@@ -1083,7 +1083,7 @@ export function SettingsPage() {
       {/* About link */}
       <div className="mt-2 text-center">
         <Link to="/about" className="text-sm text-content-tertiary hover:text-oe-blue transition-colors">
-          {t('settings.about_link', { defaultValue: 'About OpenConstructionERP' })} →
+          {t('settings.about_link', { defaultValue: 'About Neoconstruction' })} →
         </Link>
       </div>
     </div>

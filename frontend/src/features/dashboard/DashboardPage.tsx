@@ -1801,7 +1801,7 @@ export function DashboardPage() {
       <div className="flex flex-col sm:flex-row sm:items-center gap-3">
         {/* Open-source badge */}
         <a
-          href="https://github.com/datadrivenconstruction/OpenConstructionERP"
+          href="https://github.com/datadrivenconstruction/Neoconstruction"
           target="_blank"
           rel="noopener noreferrer"
           className="inline-flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-oe-blue/8 via-violet-500/8 to-emerald-500/8 border border-oe-blue/15 py-1.5 px-3 hover:shadow-md hover:border-oe-blue/30 transition-all animate-stagger-in shrink-0"
@@ -1983,7 +1983,7 @@ function ProjectsList({ projects }: { projects?: ProjectSummary[] }) {
       <div className="px-6 py-8">
         <div className="text-center mb-6">
           <p className="text-sm font-semibold text-content-primary">
-            {t('dashboard.welcome_title', { defaultValue: 'Welcome to OpenConstructionERP' })}
+            {t('dashboard.welcome_title', { defaultValue: 'Welcome to Neoconstruction' })}
           </p>
           <p className="mt-1 text-xs text-content-tertiary">
             {t('dashboard.welcome_desc', { defaultValue: 'Start by installing a demo project or creating your own.' })}

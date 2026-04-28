@@ -89,7 +89,7 @@ describe('generateGAEBXML', () => {
   it('includes GAEBInfo with version 3.3', () => {
     const result = generateGAEBXML(makeOptions());
     expect(result.xml).toContain('<Version>3.3</Version>');
-    expect(result.xml).toContain('<ProgSystem>OpenEstimate</ProgSystem>');
+    expect(result.xml).toContain('<ProgSystem>Neoconstruction</ProgSystem>');
   });
 
   it('includes project info', () => {

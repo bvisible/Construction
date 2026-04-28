@@ -1,6 +1,6 @@
 # Module Development Guide
 
-How to create, register, and publish a plugin module for OpenEstimate.
+How to create, register, and publish a plugin module for Neoconstruction.
 
 ---
 

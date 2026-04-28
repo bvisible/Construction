@@ -28,7 +28,7 @@ export function AppLayout({ title, children }: AppLayoutProps) {
   const openSidebar = useCallback(() => setSidebarOpen(true), []);
 
   useEffect(() => {
-    document.title = title ? `${title} | OpenConstructionERP` : 'OpenConstructionERP';
+    document.title = title ? `${title} | Neoconstruction` : 'Neoconstruction';
   }, [title]);
 
   // Lock body scroll when mobile sidebar is open

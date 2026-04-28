@@ -97,7 +97,7 @@ export function Header({ title, onMenuClick }: HeaderProps) {
       <div className="flex items-center gap-1.5">
         {/* GitHub repo */}
         <a
-          href="https://github.com/datadrivenconstruction/OpenConstructionERP"
+          href="https://github.com/datadrivenconstruction/Neoconstruction"
           target="_blank"
           rel="noopener noreferrer"
           className={clsx(
@@ -142,7 +142,7 @@ export function Header({ title, onMenuClick }: HeaderProps) {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
                 body: JSON.stringify({
-                  _subject: 'Bug Report from OpenConstructionERP App',
+                  _subject: 'Bug Report from Neoconstruction App',
                   'App Version': data.app_version || APP_VERSION,
                   'Error Count': data.total_errors || 0,
                   Platform: data.platform || '',
@@ -218,7 +218,7 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         {/* Email issues — direct mailto so the user can write without
              leaving to GitHub and without needing an account. */}
         <a
-          href="mailto:info@datadrivenconstruction.io?subject=OpenConstructionERP%20Issue%20Report"
+          href="mailto:info@datadrivenconstruction.io?subject=Neoconstruction%20Issue%20Report"
           className={clsx(
             'hidden sm:flex h-8 items-center gap-1.5 rounded-lg px-2.5',
             'text-xs font-medium',

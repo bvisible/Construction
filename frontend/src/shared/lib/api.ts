@@ -1,5 +1,5 @@
 /**
- * Typed API client helper for OpenEstimate.
+ * Typed API client helper for Neoconstruction.
  *
  * Provides a lightweight fetch wrapper with:
  * - Base URL configuration
@@ -251,10 +251,35 @@ async function request<TResponse>(
   }
 
   // Handle 401 – logout via auth store and redirect to login.
+  // Mode Frappe embarqué : au lieu de rediriger vers /login, on demande un
+  // JWT frais à Frappe (neoconstruction.api.sso.get_oce_jwt) et on laisse
+  // l'appelant retenter. Si Frappe n'a pas de token à fournir, on affiche
+  // une bannière via le toast store et on lève l'erreur.
   if (response.status === 401) {
     logApiError(path, 401, response.statusText);
+    const wnd = typeof window !== 'undefined'
+      ? (window as unknown as { __FRAPPE_INTEGRATION__?: boolean; oce_jwt?: string | null })
+      : undefined;
+    if (wnd?.__FRAPPE_INTEGRATION__) {
+      try {
+        const r = await fetch('/api/method/neoconstruction.api.sso.get_oce_jwt', {
+          credentials: 'same-origin',
+        });
+        const body = await r.json();
+        const token = body?.message?.token as string | undefined;
+        if (token) {
+          wnd.oce_jwt = token;
+          useAuthStore.setState({ accessToken: token });
+          // Note: pas de retry automatique ici — l'appelant (react-query)
+          // déclenche son propre retry qui repartira avec le nouveau token.
+        }
+      } catch {
+        /* swallow — on tombera dans le throw ci-dessous */
+      }
+      throw new ApiError(response.status, response.statusText, undefined);
+    }
     useAuthStore.getState().logout();
-    if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
+    if (!window.location.pathname.includes('/login')) {
       window.location.href = '/login';
     }
     throw new ApiError(response.status, response.statusText, undefined);

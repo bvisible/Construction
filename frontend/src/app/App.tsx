@@ -1,6 +1,14 @@
 import { Suspense, lazy, useState, useCallback, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { AppLayout } from './layout';
+import { AppLayout, FrappeLayout } from './layout';
+
+// Flag posé par main.tsx quand on tourne embarqué dans Frappe (/neoconstruction/*).
+// On swap AppLayout → FrappeLayout pour réutiliser la sidebar Frappe native
+// et masquer le header OCE (Frappe a déjà le sien).
+const EmbeddedLayout =
+  typeof window !== 'undefined' && (window as unknown as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__
+    ? FrappeLayout
+    : AppLayout;
 import { DashboardPage } from '@/features/dashboard';
 import { LoginPage, RegisterPage, ForgotPasswordPage } from '@/features/auth';
 import { ProjectsPage, CreateProjectPage, ProjectDetailPage } from '@/features/projects';
@@ -194,11 +202,11 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function P({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <RequireAuth>
-      <AppLayout title={title}>
+      <EmbeddedLayout title={title}>
         <ErrorBoundary>
           <Suspense fallback={<PageLoadingInline />}>{children}</Suspense>
         </ErrorBoundary>
-      </AppLayout>
+      </EmbeddedLayout>
     </RequireAuth>
   );
 }
@@ -326,6 +334,15 @@ export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   useDocumentDirection();
 
+  // In Frappe-embedded mode, the OCE auth pages (login/register/forgot-password)
+  // must never render — the Frappe session is the source of truth. If the user
+  // somehow lands on /neoconstruction/login (e.g. stale link, 401 redirect),
+  // bounce them to the dashboard. Frappe's own /login page handles unauth users
+  // upstream via _enforce_access().
+  const isFrappeEmbedded =
+    typeof window !== 'undefined' &&
+    (window as unknown as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__ === true;
+
   // DDC-CWICR-OE integrity verification
   if (typeof window !== 'undefined') {
     (window as any).__ddc_oe = ddcVerifyIntegrity();
@@ -338,10 +355,31 @@ export default function App() {
     <Suspense fallback={<LoadingScreen />}>
       {isAuthenticated && <GlobalShortcuts />}
       <Routes>
-        {/* Auth — public */}
-        <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />} />
-        <Route path="/register" element={isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />} />
-        <Route path="/forgot-password" element={isAuthenticated ? <Navigate to="/" replace /> : <ForgotPasswordPage />} />
+        {/* Auth — public (disabled in Frappe-embedded mode) */}
+        <Route
+          path="/login"
+          element={
+            isFrappeEmbedded
+              ? <Navigate to="/" replace />
+              : (isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />)
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            isFrappeEmbedded
+              ? <Navigate to="/" replace />
+              : (isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />)
+          }
+        />
+        <Route
+          path="/forgot-password"
+          element={
+            isFrappeEmbedded
+              ? <Navigate to="/" replace />
+              : (isAuthenticated ? <Navigate to="/" replace /> : <ForgotPasswordPage />)
+          }
+        />
 
         {/* Onboarding — full-screen, no layout */}
         <Route path="/onboarding" element={
@@ -445,7 +483,9 @@ export default function App() {
         <Route path="/modules/developer-guide" element={<P title="Module Developer Guide"><ModuleDeveloperGuide /></P>} />
 
         <Route path="/setup/databases" element={<P title="Databases & Resources"><DatabaseSetupPage /></P>} />
-        <Route path="/settings" element={<P title="Settings"><SettingsPage /></P>} />
+        {/* Neoconstruction: AI provider is forced to Olares (NORA) via backend
+            override. The user has nothing to configure → redirect to /ai-estimate. */}
+        <Route path="/settings" element={<Navigate to="/ai-estimate" replace />} />
         <Route path="/integrations" element={<P title="Integrations"><IntegrationsPage /></P>} />
         <Route path="/about" element={<P title="About"><AboutPage /></P>} />
         <Route path="/project-intelligence" element={<P title="Project Intelligence"><ProjectIntelligencePage /></P>} />
@@ -471,7 +511,7 @@ export default function App() {
       {/* DDC-CWICR-OE */}
       <span aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
         {'\u200B\u200C\u200D\u200B\u200C\u200D\u200B'}
-        DataDrivenConstruction·CWICR·OpenConstructionERP·2026
+        DataDrivenConstruction·CWICR·Neoconstruction·2026
       </span>
     </Suspense>
   );

@@ -167,7 +167,7 @@ export function InstallConverterPrompt({
           <p className="text-sm text-content-secondary leading-relaxed">
             {t('bim.install_prompt_body', {
               defaultValue:
-                'To process “{{fileName}}” ({{fileSize}}), OpenConstructionERP needs the {{converterName}} ({{converterSize}} MB one-time download).',
+                'To process “{{fileName}}” ({{fileSize}}), Neoconstruction needs the {{converterName}} ({{converterSize}} MB one-time download).',
               fileName,
               fileSize: sizeFormatted,
               converterName,

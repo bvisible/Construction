@@ -1,5 +1,5 @@
 /**
- * GAEB XML Import Parser for OpenEstimate.
+ * GAEB XML Import Parser for Neoconstruction.
  *
  * Supports GAEB DA XML formats:
  *   - X81 (Leistungsverzeichnis / tender specification, no prices)
@@ -241,7 +241,7 @@ export function parseGAEBXML(xmlString: string): GAEBPosition[] {
  * Individual failures are collected in `errors` without aborting the import.
  *
  * @param file  Browser File object (GAEB XML, typically .x83 / .x81 / .xml)
- * @param boqId Target BOQ identifier in OpenEstimate
+ * @param boqId Target BOQ identifier in Neoconstruction
  */
 export async function importGAEBToBOQ(file: File, boqId: string): Promise<GAEBImportResult> {
   const xmlString = await file.text();

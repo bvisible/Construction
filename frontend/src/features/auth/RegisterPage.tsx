@@ -211,7 +211,7 @@ export function RegisterPage() {
                 {t('auth.create_account', 'Create account')}
               </h2>
               <p className="text-xs text-content-secondary mb-4">
-                {t('auth.register_subtitle', 'Get started with OpenEstimate')}
+                {t('auth.register_subtitle', 'Get started with Neoconstruction')}
               </p>
             </div>
 
@@ -436,7 +436,7 @@ export function RegisterPage() {
             <div className="flex items-center justify-center gap-3">
               <a href="https://OpenConstructionERP.com" target="_blank" rel="noopener noreferrer" className="hover:text-content-secondary transition-colors">OpenConstructionERP.com</a>
               <span>·</span>
-              <a href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener noreferrer" className="hover:text-content-secondary transition-colors">GitHub</a>
+              <a href="https://github.com/datadrivenconstruction/Neoconstruction" target="_blank" rel="noopener noreferrer" className="hover:text-content-secondary transition-colors">GitHub</a>
             </div>
           </div>
         </div>

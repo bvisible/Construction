@@ -897,7 +897,7 @@ exports[`Visual Regression — DashboardPage > renders loading/skeleton state 1`
     >
       <a
         class="inline-flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-oe-blue/8 via-violet-500/8 to-emerald-500/8 border border-oe-blue/15 py-1.5 px-3 hover:shadow-md hover:border-oe-blue/30 transition-all animate-stagger-in shrink-0"
-        href="https://github.com/datadrivenconstruction/OpenConstructionERP"
+        href="https://github.com/datadrivenconstruction/Neoconstruction"
         rel="noopener noreferrer"
         style="animation-delay: 200ms;"
         target="_blank"
@@ -1582,7 +1582,7 @@ exports[`Visual Regression — DashboardPage > renders loading/skeleton state 1`
               <p
                 class="text-sm font-semibold text-content-primary"
               >
-                Welcome to OpenConstructionERP
+                Welcome to Neoconstruction
               </p>
               <p
                 class="mt-1 text-xs text-content-tertiary"

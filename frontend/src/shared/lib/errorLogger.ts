@@ -1,5 +1,5 @@
 /**
- * Anonymized error logging system for OpenConstructionERP.
+ * Anonymized error logging system for Neoconstruction.
  *
  * Captures JS errors, unhandled promise rejections, React Error Boundary errors,
  * and API errors. All data is anonymized before storage. Errors are kept in a

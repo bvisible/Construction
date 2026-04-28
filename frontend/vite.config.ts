@@ -9,7 +9,17 @@ import { readFileSync } from 'fs';
 // (sidebar, About page, error reports, update checker) stays in sync.
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'));
 
+// Frappe integration: when building for the Frappe `neoconstruction` app, the
+// bundle is served under /assets/neoconstruction/neoconstruction/. Enable with
+// FRAPPE_BUILD=1 ; override FRAPPE_OUT_DIR to point at a different checkout
+// of the neoconstruction repo.
+const FRAPPE_BUILD = process.env.FRAPPE_BUILD === '1';
+const FRAPPE_OUT_DIR =
+  process.env.FRAPPE_OUT_DIR ||
+  path.resolve(__dirname, '../../neoconstruction/neoconstruction/public/neoconstruction');
+
 export default defineConfig({
+  base: FRAPPE_BUILD ? '/assets/neoconstruction/neoconstruction/' : '/',
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -38,6 +48,8 @@ export default defineConfig({
     },
   },
   build: {
+    outDir: FRAPPE_BUILD ? FRAPPE_OUT_DIR : 'dist',
+    emptyOutDir: true,
     rollupOptions: {
       output: {
         manualChunks(id) {
