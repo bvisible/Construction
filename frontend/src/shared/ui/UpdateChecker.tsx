@@ -41,7 +41,7 @@ const CACHE_KEY = 'oe_update_cache_v1';
 const DISMISS_KEY = 'oe_update_dismissed_version_session';
 
 const GITHUB_RELEASES_API =
-  'https://api.github.com/repos/datadrivenconstruction/Neoconstruction/releases/latest';
+  'https://api.github.com/repos/datadrivenconstruction/OpenConstructionERP/releases/latest';
 
 interface ReleaseInfo {
   version: string;
@@ -273,7 +273,7 @@ export function UpdateNotification({ forceShow = false, hideDismiss = false }: U
         notes: data.body ?? '',
         url:
           data.html_url ??
-          'https://github.com/datadrivenconstruction/Neoconstruction/releases',
+          'https://github.com/datadrivenconstruction/OpenConstructionERP/releases',
         publishedAt: data.published_at ?? '',
       };
       writeCache(info);
@@ -346,7 +346,7 @@ export function UpdateNotification({ forceShow = false, hideDismiss = false }: U
             <div className="flex-1 min-w-0 leading-tight">
               <div className="flex items-baseline gap-1.5">
                 <span className="text-xs font-bold text-blue-900 dark:text-sky-100 tabular-nums">
-                  v{release.version}
+                  v{CURRENT_VERSION} → v{release.version}
                 </span>
                 <span className="text-[9px] font-semibold uppercase tracking-wider text-blue-600 dark:text-sky-300">
                   {t('update.new_available', { defaultValue: 'available' })}
@@ -358,9 +358,10 @@ export function UpdateNotification({ forceShow = false, hideDismiss = false }: U
                   <>
                     {relativeDate && <span aria-hidden="true">·</span>}
                     <span>
-                      {t('update.changes_count', {
-                        defaultValue: '{{count}} changes',
+                      {t('update.changes_count_in', {
+                        defaultValue: '{{count}} changes in v{{version}}',
                         count: grouped.totalCount,
+                        version: release.version,
                       })}
                     </span>
                   </>

@@ -1039,7 +1039,15 @@ async def _process_cad_in_background(
                 return
 
             if element_count > 0:
+                # Top-level geometry_quality drives the placeholder banner.
+                # Stamp it onto each element's properties so the frontend
+                # viewer can self-detect placeholders without an extra API
+                # round-trip for the model metadata.
+                result_quality = result.get("geometry_quality") or result.get("geometry_type")
                 for elem_data in result["elements"]:
+                    el_props = dict(elem_data.get("properties", {}) or {})
+                    if elem_data.get("is_placeholder") or result_quality == "placeholder":
+                        el_props["is_placeholder"] = True
                     el = BIMElement(
                         model_id=model_uuid,
                         stable_id=elem_data["stable_id"],
@@ -1047,7 +1055,7 @@ async def _process_cad_in_background(
                         name=elem_data.get("name"),
                         storey=elem_data.get("storey"),
                         discipline=elem_data.get("discipline"),
-                        properties=elem_data.get("properties", {}),
+                        properties=el_props,
                         quantities=elem_data.get("quantities", {}),
                         geometry_hash=elem_data.get("geometry_hash"),
                         bounding_box=elem_data.get("bounding_box"),
@@ -1066,6 +1074,12 @@ async def _process_cad_in_background(
                 model.metadata_ = {
                     **(model.metadata_ or {}),
                     "geometry_type": result.get("geometry_type", "unknown"),
+                    # geometry_quality drives the frontend's "placeholder
+                    # geometry" banner — set to "placeholder" when DDC
+                    # cad2data is unavailable and we synthesized boxes.
+                    "geometry_quality": result.get(
+                        "geometry_quality", result.get("geometry_type", "unknown"),
+                    ),
                 }
                 logger.info(
                     "Background CAD processed: %d elements, %d storeys → model %s ready",
@@ -1737,6 +1751,77 @@ async def create_model(
     return BIMModelResponse.model_validate(model)
 
 
+# ─── Asset Register routes (must come BEFORE /{model_id} so that
+#     `/assets` is not interpreted as a UUID model_id and rejected with
+#     422 by the path validator). The handlers and the `_summarise_asset`
+#     helper live further down in the file under the "Asset Register
+#     (v2.3.0)" section header — only the route registrations move up. ───
+
+@router.get("/assets", response_model=AssetListResponse)
+async def list_assets(
+    project_id: uuid.UUID = Query(..., description="Scope the asset list to this project"),
+    element_type: str | None = Query(default=None),
+    operational_status: str | None = Query(default=None),
+    search: str | None = Query(default=None, min_length=1, max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.read")),
+    service: BIMHubService = Depends(_get_service),
+) -> AssetListResponse:
+    """List tracked assets across every BIM model in a project.
+
+    Tracked = ``BIMElement.is_tracked_asset == True``. Managed-asset
+    rows appear on the Assets page with manufacturer / serial / warranty
+    columns lifted out of the ``asset_info`` JSON blob for convenient
+    sorting.
+    """
+    await _verify_project_access(service.session, project_id, user_id or "")
+    rows, total = await service.list_tracked_assets(
+        project_id,
+        element_type=element_type,
+        operational_status=operational_status,
+        search=search,
+        offset=offset,
+        limit=limit,
+    )
+    return AssetListResponse(
+        items=[_summarise_asset(element, model) for element, model in rows],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.patch("/assets/{element_id}/asset-info", response_model=BIMElementResponse)
+async def update_asset_info(
+    element_id: uuid.UUID,
+    payload: AssetInfoUpdateRequest,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.write")),
+    service: BIMHubService = Depends(_get_service),
+) -> BIMElementResponse:
+    """Merge-update asset_info on a BIMElement.
+
+    Semantics:
+    - Any key you send overwrites the matching key in ``asset_info``.
+    - Sending ``null`` or ``""`` for a key clears that key.
+    - ``is_tracked_asset`` auto-flips to ``True`` on first non-empty
+      write; pass an explicit bool to override.
+    - Unrelated keys already in ``asset_info`` survive untouched.
+    """
+    # Locate the element first so we can verify project access.
+    element = await service.get_element(element_id)
+    await _verify_model_access(service, element.model_id, user_id or "")
+
+    updated = await service.update_asset_info(
+        element_id,
+        asset_info=payload.asset_info.model_dump(exclude_unset=False),
+        is_tracked_asset=payload.is_tracked_asset,
+    )
+    return BIMElementResponse.model_validate(updated)
+
+
 @router.get("/{model_id}", response_model=BIMModelResponse)
 async def get_model(
     model_id: uuid.UUID,
@@ -2137,69 +2222,11 @@ def _summarise_asset(element, model) -> AssetSummary:
     )
 
 
-@router.get("/assets", response_model=AssetListResponse)
-async def list_assets(
-    project_id: uuid.UUID = Query(..., description="Scope the asset list to this project"),
-    element_type: str | None = Query(default=None),
-    operational_status: str | None = Query(default=None),
-    search: str | None = Query(default=None, min_length=1, max_length=200),
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=100, ge=1, le=500),
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
-    _perm: None = Depends(RequirePermission("bim.read")),
-    service: BIMHubService = Depends(_get_service),
-) -> AssetListResponse:
-    """List tracked assets across every BIM model in a project.
-
-    Tracked = ``BIMElement.is_tracked_asset == True``. Managed-asset
-    rows appear on the Assets page with manufacturer / serial / warranty
-    columns lifted out of the ``asset_info`` JSON blob for convenient
-    sorting.
-    """
-    await _verify_project_access(service, project_id, user_id or "")
-    rows, total = await service.list_tracked_assets(
-        project_id,
-        element_type=element_type,
-        operational_status=operational_status,
-        search=search,
-        offset=offset,
-        limit=limit,
-    )
-    return AssetListResponse(
-        items=[_summarise_asset(element, model) for element, model in rows],
-        total=total,
-        offset=offset,
-        limit=limit,
-    )
-
-
-@router.patch("/assets/{element_id}/asset-info", response_model=BIMElementResponse)
-async def update_asset_info(
-    element_id: uuid.UUID,
-    payload: AssetInfoUpdateRequest,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
-    _perm: None = Depends(RequirePermission("bim.write")),
-    service: BIMHubService = Depends(_get_service),
-) -> BIMElementResponse:
-    """Merge-update asset_info on a BIMElement.
-
-    Semantics:
-    - Any key you send overwrites the matching key in ``asset_info``.
-    - Sending ``null`` or ``""`` for a key clears that key.
-    - ``is_tracked_asset`` auto-flips to ``True`` on first non-empty
-      write; pass an explicit bool to override.
-    - Unrelated keys already in ``asset_info`` survive untouched.
-    """
-    # Locate the element first so we can verify project access.
-    element = await service.get_element(element_id)
-    await _verify_model_access(service, element.model_id, user_id or "")
-
-    updated = await service.update_asset_info(
-        element_id,
-        asset_info=payload.asset_info.model_dump(exclude_unset=False),
-        is_tracked_asset=payload.is_tracked_asset,
-    )
-    return BIMElementResponse.model_validate(updated)
+# Note: the @router.get("/assets") and @router.patch("/assets/{element_id}/asset-info")
+# route definitions were moved up before "/{model_id}" so FastAPI's path
+# matcher resolves the literal "assets" segment instead of mistaking it
+# for a UUID. The handlers live above; the `_summarise_asset` helper just
+# above is still referenced from there at request time.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

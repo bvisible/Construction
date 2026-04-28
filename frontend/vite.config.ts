@@ -47,6 +47,37 @@ export default defineConfig({
       },
     },
   },
+  // Pre-bundle heavy deps that are imported lazily by route-level chunks.
+  // Without this, Vite discovers them only when the chunk first loads and
+  // triggers a "504 Outdated Optimize Dep" on the in-flight import — which
+  // surfaces as "Failed to fetch dynamically imported module" on the takeoff
+  // and BIM pages.  Including them up-front keeps the version hash stable
+  // across the dev session.
+  optimizeDeps: {
+    include: [
+      'pdfjs-dist',
+      'pdfjs-dist/build/pdf.worker.min.mjs',
+      'three',
+      // High-risk: heavy deps reached only via lazy route chunks.  Without
+      // pre-bundling, Vite discovers them mid-navigation and the in-flight
+      // import 504s with "Failed to fetch dynamically imported module".
+      'ag-grid-react',
+      'ag-grid-community',
+      'recharts',
+      'jspdf',
+      'jspdf-autotable',
+      'maplibre-gl',
+      'react-map-gl/maplibre',
+      'exceljs',
+      'yjs',
+      'y-websocket',
+      'y-webrtc',
+      '@xyflow/react',
+      '@dnd-kit/core',
+      '@dnd-kit/sortable',
+      '@dnd-kit/utilities',
+    ],
+  },
   build: {
     outDir: FRAPPE_BUILD ? FRAPPE_OUT_DIR : 'dist',
     emptyOutDir: true,
@@ -62,6 +93,7 @@ export default defineConfig({
           if (id.includes('node_modules/pdfjs-dist')) return 'vendor-pdf';
           if (id.includes('node_modules/yjs') || id.includes('node_modules/y-webrtc')) return 'vendor-collab';
           if (id.includes('node_modules/jspdf') || id.includes('node_modules/html2canvas')) return 'vendor-charts';
+          if (id.includes('node_modules/exceljs')) return 'vendor-exceljs';
           // i18n fallback translations — separate chunk (~2MB of translation data)
           if (id.includes('i18n-fallbacks')) return 'i18n-data';
         },

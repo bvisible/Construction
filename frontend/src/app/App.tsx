@@ -1,22 +1,15 @@
 import { Suspense, lazy, useState, useCallback, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { AppLayout, FrappeLayout } from './layout';
-
-// Flag posé par main.tsx quand on tourne embarqué dans Frappe (/neoconstruction/*).
-// On swap AppLayout → FrappeLayout pour réutiliser la sidebar Frappe native
-// et masquer le header OCE (Frappe a déjà le sien).
-const EmbeddedLayout =
-  typeof window !== 'undefined' && (window as unknown as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__
-    ? FrappeLayout
-    : AppLayout;
+import { AppLayout } from './layout';
 import { DashboardPage } from '@/features/dashboard';
 import { LoginPage, RegisterPage, ForgotPasswordPage } from '@/features/auth';
-import { ProjectsPage, CreateProjectPage, ProjectDetailPage } from '@/features/projects';
+import { ProjectsPage, CreateProjectPage, ProjectDetailPage, ProjectSettingsPage } from '@/features/projects';
 import { BOQListPage, CreateBOQPage, TemplatesPage } from '@/features/boq';
 import { CostsPage, ImportDatabasePage } from '@/features/costs';
 import { OnboardingWizard } from '@/features/onboarding';
 import { AssembliesPage, AssemblyEditorPage, CreateAssemblyPage } from '@/features/assemblies';
 import { ValidationPage } from '@/features/validation';
+import { NlRuleBuilderPanel } from '@/features/compliance';
 import { QuantitiesPage } from '@/features/quantities';
 import { ModulesPage, ModuleDeveloperGuide } from '@/features/modules';
 import { useModuleRouteElements } from '@/modules/ModuleRoutes';
@@ -159,6 +152,17 @@ const ArchitectureMapPage = lazy(() =>
 const ProjectIntelligencePage = lazy(() =>
   import('@/features/project-intelligence/ProjectIntelligencePage').then((m) => ({ default: m.ProjectIntelligencePage }))
 );
+const SnapshotsPage = lazy(() =>
+  import('@/features/dashboards').then((m) => ({ default: m.SnapshotsPage }))
+);
+// EAC-3.1 scaffolding (RFC 35 §7) — block primitives preview. Dev-only route.
+const EacDemoPage = lazy(() =>
+  import('@/features/eac/pages/EacDemoPage').then((m) => ({ default: m.EacDemoPage }))
+);
+// EAC-3.2 — visual block editor canvas (xyflow). Per-ruleset editing UI.
+const EACBlockEditorPage = lazy(() =>
+  import('@/features/eac/EACBlockEditorPage').then((m) => ({ default: m.EACBlockEditorPage }))
+);
 
 function LoadingScreen() {
   return (
@@ -202,11 +206,11 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function P({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <RequireAuth>
-      <EmbeddedLayout title={title}>
+      <AppLayout title={title}>
         <ErrorBoundary>
           <Suspense fallback={<PageLoadingInline />}>{children}</Suspense>
         </ErrorBoundary>
-      </EmbeddedLayout>
+      </AppLayout>
     </RequireAuth>
   );
 }
@@ -334,15 +338,6 @@ export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   useDocumentDirection();
 
-  // In Frappe-embedded mode, the OCE auth pages (login/register/forgot-password)
-  // must never render — the Frappe session is the source of truth. If the user
-  // somehow lands on /neoconstruction/login (e.g. stale link, 401 redirect),
-  // bounce them to the dashboard. Frappe's own /login page handles unauth users
-  // upstream via _enforce_access().
-  const isFrappeEmbedded =
-    typeof window !== 'undefined' &&
-    (window as unknown as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__ === true;
-
   // DDC-CWICR-OE integrity verification
   if (typeof window !== 'undefined') {
     (window as any).__ddc_oe = ddcVerifyIntegrity();
@@ -355,31 +350,10 @@ export default function App() {
     <Suspense fallback={<LoadingScreen />}>
       {isAuthenticated && <GlobalShortcuts />}
       <Routes>
-        {/* Auth — public (disabled in Frappe-embedded mode) */}
-        <Route
-          path="/login"
-          element={
-            isFrappeEmbedded
-              ? <Navigate to="/" replace />
-              : (isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />)
-          }
-        />
-        <Route
-          path="/register"
-          element={
-            isFrappeEmbedded
-              ? <Navigate to="/" replace />
-              : (isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />)
-          }
-        />
-        <Route
-          path="/forgot-password"
-          element={
-            isFrappeEmbedded
-              ? <Navigate to="/" replace />
-              : (isAuthenticated ? <Navigate to="/" replace /> : <ForgotPasswordPage />)
-          }
-        />
+        {/* Auth — public */}
+        <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />} />
+        <Route path="/register" element={isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />} />
+        <Route path="/forgot-password" element={isAuthenticated ? <Navigate to="/" replace /> : <ForgotPasswordPage />} />
 
         {/* Onboarding — full-screen, no layout */}
         <Route path="/onboarding" element={
@@ -404,6 +378,7 @@ export default function App() {
         <Route path="/projects" element={<P title="Projects"><ProjectsPage /></P>} />
         <Route path="/projects/new" element={<P title="New Project"><CreateProjectPage /></P>} />
         <Route path="/projects/:projectId" element={<P title="Project"><ProjectDetailPage /></P>} />
+        <Route path="/projects/:projectId/settings" element={<P title="Project Settings"><ProjectSettingsPage /></P>} />
         <Route path="/projects/:projectId/boq/new" element={<P title="New BOQ"><CreateBOQPage /></P>} />
 
         <Route path="/boq" element={<P title="Bill of Quantities"><BOQListPage /></P>} />
@@ -420,6 +395,7 @@ export default function App() {
         <Route path="/assemblies/:assemblyId" element={<P title="Assembly Editor"><AssemblyEditorPage /></P>} />
 
         <Route path="/validation" element={<P title="Validation"><ValidationPage /></P>} />
+        <Route path="/compliance/builder" element={<P title="Compliance Rule Builder"><NlRuleBuilderPanel /></P>} />
 
         <Route path="/quantities" element={<P title="Quantity Takeoff"><QuantitiesPage /></P>} />
         <Route path="/takeoff" element={<P title="PDF Takeoff"><TakeoffPage /></P>} />
@@ -430,6 +406,9 @@ export default function App() {
         <Route path="/5d" element={<P title="5D Cost Model"><CostModelPage /></P>} />
 
         <Route path="/analytics" element={<P title="Analytics"><AnalyticsPage /></P>} />
+
+        <Route path="/dashboards" element={<P title="Dashboards"><SnapshotsPage /></P>} />
+        <Route path="/projects/:projectId/dashboards" element={<P title="Dashboards"><SnapshotsPage /></P>} />
 
         <Route path="/reports" element={<P title="Reports"><ReportsPage /></P>} />
         <Route path="/reporting" element={<P title="Reporting Dashboards"><ReportingPage /></P>} />
@@ -483,13 +462,15 @@ export default function App() {
         <Route path="/modules/developer-guide" element={<P title="Module Developer Guide"><ModuleDeveloperGuide /></P>} />
 
         <Route path="/setup/databases" element={<P title="Databases & Resources"><DatabaseSetupPage /></P>} />
-        {/* Neoconstruction: AI provider is forced to Olares (NORA) via backend
-            override. The user has nothing to configure → redirect to /ai-estimate. */}
-        <Route path="/settings" element={<Navigate to="/ai-estimate" replace />} />
+        <Route path="/settings" element={<P title="Settings"><SettingsPage /></P>} />
         <Route path="/integrations" element={<P title="Integrations"><IntegrationsPage /></P>} />
         <Route path="/about" element={<P title="About"><AboutPage /></P>} />
         <Route path="/project-intelligence" element={<P title="Project Intelligence"><ProjectIntelligencePage /></P>} />
         <Route path="/architecture" element={<P title="Architecture Map"><ArchitectureMapPage /></P>} />
+
+        {/* EAC v2 (RFC 35) — block editor primitives preview, dev-only */}
+        <Route path="/eac/demo" element={<P title="EAC Block Primitives"><EacDemoPage /></P>} />
+        <Route path="/eac/blocks/:eacId" element={<P title="EAC Block Editor"><EACBlockEditorPage /></P>} />
 
         {/* Convenience route aliases — redirect to canonical paths */}
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
@@ -511,7 +492,7 @@ export default function App() {
       {/* DDC-CWICR-OE */}
       <span aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
         {'\u200B\u200C\u200D\u200B\u200C\u200D\u200B'}
-        DataDrivenConstruction·CWICR·Neoconstruction·2026
+        DataDrivenConstruction·CWICR·OpenConstructionERP·2026
       </span>
     </Suspense>
   );

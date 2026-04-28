@@ -613,6 +613,29 @@ def cmd_serve(args: argparse.Namespace) -> None:
 def cmd_init_db(args: argparse.Namespace) -> None:
     """Initialise data directory and create the SQLite database."""
     data_dir = Path(args.data_dir).expanduser().resolve()
+    db_path = data_dir / "openestimate.db"
+    reset = bool(getattr(args, "reset", False))
+
+    # Honour --reset BEFORE _setup_env touches the directory so the user
+    # gets a guaranteed-fresh DB. We also wipe the SQLite WAL siblings,
+    # otherwise re-opening the same path can resurrect old pages.
+    if reset and db_path.exists():
+        for suffix in ("", "-shm", "-wal"):
+            sibling = db_path.with_name(db_path.name + suffix)
+            try:
+                sibling.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                logger.warning("init-db --reset: could not delete %s: %s", sibling, exc)
+        print(_amber(f"Reset: deleted previous DB at {db_path}"))
+    elif db_path.exists():
+        # Friendly warning, non-blocking — matches the spec.
+        print(
+            _yellow(f"Existing database at {db_path} — re-using.")
+            + _dim(" Use --reset to start fresh.")
+        )
+
     print(_u("Initialising data directory at ", "Initialising data directory at ")
           + f"{_bold(str(data_dir))}"
           + _u("…", "..."))
@@ -761,7 +784,52 @@ def cmd_version(_args: argparse.Namespace) -> None:
 
     print(f"OpenConstructionERP v{version}")
     print(f"Python {sys.version.split()[0]} ({sys.platform})")
+    print(f"Site-packages: {Path(sys.executable).parent}")
     print(f"Docs: {DOCS_URL}")
+
+
+def cmd_upgrade(args: argparse.Namespace) -> None:
+    """Pip-upgrade openconstructionerp inside *this* interpreter's environment.
+
+    Issue #96: users who installed via the Windows installer get a launcher
+    (``start.bat``) that points at a private venv under
+    ``%LOCALAPPDATA%\\OpenConstructionERP\\venv``. Running ``pip install
+    --upgrade openconstructionerp`` in any other shell upgrades the user's
+    GLOBAL Python — the venv keeps its old wheel, and the launcher keeps
+    reporting the old version even though pip claims success. This command
+    avoids the trap by always invoking ``sys.executable -m pip`` so the
+    upgrade lands in the same env that ``serve`` runs in.
+    """
+    import subprocess
+
+    print()
+    print(_bold(_u("OpenConstructionERP \u2014 upgrade", "OpenConstructionERP - upgrade")))
+
+    target = "openconstructionerp"
+    if args.version:
+        target = f"openconstructionerp=={args.version}"
+
+    print(_dim(f"Interpreter: {sys.executable}"))
+    print(_dim(f"Installing:  {target}"))
+    print()
+
+    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", target]
+    try:
+        result = subprocess.run(cmd, check=False)
+    except FileNotFoundError as exc:
+        print(_red(f"pip not found in this interpreter: {exc}"))
+        sys.exit(1)
+
+    if result.returncode != 0:
+        print()
+        print(_red(_bold(f"  Upgrade failed (exit {result.returncode})")))
+        print(_dim("Try: python -m pip install --upgrade openconstructionerp"))
+        sys.exit(result.returncode)
+
+    new_version = _resolve_version()
+    print()
+    print(_green(_bold(f"  Upgraded to v{new_version}")))
+    print(_dim("Restart your launcher (start.bat / openconstructionerp serve) to pick it up."))
 
 
 def _resolve_version() -> str:
@@ -929,12 +997,22 @@ def main() -> None:
         default=str(DEFAULT_DATA_DIR),
         help=f"Data directory (default: {DEFAULT_DATA_DIR})",
     )
+    init_db_p.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete the existing openestimate.db (and -shm/-wal) before init",
+    )
     # Legacy alias — same args, same handler.
     init_p = subparsers.add_parser("init", help="Alias for init-db")
     init_p.add_argument(
         "--data-dir",
         default=str(DEFAULT_DATA_DIR),
         help=f"Data directory (default: {DEFAULT_DATA_DIR})",
+    )
+    init_p.add_argument(
+        "--reset",
+        action="store_true",
+        help="Delete the existing openestimate.db (and -shm/-wal) before init",
     )
 
     # doctor
@@ -943,6 +1021,17 @@ def main() -> None:
 
     # version
     subparsers.add_parser("version", help="Show version information")
+
+    # upgrade — pip-upgrade in *this* interpreter's env (Issue #96)
+    upgrade_p = subparsers.add_parser(
+        "upgrade",
+        help="Upgrade openconstructionerp in the same env this command runs in",
+    )
+    upgrade_p.add_argument(
+        "--version",
+        default=None,
+        help="Pin to a specific version (e.g. --version 2.6.10). Defaults to latest.",
+    )
 
     # welcome (zero-network greeting + quick-start + support links)
     subparsers.add_parser(
@@ -973,6 +1062,8 @@ def main() -> None:
         cmd_doctor(args)
     elif args.command == "version":
         cmd_version(args)
+    elif args.command == "upgrade":
+        cmd_upgrade(args)
     elif args.command == "seed":
         cmd_seed(args)
     elif args.command in ("welcome", "hello"):

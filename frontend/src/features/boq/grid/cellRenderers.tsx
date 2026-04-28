@@ -26,9 +26,18 @@ import {
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueries } from '@tanstack/react-query';
-import { RESOURCE_TYPE_BADGE, fmtWithCurrency } from '../boqHelpers';
+import {
+  COMMON_CURRENCIES,
+  CURRENCY_SYMBOL,
+  RESOURCE_TYPE_BADGE,
+  fmtWithCurrency,
+  getUnitsForLocale,
+  saveCustomUnit,
+} from '../boqHelpers';
+import { RESOURCE_TYPES, getResourceTypeLabel } from '../boqResourceTypes';
 import { countComments } from '../CommentDrawer';
 import { BIMQuantityPicker } from './BIMQuantityPicker';
+import { Badge } from '@/shared/ui';
 import { MiniGeometryPreview } from '@/shared/ui/MiniGeometryPreview';
 import { fetchBIMElementsByIds, fetchBIMElementProperties } from '@/features/bim/api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer/ElementManager';
@@ -263,6 +272,13 @@ export type FullGridContext = ActionsContext & ResourceGridContext & SectionGrou
   onDeleteSection?: (sectionId: string) => void;
   /** Reorder sections via drag-and-drop. */
   onReorderSections?: (fromId: string, toId: string) => void;
+  /** Issue #90: persist a Quantity-cell formula on the row's metadata. */
+  onFormulaApplied?: (positionId: string, formula: string, result: number) => void;
+  /**
+   * RFC 37 / Issue #93 — project-level FX template used by the per-resource
+   * currency picker. Empty / undefined ⇒ single-currency project.
+   */
+  fxRates?: { currency: string; rate: number; label?: string }[];
 };
 
 /* ── Actions Cell Renderer ────────────────────────────────────────── */
@@ -359,6 +375,65 @@ export function ExpandCellRenderer(params: ICellRendererParams) {
         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
       </button>
     </div>
+  );
+}
+
+/* ── Description + CWICR Variant Badge ────────────────────────────── */
+
+/**
+ * Position-description renderer that surfaces a small "variant" badge
+ * when the position was applied from a CWICR cost item via the variant
+ * picker.  The variant payload is stored under
+ * `position.metadata.variant = { label, price, index }` by
+ * `CostDatabaseSearchModal.handleAdd` and the BOQ patch flow on
+ * `CwicrMatchPanel.onApply`.  Rows without `metadata.variant` render as
+ * plain text — no visual change.
+ *
+ * The cell is editable (the column passes `editable: true`); AG Grid
+ * still mounts the cell editor on edit, the renderer only owns the
+ * read-only view.
+ */
+export function DescriptionCellRenderer(params: ICellRendererParams) {
+  const { data, value, context } = params;
+  const ctx = context as FullGridContext | undefined;
+  const t = ctx?.t ?? ((key: string, opts?: Record<string, string>) => (opts?.defaultValue as string) ?? key);
+
+  // Sections + footer + resource rows have their own renderers; bail
+  // out cleanly so AG Grid falls back to the default text rendering
+  // for those (driven by `colDef.cellClass`).
+  if (!data || data._isSection || data._isFooter || data._isResource || data._isAddResource) {
+    return <span>{value ?? ''}</span>;
+  }
+
+  const meta = (data.metadata ?? {}) as Record<string, unknown> | undefined;
+  const variant = (meta as { variant?: { label?: string; price?: number; index?: number } } | undefined)?.variant;
+  const hasVariant = !!variant && typeof variant.label === 'string' && typeof variant.price === 'number';
+
+  if (!hasVariant) {
+    return <span className="truncate">{value ?? ''}</span>;
+  }
+
+  const formattedPrice = (() => {
+    try {
+      return new Intl.NumberFormat(getIntlLocale(), {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(variant!.price as number);
+    } catch {
+      return String(variant!.price);
+    }
+  })();
+  const tooltip = `${variant!.label} \u00B7 ${formattedPrice}`;
+
+  return (
+    <span className="inline-flex items-center gap-1.5 min-w-0 max-w-full">
+      <span className="truncate min-w-0">{value ?? ''}</span>
+      <Badge variant="blue" size="sm" className="shrink-0 cursor-help">
+        <span title={tooltip}>
+          {t('boq.from_variant', { defaultValue: 'variant' })}
+        </span>
+      </Badge>
+    </span>
   );
 }
 
@@ -1388,13 +1463,22 @@ function PdfDwgSourcePopover(props: PdfDwgSourcePopoverProps) {
     if (!canApply || measurementValue === null) return;
     const id = positionData!.id as string;
     const oldMeta = meta;
+    // Build a provenance label using the same shape the picker / takeoff
+    // module use, so the quantity-cell icon and unit-cell short label both
+    // appear (cellRenderers QuantityCellRenderer/UnitCellRenderer key off
+    // ``pdf_measurement_source`` / ``dwg_annotation_source``).
+    const label =
+      kind === 'pdf'
+        ? `Takeoff: ${sourceName ?? measurementType ?? 'measurement'}${page != null ? ` (page ${page})` : ''}`
+        : `DWG: ${sourceName ?? measurementType ?? 'annotation'}`;
+    const linkKey = kind === 'pdf' ? 'pdf_measurement_source' : 'dwg_annotation_source';
     onApplyQuantity!(
       id,
       {
         quantity: measurementValue,
         metadata: {
           ...oldMeta,
-          qty_source: kind === 'pdf' ? 'pdf_takeoff' : 'dwg_annotation',
+          [linkKey]: label,
         },
       },
       { ...positionData, quantity: positionData?.quantity },
@@ -1655,14 +1739,221 @@ function InlineTextInput({
 
 interface ColWidths { leftPad: number; unit: number; quantity: number; unitRate: number; total: number; actions: number }
 
+/**
+ * Inline unit input with datalist autocomplete. Accepts free-form values
+ * and persists novel ones via `saveCustomUnit` so they appear next time.
+ *
+ * Behaves like `InlineTextInput` (double-click to edit) but renders a
+ * `<input list="…">` so the browser shows the locale unit suggestions.
+ */
+function InlineUnitInput({
+  value,
+  onCommit,
+  className,
+}: {
+  value: string;
+  onCommit: (v: string) => void;
+  className?: string;
+}) {
+  const { t, i18n } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Stable per-component datalist id so multiple rows don't collide.
+  const listId = useMemo(() => `oe-unit-list-${Math.random().toString(36).slice(2, 10)}`, []);
+  const units = useMemo(() => getUnitsForLocale(i18n.language), [i18n.language]);
+
+  const startEdit = useCallback(() => {
+    setText(value);
+    setEditing(true);
+    setTimeout(() => inputRef.current?.select(), 0);
+  }, [value]);
+
+  const commit = useCallback(() => {
+    setEditing(false);
+    const trimmed = text.trim();
+    if (trimmed && trimmed !== value) {
+      // Persist user-typed unit so it shows up in future suggestions.
+      saveCustomUnit(trimmed);
+      onCommit(trimmed);
+    }
+  }, [text, value, onCommit]);
+
+  if (editing) {
+    return (
+      <>
+        <input
+          ref={inputRef}
+          type="text"
+          list={listId}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') commit();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+          className={`bg-white dark:bg-surface-primary border border-oe-blue rounded px-1 py-0 outline-none ${className ?? ''}`}
+          aria-label={t('boq.inline_edit_unit', { defaultValue: 'Edit unit' })}
+          autoFocus
+        />
+        <datalist id={listId}>
+          {units.map((u) => <option key={u} value={u} />)}
+        </datalist>
+      </>
+    );
+  }
+
+  return (
+    <span
+      onDoubleClick={startEdit}
+      className={`cursor-text hover:bg-oe-blue-subtle/50 rounded px-1 transition-colors truncate ${className ?? ''}`}
+      title={t('boq.double_click_to_edit', { defaultValue: 'Double-click to edit' })}
+    >
+      {value}
+    </span>
+  );
+}
+
+/**
+ * Resource type picker — fit-content badge button with portal popover.
+ *
+ * The native &lt;select&gt; element sizes itself to its longest option, which
+ * left every resource-type badge stretched to the width of "EQUIPMENT".
+ * Replacing it with a button lets the badge fit its own current label
+ * (MATERIAL / LABOR / EQUIPMENT) and gives us a popover we can style.
+ */
+function ResourceTypePicker({
+  value,
+  onChange,
+  t,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  t: (key: string, opts?: Record<string, string>) => string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+
+  const badge = RESOURCE_TYPE_BADGE[value] ?? RESOURCE_TYPE_BADGE.other ?? { bg: 'bg-gray-100 text-gray-600', label: '?' };
+  const label = getResourceTypeLabel(value, t);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (btnRef.current && btnRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const togglePicker = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    if (open) {
+      setOpen(false);
+      return;
+    }
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      setPos({ top: rect.bottom + 4, left: rect.left });
+    }
+    setOpen(true);
+  };
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={togglePicker}
+        className={`shrink-0 inline-flex items-center justify-center h-4 px-1.5 rounded
+                    text-[9px] font-bold uppercase tracking-wider whitespace-nowrap
+                    cursor-pointer outline-none border-0 focus:ring-1 focus:ring-oe-blue ${badge.bg}`}
+        title={t('boq.resource_type', { defaultValue: 'Resource type' })}
+        aria-label={t('boq.resource_type', { defaultValue: 'Resource type' })}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        {label}
+      </button>
+      {open && pos && createPortal(
+        <div
+          role="listbox"
+          className="fixed z-[2000] bg-surface-primary border border-border-light rounded-md
+                     shadow-lg py-1 min-w-[160px] max-h-[260px] overflow-auto"
+          style={{ top: pos.top, left: pos.left }}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {RESOURCE_TYPES.map((rt) => {
+            const b = RESOURCE_TYPE_BADGE[rt.value] ?? RESOURCE_TYPE_BADGE.other ?? { bg: 'bg-gray-100 text-gray-600', label: '?' };
+            const selected = rt.value === value;
+            return (
+              <button
+                key={rt.value}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChange(rt.value);
+                  setOpen(false);
+                }}
+                className={`flex items-center gap-2 w-full px-2 py-1.5 text-[11px] text-left
+                            hover:bg-surface-secondary transition-colors
+                            ${selected ? 'bg-oe-blue-subtle/30' : ''}`}
+              >
+                <span className={`inline-flex items-center justify-center h-4 w-4 rounded
+                                  text-[9px] font-bold ${b.bg}`}>
+                  {b.label}
+                </span>
+                <span className="text-content-primary uppercase tracking-wider font-medium">
+                  {getResourceTypeLabel(rt.value, t)}
+                </span>
+                {selected && <span className="ml-auto text-oe-blue text-[10px]">✓</span>}
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 function EditableResourceRow({ data, ctx, colWidths }: { data: Record<string, unknown>; ctx: FullGridContext; colWidths: ColWidths }) {
-  const badge = RESOURCE_TYPE_BADGE[(data._resourceType as string)] ?? RESOURCE_TYPE_BADGE.other ?? { bg: 'bg-gray-100 text-gray-600', label: '?' };
+  const resourceType = (data._resourceType as string) || 'other';
   const qty = (data._resourceQty as number) ?? 0;
   const rate = (data._resourceRate as number) ?? 0;
   const total = qty * rate;
-  const formattedTotal = fmtWithCurrency(total, ctx.locale ?? 'de-DE', ctx.currencyCode ?? 'EUR');
+  const baseCurrency = ctx.currencyCode ?? 'EUR';
+  const resourceCurrency = (data._resourceCurrency as string | undefined) || baseCurrency;
+  const isForeign = resourceCurrency !== baseCurrency;
+  const fxRates = ctx.fxRates ?? [];
+  const fxEntry = isForeign ? fxRates.find((r) => r.currency === resourceCurrency) : undefined;
+  const fxRate = fxEntry?.rate;
+  const hasFxRate = !isForeign || (typeof fxRate === 'number' && fxRate > 0);
+  const totalInBase = isForeign && hasFxRate ? total * (fxRate ?? 1) : total;
+
+  const formattedTotal = fmtWithCurrency(total, ctx.locale ?? 'de-DE', resourceCurrency);
+  const formattedTotalInBase = isForeign && hasFxRate
+    ? fmtWithCurrency(totalInBase, ctx.locale ?? 'de-DE', baseCurrency)
+    : null;
+
   const posId = data._parentPositionId as string;
   const resIdx = data._resourceIndex as number;
+  const originalName = (data._resourceName as string) || '';
+  const resourceCode = (data._resourceCode as string | undefined) || '';
 
   const handleQtyChange = useCallback(
     (v: number) => ctx.onUpdateResource?.(posId, resIdx, 'quantity', v),
@@ -1673,10 +1964,90 @@ function EditableResourceRow({ data, ctx, colWidths }: { data: Record<string, un
     [ctx, posId, resIdx],
   );
 
+  // When the user edits the resource name, treat it as a customisation:
+  // the linked catalogue code no longer represents this row, so clear it.
+  // The "Save to my catalog" button (BookmarkPlus) then lets the user
+  // persist the customised resource as a brand-new entry in their own
+  // catalogue without overwriting the public CWICR row.
   const handleNameChange = useCallback(
-    (v: string) => ctx.onUpdateResource?.(posId, resIdx, 'name', v),
+    (v: string) => {
+      const next = v.trim();
+      if (next === originalName.trim()) return;
+      ctx.onUpdateResource?.(posId, resIdx, 'name', v);
+      if (resourceCode) {
+        ctx.onUpdateResource?.(posId, resIdx, 'code', '');
+      }
+    },
+    [ctx, posId, resIdx, originalName, resourceCode],
+  );
+
+  const handleTypeChange = useCallback(
+    (v: string) => ctx.onUpdateResource?.(posId, resIdx, 'type', v),
     [ctx, posId, resIdx],
   );
+
+  const handleCurrencyChange = useCallback(
+    (v: string) => {
+      // Empty string is the explicit "use project base" sentinel — record
+      // an empty string so the backend can clear the override.
+      const value = v === baseCurrency ? '' : v;
+      ctx.onUpdateResource?.(posId, resIdx, 'currency', value);
+    },
+    [ctx, posId, resIdx, baseCurrency],
+  );
+
+  // Currency dropdown — three groups, deduped:
+  //   1. Project base + every fx_rates entry the BOQ owner already configured.
+  //   2. The resource's current currency if it's outside both above
+  //      (so the picker can faithfully render whatever was already saved).
+  //   3. COMMON_CURRENCIES — global fallback so an international estimator
+  //      can pick e.g. JPY for an imported component even when the project
+  //      hasn't pre-loaded an FX rate. The "no FX" warning badge on the
+  //      total cell flags missing-rate cases.
+  const { projectGroup, otherGroup } = useMemo(() => {
+    const seen = new Set<string>();
+    const project: string[] = [];
+    const other: string[] = [];
+    if (baseCurrency) {
+      project.push(baseCurrency);
+      seen.add(baseCurrency);
+    }
+    for (const fx of fxRates) {
+      if (fx.currency && !seen.has(fx.currency)) {
+        project.push(fx.currency);
+        seen.add(fx.currency);
+      }
+    }
+    if (resourceCurrency && !seen.has(resourceCurrency)) {
+      project.push(resourceCurrency);
+      seen.add(resourceCurrency);
+    }
+    for (const code of COMMON_CURRENCIES) {
+      if (!seen.has(code)) {
+        other.push(code);
+        seen.add(code);
+      }
+    }
+    return { projectGroup: project, otherGroup: other };
+  }, [baseCurrency, fxRates, resourceCurrency]);
+
+  const totalTitle = (() => {
+    if (!isForeign) return formattedTotal;
+    if (hasFxRate && formattedTotalInBase) {
+      return ctx.t('boq.resource_total_in_base', {
+        defaultValue: '{{foreign}} ≈ {{base}} (1 {{code}} = {{rate}} {{baseCode}})',
+        foreign: formattedTotal,
+        base: formattedTotalInBase,
+        code: resourceCurrency,
+        rate: String(fxRate ?? ''),
+        baseCode: baseCurrency,
+      });
+    }
+    return ctx.t('boq.resource_no_fx_rate', {
+      defaultValue: 'No FX rate configured for {{code}} — total shown in {{code}}',
+      code: resourceCurrency,
+    });
+  })();
 
   return (
     <div
@@ -1689,26 +2060,45 @@ function EditableResourceRow({ data, ctx, colWidths }: { data: Record<string, un
         ctx.onShowContextMenu?.(e, 'resource', data);
       }}
     >
-      {/* Type badge */}
-      <span className={`shrink-0 inline-flex items-center h-4 px-1.5 rounded text-[9px] font-bold uppercase tracking-wider ${badge.bg}`}>
-        {badge.label}
-      </span>
+      {/* Type — fit-content badge picker (portal popover, not a native select
+          — native selects render at the width of the longest option which
+          left every badge stretched to "EQUIPMENT" width). */}
+      <ResourceTypePicker
+        value={resourceType}
+        onChange={handleTypeChange}
+        t={ctx.t}
+      />
 
-      {/* Name — editable */}
-      <span className="truncate min-w-0 flex-1 text-content-secondary font-medium">
-        <InlineTextInput value={data._resourceName as string} onCommit={handleNameChange} className="w-full text-[11px]" />
-      </span>
-
-      {/* Code (small, muted) */}
-      {typeof data._resourceCode === 'string' && data._resourceCode && (
-        <span className="shrink-0 text-[9px] font-mono text-content-quaternary truncate max-w-[60px]" title={data._resourceCode}>
-          {data._resourceCode}
+      {/* Code (small, muted) — moved to the LEFT of the name so the catalogue
+          article number is the first thing the eye lands on. Hidden once
+          the user customises the name (handleNameChange clears it), so a
+          customised row reads as a brand-new entry, not a fork of the
+          original catalogue item. */}
+      {resourceCode && (
+        <span
+          className="shrink-0 text-[9px] font-mono text-content-quaternary truncate max-w-[80px]
+                     px-1 py-0.5 rounded bg-surface-secondary/60"
+          title={ctx.t('boq.resource_catalog_code', { defaultValue: 'Catalogue code: {{code}}', code: resourceCode })}
+        >
+          {resourceCode}
         </span>
       )}
 
-      {/* Unit — aligned to grid Unit column */}
+      {/* Name — editable. Committing a different name strips the catalogue
+          code (see handleNameChange) so the row becomes a customised
+          resource, savable to the user's personal catalogue via the
+          BookmarkPlus action. */}
+      <span className="truncate min-w-0 flex-1 text-content-secondary font-medium">
+        <InlineTextInput value={originalName} onCommit={handleNameChange} className="w-full text-[11px]" />
+      </span>
+
+      {/* Unit — free-form with datalist autocomplete */}
       <span className="shrink-0 text-center text-content-tertiary" style={{ width: `${colWidths.unit}px` }}>
-        <InlineTextInput value={data._resourceUnit as string} onCommit={(v: string) => ctx.onUpdateResource?.(posId, resIdx, 'unit', v)} className="w-full text-[11px] text-center" />
+        <InlineUnitInput
+          value={data._resourceUnit as string}
+          onCommit={(v: string) => ctx.onUpdateResource?.(posId, resIdx, 'unit', v)}
+          className="w-full text-[11px] text-center"
+        />
       </span>
 
       {/* Quantity — aligned to grid Qty column */}
@@ -1721,9 +2111,59 @@ function EditableResourceRow({ data, ctx, colWidths }: { data: Record<string, un
         <InlineNumberInput value={rate} onCommit={handleRateChange} fmt={ctx.fmt} className="w-full text-[11px]" />
       </span>
 
+      {/* Currency — grouped picker. Project FX-configured currencies appear
+          first; the global ISO catalogue follows so an international
+          estimator can pick e.g. JPY for an imported component even when
+          the BOQ owner hasn't set up FX rates yet. */}
+      <select
+        value={resourceCurrency}
+        onChange={(e) => handleCurrencyChange(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        className="shrink-0 h-4 px-1 rounded text-[9px] font-mono uppercase tracking-wide
+                   bg-surface-primary border border-border-light text-content-secondary
+                   appearance-none cursor-pointer outline-none focus:ring-1 focus:ring-oe-blue"
+        style={{ width: '56px' }}
+        title={ctx.t('boq.resource_currency_pick', {
+          defaultValue: 'Currency — {{symbol}} {{code}}',
+          symbol: CURRENCY_SYMBOL[resourceCurrency] ?? '',
+          code: resourceCurrency,
+        })}
+        aria-label={ctx.t('boq.resource_currency', { defaultValue: 'Currency' })}
+      >
+        <optgroup label={ctx.t('boq.currency_group_project', { defaultValue: 'Project' })}>
+          {projectGroup.map((code) => (
+            <option key={code} value={code}>{code}</option>
+          ))}
+        </optgroup>
+        {otherGroup.length > 0 && (
+          <optgroup label={ctx.t('boq.currency_group_world', { defaultValue: 'World currencies' })}>
+            {otherGroup.map((code) => (
+              <option key={code} value={code}>{code}</option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+
       {/* Total — aligned to grid Total column */}
-      <span className="shrink-0 text-right tabular-nums font-medium text-content-primary" style={{ width: `${colWidths.total}px` }}>
-        {formattedTotal}
+      <span
+        className="shrink-0 text-right tabular-nums font-medium text-content-primary flex items-center justify-end gap-1"
+        style={{ width: `${colWidths.total}px` }}
+        title={totalTitle}
+      >
+        {isForeign && !hasFxRate && (
+          <span
+            className="inline-flex items-center justify-center h-3 px-1 rounded
+                       text-[8px] font-bold uppercase
+                       bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+            title={ctx.t('boq.resource_no_fx_rate', {
+              defaultValue: 'No FX rate configured for {{code}} — total shown in {{code}}',
+              code: resourceCurrency,
+            })}
+          >
+            ⚠ no FX
+          </span>
+        )}
+        <span>{formattedTotal}</span>
       </span>
 
       {/* Actions — aligned to grid Actions column */}
@@ -1853,6 +2293,9 @@ export function ResourceFullWidthRenderer(params: ICellRendererParams) {
 export function QuantityCellRenderer(params: ICellRendererParams) {
   const { data, value, context } = params;
   if (!data || data._isSection || data._isFooter) {
+    // Footer rows (Direct Cost / Net Total / VAT / Gross Total) must not
+    // display a numeric Qty — totals don't have a meaningful quantity (Bug 15).
+    if (data?._isFooter) return <span />;
     return <span className="text-right text-xs tabular-nums">{value != null ? value : ''}</span>;
   }
 
@@ -1882,15 +2325,63 @@ export function QuantityCellRenderer(params: ICellRendererParams) {
   const meta = (data.metadata ?? {}) as Record<string, unknown>;
   const hasBimSource = !!meta.bim_qty_source;
   const hasPdfSource = !!meta.pdf_measurement_source;
+  const hasDwgSource = !!meta.dwg_annotation_source;
+  const formulaSource = typeof meta.formula === 'string' ? meta.formula : null;
 
   let colorClass = '';
   let titleText: string | undefined;
   if (hasPdfSource) {
     colorClass = 'font-semibold text-rose-700 dark:text-rose-400';
     titleText = String(meta.pdf_measurement_source);
+  } else if (hasDwgSource) {
+    colorClass = 'font-semibold text-amber-700 dark:text-amber-400';
+    titleText = String(meta.dwg_annotation_source);
   } else if (hasBimSource) {
     colorClass = 'font-semibold text-emerald-700 dark:text-emerald-400';
     titleText = String(meta.bim_qty_source);
+  } else if (formulaSource) {
+    // Issue #90: cells with a stored formula get a violet accent + the
+    // formula string in the title so a user knows the qty is computed.
+    colorClass = 'font-semibold text-violet-700 dark:text-violet-300';
+    titleText = `Formula: ${formulaSource}`;
+  }
+
+  // When a formula is the source of the value, give the cell a clear,
+  // unmissable visual treatment: a violet ƒx pill on the left, the resolved
+  // number on the right, and the original formula string surfaced in the
+  // browser tooltip. Click → re-enter edit mode and the FormulaCellEditor
+  // pre-fills with the source formula (not the resolved number).
+  if (formulaSource && !hasBimSource && !hasPdfSource && !hasDwgSource) {
+    return (
+      <span
+        className="relative flex items-center justify-end gap-1 w-full h-full text-xs tabular-nums leading-[32px]"
+        title={`ƒx ${formulaSource}  =  ${formatted}\n\nClick to edit the formula.`}
+      >
+        <span
+          aria-hidden="true"
+          className="inline-flex items-center px-1 h-[16px] rounded text-[9px] font-bold leading-none tracking-tight bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300 border border-violet-300/60 dark:border-violet-700/50"
+        >
+          ƒx
+        </span>
+        <span className="font-semibold text-violet-700 dark:text-violet-300">{formatted}</span>
+      </span>
+    );
+  }
+
+  // Source badge: BIM → Cuboid, PDF → Ruler, DWG → FileBox. Same icons used
+  // by the link-buttons next to the description column so provenance is
+  // visually consistent across the grid.
+  if (hasBimSource || hasPdfSource || hasDwgSource) {
+    const Icon = hasBimSource ? Cuboid : hasPdfSource ? Ruler : FileBox;
+    return (
+      <span
+        className={`flex items-center justify-end gap-1 w-full h-full text-xs tabular-nums leading-[32px] ${colorClass}`}
+        title={titleText}
+      >
+        <Icon className="w-3 h-3 opacity-80" aria-hidden="true" />
+        <span>{formatted}</span>
+      </span>
+    );
   }
 
   return (
@@ -1907,17 +2398,20 @@ export function QuantityCellRenderer(params: ICellRendererParams) {
 
 export function UnitCellRenderer(params: ICellRendererParams) {
   const { data, value } = params;
+  // Bug 9: render the raw unit code (e.g. "m2") with NO casing transform — must match
+  // the agSelectCellEditor dropdown which lists lowercase values.
   if (!data || data._isSection || data._isFooter) {
-    return <span className="text-center text-2xs font-mono uppercase">{value ?? ''}</span>;
+    return <span className="text-center text-2xs font-mono">{value ?? ''}</span>;
   }
 
   const meta = (data.metadata ?? {}) as Record<string, unknown>;
   const bimSource = meta.bim_qty_source as string | undefined;
   const pdfSource = meta.pdf_measurement_source as string | undefined;
+  const dwgSource = meta.dwg_annotation_source as string | undefined;
 
   // No source indicator needed
-  if (!bimSource && !pdfSource) {
-    return <span className="text-center text-2xs font-mono uppercase w-full block">{value ?? ''}</span>;
+  if (!bimSource && !pdfSource && !dwgSource) {
+    return <span className="text-center text-2xs font-mono w-full block">{value ?? ''}</span>;
   }
 
   if (pdfSource) {
@@ -1926,10 +2420,27 @@ export function UnitCellRenderer(params: ICellRendererParams) {
     const shortLabel = (parts[parts.length - 1] ?? pdfSource).trim();
     return (
       <div className="flex flex-col items-center justify-center h-full w-full gap-0">
-        <span className="text-2xs font-mono uppercase leading-tight">{value ?? ''}</span>
+        <span className="text-2xs font-mono leading-tight">{value ?? ''}</span>
         <span
           className="text-[7px] leading-none font-medium text-rose-600 dark:text-rose-400 truncate max-w-full"
           title={pdfSource}
+        >
+          {shortLabel}
+        </span>
+      </div>
+    );
+  }
+
+  if (dwgSource) {
+    // Extract short label: "DWG: Area annotation" -> "annotation" (last token).
+    const parts = dwgSource.split(/[:/]/);
+    const shortLabel = (parts[parts.length - 1] ?? dwgSource).trim();
+    return (
+      <div className="flex flex-col items-center justify-center h-full w-full gap-0">
+        <span className="text-2xs font-mono leading-tight">{value ?? ''}</span>
+        <span
+          className="text-[7px] leading-none font-medium text-amber-600 dark:text-amber-400 truncate max-w-full"
+          title={dwgSource}
         >
           {shortLabel}
         </span>
@@ -1944,7 +2455,7 @@ export function UnitCellRenderer(params: ICellRendererParams) {
 
   return (
     <div className="flex flex-col items-center justify-center h-full w-full gap-0">
-      <span className="text-2xs font-mono uppercase leading-tight">{value ?? ''}</span>
+      <span className="text-2xs font-mono leading-tight">{value ?? ''}</span>
       <span
         className="text-[7px] leading-none font-medium text-emerald-600 dark:text-emerald-400 truncate max-w-full"
         title={bimSource}

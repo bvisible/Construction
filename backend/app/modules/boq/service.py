@@ -742,6 +742,57 @@ def _to_decimal(
     return d
 
 
+# BUG-MATH01: enforce a fixed 4-decimal-place precision boundary at the
+# storage layer.  CLAUDE.md specifies decimal arithmetic with explicit
+# rounding; previously we wrote whatever Decimal multiplication produced
+# (e.g. ``99.99 * 0.1 = 9.999``), which leaked binary-float drift in for
+# any caller that fed floats in via ``repr``.  Quantising at write time
+# turns the column into a NUMERIC(18,4) equivalent regardless of the
+# underlying String-vs-Numeric storage choice.
+_MONEY_QUANTUM = Decimal("0.0001")
+
+
+def _quantize_money(value: Decimal) -> Decimal:
+    """Round a Decimal to 4 fractional digits using banker's rounding.
+
+    Returns the input unchanged when the value is non-finite — callers
+    upstream already guarded those.  ROUND_HALF_EVEN ("banker's rounding")
+    is the regulated default for monetary aggregations and avoids the
+    upward bias of HALF_UP over millions of line items.
+    """
+    from decimal import ROUND_HALF_EVEN
+
+    if not value.is_finite():
+        return value
+    return value.quantize(_MONEY_QUANTUM, rounding=ROUND_HALF_EVEN)
+
+
+def _quantize_money_str(value: str | int | float | Decimal | None) -> str:
+    """Coerce → Decimal → quantize(4dp) → canonical string.
+
+    Used at every write boundary for ``quantity``, ``unit_rate``, and
+    ``total`` so the DB never holds more than 4 fractional digits.
+    """
+    return str(_quantize_money(_to_decimal(value)))
+
+
+def _coerce_audit_value(value: Any) -> Any:
+    """Convert a Position attribute to a JSON-safe primitive (BUG-AUDIT01).
+
+    Activity-log ``changes`` is stored as a JSON column; raw UUID /
+    datetime / Decimal instances trip the SQLite JSON serialiser and
+    break the diff write entirely.  Stringify them; primitives, dicts
+    and lists pass through unchanged.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_coerce_audit_value(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _coerce_audit_value(v) for k, v in value.items()}
+    return str(value)
+
+
 def _compute_total(
     quantity: str | int | float | Decimal | None,
     unit_rate: str | int | float | Decimal | None,
@@ -749,10 +800,12 @@ def _compute_total(
     """Compute ``quantity * unit_rate`` preserving exact decimal precision.
 
     Returns a canonical string representation safe for SQLite storage.
+    The product is quantised to 4 decimal places (BUG-MATH01) so aggregate
+    drift cannot compound across thousands of lines.
     """
     q = _to_decimal(quantity)
     r = _to_decimal(unit_rate)
-    return str(q * r)
+    return str(_quantize_money(q * r))
 
 
 def _str_to_float(value: str | None) -> float:
@@ -786,6 +839,73 @@ def _is_section(position: Position) -> bool:
     qty = _str_to_float(position.quantity)
     rate = _str_to_float(position.unit_rate)
     return unit in ("", "section") and qty == 0.0 and rate == 0.0
+
+
+def _resource_total_in_base(
+    resources: list[dict[str, Any]],
+    fx_rates_map: dict[str, str] | None,
+    base_currency: str,
+) -> float:
+    """Sum resource subtotals in the project's BASE currency.
+
+    Issue #88 — each resource dict may carry an optional ``currency``. When
+    present and different from ``base_currency``, the row's contribution is
+    converted via ``fx_rates_map[currency]`` (units of base per 1 unit of
+    foreign). Missing currency → treated as base. Missing rate for a
+    foreign currency → resource is summed in its own units anyway, but
+    the caller is expected to surface a "missing FX rate" warning at UI
+    time (this function silently skips the conversion to keep the rollup
+    deterministic and never zero out a row).
+
+    Pure function — no DB I/O — so it's cheap to call from update_position
+    and reusable from snapshot/export paths.
+    """
+    if not resources:
+        return 0.0
+    base = (base_currency or "").upper()
+    total = 0.0
+    for r in resources:
+        if not isinstance(r, dict):
+            continue
+        try:
+            qty = float(r.get("quantity", 0) or 0)
+            rate = float(r.get("unit_rate", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        sub = qty * rate
+        code = str(r.get("currency") or "").strip().upper()
+        if code and code != base and fx_rates_map:
+            fx = fx_rates_map.get(code)
+            if fx:
+                try:
+                    sub = sub * float(fx)
+                except (TypeError, ValueError):
+                    pass
+        total += sub
+    return total
+
+
+def _project_fx_map(project: object | None) -> dict[str, str]:
+    """Project the ``Project.fx_rates`` JSON list into ``{code: rate}``.
+
+    Defensive against missing attribute / malformed entries — returns an
+    empty dict in any error path so callers can pass it through
+    ``_resource_total_in_base`` without further guards.
+    """
+    if project is None:
+        return {}
+    raw = getattr(project, "fx_rates", None)
+    if not isinstance(raw, list):
+        return {}
+    out: dict[str, str] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        code = str(entry.get("code") or "").strip().upper()
+        rate = str(entry.get("rate") or "").strip()
+        if code and rate:
+            out[code] = rate
+    return out
 
 
 def _build_position_response(pos: Position) -> PositionResponse:
@@ -1025,6 +1145,99 @@ class BOQService:
             )
         return boq
 
+    async def _validate_parent_id(
+        self,
+        *,
+        boq_id: uuid.UUID,
+        position_id: uuid.UUID | None,
+        new_parent_id: uuid.UUID | None,
+    ) -> None:
+        """Validate a candidate ``parent_id`` for a position to prevent cycles.
+
+        Guards three classes of corruption that would crash hierarchical
+        traversal (total recompute, PDF/Excel/GAEB exports):
+
+        1. **Self-cycle** — ``parent_id == position_id``.
+        2. **Descendant cycle** — ``parent_id`` is a direct or transitive
+           descendant of ``position_id``. Walks the descendant chain by
+           repeatedly fetching children until the candidate is found or the
+           tree is exhausted. A visited-set guard prevents an infinite loop
+           on already-corrupt data; if the guard ever trips we log a warning
+           — under normal operation it never should.
+        3. **Cross-BOQ parent** — ``parent_id`` belongs to a different BOQ.
+
+        Args:
+            boq_id: BOQ that the (current or candidate) position lives in.
+            position_id: ID of the position being updated, or ``None`` for
+                creates where the row does not exist yet.
+            new_parent_id: Candidate parent UUID, or ``None`` for a top-level
+                position. ``None`` is always valid and short-circuits.
+
+        Raises:
+            HTTPException 400: Any of the three invariants is violated.
+        """
+        if new_parent_id is None:
+            return
+
+        # 1. Self-cycle. Cheap pre-check before any DB round-trip.
+        # BUG-CYCLE02: validation errors return 422 (FastAPI convention),
+        # not 400. Bogus parent_id used to surface as a generic 400 or
+        # leak a 500 from FK violation; now consistent across all
+        # parent-validation failures.
+        if position_id is not None and new_parent_id == position_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Position cannot be its own parent (self-referencing parent_id).",
+            )
+
+        # 3. Cross-BOQ parent — validated up front so we don't follow
+        #    descendant chains across BOQ boundaries.
+        parent = await self.position_repo.get_by_id(new_parent_id)
+        if parent is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Parent position {new_parent_id} does not exist.",
+            )
+        if parent.boq_id != boq_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Parent position belongs to a different BOQ "
+                    f"({parent.boq_id}); cross-BOQ parents are not allowed."
+                ),
+            )
+
+        # 2. Descendant cycle. Only meaningful for updates (position_id
+        #    is not None). For creates the row has no descendants yet.
+        if position_id is None:
+            return
+
+        visited: set[uuid.UUID] = set()
+        frontier: list[uuid.UUID] = [position_id]
+        while frontier:
+            current = frontier.pop()
+            if current in visited:
+                logger.warning(
+                    "Cycle guard: revisited position %s while walking descendants of %s — "
+                    "data may already be corrupt.",
+                    current,
+                    position_id,
+                )
+                continue
+            visited.add(current)
+
+            children = await self.position_repo.list_children(current)
+            for child in children:
+                if child.id == new_parent_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=(
+                            "Cannot set parent_id to a descendant of this position "
+                            "— would create a cycle in the BOQ hierarchy."
+                        ),
+                    )
+                frontier.append(child.id)
+
     # ── BOQ operations ────────────────────────────────────────────────────
 
     async def create_boq(self, data: BOQCreate) -> BOQ:
@@ -1195,6 +1408,8 @@ class BOQService:
         Raises:
             HTTPException 404 if the target BOQ doesn't exist.
             HTTPException 409 if the BOQ is locked.
+            HTTPException 422 if ``cost_item_id`` was supplied but does not
+                reference an active CostItem (Issue #79).
         """
         await self._ensure_not_locked(data.boq_id)
 
@@ -1205,6 +1420,45 @@ class BOQService:
                 detail=f"Position with ordinal '{data.ordinal}' already exists in this BOQ",
             )
 
+        # Cycle / cross-BOQ guard. The (rare) client-supplied id case where
+        # parent_id == id would otherwise create an immediate self-loop.
+        await self._validate_parent_id(
+            boq_id=data.boq_id,
+            position_id=None,
+            new_parent_id=data.parent_id,
+        )
+
+        # Issue #79: validate and stamp ``metadata.cost_item_id`` so a position
+        # created with ``source='cwicr'`` (or any source) can carry a typed
+        # link back to the cost database.  No DB migration — we piggyback
+        # on the existing JSON metadata column.
+        merged_metadata: dict[str, Any] = (
+            dict(data.metadata) if isinstance(data.metadata, dict) else {}
+        )
+        if data.cost_item_id is not None:
+            try:
+                cost_repo = CostItemRepository(self.session)
+                cost_item = await cost_repo.get_by_id(data.cost_item_id)
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001 — surface any DB failure as 422
+                logger.exception(
+                    "add_position cost_item lookup failed for %s", data.cost_item_id
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "cost_item_id does not reference an active CostItem "
+                        f"({type(exc).__name__})"
+                    ),
+                ) from exc
+            if cost_item is None or not getattr(cost_item, "is_active", False):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="cost_item_id does not reference an active CostItem",
+                )
+            merged_metadata["cost_item_id"] = str(data.cost_item_id)
+
         total = _compute_total(data.quantity, data.unit_rate)
         max_order = await self.position_repo.get_max_sort_order(data.boq_id)
 
@@ -1214,14 +1468,15 @@ class BOQService:
             ordinal=data.ordinal,
             description=data.description,
             unit=data.unit,
-            quantity=str(data.quantity),
-            unit_rate=str(data.unit_rate),
+            # BUG-MATH01: quantise inputs to 4 dp at the storage boundary.
+            quantity=_quantize_money_str(data.quantity),
+            unit_rate=_quantize_money_str(data.unit_rate),
             total=total,
             classification=data.classification,
             source=data.source,
             confidence=str(data.confidence) if data.confidence is not None else None,
             cad_element_ids=data.cad_element_ids,
-            metadata_=data.metadata,
+            metadata_=merged_metadata,
             sort_order=max_order + 1,
         )
         position = await self.position_repo.create(position)
@@ -1311,19 +1566,33 @@ class BOQService:
         logger.info("Section created: %s in BOQ %s", data.ordinal, boq_id)
         return section
 
-    async def update_position(self, position_id: uuid.UUID, data: PositionUpdate) -> Position:
+    async def update_position(
+        self,
+        position_id: uuid.UUID,
+        data: PositionUpdate,
+        *,
+        actor_id: uuid.UUID | None = None,
+    ) -> Position:
         """Update a position and recalculate total if quantity or unit_rate changed.
 
         Args:
             position_id: Target position identifier.
-            data: Partial update payload.
+            data: Partial update payload.  May include ``version`` for
+                optimistic-concurrency control (BUG-CONCURRENCY01).
+            actor_id: Optional caller user-id to attribute the audit-log
+                entry to.  When ``None`` the service falls back to the
+                system zero-UUID; routers should always pass it explicitly
+                so ``BOQActivityLog.user_id`` resolves to a real user
+                (PG/SQLite both enforce the FK).
 
         Returns:
             Updated position.
 
         Raises:
             HTTPException 404 if position not found.
-            HTTPException 409 if the owning BOQ is locked.
+            HTTPException 409 if the owning BOQ is locked, the ordinal
+                collides, OR the supplied ``version`` does not match the
+                row's current value (lost-update protection).
         """
         position = await self.position_repo.get_by_id(position_id)
         if position is None:
@@ -1335,6 +1604,76 @@ class BOQService:
 
         fields = data.model_dump(exclude_unset=True)
 
+        # ── Issue #79: cost_item_id linkage ─────────────────────────────
+        # The client doesn't see ``metadata.cost_item_id`` directly — they
+        # send a top-level ``cost_item_id`` field.  Pop it out, validate
+        # the target exists, then merge into ``metadata`` so the existing
+        # JSON-column write path persists it without a schema migration.
+        client_cost_item_id = fields.pop("cost_item_id", None)
+        if client_cost_item_id is not None:
+            try:
+                cost_repo = CostItemRepository(self.session)
+                cost_item = await cost_repo.get_by_id(client_cost_item_id)
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001 — surface any DB failure as 422
+                logger.exception(
+                    "update_position cost_item lookup failed for %s",
+                    client_cost_item_id,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "cost_item_id does not reference an active CostItem "
+                        f"({type(exc).__name__})"
+                    ),
+                ) from exc
+            if cost_item is None or not getattr(cost_item, "is_active", False):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="cost_item_id does not reference an active CostItem",
+                )
+            # Merge into the metadata field that the rest of the function
+            # already knows how to persist.  Preserve any other keys the
+            # caller patched (or, when they didn't touch metadata, the
+            # existing stored values).
+            base_meta: dict[str, Any]
+            if "metadata" in fields and isinstance(fields["metadata"], dict):
+                base_meta = dict(fields["metadata"])
+            else:
+                existing_meta = (
+                    position.metadata_ if isinstance(position.metadata_, dict) else {}
+                )
+                base_meta = dict(existing_meta)
+            base_meta["cost_item_id"] = str(client_cost_item_id)
+            fields["metadata"] = base_meta
+
+        # ── BUG-CONCURRENCY01: optimistic concurrency check ──────────────
+        # Pop the client-supplied ``version`` so it never reaches the SQL
+        # UPDATE.  We bump it ourselves below.
+        client_version = fields.pop("version", None)
+        if client_version is not None and int(client_version) != int(position.version or 0):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Position was modified by another writer (server version "
+                    f"{position.version}, client supplied {client_version}). "
+                    "Reload and retry."
+                ),
+            )
+
+        # ── BUG-AUDIT01: snapshot before-state for the audit-log diff ──
+        # Capture *before* mutation so the audit row carries old/new pairs
+        # for every column the patch touches.  We only snapshot fields the
+        # client actually set, mirroring ``exclude_unset`` above.
+        _audit_before: dict[str, Any] = {}
+        for key in fields:
+            attr = "metadata_" if key == "metadata" else key
+            try:
+                _audit_before[key] = getattr(position, attr)
+            except AttributeError:
+                _audit_before[key] = None
+
         # If ordinal is being changed, check uniqueness within the BOQ
         if "ordinal" in fields and fields["ordinal"] != position.ordinal:
             if await self.position_repo.ordinal_exists(
@@ -1345,11 +1684,22 @@ class BOQService:
                     detail=f"Position with ordinal '{fields['ordinal']}' already exists in this BOQ",
                 )
 
-        # Convert float values to strings for storage
+        # If parent_id is being changed, validate it doesn't create a cycle
+        # or cross BOQ boundaries. Skip the walk when the value is unchanged
+        # so untouched edits don't pay the descendant-traversal cost.
+        if "parent_id" in fields and fields["parent_id"] != position.parent_id:
+            await self._validate_parent_id(
+                boq_id=position.boq_id,
+                position_id=position_id,
+                new_parent_id=fields["parent_id"],
+            )
+
+        # Convert float values to strings for storage and quantise to 4dp
+        # so storage drift cannot accumulate (BUG-MATH01).
         if "quantity" in fields:
-            fields["quantity"] = str(fields["quantity"])
+            fields["quantity"] = _quantize_money_str(fields["quantity"])
         if "unit_rate" in fields:
-            fields["unit_rate"] = str(fields["unit_rate"])
+            fields["unit_rate"] = _quantize_money_str(fields["unit_rate"])
         if "confidence" in fields:
             val = fields["confidence"]
             fields["confidence"] = str(val) if val is not None else None
@@ -1409,29 +1759,91 @@ class BOQService:
             # str → float → str roundtrip that was losing precision.
             fields["total"] = _compute_total(new_quantity, new_unit_rate)
 
-        # Manual quantity override: drop BIM/PDF link artifacts and reset validation.
-        # When the user hand-edits the quantity, any previously-linked BIM or PDF
-        # source is no longer authoritative — the unit-column badges disappear and
-        # the red validation border clears until re-validation runs.
+        # Manual quantity override: drop BIM/PDF/DWG link artifacts and reset
+        # validation. When the user hand-edits the quantity, any previously-
+        # linked source is no longer authoritative — unit-column badges
+        # disappear and the red validation border clears until re-validation
+        # runs.
+        #
+        # Exception: when the caller (BIM Quantity Picker, PDF takeoff "Use
+        # as quantity", or DWG popover "Apply") explicitly includes the
+        # relevant ``*_source`` key in the incoming metadata, that key is the
+        # authoritative new link and must be preserved through the strip
+        # pass. Without this carve-out the picker's own provenance was wiped
+        # on the same request that set it.
         if triggered_by_qty:
             existing_meta = position.metadata_ if isinstance(position.metadata_, dict) else {}
             incoming_meta = fields.get("metadata_")
-            base_meta = incoming_meta if isinstance(incoming_meta, dict) else dict(existing_meta)
+            base_meta = dict(incoming_meta) if isinstance(incoming_meta, dict) else dict(existing_meta)
             stripped = False
-            for link_key in ("bim_qty_source", "pdf_measurement_source"):
+            for link_key in (
+                "bim_qty_source",
+                "pdf_measurement_source",
+                "dwg_annotation_source",
+            ):
+                if isinstance(incoming_meta, dict) and link_key in incoming_meta:
+                    continue
                 if link_key in base_meta:
                     base_meta.pop(link_key)
                     stripped = True
-            if stripped:
+            if stripped or isinstance(incoming_meta, dict):
                 fields["metadata_"] = base_meta
             if "validation_status" not in fields:
                 fields["validation_status"] = "pending"
 
         if fields:
-            await self.position_repo.update_fields(position_id, **fields)
-            # Flush to DB, then refresh ORM state from DB (avoids MissingGreenlet on lazy load)
-            await self.session.flush()
-            await self.session.refresh(position)
+            # BUG-CONCURRENCY01: bump the version counter atomically with the
+            # rest of the field set so any concurrent reader observing the
+            # post-write state also sees the incremented token.
+            fields["version"] = int(position.version or 0) + 1
+            # Bug 1 (v2.5.4): wrap the DB write in a defensive try/except so
+            # any unexpected SQLAlchemy/IntegrityError surfaces as a 422 with
+            # a useful detail instead of a bare 500. Common trigger: undo
+            # replay against a position whose parent_id, ordinal, or numeric
+            # field is no longer valid relative to current DB state.
+            try:
+                await self.position_repo.update_fields(position_id, **fields)
+                # Flush to DB, then refresh ORM state from DB (avoids MissingGreenlet on lazy load)
+                await self.session.flush()
+                await self.session.refresh(position)
+            except HTTPException:
+                raise
+            except Exception as exc:  # noqa: BLE001 — surface any DB failure as 422
+                logger.exception(
+                    "update_position DB write failed for %s; fields=%s",
+                    position_id,
+                    {k: type(v).__name__ for k, v in fields.items()},
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "Position update could not be applied. The row may have "
+                        "been deleted or modified concurrently — reload and retry. "
+                        f"({type(exc).__name__})"
+                    ),
+                ) from exc
+
+        # ── BUG-AUDIT01: build the field-level diff payload ──────────────
+        # ``_audit_before`` snapshotted attributes BEFORE the UPDATE; we
+        # snapshot again now to compose ``{"field": {"old": ..., "new": ...}}``
+        # entries.  Stringify everything so the JSON column never receives
+        # an opaque Decimal/UUID/datetime that would break dict equality
+        # downstream.  ``version`` is embedded in metadata so consumers can
+        # reconstruct the row history without joining back to ``Position``.
+        changes_diff: dict[str, dict[str, Any]] = {}
+        if fields:
+            for key in _audit_before:
+                attr = "metadata_" if key == "metadata" else key
+                try:
+                    new_val = getattr(position, attr)
+                except AttributeError:
+                    new_val = None
+                old_val = _audit_before[key]
+                if old_val != new_val:
+                    changes_diff[key] = {
+                        "old": _coerce_audit_value(old_val),
+                        "new": _coerce_audit_value(new_val),
+                    }
 
         await _safe_publish(
             "boq.position.updated",
@@ -1439,9 +1851,42 @@ class BOQService:
                 "position_id": str(position.id),
                 "boq_id": str(position.boq_id),
                 "ordinal": position.ordinal,
+                # Diff payload picked up by the activity-log wildcard
+                # handler in ``boq.events`` (BUG-AUDIT01).
+                "changes": changes_diff,
+                "version": int(position.version or 0),
             },
             source_module="oe_boq",
         )
+
+        # ── BUG-AUDIT01: direct activity-log write ──────────────────────
+        # The wildcard event handler in ``boq.events`` is *not* registered
+        # on SQLite (greenlet-bridge issue) so dev / test instances would
+        # otherwise lose every position-update audit entry.  Writing
+        # in-line here, in the same session as the update, guarantees
+        # coverage on every dialect.  Skipped when the caller did not
+        # supply a real user-id (FK-bound column).
+        if changes_diff and actor_id is not None:
+            try:
+                project_id: uuid.UUID | None = None
+                try:
+                    boq = await self.get_boq(position.boq_id)
+                    project_id = boq.project_id
+                except Exception:  # noqa: BLE001 — best-effort
+                    project_id = None
+                await self.log_activity(
+                    user_id=actor_id,
+                    action="position.updated",
+                    target_type="position",
+                    description=f"Updated position {position.ordinal}",
+                    project_id=project_id,
+                    boq_id=position.boq_id,
+                    target_id=position.id,
+                    changes=changes_diff,
+                    metadata_={"version": int(position.version or 0)},
+                )
+            except Exception:  # noqa: BLE001 — best-effort, never break PATCH
+                logger.debug("Activity-log write for position.updated failed", exc_info=True)
 
         return position
 
@@ -1744,6 +2189,11 @@ class BOQService:
 
         Deletes existing markups and creates the standard set.
 
+        Issue #89 — when the owning Project has ``default_vat_rate`` set,
+        the seeded VAT/tax markup row uses that percentage instead of the
+        regional template's default. Other markup rows (overhead, profit,
+        contingency) keep their regional defaults.
+
         Args:
             boq_id: Target BOQ identifier.
             region: Region code — "DACH", "UK", "US", "RU", "GULF", or "DEFAULT".
@@ -1761,23 +2211,46 @@ class BOQService:
         region_key = region.upper()
         template = DEFAULT_MARKUP_TEMPLATES.get(region_key, DEFAULT_MARKUP_TEMPLATES["DEFAULT"])
 
+        # Resolve the project's per-project VAT override, if any. Loaded
+        # via the BOQ → Project chain so we don't need a project_id arg
+        # (keeps backwards compat with the existing public signature).
+        # ``default_vat_rate`` is a decimal-string percentage (e.g. ``"21"``).
+        project_vat_override: str | None = None
+        try:
+            boq = await self.boq_repo.get_by_id(boq_id)
+            if boq is not None and getattr(boq, "project_id", None):
+                from app.modules.projects.repository import ProjectRepository
+
+                project = await ProjectRepository(self.session).get_by_id(boq.project_id)
+                if project is not None:
+                    raw = getattr(project, "default_vat_rate", None)
+                    if raw is not None and str(raw).strip() != "":
+                        project_vat_override = str(raw).strip()
+        except Exception:  # noqa: BLE001 — best-effort, never break seeding
+            logger.debug("default_vat_rate lookup failed for boq %s", boq_id, exc_info=True)
+            project_vat_override = None
+
         # Remove existing markups
         await self.markup_repo.delete_all_for_boq(boq_id)
 
-        # Create new markups from template
+        # Create new markups from template, swapping in the override on tax rows
         new_markups: list[BOQMarkup] = []
         for entry in template:
+            percentage = str(entry["percentage"])
+            is_tax_override = bool(project_vat_override) and entry.get("category") == "tax"
+            if is_tax_override:
+                percentage = project_vat_override  # type: ignore[assignment]
             markup = BOQMarkup(
                 boq_id=boq_id,
                 name=str(entry["name"]),
                 markup_type=str(entry.get("markup_type", "percentage")),
                 category=str(entry["category"]),
-                percentage=str(entry["percentage"]),
+                percentage=percentage,
                 fixed_amount=str(entry.get("fixed_amount", "0")),
                 apply_to=str(entry.get("apply_to", "direct_cost")),
                 sort_order=int(entry["sort_order"]),  # type: ignore[arg-type]
                 is_active=True,
-                metadata_={},
+                metadata_={"vat_override": True} if is_tax_override else {},
             )
             new_markups.append(markup)
 

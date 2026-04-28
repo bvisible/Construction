@@ -17,7 +17,7 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Response, UploadFile, status
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,66 @@ _EXT_CATEGORY: dict[str, str] = {
 
 def _get_service(session: SessionDep) -> AIService:
     return AIService(session)
+
+
+# ── AI Providers (BUG-AI-PROVIDERS) ─────────────────────────────────────────
+
+
+_AI_PROVIDERS: list[dict[str, Any]] = [
+    {
+        "id": "anthropic",
+        "display_name": "Anthropic Claude",
+        "supports_streaming": True,
+        "model_choices": ["claude-sonnet", "claude-opus", "claude-haiku"],
+        "recommended": True,
+    },
+    {
+        "id": "openai",
+        "display_name": "OpenAI",
+        "supports_streaming": True,
+        "model_choices": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+    },
+    {
+        "id": "gemini",
+        "display_name": "Google Gemini",
+        "supports_streaming": True,
+        "model_choices": ["gemini-flash", "gemini-pro"],
+    },
+    {
+        "id": "openrouter",
+        "display_name": "OpenRouter",
+        "supports_streaming": True,
+        "model_choices": [],
+    },
+    {"id": "mistral", "display_name": "Mistral AI", "supports_streaming": True, "model_choices": []},
+    {"id": "groq", "display_name": "Groq", "supports_streaming": True, "model_choices": []},
+    {"id": "deepseek", "display_name": "DeepSeek", "supports_streaming": True, "model_choices": []},
+    {"id": "together", "display_name": "Together AI", "supports_streaming": True, "model_choices": []},
+    {"id": "fireworks", "display_name": "Fireworks AI", "supports_streaming": True, "model_choices": []},
+    {"id": "perplexity", "display_name": "Perplexity", "supports_streaming": True, "model_choices": []},
+    {"id": "cohere", "display_name": "Cohere", "supports_streaming": True, "model_choices": []},
+    {"id": "ai21", "display_name": "AI21 Labs", "supports_streaming": False, "model_choices": []},
+    {"id": "xai", "display_name": "xAI Grok", "supports_streaming": True, "model_choices": []},
+]
+
+
+@router.get(
+    "/providers",
+    summary="List available AI providers",
+    description="Return the list of AI providers the platform can talk to. "
+    "Lets the frontend render provider toggles dynamically instead of "
+    "hard-coding the list.",
+)
+@router.get(
+    "/providers/",
+    summary="List available AI providers",
+    description="Return the list of AI providers the platform can talk to. "
+    "Lets the frontend render provider toggles dynamically instead of "
+    "hard-coding the list.",
+)
+async def list_ai_providers() -> list[dict[str, Any]]:
+    """Return the list of supported AI providers."""
+    return _AI_PROVIDERS
 
 
 # ── AI Settings ──────────────────────────────────────────────────────────────
@@ -254,6 +314,7 @@ async def photo_estimate(
     currency: str = Form(default="EUR", description="Currency code"),
     standard: str = Form(default="din276", description="Classification standard"),
     project_id: str | None = Form(default=None, description="Optional project ID"),
+    content_length: int | None = Header(default=None),
     remaining: int = Depends(check_ai_rate_limit),
     service: AIService = Depends(_get_service),
 ) -> EstimateJobResponse:
@@ -275,7 +336,14 @@ async def photo_estimate(
             detail=(f"Unsupported image type: {content_type}. Accepted: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}"),
         )
 
-    # Read and validate size
+    # Reject obviously oversize bodies before reading them into memory.
+    if content_length is not None and content_length > MAX_PHOTO_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Image too large. Maximum size is 10 MB.",
+        )
+
+    # Read and validate size (covers clients that omit/lie about Content-Length).
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(
@@ -284,7 +352,7 @@ async def photo_estimate(
         )
     if len(image_bytes) > MAX_PHOTO_SIZE:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="Image too large. Maximum size is 10 MB.",
         )
 
@@ -327,6 +395,7 @@ async def file_estimate(
     currency: str = Form(default="EUR", description="Currency code"),
     standard: str = Form(default="din276", description="Classification standard"),
     project_id: str | None = Form(default=None, description="Optional project ID"),
+    content_length: int | None = Header(default=None),
     remaining: int = Depends(check_ai_rate_limit),
     service: AIService = Depends(_get_service),
 ) -> EstimateJobResponse:
@@ -354,12 +423,19 @@ async def file_estimate(
             detail=(f"Unsupported file type: .{ext}. Accepted: {', '.join(f'.{e}' for e in sorted(_EXT_CATEGORY))}"),
         )
 
+    # Reject obviously oversize bodies before reading them into memory.
+    if content_length is not None and content_length > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large. Max: {MAX_FILE_SIZE // 1024 // 1024} MB.",
+        )
+
     content = await file.read()
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
     if len(content) > MAX_FILE_SIZE:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File too large ({len(content) / 1024 / 1024:.1f} MB). Max: {MAX_FILE_SIZE // 1024 // 1024} MB.",
         )
 

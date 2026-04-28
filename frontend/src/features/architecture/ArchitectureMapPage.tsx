@@ -1,5 +1,5 @@
 /**
- * ArchitectureMapPage — Interactive visual map of the Neoconstruction system architecture.
+ * ArchitectureMapPage — Interactive visual map of the OpenConstructionERP system architecture.
  *
  * Uses @xyflow/react (React Flow) to render modules, models, routes, and their relationships
  * as an interactive node graph with 4 view levels.

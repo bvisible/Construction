@@ -3,7 +3,7 @@
  *
  * The chat feature historically used its own "keynote" palette (dark
  * GitHub-like colors + amber accent). To make /chat feel like a native
- * part of the app, these tokens are now aliased onto the global Neoconstruction
+ * part of the app, these tokens are now aliased onto the global OpenEstimate
  * design system tokens (`--oe-*` in `src/index.css`). The accent color
  * has been updated from amber to oe-blue for consistency.
  *

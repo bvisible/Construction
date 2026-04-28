@@ -1,4 +1,4 @@
-// Neoconstruction — DataDrivenConstruction (DDC)
+// OpenConstructionERP — DataDrivenConstruction (DDC)
 // CAD2DATA Pipeline · PDF Takeoff Module
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 // DDC-CWICR-OE-2026
@@ -48,6 +48,8 @@ import {
   Layers,
   List,
   X,
+  Check,
+  AlertTriangle,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useToastStore } from '../../stores/useToastStore';
@@ -287,6 +289,11 @@ export default function TakeoffViewerModule({
   const [showTextInput, setShowTextInput] = useState(false);
   const [textInputPos, setTextInputPos] = useState<Point>({ x: 0, y: 0 });
   const [textInputValue, setTextInputValue] = useState('');
+  /** Set on Escape so the imminent input onBlur skips handleTextConfirm.
+   *  Without it, the unmounting input fires blur, blur calls confirm with
+   *  the still-typed value, and a "ghost" annotation is created despite
+   *  the user pressing Escape to cancel. */
+  const textInputCancellingRef = useRef(false);
   const [rectStartPoint, setRectStartPoint] = useState<Point | null>(null);
   const [isDraggingRect, setIsDraggingRect] = useState(false);
 
@@ -381,6 +388,33 @@ export default function TakeoffViewerModule({
     }
   }, []);
 
+  /* ── Reset cross-page in-progress state on page change ───────────
+   * Without this, an in-progress drawing (one click placed) on page 1,
+   * a half-finished calibration pick, or a selected measurement that
+   * lives on another page all leak to the new page.  Symptoms: the next
+   * click on page 2 completes a polygon spanning pages, the calibration
+   * dialog opens with a nonsense distance, the Properties panel shows
+   * data for an off-screen measurement.  See takeoff audit BUG-1/2/5/6. */
+  useEffect(() => {
+    setActivePoints([]);
+    setRectStartPoint(null);
+    setIsDraggingRect(false);
+    setShowTextInput(false);
+    setPendingVolumePoints([]);
+    setShowVolumeDepthInput(false);
+    setSettingScale(false);
+    setCalibrationMode(false);
+    setScalePoints([]);
+  }, [currentPage]);
+
+  /* Deselect a measurement that lives on a different page than the one
+   * being viewed — keeps Properties panel coherent with the canvas. */
+  useEffect(() => {
+    if (!selectedMeasurementId) return;
+    const m = measurements.find((x) => x.id === selectedMeasurementId);
+    if (m && m.page !== currentPage) setSelectedMeasurementId(null);
+  }, [currentPage, selectedMeasurementId, measurements]);
+
   /* ── Load PDF from URL (filmstrip click / deep link) ────────────── */
 
   useEffect(() => {
@@ -443,6 +477,33 @@ export default function TakeoffViewerModule({
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [measurements.length]);
+
+  /* ── First-measurement-without-calibration warning ───────────────── */
+  // Fires exactly once per session: when the user creates their first
+  // measurement on an uncalibrated drawing, surface a toast that links
+  // back to the Calibrate tool. Without this, raw-pixel measurements
+  // (e.g. "22.98 km" on a unitless DWG/PDF) sail through silently.
+  const calibrationWarnShownRef = useRef(false);
+  useEffect(() => {
+    if (calibrationWarnShownRef.current) return;
+    if (isCalibrated) return;
+    if (measurements.length === 0) return;
+    // Only count "real" measurements, not annotations.
+    const hasRealMeasurement = measurements.some(
+      (m) => !ANNOTATION_TOOLS.includes(m.type as AnnotationToolType),
+    );
+    if (!hasRealMeasurement) return;
+    calibrationWarnShownRef.current = true;
+    addToast({
+      type: 'warning',
+      title: t('takeoff_viewer.calibration_warn_title', {
+        defaultValue: 'Drawing is not calibrated',
+      }),
+      message: t('takeoff_viewer.calibration_warn_msg', {
+        defaultValue: 'Measurements may be inaccurate. Use the Calibrate tool to set a real-world length.',
+      }),
+    });
+  }, [measurements, isCalibrated, addToast, t]);
 
   /* ── Render page to canvas ───────────────────────────────────────── */
 
@@ -1460,10 +1521,56 @@ export default function TakeoffViewerModule({
   const zoomOut = useCallback(() => setZoom((z) => Math.max(z / 1.25, 0.25)), []);
   const zoomFit = useCallback(() => setZoom(1), []);
 
+  // Mouse-wheel zoom on the canvas container. Native listener with
+  // `{ passive: false }` so we can preventDefault — React's synthetic
+  // onWheel binds passive in v17+ which silently ignores preventDefault.
+  // Zoom anchors at the cursor (CAD-standard): the world point under the
+  // cursor stays put while we rescale, by adjusting scrollLeft/Top.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      const rect = container.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+
+      setZoom((prev) => {
+        const raw = prev * factor;
+        const next = Math.round(Math.max(0.25, Math.min(4, raw)) * 100) / 100;
+        if (next === prev) return prev;
+        const ratio = next / prev;
+        // Re-anchor scroll on next frame so the new canvas size is laid out.
+        requestAnimationFrame(() => {
+          if (containerRef.current) {
+            containerRef.current.scrollLeft = (container.scrollLeft + cx) * ratio - cx;
+            containerRef.current.scrollTop = (container.scrollTop + cy) * ratio - cy;
+          }
+        });
+        return next;
+      });
+    };
+
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
+  }, []);
+
   /* ── Page navigation ─────────────────────────────────────────────── */
 
   const prevPage = useCallback(() => setCurrentPage((p) => Math.max(p - 1, 1)), []);
-  const nextPage = useCallback(() => setCurrentPage((p) => Math.min(p + 1, totalPages)), []);
+  // BUG-fix: totalPages MUST be a dependency.  With `[]` the callback was
+  // captured on first render when totalPages=0, so Math.min(p+1, 0) clamped
+  // every "next" click to 0 — surfacing as "0/31" in the page indicator
+  // and an empty Measurements list (no measurement has page=0).
+  const nextPage = useCallback(
+    () =>
+      setCurrentPage((p) =>
+        totalPages > 0 ? Math.min(p + 1, totalPages) : p,
+      ),
+    [totalPages],
+  );
 
   /* ── Measurement summary ─────────────────────────────────────────── */
 
@@ -1990,11 +2097,15 @@ export default function TakeoffViewerModule({
    *  is more useful at that point) leave the user on Ledger so they can
    *  click the next row without losing context. */
   const handleLedgerRowClick = useCallback((m: Measurement) => {
-    if (m.page !== currentPage) {
-      setCurrentPage(m.page);
+    // Defensive clamp: server-stored measurements may have page=0 from older
+    // imports.  Snapping to the valid 1..totalPages range avoids pushing
+    // currentPage to 0 (which would render an empty viewport + "0/N" header).
+    const target = Math.max(1, Math.min(m.page || 1, totalPages || 1));
+    if (target !== currentPage) {
+      setCurrentPage(target);
     }
     setSelectedMeasurementId(m.id);
-  }, [currentPage]);
+  }, [currentPage, totalPages]);
 
   /* ── Undo ────────────────────────────────────────────────────────── */
 
@@ -2209,6 +2320,21 @@ export default function TakeoffViewerModule({
       // Tool letters — only when focus isn't in an input / textarea / etc.
       if (!shouldHandleShortcut(e.target)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      // Delete / Backspace removes the selected measurement.  Users coming
+      // from any other CAD/design tool expect this — without it the only
+      // way to delete is right-click → menu, which feels clunky.
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedMeasurementId) {
+        e.preventDefault();
+        setMeasurements((prev) => {
+          const target = prev.find((m) => m.id === selectedMeasurementId);
+          if (target) pushUndo({ kind: 'delete_measurement', measurement: target });
+          return prev.filter((m) => m.id !== selectedMeasurementId);
+        });
+        setSelectedMeasurementId(null);
+        return;
+      }
+
       const tool = shortcutToTool(e.key);
       if (tool) {
         e.preventDefault();
@@ -2383,17 +2509,26 @@ export default function TakeoffViewerModule({
               <div className="flex flex-col">
                 <div className="rounded-2xl bg-white dark:bg-gray-800/60 border border-border-light shadow-lg shadow-black/5 dark:shadow-black/20 p-6 flex flex-col h-full">
                   <label
-                    aria-label={t('takeoff.landing_dropzone_aria', { defaultValue: 'Drop a PDF, PNG, JPG or TIFF here or click to browse.' })}
+                    aria-label={t('takeoff.landing_dropzone_aria', { defaultValue: 'Drop a PDF here or click to browse.' })}
                     onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add('ring-2', 'ring-oe-blue/40'); }}
                     onDragLeave={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.remove('ring-2', 'ring-oe-blue/40'); }}
                     onDrop={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
                       e.currentTarget.classList.remove('ring-2', 'ring-oe-blue/40');
-                      const file = Array.from(e.dataTransfer.files).find((f) => f.type === 'application/pdf');
-                      if (file) {
-                        const fakeEvent = { target: { files: [file] } } as unknown as React.ChangeEvent<HTMLInputElement>;
+                      const dropped = Array.from(e.dataTransfer.files);
+                      if (dropped.length === 0) return;
+                      const pdf = dropped.find((f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'));
+                      if (pdf) {
+                        const fakeEvent = { target: { files: [pdf] } } as unknown as React.ChangeEvent<HTMLInputElement>;
                         handleFileUpload(fakeEvent);
+                      } else {
+                        // Visible feedback so the user isn't left wondering why a non-PDF drop did nothing.
+                        addToast({
+                          type: 'warning',
+                          title: t('takeoff.landing_drop_pdf_only_title', { defaultValue: 'PDF only' }),
+                          message: t('takeoff.landing_drop_pdf_only_msg', { defaultValue: 'Image support is coming soon — drop a PDF for now.' }),
+                        });
                       }
                     }}
                     className="group/drop flex flex-col items-center justify-center gap-4 rounded-xl p-10 text-center cursor-pointer transition-all flex-1 border-2 border-dashed border-border-medium bg-gradient-to-br from-blue-50/60 via-white to-violet-50/40 dark:from-blue-950/20 dark:via-gray-800/40 dark:to-violet-950/20 hover:border-oe-blue/50 hover:shadow-md"
@@ -2406,14 +2541,11 @@ export default function TakeoffViewerModule({
                         {t('takeoff.landing_drop_here', { defaultValue: 'Drop a PDF here or click to browse' })}
                       </p>
                       <p className="text-xs text-content-tertiary mt-1">
-                        {t('takeoff.landing_size_hint', { defaultValue: 'PDF, PNG, JPG, TIFF — up to 50MB' })}
+                        {t('takeoff.landing_size_hint', { defaultValue: 'PDF — up to 50MB' })}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap justify-center">
                       <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-oe-blue/8 text-oe-blue border border-oe-blue/15 font-semibold">.pdf</span>
-                      <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-oe-blue/8 text-oe-blue border border-oe-blue/15 font-semibold">.png</span>
-                      <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-oe-blue/8 text-oe-blue border border-oe-blue/15 font-semibold">.jpg</span>
-                      <span className="text-[10px] font-mono px-2 py-1 rounded-md bg-oe-blue/8 text-oe-blue border border-oe-blue/15 font-semibold">.tiff</span>
                     </div>
                     <p className="text-[10px] text-content-quaternary leading-relaxed mt-1 text-center">
                       {t('takeoff.landing_dropzone_hint', { defaultValue: 'Architectural drawings \u00B7 floor plans \u00B7 sections \u00B7 scans' })}
@@ -2529,9 +2661,36 @@ export default function TakeoffViewerModule({
               <button onClick={prevPage} disabled={currentPage <= 1} className="p-1.5 rounded hover:bg-surface-secondary disabled:opacity-30 transition-colors" aria-label={t('takeoff_viewer.prev_page', { defaultValue: 'Previous page' })}>
                 <ChevronLeft size={16} />
               </button>
-              <span className="text-xs text-content-secondary tabular-nums px-1">
-                {currentPage} / {totalPages}
-              </span>
+              <details className="relative shrink-0" data-testid="page-jump">
+                <summary className="text-xs text-content-secondary tabular-nums px-1 cursor-pointer hover:text-content-primary list-none select-none whitespace-nowrap" title={t('takeoff_viewer.jump_to_page', { defaultValue: 'Click to jump to a page' })}>
+                  {currentPage}/{totalPages}
+                </summary>
+                {totalPages > 1 && (
+                  <div className="absolute left-0 top-full mt-1 z-30 max-h-72 w-44 overflow-y-auto rounded-lg border border-border bg-surface-elevated shadow-lg p-1">
+                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => {
+                      const cnt = measurements.filter((m) => m.page === p).length;
+                      return (
+                        <button
+                          key={p}
+                          type="button"
+                          onClick={(e) => {
+                            setCurrentPage(p);
+                            (e.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open');
+                          }}
+                          className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-xs ${p === currentPage ? 'bg-oe-blue text-white' : 'text-content-secondary hover:bg-surface-secondary'}`}
+                        >
+                          <span className="tabular-nums">{t('takeoff_viewer.page_label', { defaultValue: 'Page' })} {p}</span>
+                          {cnt > 0 && (
+                            <span className={`tabular-nums rounded-full px-1.5 py-0.5 text-[10px] ${p === currentPage ? 'bg-white/20' : 'bg-purple-500/15 text-purple-500'}`}>
+                              {cnt}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </details>
               <button onClick={nextPage} disabled={currentPage >= totalPages} className="p-1.5 rounded hover:bg-surface-secondary disabled:opacity-30 transition-colors" aria-label={t('takeoff_viewer.next_page', { defaultValue: 'Next page' })}>
                 <ChevronRight size={16} />
               </button>
@@ -2638,23 +2797,36 @@ export default function TakeoffViewerModule({
                 <span className="hidden sm:inline">{t('takeoff_viewer.calibrate', { defaultValue: 'Calibrate' })}</span>
               </button>
 
-              {/* Calibration status badge — shows the active ratio + real length. */}
+              {/* Calibration status badge — compact: ratio · length, no
+                  "Calibrated" word (the green tick implies it). One line. */}
               {isCalibrated && !calibrationMode && !settingScale && (
                 <button
                   onClick={handleStartCalibration}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] font-mono bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors border border-purple-300/50 dark:border-purple-700/50"
-                  title={t('takeoff_viewer.recalibrate', { defaultValue: 'Recalibrate scale' })}
+                  className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-mono whitespace-nowrap shrink-0 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/50 transition-colors border border-purple-300/50 dark:border-purple-700/50"
+                  title={t('takeoff_viewer.calibrated_tooltip', {
+                    defaultValue: 'Calibrated · {{ratio}}{{atLen}} — click to recalibrate',
+                    ratio: formatScaleRatio(scale),
+                    atLen: lastCalibration ? ` @ ${lastCalibration.realLength.toFixed(2)} m` : '',
+                  })}
                   data-testid="calibration-badge"
                 >
-                  <span className="font-semibold">Calibrated</span>
-                  <span className="text-purple-500">·</span>
+                  <Check size={11} className="text-purple-500 shrink-0" />
                   <span>{formatScaleRatio(scale)}</span>
                   {lastCalibration && (
-                    <>
-                      <span className="text-purple-500">@</span>
-                      <span>{lastCalibration.realLength.toFixed(2)} m</span>
-                    </>
+                    <span className="text-purple-500/80">· {lastCalibration.realLength.toFixed(1)}m</span>
                   )}
+                </button>
+              )}
+              {/* Uncalibrated warning — shortened to a single chip. */}
+              {!isCalibrated && !calibrationMode && !settingScale && (
+                <button
+                  onClick={handleStartCalibration}
+                  className="flex items-center gap-1 px-1.5 py-1 rounded text-[10px] font-mono whitespace-nowrap shrink-0 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors border border-amber-300/50 dark:border-amber-700/50"
+                  title={t('takeoff_viewer.uncalibrated_hint', { defaultValue: 'Drawing is not calibrated — measurements may be inaccurate. Click to calibrate.' })}
+                  data-testid="uncalibrated-badge"
+                >
+                  <AlertTriangle size={11} className="text-amber-500 shrink-0" />
+                  <span>{t('takeoff_viewer.calibrate_short', { defaultValue: 'Calibrate' })}</span>
                 </button>
               )}
 
@@ -2745,6 +2917,37 @@ export default function TakeoffViewerModule({
                         : t('takeoff_viewer.scale_click_second', { defaultValue: 'Click second point' }))}
                 </div>
               )}
+              {/* Active-tool hint banner — shows what the current tool expects.
+                  Critical for Count/Polyline/Area where users were unsure how
+                  to terminate a session (Esc) and for Calibrate workflow. The
+                  calibration-specific hint above already covers settingScale,
+                  so this branch only fires for measure/annotation tools. */}
+              {!settingScale && activeTool !== 'select' && (
+                <div
+                  className="absolute top-2 left-1/2 -translate-x-1/2 bg-oe-blue/90 text-white px-3 py-1 rounded-md text-[11px] font-medium shadow-lg pointer-events-none flex items-center gap-2"
+                  data-testid="active-tool-hint"
+                >
+                  <span>
+                    {activeTool === 'count' && t('takeoff_viewer.hint_count', { defaultValue: 'Click on each item to count.' })}
+                    {activeTool === 'distance' && t('takeoff_viewer.hint_distance', { defaultValue: 'Click two points for a distance.' })}
+                    {activeTool === 'polyline' && t('takeoff_viewer.hint_polyline', { defaultValue: 'Click points along the line.' })}
+                    {activeTool === 'area' && t('takeoff_viewer.hint_area', { defaultValue: 'Click polygon vertices.' })}
+                    {activeTool === 'volume' && t('takeoff_viewer.hint_volume', { defaultValue: 'Click area outline.' })}
+                    {activeTool === 'cloud' && t('takeoff_viewer.hint_cloud', { defaultValue: 'Click cloud outline points.' })}
+                    {activeTool === 'arrow' && t('takeoff_viewer.hint_arrow', { defaultValue: 'Click arrow start, then end.' })}
+                    {activeTool === 'rectangle' && t('takeoff_viewer.hint_rectangle', { defaultValue: 'Click two corners.' })}
+                    {activeTool === 'highlight' && t('takeoff_viewer.hint_highlight', { defaultValue: 'Drag to highlight a region.' })}
+                    {activeTool === 'text' && t('takeoff_viewer.hint_text', { defaultValue: 'Click to place a text pin.' })}
+                  </span>
+                  {(activeTool === 'count' || activeTool === 'polyline' || activeTool === 'area' || activeTool === 'cloud') && (
+                    <span className="opacity-80 border-l border-white/30 pl-2">
+                      {activeTool === 'count'
+                        ? t('takeoff_viewer.hint_esc_to_finish', { defaultValue: 'Esc: switch tool · Del: undo last' })
+                        : t('takeoff_viewer.hint_dblclick_close', { defaultValue: 'Double-click: close shape · Esc: cancel' })}
+                    </span>
+                  )}
+                </div>
+              )}
               {/* Inline text input overlay for text annotation tool */}
               {showTextInput && (
                 <div
@@ -2760,9 +2963,19 @@ export default function TakeoffViewerModule({
                     onChange={(e) => setTextInputValue(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') handleTextConfirm();
-                      if (e.key === 'Escape') { setShowTextInput(false); setTextInputValue(''); }
+                      if (e.key === 'Escape') {
+                        textInputCancellingRef.current = true;
+                        setShowTextInput(false);
+                        setTextInputValue('');
+                      }
                     }}
-                    onBlur={handleTextConfirm}
+                    onBlur={() => {
+                      if (textInputCancellingRef.current) {
+                        textInputCancellingRef.current = false;
+                        return;
+                      }
+                      handleTextConfirm();
+                    }}
                     autoFocus
                     placeholder={t('takeoff_viewer.text_placeholder', { defaultValue: 'Type annotation text...' })}
                     className="rounded border-2 bg-white/95 dark:bg-gray-800/95 px-2 py-1 text-sm font-medium outline-none shadow-lg min-w-[150px]"
@@ -3154,7 +3367,21 @@ export default function TakeoffViewerModule({
             <div className="rounded-md border border-border/80 bg-surface-primary/80 backdrop-blur-sm p-3 shadow-sm">
               <div className="flex items-center justify-between mb-2">
                 <p className="text-xs font-semibold text-content-primary">
-                  {t('takeoff_viewer.measurements', { defaultValue: 'Measurements' })} ({pageMeasurements.filter((m) => !isAnnotationType(m.type)).length})
+                  {t('takeoff_viewer.measurements', { defaultValue: 'Measurements' })}{' '}
+                  <span className="tabular-nums text-content-tertiary font-normal">
+                    {(() => {
+                      const onPage = pageMeasurements.filter((m) => !isAnnotationType(m.type)).length;
+                      const total = measurements.filter((m) => !isAnnotationType(m.type)).length;
+                      // "5 on page · 31 total" reads as "yes your data is still there".
+                      return total > onPage
+                        ? t('takeoff_viewer.measurement_count_split', {
+                            defaultValue: '({{onPage}} on page · {{total}} total)',
+                            onPage,
+                            total,
+                          })
+                        : `(${onPage})`;
+                    })()}
+                  </span>
                 </p>
                 {fileName && (
                   <div className="flex items-center gap-1.5">
@@ -3185,11 +3412,26 @@ export default function TakeoffViewerModule({
                 )}
               </div>
 
-              {pageMeasurements.length === 0 && (
-                <p className="text-xs text-content-tertiary py-4 text-center">
-                  {t('takeoff_viewer.no_measurements', { defaultValue: 'No measurements yet. Select a tool and click on the drawing.' })}
-                </p>
-              )}
+              {pageMeasurements.length === 0 && (() => {
+                const totalOtherPages = measurements.filter(
+                  (m) => !isAnnotationType(m.type) && m.page !== currentPage,
+                ).length;
+                return (
+                  <p className="text-xs text-content-tertiary py-4 text-center px-2">
+                    {totalOtherPages > 0
+                      ? t('takeoff_viewer.no_measurements_this_page', {
+                          defaultValue:
+                            'No measurements on page {{page}}. {{count}} measurement(s) on other pages — open the Ledger tab to see them all.',
+                          page: currentPage,
+                          count: totalOtherPages,
+                        })
+                      : t('takeoff_viewer.no_measurements', {
+                          defaultValue:
+                            'No measurements yet. Select a tool and click on the drawing.',
+                        })}
+                  </p>
+                );
+              })()}
 
               <div className="space-y-2 max-h-[400px] overflow-auto">
                 {/* Measurement groups (non-annotation types) */}
@@ -3292,24 +3534,35 @@ export default function TakeoffViewerModule({
                                   )}
                                 </div>
                                 <div className="flex items-center gap-0.5 shrink-0">
-                                  {/* Link to BOQ button — always visible if linked, hover-only otherwise */}
+                                  {/* Link to BOQ button — always visible (the primary
+                                      per-measurement action). Linked rows get an emerald
+                                      tint; unlinked rows get a rose tint that strengthens
+                                      on hover. Discoverability matters here: hover-only
+                                      revealed too late for first-time users. */}
                                   <button
                                     onClick={(e) => { e.stopPropagation(); handleOpenLinkToBoq(m.id); }}
                                     className={clsx(
                                       'transition-all p-0.5 rounded',
                                       m.linkedPositionId
-                                        ? 'text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300'
-                                        : 'opacity-0 group-hover/item:opacity-100 text-content-tertiary hover:text-rose-700 dark:hover:text-rose-400',
+                                        ? 'text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 dark:hover:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30'
+                                        : 'text-rose-500/60 dark:text-rose-400/60 hover:text-rose-700 dark:hover:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/30',
                                     )}
                                     aria-label={t('takeoff_viewer.link_to_boq', { defaultValue: 'Link to BOQ' })}
-                                    title={t('takeoff_viewer.link_to_boq', { defaultValue: 'Link to BOQ' })}
+                                    title={
+                                      m.linkedPositionId
+                                        ? t('takeoff_viewer.relink_to_boq', { defaultValue: 'Re-link or unlink BOQ position' })
+                                        : t('takeoff_viewer.link_to_boq_hint', {
+                                            defaultValue: 'Push this measurement\'s quantity to a BOQ position',
+                                          })
+                                    }
                                   >
                                     <Link2 size={12} />
                                   </button>
                                   <button
                                     onClick={(e) => { e.stopPropagation(); deleteMeasurement(m.id); }}
-                                    className="opacity-0 group-hover/item:opacity-100 text-content-tertiary hover:text-semantic-error transition-all shrink-0"
+                                    className="opacity-40 group-hover/item:opacity-100 text-content-tertiary hover:text-semantic-error transition-all shrink-0"
                                     aria-label={t('takeoff_viewer.delete_measurement', { defaultValue: 'Delete measurement' })}
+                                    title={`${t('takeoff_viewer.delete_measurement', { defaultValue: 'Delete measurement' })} (Del)`}
                                   >
                                     <Trash2 size={12} />
                                   </button>
@@ -3330,6 +3583,27 @@ export default function TakeoffViewerModule({
                                     >
                                       <X size={10} />
                                     </button>
+                                  </div>
+
+                                  {/* Transfer-preview banner — shows exactly what will
+                                      be pushed to the picked position. Removes the "I
+                                      hope I clicked the right thing" anxiety. */}
+                                  <div className="mb-1.5 flex items-center gap-1.5 rounded bg-rose-100/70 dark:bg-rose-950/40 border border-rose-200/60 dark:border-rose-800/30 px-1.5 py-1 text-[10px]">
+                                    <ArrowUpRight size={10} className="text-rose-600 dark:text-rose-400 shrink-0" />
+                                    <span className="text-content-tertiary shrink-0">
+                                      {t('takeoff.will_transfer', { defaultValue: 'Will transfer:' })}
+                                    </span>
+                                    <span className="font-mono font-semibold text-rose-700 dark:text-rose-300 tabular-nums">
+                                      {(Math.round(m.value * 100) / 100).toLocaleString()}
+                                    </span>
+                                    <span className="font-mono text-rose-700/80 dark:text-rose-300/80 shrink-0">
+                                      {normalizeUnit(m.unit)}
+                                    </span>
+                                    {m.page && (
+                                      <span className="text-content-tertiary shrink-0 ml-auto">
+                                        {t('takeoff_viewer.page_label', { defaultValue: 'Page' })} {m.page}
+                                      </span>
+                                    )}
                                   </div>
 
                                   {/* Currently-linked summary + unlink */}
@@ -3447,19 +3721,50 @@ export default function TakeoffViewerModule({
                                               );
                                             })
                                             .slice(0, 100)
-                                            .map((pos) => (
-                                              <button
-                                                key={pos.id}
-                                                type="button"
-                                                onClick={() => handleLinkToPosition(m.id, pos)}
-                                                disabled={linkingInProgress}
-                                                className="w-full text-left px-2 py-1 rounded text-[10px] hover:bg-rose-100 dark:hover:bg-rose-900/30 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-                                              >
-                                                <span className="font-mono text-rose-600 dark:text-rose-400 shrink-0">{pos.ordinal}</span>
-                                                <span className="text-content-primary truncate flex-1">{pos.description}</span>
-                                                <span className="text-content-tertiary shrink-0 text-[9px]">{pos.unit}</span>
-                                              </button>
-                                            ))}
+                                            .map((pos) => {
+                                              const measurementUnit = normalizeUnit(m.unit);
+                                              const unitMismatch = !!pos.unit && !!measurementUnit && pos.unit !== measurementUnit;
+                                              const currentQty = typeof pos.quantity === 'number' ? pos.quantity : Number(pos.quantity ?? 0);
+                                              return (
+                                                <button
+                                                  key={pos.id}
+                                                  type="button"
+                                                  onClick={() => handleLinkToPosition(m.id, pos)}
+                                                  disabled={linkingInProgress}
+                                                  className="w-full text-left px-2 py-1 rounded text-[10px] hover:bg-rose-100 dark:hover:bg-rose-900/30 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                                                  title={
+                                                    unitMismatch
+                                                      ? t('takeoff.unit_mismatch_warning', {
+                                                          defaultValue: 'Unit mismatch: position is in {{posUnit}}, measurement is in {{measUnit}}. Linking will overwrite the position\'s unit.',
+                                                          posUnit: pos.unit,
+                                                          measUnit: measurementUnit,
+                                                        })
+                                                      : t('takeoff.link_overwrites_qty', {
+                                                          defaultValue: 'Link → overwrites current quantity ({{q}} {{u}}) with the measurement value',
+                                                          q: currentQty,
+                                                          u: pos.unit ?? '',
+                                                        })
+                                                  }
+                                                >
+                                                  <span className="font-mono text-rose-600 dark:text-rose-400 shrink-0">{pos.ordinal}</span>
+                                                  <span className="text-content-primary truncate flex-1">{pos.description}</span>
+                                                  {/* Current qty badge — shows what's about to be replaced. */}
+                                                  {currentQty > 0 && (
+                                                    <span className="font-mono tabular-nums text-content-tertiary shrink-0 text-[9px]">
+                                                      {currentQty.toLocaleString()}
+                                                    </span>
+                                                  )}
+                                                  {unitMismatch ? (
+                                                    <span className="inline-flex items-center gap-0.5 font-mono shrink-0 text-[9px] text-amber-600 dark:text-amber-400" aria-label={t('takeoff.unit_mismatch', { defaultValue: 'unit mismatch' })}>
+                                                      <AlertTriangle size={9} />
+                                                      {pos.unit}
+                                                    </span>
+                                                  ) : (
+                                                    <span className="text-content-tertiary shrink-0 text-[9px]">{pos.unit}</span>
+                                                  )}
+                                                </button>
+                                              );
+                                            })}
                                         </div>
                                       </>
                                     )
@@ -3578,10 +3883,27 @@ export default function TakeoffViewerModule({
                                     )}
                                     <span className="text-2xs text-content-tertiary capitalize truncate shrink">{m.type}</span>
                                   </div>
+                                  {/* Color picker — change annotation colour
+                                      after creation. Native <input type="color">
+                                      gives a free palette without a custom UI;
+                                      uses the swatch as both the trigger and
+                                      the live preview. */}
+                                  <input
+                                    type="color"
+                                    value={m.color || '#EF4444'}
+                                    onChange={(e) => {
+                                      const newColor = e.target.value;
+                                      setMeasurements((prev) => prev.map((x) => (x.id === m.id ? { ...x, color: newColor } : x)));
+                                    }}
+                                    className="opacity-60 group-hover/item:opacity-100 transition-opacity h-4 w-4 rounded-full border border-border cursor-pointer shrink-0 p-0"
+                                    aria-label={t('takeoff_viewer.change_annotation_color', { defaultValue: 'Change annotation color' })}
+                                    title={t('takeoff_viewer.change_annotation_color', { defaultValue: 'Change color' })}
+                                  />
                                   <button
                                     onClick={() => deleteMeasurement(m.id)}
-                                    className="opacity-0 group-hover/item:opacity-100 text-content-tertiary hover:text-semantic-error transition-all shrink-0"
+                                    className="opacity-50 group-hover/item:opacity-100 text-content-tertiary hover:text-semantic-error transition-all shrink-0"
                                     aria-label={t('takeoff_viewer.delete_annotation', { defaultValue: 'Delete annotation' })}
+                                    title={`${t('takeoff_viewer.delete_annotation', { defaultValue: 'Delete annotation' })} (Del)`}
                                   >
                                     <Trash2 size={12} />
                                   </button>

@@ -1,7 +1,7 @@
 {
   "_meta": {
     "generator": "generate_architecture_manifest.py",
-    "description": "Auto-generated architecture manifest for Neoconstruction",
+    "description": "Auto-generated architecture manifest for OpenConstructionERP",
     "version": "1.0.0"
   },
   "modules": [
@@ -26,7 +26,7 @@
         "version": "0.1.0",
         "display_name": "AI Estimation",
         "description": "AI-powered construction cost estimation from text descriptions and photos",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_boq",
@@ -756,7 +756,7 @@
         "version": "1.0.0",
         "display_name": "Architecture Map",
         "description": "Interactive visual map of system architecture",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "developer_tools",
         "depends": [],
         "auto_install": true,
@@ -813,7 +813,7 @@
         "version": "1.0.0",
         "display_name": "Regional Pack — Asia-Pacific",
         "description": "Asia-Pacific construction standards: AIQS/Rawlinsons (AU), NATSPEC, Japanese sekkisan standards, Singapore BCA references, and multi-currency support (AUD/NZD/JPY/SGD).",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -850,7 +850,7 @@
         "version": "0.1.0",
         "display_name": "Assemblies & Calculations",
         "description": "Composite cost items built from cost database entries with factors. Supports templates, regional factors, and BOQ integration.",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_costs"
@@ -1630,7 +1630,7 @@
         "version": "1.0.0",
         "display_name": "Backup & Restore",
         "description": "Export and import user data backups",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [],
         "auto_install": true,
@@ -1679,7 +1679,7 @@
         "version": "0.1.0",
         "display_name": "BIM Hub",
         "description": "BIM data management: models, elements, BOQ linking, quantity maps, and model diffs",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -3081,7 +3081,7 @@
         "version": "0.1.0",
         "display_name": "Bill of Quantities",
         "description": "Core BOQ editor with hierarchical structure, positions, and cost calculations",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects"
@@ -6441,7 +6441,7 @@
         "version": "0.1.0",
         "display_name": "CAD Import",
         "description": "CAD file import and conversion pipeline (DWG, DGN, RVT, IFC)",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "extension",
         "depends": [
           "oe_projects"
@@ -6473,7 +6473,7 @@
         "version": "0.1.0",
         "display_name": "Product & Resource Catalog",
         "description": "Curated catalog of materials, equipment, labor, and operators extracted from cost databases",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_costs"
@@ -6937,7 +6937,7 @@
         "version": "0.1.0",
         "display_name": "Common Data Environment (ISO 19650)",
         "description": "ISO 19650 compliant Common Data Environment — document containers, revisions, state transitions, and suitability codes",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -7670,7 +7670,7 @@
         "version": "0.1.0",
         "display_name": "Change Orders",
         "description": "Track scope changes, cost impacts, and approval workflows",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects",
@@ -8427,7 +8427,7 @@
         "version": "0.1.0",
         "display_name": "Comments & Viewpoints",
         "description": "Threaded comments with @mentions and viewpoints for any entity",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users"
@@ -8971,7 +8971,7 @@
         "version": "0.1.0",
         "display_name": "Contacts Directory",
         "description": "Unified contacts directory for clients, subcontractors, suppliers, consultants",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users"
@@ -9636,7 +9636,7 @@
         "version": "0.1.0",
         "display_name": "Correspondence",
         "description": "Project correspondence tracking — letters, emails, notices with direction, contacts, and document cross-references",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -10024,7 +10024,7 @@
         "version": "0.1.0",
         "display_name": "5D Cost Model",
         "description": "5D cost management — S-curves, cash flow projections, earned value analysis (EVM), and budget tracking",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects",
@@ -11296,7 +11296,7 @@
         "version": "0.1.0",
         "display_name": "Cost Database",
         "description": "Cost item management, rate databases (CWICR, RSMeans, BKI), bulk import",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [],
         "auto_install": true,
@@ -11854,7 +11854,7 @@
         "version": "1.0.0",
         "display_name": "Regional Pack — DACH (DE/AT/CH)",
         "description": "DACH construction standards: GAEB XML exchange formats, VOB/B contract terms, DIN 276 cost groups, HOAI fee schedules, MwSt, and Abschlagsrechnung templates.",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -11890,7 +11890,7 @@
         "version": "0.1.0",
         "display_name": "Document Management",
         "description": "Upload, categorize, and manage project documents with tagging and search",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects"
@@ -12865,7 +12865,7 @@
         "version": "0.1.0",
         "display_name": "Enterprise Workflows",
         "description": "Configurable approval workflows for invoices, purchase orders, variations, and BOQs",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "enterprise",
         "depends": [
           "oe_users",
@@ -13394,7 +13394,7 @@
         "version": "0.1.0",
         "display_name": "Field Reports",
         "description": "Daily field reports for construction sites — weather, workforce, delays, safety incidents, and approvals",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects"
@@ -14641,7 +14641,7 @@
         "version": "0.1.0",
         "display_name": "Finance",
         "description": "Invoicing, payments, budgets, and Earned Value Management for construction projects",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -16091,7 +16091,7 @@
         "version": "0.1.0",
         "display_name": "Full EVM",
         "description": "Advanced Earned Value Management with forecasting, S-curves, and TCPI analysis",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "enterprise",
         "depends": [
           "oe_finance"
@@ -16405,7 +16405,7 @@
         "version": "0.1.0",
         "display_name": "Internationalization Foundation",
         "description": "Multi-currency exchange rates, country registry, work calendars, tax configurations",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users"
@@ -17480,7 +17480,7 @@
         "version": "1.0.0",
         "display_name": "Regional Pack — India",
         "description": "Indian construction standards: IS codes, CPWD/MES rate references, multi-rate GST (28/18/12/5/0%), INR, and Indian contract forms.",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -17516,7 +17516,7 @@
         "version": "0.1.0",
         "display_name": "Quality Inspections",
         "description": "Quality inspection management — concrete pours, waterproofing, MEP, fire stopping, handover with checklists and pass/fail workflows",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -17947,7 +17947,7 @@
         "version": "0.1.0",
         "display_name": "Integrations",
         "description": "Chat connectors (Teams, Slack, Telegram), outgoing webhooks, email, iCal feeds",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -18609,7 +18609,7 @@
         "version": "1.0.0",
         "display_name": "Regional Pack — Latin America",
         "description": "Latin America construction standards: SINAPI (Brazil), NTDIF (Mexico), multi-currency support (BRL/MXN/ARS), and regional contract forms.",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -18645,7 +18645,7 @@
         "version": "0.1.0",
         "display_name": "Markups & Annotations",
         "description": "Drawing markups, scale calibration, and stamp templates for document annotation",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects"
@@ -19632,7 +19632,7 @@
         "version": "0.1.0",
         "display_name": "Meetings",
         "description": "Meeting minutes management — agendas, attendees, action items, and status tracking",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -20313,7 +20313,7 @@
         "version": "1.0.0",
         "display_name": "Regional Pack — Middle East & GCC",
         "description": "Middle East / GCC construction standards: FIDIC contract forms, Islamic calendar references, Ramadan adjustments, GCC VAT rates, bilingual PDF support (Arabic + English).",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -20349,7 +20349,7 @@
         "version": "0.1.0",
         "display_name": "Non-Conformance Reports",
         "description": "NCR management — material, workmanship, design non-conformances with root cause analysis and corrective actions",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -20808,7 +20808,7 @@
         "version": "0.1.0",
         "display_name": "Notifications",
         "description": "In-app notification system with i18n keys and per-user preferences",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users"
@@ -21053,7 +21053,7 @@
         "version": "0.1.0",
         "display_name": "OpenCDE API",
         "description": "BuildingSMART OpenCDE Foundation API 1.1 + BCF API 3.0 compliance layer",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -21668,7 +21668,7 @@
         "version": "0.1.0",
         "display_name": "Procurement",
         "description": "Purchase orders, goods receipts, and vendor management for construction projects",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -22671,7 +22671,7 @@
         "version": "0.1.0",
         "display_name": "Projects",
         "description": "Project management with regional settings, classification standards, and validation configuration",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users"
@@ -23840,7 +23840,7 @@
         "version": "0.1.0",
         "display_name": "Punch List",
         "description": "Track construction deficiencies, quality issues, and snag items with photo evidence and verification workflows",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects"
@@ -24417,7 +24417,7 @@
         "version": "1.0.0",
         "display_name": "Reporting & Dashboards",
         "description": "KPI snapshots, report templates, and generated reports for projects and portfolios",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -25909,7 +25909,7 @@
         "version": "0.1.0",
         "display_name": "Requests for Information",
         "description": "RFI management — questions, responses, cost/schedule impact tracking, and drawing cross-references",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -26484,7 +26484,7 @@
         "version": "0.1.0",
         "display_name": "RFQ & Bidding",
         "description": "Request for Quotation management with bid submission, evaluation, and award workflows",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "enterprise",
         "depends": [
           "oe_users",
@@ -27120,7 +27120,7 @@
         "version": "0.1.0",
         "display_name": "Risk Register",
         "description": "Track project risks, assess probability and impact, manage mitigation strategies",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects"
@@ -27703,8 +27703,8 @@
         "name": "oe_russia_pack",
         "version": "1.0.0",
         "display_name": "Regional Pack — Russia & CIS",
-        "description": "Russian construction standards: GESN/FER/TER cost databases, KS-2/KS-3 acceptance forms, NDS rates, and Russian contract templates.",
-        "author": "Neoconstruction Core Team",
+        "description": "Russian construction standards: GESN/FER/TER cost databases, NDS rates, and Russian contract templates.",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -27740,7 +27740,7 @@
         "version": "0.1.0",
         "display_name": "Safety Management",
         "description": "Safety incident reporting and observation tracking with risk scoring, corrective actions, and regulatory compliance",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -28628,7 +28628,7 @@
         "version": "0.1.0",
         "display_name": "4D Schedule",
         "description": "4D construction scheduling — linking BOQ positions to a timeline",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects",
@@ -31006,7 +31006,7 @@
         "version": "0.1.0",
         "display_name": "Submittals",
         "description": "Construction submittal management — shop drawings, product data, samples with review/approval workflows",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -31471,7 +31471,7 @@
         "version": "0.1.0",
         "display_name": "Quantity Takeoff",
         "description": "Manual and AI-assisted quantity takeoff from drawings and models",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "extension",
         "depends": [
           "oe_projects",
@@ -32572,7 +32572,7 @@
         "version": "0.1.0",
         "display_name": "Tasks",
         "description": "Project task management — tasks, topics, decisions, and personal items with checklists and assignment workflows",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -33116,7 +33116,7 @@
         "version": "0.1.0",
         "display_name": "Team Visibility",
         "description": "Team-based entity visibility and access control within projects",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -33553,7 +33553,7 @@
         "version": "0.1.0",
         "display_name": "Tendering",
         "description": "Bid package management, distribution, collection, and comparison",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects",
@@ -34202,7 +34202,7 @@
         "version": "0.1.0",
         "display_name": "Transmittals",
         "description": "Formal document transmittal management with recipients, acknowledgements, and responses",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_users",
@@ -34863,7 +34863,7 @@
         "version": "1.0.0",
         "display_name": "Regional Pack — United Kingdom",
         "description": "UK construction standards: JCT/NEC4 contract forms, NRM2 measurement rules, CIS tax deductions, Interim Valuations, VAT rates, and GBP.",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -34895,7 +34895,7 @@
         "version": "1.0.0",
         "display_name": "Regional Pack — United States",
         "description": "US construction standards: AIA G702 payment applications, CSI MasterFormat divisions, imperial units, USD, and state sales-tax examples.",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "regional",
         "depends": [],
         "auto_install": false,
@@ -34931,7 +34931,7 @@
         "version": "0.1.0",
         "display_name": "Users & Authentication",
         "description": "User management, JWT authentication, API keys, and RBAC",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [],
         "auto_install": true,
@@ -35821,7 +35821,7 @@
         "version": "1.0.0",
         "display_name": "Validation Engine",
         "description": "Data quality validation with configurable rule sets (DIN 276, GAEB, NRM, MasterFormat, BOQ quality)",
-        "author": "Neoconstruction Core Team",
+        "author": "OpenEstimate Core Team",
         "category": "core",
         "depends": [
           "oe_projects",

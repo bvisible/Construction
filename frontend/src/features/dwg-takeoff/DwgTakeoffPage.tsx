@@ -1478,7 +1478,24 @@ export function DwgTakeoffPage() {
     setSelectedLayout(null);
     setEntityPopup(null);
     setContextMenu(null);
+    // Drop in-progress draw / calibration so a half-started measurement on
+    // the previous drawing doesn't bleed into the new one.
+    setActiveTool('select');
+    setCalibStep(0);
+    setCalibPointA(null);
+    setCalibPointB(null);
+    setIsCalibrating(false);
+    setCalibrationPixels(null);
   }, []);
+
+  /* Layout switch on the same drawing also has to reset in-progress
+   * calibration — the picked points are world-space coords from the
+   * previous viewport and would yield a nonsense scale. */
+  useEffect(() => {
+    setCalibStep(0);
+    setCalibPointA(null);
+    setCalibPointB(null);
+  }, [selectedLayout]);
 
   /** First entity in the selection set — drives single-entity UI affordances. */
   const primarySelectedEntityId = useMemo(
@@ -2343,6 +2360,7 @@ export function DwgTakeoffPage() {
             <>
             <div className="relative flex-1 min-h-0" data-dwg-viewer-root>
               <DxfViewer
+                key={`${selectedDrawingId}:${selectedLayout ?? 'default'}`}
                 entities={viewerEntities}
                 annotations={visibleAnnotations}
                 visibleLayers={visibleLayers}
@@ -3098,7 +3116,7 @@ export function DwgTakeoffPage() {
             <div className="flex border-b border-border">
               {(
                 [
-                  { id: 'layers' as const, icon: Layers, labelKey: 'dwg_takeoff.tab_layers_short', fallback: 'Layers', titleKey: 'dwg_takeoff.layers', titleFallback: 'Layers', count: layers.length },
+                  { id: 'layers' as const, icon: Layers, labelKey: 'dwg_takeoff.tab_layers_short', fallback: 'Layers', titleKey: 'dwg_takeoff.layers', titleFallback: 'Layers', count: visibleLayers.size > 0 ? visibleLayers.size : layers.length },
                   { id: 'annotations' as const, icon: MessageSquare, labelKey: 'dwg_takeoff.tab_annotations_short', fallback: 'Notes', titleKey: 'dwg_takeoff.annotations', titleFallback: 'Annotations', count: annotations.length },
                   { id: 'properties' as const, icon: Info, labelKey: 'dwg_takeoff.tab_properties_short', fallback: 'Props', titleKey: 'dwg_takeoff.properties', titleFallback: 'Properties', count: 0 },
                   { id: 'scale' as const, icon: Ruler, labelKey: 'dwg_takeoff.tab_scale_short', fallback: 'Scale', titleKey: 'dwg_takeoff.tab_scale', titleFallback: 'Drawing scale', count: 0 },

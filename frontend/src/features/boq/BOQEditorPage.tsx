@@ -55,6 +55,7 @@ import {
   UNDO_STACK_LIMIT,
   type UndoEntry,
   getVatRate,
+  getVatRateFromMarkups,
   getLocaleForRegion,
   getCurrencySymbol,
   getCurrencyCode,
@@ -138,10 +139,25 @@ export function BOQEditorPage() {
     return ready?.id ?? null;
   }, [bimModelsData]);
 
-  const vatRate = useMemo(() => getVatRate(project?.region), [project?.region]);
   const currencySymbol = useMemo(() => getCurrencySymbol(project?.currency), [project?.currency]);
   const currencyCode = useMemo(() => getCurrencyCode(project?.currency), [project?.currency]);
   const locale = useMemo(() => getLocaleForRegion(project?.region), [project?.region]);
+  /**
+   * Project FX template (RFC 37 / Issue #93) — flatten to the shape BOQGrid
+   * expects (`currency` + numeric `rate`). The API returns `code` and a
+   * decimal-precise string, so coerce here once.
+   */
+  const fxRates = useMemo(
+    () =>
+      (project?.fx_rates ?? [])
+        .map((fx) => ({
+          currency: fx.code,
+          rate: Number(fx.rate),
+          label: fx.label ?? undefined,
+        }))
+        .filter((fx) => fx.currency && Number.isFinite(fx.rate)),
+    [project?.fx_rates],
+  );
 
   // Custom columns from BOQ metadata
   const boqCustomColumns = useMemo(() => {
@@ -168,6 +184,13 @@ export function BOQEditorPage() {
   });
 
   const markups: Markup[] = markupsData?.markups ?? [];
+
+  /**
+   * VAT rate driven from the `tax`-category markup row — single source of
+   * truth shared with the backend PDF/Excel exports. Returns 0 (No VAT)
+   * when no tax markup exists. Never falls back to a country default.
+   */
+  const vatRate = useMemo(() => getVatRateFromMarkups(markups), [markups]);
 
   const addToast = useToastStore((s) => s.addToast);
   const removeToast = useToastStore((s) => s.removeToast);
@@ -275,9 +298,8 @@ export function BOQEditorPage() {
     mutationFn: ({ id, data }: { id: string; data: UpdatePositionData }) =>
       boqApi.updatePosition(id, data),
     onMutate: ({ id, data }: { id: string; data: UpdatePositionData }) => {
-      // Manual quantity edit clears BIM/PDF link badges and the red validation
-      // border immediately, without waiting for the server round-trip.
-      if (data.quantity === undefined) return;
+      // Optimistic cache write — paint the user's edit instantly so the grid
+      // shows the new value without the ~5s server round-trip flicker.
       queryClient.setQueryData(['boq', boqId], (old: unknown) => {
         if (!old || typeof old !== 'object') return old;
         const cur = old as { positions: Position[]; [k: string]: unknown };
@@ -285,16 +307,39 @@ export function BOQEditorPage() {
           ...cur,
           positions: cur.positions.map((p) => {
             if (p.id !== id) return p;
-            const meta = { ...(p.metadata ?? {}) } as Record<string, unknown>;
-            delete meta.bim_qty_source;
-            delete meta.pdf_measurement_source;
-            return { ...p, metadata: meta, validation_status: 'pending' };
+            const next = { ...p, ...data } as Position;
+            if (data.quantity !== undefined || data.unit_rate !== undefined) {
+              next.total = (next.quantity ?? 0) * (next.unit_rate ?? 0);
+            }
+            if (data.quantity !== undefined) {
+              // Manual edit clears BIM/PDF/DWG source badges. The picker /
+              // takeoff link callers explicitly include the relevant key in
+              // `data.metadata` so we preserve it in that case — that's the
+              // signal the new value IS authoritative provenance.
+              const incomingMeta = (data.metadata ?? {}) as Record<string, unknown>;
+              const preservesBim = 'bim_qty_source' in incomingMeta;
+              const preservesPdf = 'pdf_measurement_source' in incomingMeta;
+              const preservesDwg = 'dwg_annotation_source' in incomingMeta;
+              if (!preservesBim || !preservesPdf || !preservesDwg) {
+                const meta = { ...(next.metadata ?? {}) } as Record<string, unknown>;
+                if (!preservesBim) delete meta.bim_qty_source;
+                if (!preservesPdf) delete meta.pdf_measurement_source;
+                if (!preservesDwg) delete meta.dwg_annotation_source;
+                next.metadata = meta;
+              }
+              next.validation_status = 'pending';
+            }
+            return next;
           }),
         };
       });
     },
     onSuccess: () => invalidateAll(),
     onError: (err: Error) => {
+      // Roll back the optimistic cache mutation by re-fetching server truth.
+      // Without this the grid keeps the user's edited value while the server
+      // never accepted it — silent data loss (Bug 5).
+      invalidateAll();
       addToast({ type: 'error', title: t('boq.update_failed', { defaultValue: 'Failed to update position' }), message: err.message });
     },
   });
@@ -362,8 +407,16 @@ export function BOQEditorPage() {
   });
 
   const handleLock = useCallback(() => {
+    // Lock is irreversible without admin unlock — confirm before mutating (Bug 8).
+    const ok = window.confirm(
+      t('boq.lock_confirm', {
+        defaultValue:
+          'Lock this estimate?\n\nLocked estimates cannot be edited. Unlocking requires admin privileges.',
+      }),
+    );
+    if (!ok) return;
     lockMutation.mutate();
-  }, [lockMutation]);
+  }, [lockMutation, t]);
 
   const unlockMutation = useMutation({
     mutationFn: () => apiPost(`/v1/boq/boqs/${boqId}/unlock/`, {}),
@@ -1050,7 +1103,7 @@ export function BOQEditorPage() {
   const markupTotals = useMemo(() => {
     let running = directCost;
     return markups
-      .filter((m) => m.is_active !== false)
+      .filter((m) => m.is_active !== false && m.category !== 'tax')
       .map((m) => {
         let amount = 0;
         if (m.markup_type === 'fixed') {
@@ -1236,8 +1289,14 @@ export function BOQEditorPage() {
         unit_rate: 0,
         parent_id: parentId,
       });
+      addToast({
+        type: 'info',
+        title: t('boq.empty_position_quality_hint', {
+          defaultValue: 'Empty position lowers Quality Score until quantity & rate are filled',
+        }),
+      });
     },
-    [boqId, boq, grouped, addMutation],
+    [boqId, boq, grouped, addMutation, addToast, t],
   );
   // Keep ref in sync for keyboard shortcut access
   addPositionRef.current = handleAddPosition;
@@ -1253,7 +1312,7 @@ export function BOQEditorPage() {
             percentage: m.percentage,
             amount: m.amount,
           }));
-          exportBOQToExcel({
+          await exportBOQToExcel({
             boqTitle: boq?.name ?? 'BOQ',
             projectName: project?.name,
             classificationStandard: project?.classification_standard,
@@ -1262,9 +1321,9 @@ export function BOQEditorPage() {
             positions,
             markupTotals: markupTotalsForExport,
             netTotal,
-            vatRate: (boq as Record<string, unknown>)?.vat_rate as number ?? 0.19,
-            vatAmount: netTotal * ((boq as Record<string, unknown>)?.vat_rate as number ?? 0.19),
-            grossTotal: netTotal * (1 + ((boq as Record<string, unknown>)?.vat_rate as number ?? 0.19)),
+            vatRate,
+            vatAmount,
+            grossTotal,
           });
           addToast({ type: 'success', title: t('boq.file_downloaded', { defaultValue: 'File downloaded' }) });
           return;
@@ -1831,6 +1890,16 @@ export function BOQEditorPage() {
   const [showVectorSetup, setShowVectorSetup] = useState(false);
   const [vectorIndexing, setVectorIndexing] = useState(false);
 
+  // Esc closes the AI Features Setup modal — standard modal behaviour (Bug 10).
+  useEffect(() => {
+    if (!showVectorSetup) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setShowVectorSetup(false);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [showVectorSetup]);
+
   const { data: vectorStatus } = useQuery({
     queryKey: ['vector-status'],
     queryFn: () => apiGet<{
@@ -2127,12 +2196,30 @@ export function BOQEditorPage() {
       const form = new FormData();
       form.append('file', file);
 
+      // Tell the user *immediately* that the import is in flight — the server
+      // can take 30+ seconds for large XLSX/PDF/CAD files, and without this
+      // toast the UI looks frozen (Bug 2).
+      addToast({
+        type: 'info',
+        title: t('boq.import_started', { defaultValue: 'Importing {{name}}…', name: file.name }),
+        message: t('boq.import_started_hint', {
+          defaultValue: 'Large files (PDF / CAD / 1000+ rows) may take up to 60 seconds.',
+        }),
+      });
+
+      // Abort if the server doesn't respond within 90 seconds. Without a timeout
+      // the fetch hangs and the user thinks the page froze (Bug 2).
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
       try {
         const res = await fetch(`/api/v1/boq/boqs/${boqId}/import/smart/`, {
           method: 'POST',
           headers: token ? { Authorization: `Bearer ${token}` } : {},
           body: form,
+          signal: controller.signal,
         });
+        clearTimeout(timeoutId);
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({ detail: res.statusText }));
@@ -2168,10 +2255,16 @@ export function BOQEditorPage() {
 
         invalidateAll();
       } catch (err) {
+        clearTimeout(timeoutId);
+        const isTimeout = err instanceof DOMException && err.name === 'AbortError';
         addToast({
           type: 'error',
           title: t('boq.import_failed', { defaultValue: 'Import failed' }),
-          message: err instanceof Error ? err.message : 'Unknown error',
+          message: isTimeout
+            ? t('boq.import_timeout', {
+                defaultValue: 'Server did not respond within 90 seconds. The file may be too large — try splitting it.',
+              })
+            : err instanceof Error ? err.message : 'Unknown error',
         });
       } finally {
         setIsImporting(false);
@@ -2202,8 +2295,10 @@ export function BOQEditorPage() {
       rows.push({ ...base, _footerType: `markup_${m.id}`, id: `_markup_${m.id}`, description: `${m.name} ${fmt.format(m.percentage)}%`, total: m.amount });
     }
     rows.push({ ...base, _footerType: 'net_total', id: '_net_total', description: t('boq.net_total', { defaultValue: 'NET TOTAL' }), total: netTotal });
-    rows.push({ ...base, _footerType: 'vat', id: '_vat', description: vatRate > 0 ? `${t('boq.vat', { defaultValue: 'VAT' })} ${fmt.format(vatRate * 100)}%` : t('boq.no_vat', { defaultValue: 'No VAT' }), total: vatAmount });
-    rows.push({ ...base, _footerType: 'gross_total', id: '_gross_total', description: t('boq.gross_total', { defaultValue: 'GROSS TOTAL' }), total: grossTotal });
+    if (vatRate > 0) {
+      rows.push({ ...base, _footerType: 'vat', id: '_vat', description: `${t('boq.vat', { defaultValue: 'VAT' })} ${fmt.format(vatRate * 100)}%`, total: vatAmount });
+      rows.push({ ...base, _footerType: 'gross_total', id: '_gross_total', description: t('boq.gross_total', { defaultValue: 'GROSS TOTAL' }), total: grossTotal });
+    }
     return rows;
   }, [hasPositions, directCost, markupTotals, netTotal, vatRate, vatAmount, grossTotal, t, fmt]);
 
@@ -2315,14 +2410,26 @@ export function BOQEditorPage() {
     [boq?.positions, t, addToast],
   );
 
-  /** Handle formula applied from AG Grid quantity editor */
+  /** Handle formula applied from AG Grid quantity editor.
+   *
+   * Issue #90: when ``formula`` is non-empty we persist it under
+   * ``metadata.formula`` so the ƒx badge + round-trip edit work. When it's
+   * empty (the user replaced an existing formula with a plain number) we
+   * strip the key so a stale formula doesn't outlive its source. */
   const handleGridFormulaApplied = useCallback(
     (positionId: string, formula: string, _result: number) => {
       const pos = boq?.positions.find((p) => p.id === positionId);
       if (!pos) return;
+      const existingMeta = (pos.metadata ?? {}) as Record<string, unknown>;
+      const nextMeta = { ...existingMeta };
+      if (formula) {
+        nextMeta.formula = formula;
+      } else {
+        delete nextMeta.formula;
+      }
       updateMutation.mutate({
         id: positionId,
-        data: { metadata: { ...pos.metadata, formula } },
+        data: { metadata: nextMeta },
       });
     },
     [boq?.positions, updateMutation],
@@ -2564,6 +2671,7 @@ export function BOQEditorPage() {
           highlightPositionId={newPositionId ?? bimScrollTargetId ?? undefined}
           currencySymbol={currencySymbol}
           currencyCode={currencyCode}
+          fxRates={fxRates}
           locale={locale}
           footerRows={boqFooterRows}
           onSelectionChanged={handleSelectionChanged}

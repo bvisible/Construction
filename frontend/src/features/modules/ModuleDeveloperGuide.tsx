@@ -104,7 +104,7 @@ export function ModuleDeveloperGuide() {
             <p className="text-sm text-content-secondary">
               {t('modules.dev_guide_subtitle', {
                 defaultValue:
-                  'A practical, 10-minute walkthrough for adding business features to Neoconstruction.',
+                  'A practical, 10-minute walkthrough for adding business features to OpenConstructionERP.',
               })}
             </p>
           </div>
@@ -176,8 +176,8 @@ export function ModuleDeveloperGuide() {
             </ul>
           </div>
           <Code lang="bash">
-{`git clone https://github.com/datadrivenconstruction/Neoconstruction.git
-cd Neoconstruction
+{`git clone https://github.com/datadrivenconstruction/OpenConstructionERP.git
+cd OpenConstructionERP
 # Backend
 cd backend && pip install -e ".[dev]"
 uvicorn app.main:create_app --factory --reload --port 8000
@@ -1225,8 +1225,8 @@ zip -r ~/my-module-0.1.0.zip my_module
 # 2. Share the zip — recipients install with:
 openestimate module install ~/my-module-0.1.0.zip
 
-# 3. Optional — publish on the Neoconstruction marketplace:
-#    open a PR against github.com/datadrivenconstruction/Neoconstruction-modules
+# 3. Optional — publish on the OpenEstimate marketplace:
+#    open a PR against github.com/datadrivenconstruction/OpenConstructionERP-modules
 #    adding your zip URL + manifest summary`}
           </Code>
           <p className="text-xs text-content-tertiary mt-3">
@@ -1249,7 +1249,7 @@ openestimate module install ~/my-module-0.1.0.zip
           </div>
           <div className="grid sm:grid-cols-2 gap-3">
             <a
-              href="https://github.com/datadrivenconstruction/Neoconstruction/blob/main/MODULES.md"
+              href="https://github.com/datadrivenconstruction/OpenConstructionERP/blob/main/MODULES.md"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary/30 p-3 text-sm text-content-secondary hover:bg-surface-secondary hover:text-content-primary transition-colors"
@@ -1262,7 +1262,7 @@ openestimate module install ~/my-module-0.1.0.zip
               <ExternalLink size={12} className="text-content-quaternary shrink-0" />
             </a>
             <a
-              href="https://github.com/datadrivenconstruction/Neoconstruction/blob/main/CONTRIBUTING.md"
+              href="https://github.com/datadrivenconstruction/OpenConstructionERP/blob/main/CONTRIBUTING.md"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary/30 p-3 text-sm text-content-secondary hover:bg-surface-secondary hover:text-content-primary transition-colors"

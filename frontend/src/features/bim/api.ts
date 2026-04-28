@@ -1021,7 +1021,10 @@ export async function listTrackedAssets(
   });
   if (opts?.search) params.set('search', opts.search);
   if (opts?.operationalStatus) params.set('operational_status', opts.operationalStatus);
-  return apiGet<AssetListResponse>(`/v1/bim_hub/assets/?${params.toString()}`);
+  // BUG-UI07: backend route is `/assets` (no trailing slash). With the
+  // trailing slash FastAPI dispatches to `/{model_id}` instead, returning
+  // 404 for "assets" as a UUID. Verified against /openapi.json.
+  return apiGet<AssetListResponse>(`/v1/bim_hub/assets?${params.toString()}`);
 }
 
 /** Patch asset-info on a BIMElement. Partial merge — unspecified keys
@@ -1037,13 +1040,53 @@ export async function updateElementAssetInfo(
     asset_info: assetInfo,
   };
   if (isTrackedAsset !== undefined) body.is_tracked_asset = isTrackedAsset;
+  // BUG-UI07: backend route has no trailing slash — see listTrackedAssets above.
   return apiPatch<AssetSummary, typeof body>(
-    `/v1/bim_hub/assets/${encodeURIComponent(elementId)}/asset-info/`,
+    `/v1/bim_hub/assets/${encodeURIComponent(elementId)}/asset-info`,
     body,
   );
 }
 
-/** URL to the COBie UK 2.4 XLSX export for a BIM model. */
+/** URL to the COBie UK 2.4 XLSX export for a BIM model.
+ *  Backend route is `/export/cobie.xlsx` — NO trailing slash. With one,
+ *  FastAPI 307-redirects and the browser drops the Authorization header. */
 export function cobieExportUrl(modelId: string): string {
-  return `/api/v1/bim_hub/models/${encodeURIComponent(modelId)}/export/cobie.xlsx/`;
+  return `/api/v1/bim_hub/models/${encodeURIComponent(modelId)}/export/cobie.xlsx`;
+}
+
+/** Download the COBie XLSX with the current user's JWT.
+ *  `<a href>` clicks don't carry Authorization headers, so we fetch the
+ *  blob ourselves and trigger a synthetic download. Throws on HTTP error. */
+export async function downloadCobieXlsx(
+  modelId: string,
+  filename = 'cobie.xlsx',
+): Promise<void> {
+  const token = useAuthStore.getState().accessToken;
+  const headers: HeadersInit = {
+    Accept:
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/octet-stream',
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(cobieExportUrl(modelId), { headers });
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      detail = (await resp.text()).slice(0, 200);
+    } catch {
+      /* ignore */
+    }
+    throw new Error(`COBie export failed (HTTP ${resp.status}) ${detail}`);
+  }
+  const cd = resp.headers.get('content-disposition') || '';
+  const match = cd.match(/filename="?([^";]+)"?/i);
+  const finalName = match?.[1] || filename;
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = finalName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }

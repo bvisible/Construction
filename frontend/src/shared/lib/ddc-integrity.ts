@@ -1,5 +1,5 @@
 /**
- * DataDrivenConstruction (DDC) — Neoconstruction
+ * DataDrivenConstruction (DDC) — OpenConstructionERP
  * CWICR Cost Database Engine · CAD2DATA Pipeline
  * Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
  * AGPL-3.0 License · DDC-CWICR-OE-2026
@@ -26,7 +26,7 @@ export function ddcGetFingerprint(): string {
 }
 
 /** @internal DDC-CWICR-OE-2026 origin marker */
-export const DDC_ORIGIN = 'DataDrivenConstruction/Neoconstruction/CWICR' as const;
+export const DDC_ORIGIN = 'DataDrivenConstruction/OpenConstructionERP/CWICR' as const;
 
 /** Watermark embedded in exported documents and PDF reports. */
 export const DDC_WATERMARK = '\u200b\u200c\u200d\u2060\u200b\u200c\u200d\u2060';

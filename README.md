@@ -6,10 +6,10 @@
 
 Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all in one platform.
 
-[Demo](https://openconstructionerp.com) · [Documentation](https://openconstructionerp.com/docs) · [Discussions](https://t.me/datadrivenconstruction) · [Report Bug](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)
+[▶ Watch the 12-min walkthrough](https://www.youtube.com/watch?v=X06cIaroAeI) · [Demo](https://openconstructionerp.com) · [Documentation](https://openconstructionerp.com/docs) · [Discussions](https://t.me/datadrivenconstruction) · [Report Bug](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.3.1-green)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/tag/v2.3.1)
+[![Version](https://img.shields.io/badge/version-2.6.10-green)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/tag/v2.6.10)
 [![PyPI](https://img.shields.io/pypi/v/openconstructionerp?color=informational&label=pypi)](https://pypi.org/project/openconstructionerp/)
 [![Downloads (pepy · per month)](https://static.pepy.tech/personalized-badge/openconstructionerp?period=month&units=international_system&left_color=grey&right_color=blue&left_text=downloads%20(pepy%20%C2%B7%20per%20month))](https://pepy.tech/project/openconstructionerp)
 [![Stars](https://img.shields.io/github/stars/datadrivenconstruction/OpenConstructionERP?style=flat&logo=github)](https://github.com/datadrivenconstruction/OpenConstructionERP/stargazers)
@@ -19,6 +19,12 @@ Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all
 ![Cost Items](https://img.shields.io/badge/cost_items-55%2C000%2B-red)
 
 <img src="docs/screenshots/hero-overview.jpg" alt="OpenConstructionERP — Dashboard Overview" width="800" />
+
+<video src="https://github.com/user-attachments/assets/20b9b585-93ac-4829-a3dc-0ede9ca9e2fc" controls width="800" playsinline>
+  <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/download/v2.0.0/oce_full_demo.mp4">▶ 1-minute teaser (your browser can't inline this — click for full 12-min walkthrough)</a>
+</video>
+
+<sub>🎬 <b>1-minute teaser above</b> · for the full 12-minute walkthrough → <a href="https://www.youtube.com/watch?v=X06cIaroAeI"><b>watch on YouTube</b></a> · onboarding → BoQ → BIM → DWG → PDF → AI → dashboard</sub>
 
 *100% open source · 55,000+ cost items · AI estimation · 21 languages · Self-hosted*
 
@@ -190,10 +196,10 @@ Construction cost estimation software is expensive, closed-source, and locked to
 <tr>
 <th align="left">Capability</th>
 <th align="center">OpenConstructionERP</th>
-<th align="center">RIB iTWO</th>
-<th align="center">Exactal CostX</th>
-<th align="center">Sage Estimating</th>
-<th align="center">Bluebeam</th>
+<th align="center">Enterprise BIM Suites</th>
+<th align="center">CAD Takeoff Software</th>
+<th align="center">Legacy Estimating Tools</th>
+<th align="center">PDF Markup Tools</th>
 </tr>
 <tr><td><b>License</b></td><td align="center">AGPL-3.0 (free)</td><td align="center">Proprietary</td><td align="center">Proprietary</td><td align="center">Proprietary</td><td align="center">Proprietary</td></tr>
 <tr><td><b>Self-hosted / offline</b></td><td align="center">&#10004;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#9888; partial</td><td align="center">&#10006;</td></tr>
@@ -213,102 +219,85 @@ Construction cost estimation software is expensive, closed-source, and locked to
 <tr><td><b>BIM requirements (IDS/COBie)</b></td><td align="center">&#10004; import + export</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
 </table>
 
-<sub>Product names are trademarks of their respective owners. This comparison is based on publicly available information as of Q1 2026. Pricing is approximate (per-seat, list price) and may vary by region. OpenConstructionERP is not affiliated with any of the listed vendors.</sub>
+<sub>Comparison reflects typical category capabilities based on publicly available information as of Q1 2026. Pricing is approximate (per-seat, list price) and varies by vendor and region. OpenConstructionERP is an independent open-source project and is not affiliated with any commercial vendor in the categories above.</sub>
 
 ---
 
 ## See It In Action
 
-### Core workflows
+Each block below is a short GIF cut from the full walkthrough above — same order as the video, so you can jump to whichever workflow matters most. Prefer one continuous video? **[▶ Watch the 12-minute walkthrough on YouTube](https://www.youtube.com/watch?v=X06cIaroAeI)**.
 
 <table>
 <tr>
 <td align="center" width="50%">
-<strong>🎬 Full Workflow</strong><br/>
-<em>From upload to estimate — complete demo</em><br/><br/>
-<img src="docs/gifs/01_HERO_Full_Workflow.gif" alt="Full Workflow" width="400" />
-</td>
-<td align="center" width="50%">
-<strong>📸 AI Photo → Estimate</strong><br/>
-<em>Upload a construction photo, get a BOQ in seconds</em><br/><br/>
-<img src="docs/gifs/02_AI_Photo_to_Estimate.gif" alt="AI Photo to Estimate" width="400" />
-</td>
-</tr>
-<tr>
-<td align="center">
-<strong>🏗️ BIM → BOQ Takeoff</strong><br/>
-<em>Import IFC/RVT, auto-extract quantities to BOQ</em><br/><br/>
-<img src="docs/gifs/03_BIM_to_BOQ.gif" alt="BIM to BOQ" width="400" />
-</td>
-<td align="center">
-<strong>📐 PDF Takeoff</strong><br/>
-<em>Measure directly on PDF drawings</em><br/><br/>
-<img src="docs/gifs/04_PDF_Takeoff.gif" alt="PDF Takeoff" width="400" />
-</td>
-</tr>
-<tr>
-<td align="center">
-<strong>🔍 55K+ Cost Items</strong><br/>
-<em>Find any cost item across 11 regional databases</em><br/><br/>
-<img src="docs/gifs/05_Instant_Search.gif" alt="Instant Search" width="400" />
-</td>
-<td align="center">
-<strong>⚡ Build BOQ in 60 Seconds</strong><br/>
-<em>Keyboard-first editor with inline cost lookup</em><br/><br/>
-<img src="docs/gifs/06_Build_BOQ_Fast.gif" alt="Build BOQ Fast" width="400" />
-</td>
-</tr>
-</table>
-
-### Module deep-dives
-
-<table>
-<tr>
-<td align="center" width="50%">
-<strong>👤 Role-Based Setup</strong><br/>
-<em>Onboarding wizard pre-selects the right 17 of 46 modules for your role</em><br/><br/>
+<strong>👤 1 · Role-Based Onboarding</strong><br/>
+<em>Sign in as Admin / Estimator / Manager — the wizard pre-selects the right 17 of 46 modules for your role</em><br/><br/>
 <img src="docs/gifs/07_Role_Based_Onboarding.gif" alt="Role-Based Onboarding" width="400" />
 </td>
 <td align="center" width="50%">
-<strong>🌍 Multi-Region Project</strong><br/>
-<em>Any region, any standard, any currency — live map & weather built-in</em><br/><br/>
+<strong>🌍 2 · New Project, Any Region</strong><br/>
+<em>Pick currency, classification standard, regional factor — live map & weather come along for free</em><br/><br/>
 <img src="docs/gifs/08_New_Project_Global.gif" alt="New Project Global" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>🏗️ Bulk BIM Quantities</strong><br/>
-<em>Link 100 walls → one BOQ line with aggregated area / volume / length</em><br/><br/>
-<img src="docs/gifs/09_Bulk_Link_BIM_Group.gif" alt="Bulk Link BIM Group" width="400" />
+<strong>⚡ 3 · Build the Bill of Quantities</strong><br/>
+<em>Keyboard-first editor, 55K+ priced items, AI cost finder & Smart AI — quality score updates live</em><br/><br/>
+<img src="docs/gifs/15_BoQ_Editor.gif" alt="BoQ Editor" width="400" />
 </td>
 <td align="center">
-<strong>📐 DWG Layer Control</strong><br/>
-<em>636 wall entities across 10 layers — every one linkable to the BOQ</em><br/><br/>
-<img src="docs/gifs/10_DWG_Layers.gif" alt="DWG Layers" width="400" />
+<strong>🏗️ 4 · BIM → BOQ Bulk Link</strong><br/>
+<em>Link 100 Revit walls → one BOQ line with aggregated area / volume / length — no IfcOpenShell</em><br/><br/>
+<img src="docs/gifs/09_Bulk_Link_BIM_Group.gif" alt="Bulk Link BIM Group" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>💵 $6.26M in 215 Positions</strong><br/>
-<em>Real Revit project → 88 sections, CWICR-priced, quality score 99</em><br/><br/>
+<strong>📐 5 · DWG Drawings & Layers</strong><br/>
+<em>636 wall entities across 10 DWG layers — every one linkable to the BOQ, measured in place</em><br/><br/>
+<img src="docs/gifs/10_DWG_Layers.gif" alt="DWG Layers" width="400" />
+</td>
+<td align="center">
+<strong>🖊️ 6 · PDF Takeoff</strong><br/>
+<em>Drop a floorplan, measure distance / area / count, push the numbers straight into the BOQ</em><br/><br/>
+<img src="docs/gifs/16_PDF_Takeoff_v2.gif" alt="PDF Takeoff" width="400" />
+</td>
+</tr>
+<tr>
+<td align="center">
+<strong>💵 7 · Complete Estimate — $6.26M</strong><br/>
+<em>Real Revit project → 215 positions, 88 sections, CWICR-priced, quality score 99</em><br/><br/>
 <img src="docs/gifs/11_Complete_Estimate_6M.gif" alt="Complete Estimate" width="400" />
 </td>
 <td align="center">
-<strong>✅ BIM-Linked Tasks</strong><br/>
-<em>Issues tied to exact model elements, tracked on a Kanban board</em><br/><br/>
+<strong>✅ 8 · Every Module — BIM-Linked Tasks</strong><br/>
+<em>Issues tied to exact model elements, tracked on a Kanban board alongside schedule, docs & requirements</em><br/><br/>
 <img src="docs/gifs/12_Tasks_Linked_To_BIM.gif" alt="Tasks Linked To BIM" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>📊 Pivot → BOQ</strong><br/>
-<em>CAD-BIM Explorer pivot becomes 10 BOQ positions in one click</em><br/><br/>
+<strong>📊 9 · Data Explorer — Pivot → BOQ</strong><br/>
+<em>CAD-BIM Explorer pivot becomes 10 BOQ positions in one click — charts, data bars & drill-down included</em><br/><br/>
 <img src="docs/gifs/13_Data_Explorer_Pivot.gif" alt="Data Explorer Pivot" width="400" />
 </td>
 <td align="center">
-<strong>🗺️ Global Portfolio</strong><br/>
-<em>7 projects, 4 continents, $28.3M in active estimates — one workspace</em><br/><br/>
+<strong>📸 10 · AI Estimate from a Photo</strong><br/>
+<em>Upload a construction photo → GPT-4o + YOLO return a scoped BOQ in seconds, confidence-scored</em><br/><br/>
+<img src="docs/gifs/02_AI_Photo_to_Estimate.gif" alt="AI Photo to Estimate" width="400" />
+</td>
+</tr>
+<tr>
+<td align="center">
+<strong>🗺️ 11 · Global Portfolio Dashboard</strong><br/>
+<em>7 projects, 4 continents, $28.3M in active estimates — one workspace, one map</em><br/><br/>
 <img src="docs/gifs/14_Projects_Dashboard.gif" alt="Projects Dashboard" width="400" />
+</td>
+<td align="center">
+<strong>🔍 Bonus · Instant Search</strong><br/>
+<em>Find any of 55K+ cost items across 11 regional databases by keyword, unit or classification</em><br/><br/>
+<img src="docs/gifs/05_Instant_Search.gif" alt="Instant Search" width="400" />
 </td>
 </tr>
 </table>
@@ -483,19 +472,42 @@ Get productive in under 10 minutes:
 
 ## Quick Start
 
-### Fastest: One-Line Install
+> 👀 **Prefer to see it first?** [▶ Watch the 12-minute walkthrough on YouTube](https://www.youtube.com/watch?v=X06cIaroAeI) — onboarding → BoQ → BIM → DWG → PDF → AI → dashboard.
+
+> **Requires Python 3.12+** (any path below). Check with `python --version`.
+
+### Recommended: pip install (1 command, full app)
+
+```bash
+pip install --upgrade openconstructionerp
+openestimate
+```
+
+That's it. Installs backend + pre-built React frontend in one wheel (~7.4 MB), opens your browser at **http://localhost:8080**, creates a SQLite database, and seeds the three demo accounts on first boot. No Docker, no Node.js, no extra services. [PyPI package](https://pypi.org/project/openconstructionerp/).
+
+> **Ubuntu / Debian users:** on Ubuntu 23.04+ (including Ubuntu 26) and Debian 12+, `pip install` directly to the system Python fails with `error: externally-managed-environment` (PEP 668). Use a venv:
+> ```bash
+> sudo apt install -y python3.12 python3.12-venv
+> python3.12 -m venv venv && source venv/bin/activate
+> pip install --upgrade openconstructionerp
+> ```
+> Full Linux guide with system deps and troubleshooting: [docs/INSTALL_LINUX.md](docs/INSTALL_LINUX.md).
+
+If something looks off, run `openestimate doctor` for a per-check OK/WARN/ERROR report.
+
+### Alternative 1: One-line installer (auto-detects Docker / uv / pip)
 
 ```bash
 # Linux / macOS
-curl -sSL https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionERP/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionERP/main/scripts/install.sh | bash
 
 # Windows (PowerShell)
 irm https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionERP/main/scripts/install.ps1 | iex
 ```
 
-Auto-detects Docker / Python / uv → installs and runs at **http://localhost:8080**
+Picks Docker if installed, otherwise uv, otherwise pip. Runs at **http://localhost:8080**.
 
-### Option 1: Docker (recommended)
+### Alternative 2: Docker compose
 
 ```bash
 git clone https://github.com/datadrivenconstruction/OpenConstructionERP.git
@@ -505,14 +517,14 @@ make quickstart
 
 Open **http://localhost:8080** — builds everything in ~2 minutes.
 
-### Option 2: Local Development (no Docker)
+### Alternative 3: Local development (clone + npm + uvicorn)
 
 ```bash
 git clone https://github.com/datadrivenconstruction/OpenConstructionERP.git
 cd OpenConstructionERP
 
 # Install dependencies
-cd backend && pip install -r requirements.txt && cd ..
+pip install -e ./backend[server]
 cd frontend && npm install && cd ..
 
 # Start (Linux/macOS)
@@ -523,30 +535,17 @@ make dev
 # Terminal 2: cd frontend && npm run dev
 ```
 
-Open **http://localhost:5173** — requires Python 3.12+ and Node.js 20+. Uses SQLite by default — zero configuration needed.
-
-### Option 3: pip install (full app — backend + frontend)
-
-```bash
-pip install openconstructionerp
-openconstructionerp serve --open
-```
-
-One command installs everything. Opens browser at **http://localhost:8080** with full UI. Uses SQLite — zero config. [PyPI package](https://pypi.org/project/openconstructionerp/) (2.6 MB, includes pre-built frontend).
+Open **http://localhost:5173** — for hacking on the codebase. Requires Python 3.12+ and Node.js 20+.
 
 ### Demo Accounts
 
-Three demo accounts are created automatically on first start. **Passwords are
-randomly generated per installation and printed to the container logs** on
-first boot — look for the `=== DEMO ACCOUNTS ===` banner in `docker compose
-logs backend` (or in the stdout of `make dev`). You can override them with
-environment variables before the first start.
+Three demo accounts are created automatically on first start. The default password is `DemoPass1234!` for all three — override with `DEMO_ADMIN_PASSWORD` / `DEMO_ESTIMATOR_PASSWORD` / `DEMO_MANAGER_PASSWORD` env vars before the first boot if you need a custom one (e.g. for any internet-exposed deployment).
 
-| Account | Email | Password source | Role |
-|---------|-------|-----------------|------|
-| Admin | `demo@openestimator.io` | `DEMO_ADMIN_PASSWORD` env var, or generated | Full access |
-| Estimator | `estimator@openestimator.io` | `DEMO_ESTIMATOR_PASSWORD` env var, or generated | Estimator |
-| Manager | `manager@openestimator.io` | `DEMO_MANAGER_PASSWORD` env var, or generated | Manager |
+| Account | Email | Password | Role |
+|---------|-------|----------|------|
+| Admin | `demo@openestimator.io` | `DemoPass1234!` | Full access |
+| Estimator | `estimator@openestimator.io` | `DemoPass1234!` | Estimator |
+| Manager | `manager@openestimator.io` | `DemoPass1234!` | Manager |
 
 > Demo accounts include 5 pre-loaded projects from Berlin, London, New York, Paris, and Dubai with complete BOQs, schedules, and cost models.
 >
@@ -678,13 +677,11 @@ tender-submission use. See [NOTICE](NOTICE) and [TERMS.md](TERMS.md) §4.
 ## Trademarks
 
 All product names, logos, and trademarks referenced in this repository
-are property of their respective owners. Comparative references to
-commercial products (e.g., RIB iTWO, Exactal CostX, Sage Estimating,
-Bluebeam) reflect publicly available feature information at the time of
-publication and are used for fair comparative purposes. OpenConstructionERP
-is an independent project and is not affiliated with, endorsed by, or
-sponsored by any of the trademark owners named. Full attributions in
-[NOTICE](NOTICE).
+are property of their respective owners. Any comparative references to
+commercial categories or products are made for fair comparative purposes
+based on publicly available information. OpenConstructionERP is an
+independent project and is not affiliated with, endorsed by, or sponsored
+by any third-party trademark owners. Full attributions in [NOTICE](NOTICE).
 
 ## Export control
 
@@ -717,12 +714,30 @@ For **commercial licensing** without AGPL obligations, see
 
 ---
 
-<div align="center">
+<p align="left">
+  <!-- Social Links -->
+  <a href="https://x.com/datadrivenconst" target="_blank">
+    <img src="https://img.shields.io/twitter/follow/datadrivenconst?logo=X&style=flat&color=%23f5f5f5" alt="Follow on X">
+  </a>
+  <a href="https://www.youtube.com/@datadrivenconstruction" target="_blank">
+    <img src="https://img.shields.io/badge/YouTube-FF0000?logo=youtube&logoColor=white" alt="Subscribe on YouTube">
+  </a>
+  <a href="https://www.linkedin.com/company/78381569" target="_blank">
+    <img src="https://custom-icon-badges.demolab.com/badge/LinkedIn-0A66C2?logo=linkedin-white&logoColor=fff" alt="Connect on LinkedIn">
+  </a>
+  <a href="https://www.youtube.com/watch?v=X06cIaroAeI" target="_blank">
+    <img src="https://img.shields.io/badge/▶_Watch_demo-12_min_walkthrough-FF0000?logo=youtube&logoColor=white" alt="Watch the 12-minute walkthrough">
+  </a>
+</p>
 
-**[Data Driven Construction](https://datadrivenconstruction.io)** — open-source tools for the global construction industry.
 
-[Website](https://datadrivenconstruction.io) · [YouTube](https://www.youtube.com/@datadrivenconstruction) · [GitHub](https://github.com/datadrivenconstruction) · [Telegram](https://t.me/datadrivenconstruction)
+<p align="left">
 
-<sub>OpenConstructionERP v2.1.0 · AGPL-3.0 · Python 3.12+ · Node 20+</sub>
-
-</div>
+  <a href="https://datadrivenconstruction.io">
+    <img src="https://datadrivenconstruction.io/wp-content/uploads/2023/07/DataDrivenConstruction-1-1.png" alt="DDC Logo" width="200"/>
+  </a>
+  <br>
+   <b>   Unlock the Power of Data in Construction</b>
+   <br>
+     🚀 Move to full-cycle data management  where only unified <br /> structured data & processes remain and where  🔓 your data is yours
+</p>

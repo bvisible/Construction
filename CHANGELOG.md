@@ -5,299 +5,557 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.0] — 2026-04-22
+## [2.6.17] — 2026-04-28
 
-### Observability + i18n — audit-driven hardening continues
+### Fixed
+- **BOQ unit catalogue** — `'100 EA'`, `'1000 m'`, and other CWICR multi-prefix forms (rate-per-N units) were rejected by `PositionCreate` / `PositionUpdate`. New `normalise_unit()` helper accepts `<N> <approved_unit>` patterns with up to 6-digit multipliers and lowercases the trailing token. Bare units behave as before.
 
-**Structured error logging** (slice C)
+### Changed
+- **Resource row UX** in BOQ inline editor:
+  - Resource-type badge replaced with a fit-content portal-popover picker. Native `<select>` rendered every badge at "EQUIPMENT" width regardless of label; each badge now sizes to its own content (MATERIAL / LABOR / EQUIPMENT / SUBCONTRACTOR / OTHER).
+  - Catalogue code chip moved from the right of the name to the **left**, so the article number is the first thing the eye lands on. Auto-clears when the user commits a different name — the row then represents a customised resource saveable to the user's personal catalogue via the existing BookmarkPlus action.
+  - Currency dropdown grouped: project-FX-configured codes first, then a 33-currency global ISO 4217 list (USD/EUR/GBP/CHF/JPY/CNY/RUB/INR/CAD/AUD/NZD/SGD/HKD/KRW/BRL/MXN/ZAR/TRY/PLN/CZK/HUF/SEK/NOK/DKK/RON/AED/SAR/QAR/ILS/THB/IDR/MYR/PHP/VND). Picking a currency without a configured FX rate still flags the total cell with the existing "no FX" amber badge.
 
-Replaces bare `except Exception: pass` / `logger.debug(...)` blocks flagged by the v2.3.0 audit with WARNING/EXCEPTION lines that carry operation names and entity IDs, so production incidents are triageable from logs.
+## [2.6.16] — 2026-04-28
 
-- `reporting/service.auto_recalculate_kpis` — 7 sub-module failure paths log at WARNING with `reporting.kpi_recalc <op> failed for project_id=…` and original stack. Fallback semantics (null field, zero count) preserved exactly; only visibility changes.
-- `takeoff/service._extract_pdf_pages` / `_count_pdf_pages` — new input fingerprint helper (size / magic-byte / extension, never absolute paths) and the real pdfplumber / PyMuPDF exception on first-pass failure at WARNING, `logger.exception` when both parsers fail. `upload_document` rejects a double-parse-failure with a generic 400 while keeping the diagnostic server-side only.
-- `boq/events` — re-enables the wildcard activity-log handler behind a dialect guard (registers on PostgreSQL, skips on SQLite with a single INFO line; the aiosqlite greenlet bridge still trips MissingGreenlet). Vector-index failures upgrade from DEBUG to WARNING and funnel through `_RateLimitedLogger` from `app.core.cache`, so a 30-min embedding outage emits a handful of lines per operation instead of thousands.
-- `core/storage.StorageBackend.open_stream` — downgrades from unconditional `NotImplementedError` to a safe default that yields `read_bytes()` as a single chunk (with a DEBUG trace note). Double-missing override paths still raise `NotImplementedError` with a pointer to the two hooks authors can implement.
-- 28 new unit tests across `test_reporting_error_logging.py` / `test_takeoff_error_logging.py` / `test_boq_events.py` / `test_storage_open_stream.py` using the `caplog` pattern from `test_cache_logging.py`.
+### Added
+- CWICR abstract-resource variants surfaced end-to-end. Importer preserves the 4 bullet-separated parquet columns (`variable_parts`, `est_price_all_values`, `position_count`, plus the per-unit sibling) into `CostItem.metadata_['variants']` + `['variant_stats']`. Cost DB grid shows a blue "N variants" badge next to the rate; clicking the row expands a detail panel with KvList stats, sorted variants table, and a "Median" chip on the median row. BOQ "From Database" → row pick triggers a portal popover (`VariantPicker`) for choosing a specific variant; chosen price overrides `unit_rate`, label is appended as `(Variant: …)` suffix in the description, and `metadata.variant` is written to the BOQ position. BOQ grid renders a marker badge next to variant-bearing rows.
+- 8 new i18n keys per locale (EN + RU) under `costs.*` and `boq.*`.
 
-**Validation i18n + GAEB expansion** (slice D)
+### Changed
+- Demo database trimmed from 75 mixed (Cycle/CostLink/Domain/Smoke probes) to 6 curated demo projects: Boylston Crossing, Wohnpark Friedrichshain, Residencial Salamanca, Residencial Vila Madalena, 上海徐汇职业学校扩建工程, Downtown Medical Center.
+- Hoisted `KvList`, `Kv`, `QtyTile` from BIM drawer to `frontend/src/shared/ui/` so cost variant detail panel can reuse them.
 
-- `backend/app/core/validation/messages/` — new self-contained translation package co-located with the rules it serves.
-  - `__init__.py` — `MessageBundle` loader with a cached, thread-safe `translate(key, locale, **params)` API. Fallback chain: `locale → en → raw key` (logged WARNING, deduped so a 1 000-row BOQ doesn't log 1 000 lines).
-  - `en.json` / `de.json` / `ru.json` — 87 keys each, fully in sync. English is the source of truth; German and Russian cover every key.
-- `core/validation/rules/__init__.py` — all 42 built-in rules now call `translate(...)` for user-facing `message` / `suggestion` text. `RuleResult.details` (structured data) stays untouched by design. Active locale is read from `ValidationContext.metadata['locale']`, so the engine API is unchanged; omitting the key preserves pre-refactor English output (backward-compatible).
-- **GAEB rule set expanded from 1 → 5** (aligned with CLAUDE.md Phase 1 DACH focus):
-  - `gaeb.lv_structure` — warns on leaf positions missing parent_id.
-  - `gaeb.einheitspreis_sanity` — **errors** on zero/negative Einheitspreis for non-lump-sum positions (would break GAEB X83 Angebotsabgabe).
-  - `gaeb.trade_section_code` — warns on top-level sections missing a 3-digit Leistungsbereich code (accepts either `classification.gaeb_lb` or a matching ordinal prefix).
-  - `gaeb.quantity_decimals` — warns on >3 decimals (GAEB X83 cap). `Decimal(str(value))` roundtrip strips IEEE-754 artefacts so `0.3` is not flagged as ~16 decimals.
-- **Total validation rules: 42 → 46; GAEB set: 1 → 5.**
-- 44 new unit tests across `test_validation_i18n.py` (bundle loader, fallback chain, rule wiring, locale coverage) and `test_gaeb_rules.py` (pass/fail fixture for every new rule + end-to-end engine smoke test in German).
+### Fixed
+- **Issue #101 — RBAC: BOQ create blocked for viewer-tier users.** `boq.create` lowered from EDITOR to VIEWER so any signed-in user (including freshly self-registered viewers) can start an estimate; project ownership / membership is still enforced by the service. `RequirePermission` now falls back to the live permission registry when the JWT's frozen permission list omits a lowered permission, so existing sessions don't have to re-login. Update / delete remain editor-gated.
+- Several quality slices from prior sessions: punchlist photo upload now reads body before mkdir (413 fires even when storage is unwritable); AI photo/file estimate endpoints reject oversize Content-Length pre-emptively; assemblies formula-engine narrows the `except` ladder so type errors surface; erp_chat splits `ValueError` from generic `Exception` to stop flooding the journal with expected AI-key tracebacks; bim_hub forward-ref hoisted to module-level import; dwg_takeoff `l` → `layer` (E741); eac executor SIM103 collapsed; catalog `urlopen` offloaded to `asyncio.to_thread` to keep the event loop responsive.
+
+## [2.6.15] — 2026-04-27
+
+### Added
+- Provenance markers across exporters and runtime artifacts so a forked deploy can be traced back. COBie/IDS/Excel/PDF/SARIF exports stamp `OpenConstructionERP · DDC-CWICR-OE-2026` in document metadata; SVG favicon carries an RDF authorship block; JWT tokens include `iss: openconstructionerp`; outbound catalog HTTP requests advertise the project User-Agent.
+
+## [2.6.14] — 2026-04-27
+
+### Fixed
+- Alembic migrations `v260b` and `v260c` no longer raise on missing project / EAC tables — they skip with a warning so `Base.metadata.create_all()` at boot can handle the schema. Was bricking every prod `alembic upgrade head` while the running service was fine.
+
+## [2.6.13] — 2026-04-27
+
+### Fixed
+- COBie XLSX export — `<a href>` clicks didn't carry the JWT, plus the URL had a trailing slash that 307-redirected. Replaced with `downloadCobieXlsx()` that fetches with Authorization header and triggers a synthetic download.
+- `/assets` page contrast — text was hardcoded `text-neutral-100/200/300` so it disappeared in light theme and especially under hover. Switched to design tokens (`text-content-*`, `bg-surface-*`, `border-border-*`) so both themes are legible.
+- Asset detail drawer uses the same theme tokens — backdrop, header, action bar, KvList, QtyTile, BIM properties rows all adapt to light/dark.
+
+## [2.6.12] — 2026-04-27
+
+### Fixed
+- Frontend version sync — `frontend/package.json` was stuck at 2.6.10 through the v2.6.11 release, so the bundled UI kept reporting the old version. Both versions now move in lockstep (Issue #101 follow-up).
+- Asset Register `/assets` route 422 — `GET /v1/bim_hub/assets` and `PATCH /v1/bim_hub/assets/{id}/asset-info` are now declared before `GET /v1/bim_hub/{model_id}` so FastAPI matches the literal path first.
+- DWG annotation provenance preserved — backend `update_position` strip pass now also skips `dwg_annotation_source` when the caller includes it (mirrors the BIM/PDF carve-outs from v2.6.11).
+
+### Added
+- Asset detail drawer on `/assets` — click any asset row (or the new geometry icon) to open a side drawer with quantities, the full BIM properties (lazy-loaded from the same Parquet endpoint the 3D viewer uses), and an "Open in 3D Viewer" deep-link.
+- BOQ "Quality & AI" dropdown — Validate / Update Rates / AI Chat are promoted inline; the rest (Price Check, Cost Finder, Smart AI) live behind a single dropdown to free up toolbar space.
+- Per-measurement BOQ link in PDF Takeoff — link a single measurement to one BOQ position with a quantity-transfer preview and a unit-mismatch warning.
+- Update banner shows installed → latest delta — `v{current} → v{latest}` and "X changes in v{latest}" instead of the ambiguous "X changes" count.
+- `dwg_annotation_source` icon + short-label in the BOQ Quantity / Unit cells.
 
 ### Tests
+- `test_boq_bim_qty_source_roundtrip.py` extended with PDF and DWG carve-out cases — all 4 pass.
 
-- **Backend**: +72 new unit tests (28 slice C + 44 slice D). Full suite: **1445 / 1445 green**.
 
-### Compatibility
 
-- `ValidationContext.metadata['locale']` is optional — omitting it keeps pre-v2.4.0 English messages.
-- `StorageBackend.open_stream` no longer raises by default; custom backends that relied on the exception to signal "not implemented" should override and raise explicitly.
+### Fixed — Issue #96 (CLI / installer)
+- **`openconstructionerp upgrade`** new command that pip-installs into the *same* Python env it's running in (uses `sys.executable -m pip`). The Windows installer creates a private venv at `%LOCALAPPDATA%\OpenConstructionERP\venv`; running `pip install --upgrade openconstructionerp` from any other shell upgraded the user's global Python instead, leaving the launcher's venv pinned to the old wheel — so the startup banner kept reporting the old version even though pip claimed success. The new command always lands in the right env. `version` now also prints `Site-packages: …` so users can see which interpreter the launcher is actually using.
 
-### Deferred from this release
+### Fixed — BOQ editor
+- **VAT row no longer hardcoded.** Removed the German-19% fallback in `boqHelpers.ts`. The Net→VAT→Gross footer is now driven from the `tax`-category row in Markups & Overheads (single source of truth, matches the backend PDF/Excel exporters). When no tax markup exists, the VAT and Gross Total rows are hidden; adding any tax markup re-introduces them with the correct rate.
+- **Volume column edit lag fixed.** `updateMutation.onMutate` now writes the new value to the React Query cache immediately instead of only clearing badges, so a quantity edit no longer flickers through the old value for ~5 s while the server round-trips.
+- **BIM picker provenance preserved.** Backend `update_position` was unconditionally stripping `metadata.bim_qty_source` / `pdf_measurement_source` on any quantity change — including the same request that the BIM Quantity Picker used to *set* them. Now the strip pass skips link keys that the caller explicitly included in incoming metadata; pure manual quantity edits still drop the badge as before. Added `tests/integration/test_boq_bim_qty_source_roundtrip.py` (2 cases) covering both branches.
+- **BIM / PDF source icons in the Quantity cell.** `QuantityCellRenderer` now renders a small Cuboid icon for BIM-sourced cells and a Ruler icon for PDF-takeoff-sourced cells, so provenance is scannable without hovering for the tooltip.
+- **Custom Columns accept any script.** `CustomColumnsDialog.normalizeColumnName` was stripping every non-ASCII character (`/[^a-z0-9_]/g`), which silently nuked Cyrillic / CJK / Arabic input and surfaced as "Column name is invalid". Now uses Unicode property escapes (`\p{L}\p{N}`), mirroring Python's `str.isidentifier()` so frontend and backend agree.
 
-Three slices identified in the audit were scoped out of v2.4.0 pending further review: authentication/IDOR hotfixes (erp_chat, costs `/autocomplete` and `/search`, reporting `list_kpi_history`), pagination on unbounded `.scalars().all()` calls (schedule, bim_hub), and event-bus adoption in five silent modules (costs, projects, finance, tendering, validation). These remain tracked for a follow-up patch.
+### Fixed — Country-specific defaults
+- **Removed German / Euro fallbacks** flagged by the country-hardcode audit:
+  - `getLocaleForRegion()` now falls back to the user's UI locale (resolved via `i18next`) instead of `'de-DE'`.
+  - `getCurrencySymbol()` and `getCurrencyCode()` return empty strings when no currency is set (was `'€'` / `'EUR'`).
+  - `createFormatter()` accepts an optional locale and falls back to `getIntlLocale()` instead of `'de-DE'`.
+- The static `VAT_RATES` map is renamed to `SUGGESTED_VAT_RATES` and downgraded to a *suggestion* — used only to seed the placeholder in Project Settings; no longer applied as a render-time default.
+
+### Tests
+- 196 / 196 BOQ frontend tests, 1 132 / 1 132 full frontend sweep — all green.
+- BOQ backend integration suite (44 tests) — all green, including the new `bim_qty_source` roundtrip cases.
+
+## [2.6.10] — 2026-04-27
+
+### Security
+- **Demo password no longer hardcoded.** `_resolve_demo_password()` regression reintroduced the literal `DemoPass1234!` as the no-env-var fallback (BUG-D01). Restored to `secrets.token_urlsafe(16)` so every fresh install gets a unique random password persisted to `~/.openestimator/.demo_credentials.json`. Operators using `OE_DEMO_PASSWORD` env var are unaffected.
+
+### Fixed — Tests
+- `tests/conftest.py` now eagerly imports every module's ORM `models` so `Base.metadata` holds a coherent table set regardless of test-collection order. Eliminates 9 spurious `NoReferencedTableError` failures in `tests/unit/eac/test_validator_aliases.py` when run as part of the full sweep. Full unit-test pass: 2309 / 2309.
+
+## [2.6.9] — 2026-04-27
+
+### Fixed — Takeoff
+- **Suppress "0 m²" / "0 m" labels for degenerate measurements.** `formatMeasurement(value, unit)` now returns the empty string when `value < 0.01`, so half-finished polygons and pre-calibration shapes no longer litter the side panel and on-canvas labels with misleading zero readouts.
+
+## [2.6.8] — 2026-04-27
+
+### Fixed — Takeoff
+- **Page-jump popover** on the page indicator. Click the `X / Y` chip in the toolbar and the dropdown lists every page with a measurement-count badge per page, so users can jump directly to the page they need (especially useful on multi-page tender drawings).
+
+## [2.6.7] — 2026-04-27
+
+Annotation persistence — the last gap in PDF Takeoff durability.
+
+### Fixed — Takeoff
+- **Annotations now persist to the backend.** Cloud / arrow / text / rectangle / highlight types previously only saved to `localStorage`, so annotations vanished on a fresh device or browser. Schema regex extended (`takeoff/schemas.py`) and the frontend sync hook (`useMeasurementPersistence.ts`) no longer filters them out, so the existing 3-second debounce now covers the full set.
+- Backwards compatible: existing measurements rows untouched; clients running v2.6.6 continue to work (annotations just stay localStorage-only on those clients).
+
+## [2.6.6] — 2026-04-27
+
+UX papercuts patch — Takeoff Tier 2 follow-up + Header surface fixes.
+
+### Fixed — Takeoff
+- **Active-tool hint banner** above the canvas — every measure / annotation tool now shows a one-line instruction (e.g. "Click on each item to count" + "Esc: switch tool · Del: undo last"). Replaces the silent state where users could not tell what the tool expected.
+- **Annotation colour editing in the Notes panel** — small swatch next to each annotation row, native `<input type="color">` opens the OS palette so users can recolour after creation without re-drawing.
+- **DWG Layers tab counter** now reflects the *visible* layer count instead of the static total, so toggling layers updates the badge live.
+
+### Fixed — Header
+- "Report Issue" button surfaced directly in the top header (was hidden behind a `…` More popover). The mailto fallback stays inside the popover.
+
+## [2.6.5] — 2026-04-27
+
+Hotfix bundle — security findings + deferred Auth/IDOR slice + Takeoff UX papercuts.
+
+### Security
+- Fix CodeQL `py/partial-ssrf` (critical) in `fieldreports/weather.py` — switch to `httpx.get(base_url, params=…)` so the host is fixed at compile time.
+- Fix CodeQL `py/partial-ssrf` (critical) in `catalog/router.py` — URL-quote the static-map values and verify final netloc is `raw.githubusercontent.com` before download.
+- Fix CodeQL `py/polynomial-redos` (high) in `dsl/nl_builder.py` — bound the German V2 reorder regex inner field to `{1,100}` characters so the lazy quantifier can't backtrack quadratically on adversarial input.
+
+### Added — Auth/IDOR hardening (v2.4.0 slice A, deferred)
+- `erp_chat/router.py`: project-scoped IDOR closed on `/{conversation_id}/messages` GET + DELETE.
+- `reporting/router.py`: 3 IDOR fixes covering KPI history, dashboards, and audit trails.
+- 17 new integration tests in `tests/integration/test_costs_idor.py`, `test_erp_chat_idor.py`, `test_reporting_idor.py`.
+
+### Fixed — PDF Takeoff UX
+- Mouse-wheel zoom on canvas (cursor-anchored, native listener with `passive: false` so `preventDefault` actually works).
+- Annotation/measurement delete buttons now visible at 40-50% baseline opacity (no longer hover-only) and carry the `(Del)` shortcut hint.
+- New "Not calibrated · click to fix" amber badge in toolbar — mirrors the existing purple "Calibrated · 1:N" badge.
+- One-time toast warning when first real measurement is created on an uncalibrated drawing, gated by ref so it never spams.
+
+## [2.6.4] — 2026-04-27
+
+Wave-5 patch release — completes the T00–T13 dashboards/compliance backlog with two final feature deliverables.
+
+### Added — Dashboards (T10 Multi-Source Project Federation)
+- `dashboards/federation.py`: `build_federated_view(snapshot_ids, schema_align)` reads each snapshot's parquet into DuckDB and unions them with `__project_id` + `__snapshot_id` provenance columns. Three schema-align modes: `intersect` (common columns only), `union` (NULL-fill missing), `strict` (422 on mismatch).
+- `federated_query()` runs whitelisted SELECT-only SQL on the view (rejects ATTACH/INSTALL/DROP/PRAGMA/SET, rejects multi-statement, rejects empty input)
+- `federated_aggregate()` supports count/sum/avg/min/max with provenance group-by
+- Endpoints: `POST /api/v1/dashboards/federation/build`, `POST /api/v1/dashboards/federation/aggregate`
+- Frontend: `FederationPanel` (multi-select snapshot picker + schema-align mode + group-by/measure pickers), `FederatedResultsTable` (provenance chips first, project/snapshot labels)
+
+### Added — Compliance (T13 Natural Language Rule Builder)
+- `core/validation/dsl/nl_builder.py`: 8 deterministic patterns (must_have, must_not_have, value_equals, value_greater_than, value_less_than, value_at_least, count_at_least, count_zero) with EN / DE / RU lang aliases (incl. German V2 verb-final reordering)
+- Optional injectable AI fallback: lazy `app.modules.ai.ai_client` import, low-confidence-only invocation, response round-tripped through the strict T08 parser before acceptance — never crashes if no API key
+- Endpoints: `POST /api/v1/compliance/dsl/from-nl`, `GET /api/v1/compliance/dsl/nl-patterns`
+- Frontend: `/compliance/builder` route with `NlRuleBuilderPanel` (3-pane: NL textarea / DSL preview / pattern hints, Ctrl+Enter to generate, AI checkbox, confidence badge), `DslPreview` (token-level YAML highlight, no codemirror), `NlPatternHints`
+
+### Tests
+- 30 + 6 (T10) + 29 + 7 + 11 (T13) = 83 new tests, all passing
+- Full frontend `tsc --noEmit` clean across all dashboards + compliance + EAC canvas additions
+- ruff + mypy clean on all new backend code
+
+## [2.6.3] — 2026-04-27
+
+Wave-4 patch release bundling three feature deliverables (T09 Model-Dashboard Sync Protocol, T11 Historical Snapshot Navigator, T12 CWICR Item Matcher).
+
+### Added — Dashboards (T09 Sync Protocol)
+- `sync_protocol.py` with `PresetSyncProbe`, `SyncReport`, `auto_heal()`, `diff_snapshot_meta()`. Detects column renames, drops, dtype changes, and dropped filter values; classifies severity and proposes auto-fixes.
+- `oe_dashboards_preset.sync_status` + `last_sync_check_at` columns (alembic `v2b0_preset_sync_columns`)
+- Subscribes to `snapshot.refreshed` event — flips matching presets to `stale` automatically
+- Endpoints: `POST /api/v1/dashboards/presets/{id}/sync-check`, `POST /presets/{id}/sync-heal`
+- Frontend: `PresetSyncBadge` (color-coded chip beside preset names), `SyncReportDrawer` (grouped issue list with Auto-heal CTA)
+
+### Added — Dashboards (T11 Snapshot Navigator)
+- `snapshot_navigator.py` with `list_snapshots_for_project()`, `diff_two_snapshots()`, schema-from-stats helper
+- Endpoints: `GET /snapshots/timeline`, `GET /snapshots/diff` (cross-project diff returns 422)
+- Frontend: `SnapshotTimeline` (vertical card list with multi-select + Compare), `SnapshotDiffView` (added/removed/dtype-changed columns + summary chips), `SnapshotPickerInline` (compact dropdown)
+
+### Added — Costs (T12 CWICR Item Matcher)
+- `costs/matcher.py` with `match_cwicr_items()` and `match_cwicr_for_position()`
+- Lexical scoring via rapidfuzz `token_set_ratio` over description + localized descriptions, with additive unit/lang bonuses
+- Optional semantic path tries `app.core.vector.encode_texts` then `sentence_transformers`; falls back to lexical-only if either is missing (logs once, never raises)
+- Hybrid mode: `0.6 * lexical + 0.4 * semantic`
+- Endpoints: `POST /api/v1/costs/match`, `POST /api/v1/costs/match-from-position`
+- Frontend: `CwicrMatchPanel` with query input, mode selector, and per-row Apply CTA
+
+### Tests
+- 25 + 7 (T09) + 19 + 14 (T11) + 25 + 7 (T12) = 97 new tests, all passing
+- ruff + mypy clean for backend; tsc + eslint clean for frontend
+
+## [2.6.2] — 2026-04-27
+
+Patch release bundling three wave-3 features (T07 Dataset Integrity, T08 Compliance DSL Engine, EAC §3.2 Block Editor canvas) and a downgrade-path migration fix.
+
+### Fixed
+- **Alembic v260b downgrade failed on SQLite** — `drop_column("idempotency_key")` raised "error in index … after drop column" because SQLAlchemy's `create_all()` lays down an auto-named `ix_oe_eac_run_idempotency_key` index that the migration didn't know about. Now walks `inspector.get_indexes()` and drops every index covering the column. Migration roundtrip test sweep: 11/11 + 1 xfail.
+
+### Added — Dashboards (T07)
+- **Dataset Integrity Overview** — `compute_integrity_report()` in `backend/app/modules/dashboards/integrity.py` produces per-column null/unique/dtype/sample/zero/outlier/issue-code stats plus a project-wide completeness score and stable schema hash. `POST /api/v1/dashboards/integrity-report` endpoint with project cross-check. `IntegrityOverview.tsx` table component with completeness chip, per-column issue badges, click-to-expand sample-values drawer, and `issuesOnly` filter.
+
+### Added — Compliance (T08)
+- **DSL Engine for ValidationRule** — `backend/app/core/validation/dsl/` package provides a typed AST (`RuleDefinition`, `ForEachAssert`, `Comparison`, `Aggregation`, `Logical`, `FieldRef`, `Literal`) parsed from YAML/JSON via `yaml.safe_load`, dunder-rejection, depth-cap 16, python-tag attack rejection. `compile_rule()` produces a registered ValidationRule subclass; supports `forEach`/`assert`, `count`/`sum`/`avg`/`min`/`max`, comparisons (`==`,`!=`,`<`,`<=`,`>`,`>=`,`in`), logical (`and`/`or`/`not`). New `oe_compliance_dsl_rule` table (alembic `v2a0_compliance_dsl_rules`), 5 endpoints under `/api/v1/compliance/dsl/` (validate-syntax, compile, list, get, delete) with tenant isolation and owner-only delete.
+
+### Added — EAC (§3.2 Block Editor canvas)
+- **Spatial block canvas with slot DnD** — `frontend/src/features/eac/canvas/` package built on `@xyflow/react`: `BlockCanvas` (zoom/pan/multi-select/keyboard), `BlockNode` (editable title + expandable params + typed slot handles), `SlotConnection` (typed bezier edges colored by data type), `CanvasToolbar` (undo/redo, fit-view, save, validate, compile), `useBlockCanvasStore` Zustand store with bounded undo/redo and clipboard, `dnd.ts` slot-type compatibility matrix. New page `EACBlockEditorPage.tsx` mounted at `/eac/blocks/:eacId`.
+
+### Tests
+- 19 + 5 (T07) + 19 + 12 + 8 (T08) + 15 + 10 + 4 + 5 (EAC canvas) = 97 new tests, all passing
+- Migration roundtrip 11/11 (was 10 + 1 xfail before v260b downgrade fix)
+
+## [2.6.1] — 2026-04-26
+
+Patch release on top of v2.6.0 — bundles a prod-deploy migration fix and three Dashboards features (T04 Cascade Filter Engine, T05 Presets & Collections, T06 Tabular Data I/O) that were nearly complete at the v2.6.0 cut.
+
+### Fixed
+- **Alembic v270 migration crashed on empty DB** — `inspector.get_columns("oe_boq_position")` raised `NoSuchTableError` when the migration ran ahead of the ORM `create_all()` boot path. Now `get_table_names()`-guarded with a logged WARNING when the table is missing. Discovered during the v2.6.0 prod deploy: prod was actually missing `alembic_version` entirely (schema present but never stamped); fixed via `alembic stamp head` followed by `alembic upgrade head` clean no-op.
+
+### Added — Dashboards (T04 + T05 + T06)
+- **Cascade Filter Engine (T04)** — `POST /api/v1/dashboards/snapshots/{id}/cascade-values` returns distinct values of a target column whose row-set is consistent with the user's other-column selections, optional fuzzy `q`. `GET /api/v1/dashboards/snapshots/{id}/row-count` returns the live filtered row count. `CascadeFilterPanel.tsx` is a vertical stack of debounced per-column pickers with chip multi-select, per-column Clear, and a top-level Reset all.
+- **Presets & Collections (T05)** — new `oe_dashboards_preset` table (alembic `v290_dashboards_presets`), service publishing `dashboard.saved` / `dashboard.deleted` events. Endpoints: `POST/GET/PATCH/DELETE /api/v1/dashboards/presets`, `POST /presets/{id}/share`. `PresetPicker.tsx` exposes "My presets" + "Shared collections" with a Save-current modal; `QuickInsightPanel.tsx`'s pin button now creates a real preset (was a no-op stub in v2.6.0).
+- **Tabular Data I/O (T06)** — `rows_io.py` provides paginated DuckDB row reads + CSV/XLSX/Parquet exports + a two-step import staging area. Endpoints: `GET /snapshots/{id}/rows`, `GET /snapshots/{id}/export`, `POST /snapshots/{id}/import`, `POST /snapshots/{id}/import/commit`. `DataTable.tsx` renders the rows endpoint with click-to-sort headers; `ExportButton.tsx` triggers downloads with the auth token attached. Import UI deferred to a follow-up — the staging endpoints exist and are tested, but the snapshot-write path waits on T10 federation.
+
+### Tests
+- 16 + 16 + 10 + 7 + 6 + 5 + 12 = 72 new tests across the four agents, all passing. Backend ruff clean; frontend tsc + vitest clean.
+
+## [2.6.0] — 2026-04-26
+
+Major feature release. RFC 37 multi-currency / VAT / compound positions, BIM Viewer UX overhaul, IDS / SARIF interop, EAC engine API completeness, dashboards Quick-Insight + Smart-Autocomplete, security hardening, Linux install guide.
+
+### Added — RFC 37 multi-currency, VAT, compound positions
+- **Multi-currency BOQ resources (Issue #88)** — per-resource `currency` on compound-position rows. Project Settings page exposes a per-project FX rate table (code, label, rate-to-base) so foreign-priced labour, materials, equipment roll up cleanly into the project's base currency. Inline currency picker on every resource row in the BOQ grid; `⚠ no FX` pill renders when a resource currency has no rate configured. Resource total displayed in resource currency with base-currency tooltip (`qty × rate × fx`).
+- **Per-project VAT override (Issue #89)** — `Project.default_vat_rate` column. When seeding a fresh BOQ's default markups, the project's VAT override (if set) replaces the regional default. Settings UI shows live "Effective: X%" badge with regional fallback.
+- **Compound position editing (Issue #93)** — resource type / unit / currency are now first-class editable fields in the BOQ grid. Resource type rendered as a badge-styled `<select>` covering material / labour / equipment / subcontractor / other (i18n-keyed). Unit cell uses a project-aware datalist with free-form input persisted via `saveCustomUnit`. Project Settings exposes a chip list of custom units for the project.
+- **CWICR cost link (Issue #79)** — `Position.cost_item_id` plumbed through `PositionCreate` / `PositionUpdate` / `PositionResponse`. Backend rejects unknown / inactive cost-item IDs with 422; metadata-preserving on PATCH. Bulk-positions endpoint forwards optional per-row `cost_item_id`.
+
+### Added — BIM Viewer UX
+- **Geometry session cache** — Zustand LRU keyed by `modelId` (4 entries / 200 MB cap). Returning to `/bim/{id}` from another route no longer re-downloads or re-parses the GLB / DAE — the parsed scene is restored from cache. ~5× faster on second visit.
+- **Color-mode legend** — overlay listing each colour swatch + meaning across Storey / Type / Validation / BOQ-link coverage / Document coverage modes (gradient bar with min/max for the 5D-rate continuous mode). Capped at 12 swatches (+N more).
+- **Persistent measurement list** — completed measurements now land in the Tools panel with focus / hide / rename / delete per row, plus a top-level "Clear all measurements" button. Stop measuring no longer wipes the user's work; Esc cancels the active mode without deleting completed entries.
+- **Saved Views: rename + delete** — pencil + trash icons per row, inline edit with Enter / Esc.
+- **Asset Card panel fix** — store wiring repaired (`assetCardEnabled` + setter were missing in `useBIMViewerStore`), glass effect dropped for solid surface, asset registration now resolves stub IDs through `ensureBIMElement` so PATCH always lands on a real DB UUID.
+- **BIM volumetric quantity auto-suggest (Task #136)** — when linking BIM elements to a new BOQ position, the Quantity input pre-fills from the most relevant geometric parameter for the position's unit (volume / area / length / mass / count) with a confidence badge and partial-coverage warning.
+- **Properties tab** is now a real local tab inside the right panel — no longer a disguised navigation to `/data-explorer`.
+- **Rules button** opens in a new tab instead of unloading the viewer.
+- **Saved Views Save button** no longer clipped past the panel edge.
+- **4D Schedule placeholder** removed (was a no-op button).
+- **Issue #53 — placeholder geometry banner**. When the IFC text fallback synthesizes generic boxes (DDC `cad2data` not installed), elements are tagged `is_placeholder: true` and the viewer shows an amber dismissable banner pointing to `docs/INSTALL_DDC.md`. No more silent placeholder-as-real-geometry.
+- **Issue #53 — DAE double-rotation regression**. `ColladaLoader` already pre-rotates Z_UP DAEs; the unconditional `scene.rotation.x = -π/2` flipped models upside-down. Now branched on `_isGLB` with a Y-vs-Z bbox heuristic for un-rotated DAE inputs.
+
+### Added — Validation interop
+- **IDS importer (Task #224)** — `POST /api/v1/validation/import-ids` (multipart). Parses buildingSMART IDS XML via `defusedxml`, registers each `<specification>` as a `ValidationRule` under the `ids_custom` rule set. No IfcOpenShell dependency.
+- **SARIF v2.1.0 exporter** — `GET /api/v1/validation/reports/{id}/sarif` returning `application/sarif+json`. Severity error / warning / info → SARIF error / warning / note. Element refs map to logical locations.
+
+### Added — EAC §1.7 Engine API completeness
+- New endpoints: `POST /rules:compile`, `GET /runs/{id}/status`, `POST /runs/{id}:cancel`, `POST /runs/{id}:rerun`, `GET /runs/{a}:diff/{b}`.
+- Cooperative cancellation via in-process token registry + persisted `EacRun.status='cancelled'` for cross-worker visibility.
+- New events: `eac.run.cancelled`, `eac.run.rerun_started`.
+
+### Added — Dashboards (T02 + T03)
+- **Quick-Insight Panel** — `GET /api/v1/dashboards/snapshots/{id}/quick-insights` runs rule-based heuristics over the snapshot (histograms, bars, lines, scatters, donuts) ranked by interestingness with chart-type diversity. `QuickInsightPanel.tsx` renders the result grid with refresh + per-card pin buttons.
+- **Smart Value Autocomplete** — `GET /api/v1/dashboards/snapshots/{id}/values?column=...&q=...` powered by DuckDB + rapidfuzz fuzzy reranking. `SmartValueAutocomplete.tsx` is a debounced (250 ms) ARIA combobox with keyboard nav.
+
+### Added — Event bus adoption (v2.4.0 slice E)
+Five previously silent modules now emit events for downstream audit / analytics / notifications:
+- `punchlist` — item created / updated / deleted / status_changed
+- `procurement` — po created / updated / issued, gr created / confirmed
+- `reporting` — kpi_snapshot / template / report_generated
+- `notifications` — created / read / bulk_read / deleted
+- `tendering` — package created / updated, bid created / updated (re-enabled commented-out publishes)
+
+### Security
+- **XML XXE pinning** — `backend/app/modules/schedule/router.py` now imports `defusedxml` exclusively for user-XML parsing; regression tests pin against billion-laughs and external-entity payloads.
+- **Punchlist photo upload size cap** — 25 MB limit enforced via `Content-Length` pre-check then body-size fallback; HTTP 413 instead of OOM.
+- **CSP source-of-truth** — duplicate `Content-Security-Policy` removed from `deploy/docker/nginx.conf`; backend middleware is now authoritative.
+- **CodeQL noise reduction** — `.github/codeql/codeql-config.yml` adds `paths-ignore` for tests / dist / audit / alembic / demo seeds / marketing and `query-filters` for low-signal rules; expected ~80% alert reduction with zero behaviour change.
+
+### Documentation
+- **Linux install guide** — `docs/INSTALL_LINUX.md` covers PEP 668 externally-managed-environment trap on Ubuntu 23.04+ (incl. 26), Python 3.12 vs 3.13 wheel-coverage, system-deps for source build, port-collision recovery, optional systemd unit. README adds an Ubuntu/Debian pointer block.
+- **CLAUDE.md** validation-rules-tree fixed to match disk reality (one colocated `rules/__init__.py`, no per-standard files).
+
+### Test infrastructure
+- **Backend `shared_auth` fixture cascade fix** — three-layer cascade resolved: (1) `conftest.py` redirects `DATABASE_URL` to a per-session temp SQLite *before* `from app...` imports so tests no longer compete with the production DB; (2) `_auth_helpers.promote_to_admin` flips `is_active=True` (BUG-RBAC03); (3) login / API rate limits bumped for whole-suite runs to avoid spurious 429s. The five originally-failing test files (`test_api_smoke`, `test_boq_regression`, `test_boq_import_safety`, `test_boq_cycle_detection`, `test_boq_cost_item_link`) plus three adjacent suites pass cleanly together: 57/57 in 246 s.
+- `test_boq_cycle_detection` 400-vs-422 expectations aligned to the deliberate `service.py` BUG-CYCLE02 behaviour.
+
+## [2.5.6] — 2026-04-26
+
+Hotfix for Issue #92 (formula save broken on v2.5.5) plus a UX fix for Issue #91 (Enter-after-edit jumped to footer) and a toolbar polish.
+
+### Fixed
+- **BOQ Quantity save (Issue #92)** — three chained bugs caused every Quantity edit on v2.5.5 to come back as `0`:
+  1. Backend `PATCH /v1/boq/positions/{id}` returned `500` whenever the row's `confidence` column held a legacy label (`'high'` / `'medium'` / `'low'`) — `_position_to_response` did `float(position.confidence)` and crashed. Added `_coerce_confidence` that maps known labels to `0.9 / 0.6 / 0.3` and falls back to `None` for unknowns.
+  2. `onFormulaApplied` was destructured as `_onFormulaApplied` (unused) inside `BOQGrid`, so `metadata.formula` was never persisted even though the editor fired the callback. Wired through the AG Grid `gridContext`.
+  3. The popup editor's tail blur (fired when `stopEditing` unmounted the input) re-entered the commit path and double-PATCHed — sometimes with the editor's raw text, which the value-parser fell back to `oldValue` for, so the cell appeared to "revert". Added a `committedRef` idempotency guard so commit fires exactly once per Enter / Tab / Blur.
+- **BOQ Enter-after-edit (Issue #91)** — pressing Enter after editing Unit / Quantity / Unit-rate jumped focus down to the next row, and on the last data row landed on the footer ("Resumen") forcing the user to navigate back. Now Enter-after-edit advances right to the next column on the same row, matching how users actually fill BOQ data left-to-right (`enterNavigatesVerticallyAfterEdit={false}`).
+
+### Changed
+- BOQ toolbar AI section: removed the coloured `border-l-2` accent strips between the *Find Costs / AI Chat / Analyze* buttons.
+
+## [2.5.5] — 2026-04-26
+
+Issue #90: Excel-style formulas in BOQ Quantity cells. Plus the v2.5.4 Undo defensive wrapper, an "About" copy edit, and three small marketing-page text updates.
+
+### Added — Issue #90 formulas in Qty
+- New `formulaCellEditor` wired to the BOQ Quantity column. Type `=2*PI()^2*3`, `=sqrt(144) + 5`, `12.5 x 4`, etc. — the cell evaluates the expression and stores the resolved number, while the source formula is persisted in `metadata.formula` so you can re-edit it later.
+- The parser is hand-written recursive-descent (CSP-safe; **no eval / no Function**) and supports:
+  - Operators `+ − * / ^` (and `**` as exponent alias), parentheses
+  - `x` / `×` as multiplication aliases (so "2 x 3" works)
+  - `,` as decimal separator (es / de / ru locales) — only when the input has no parens, so it never collides with function-arg separators
+  - Constants: `PI`, `E`
+  - Functions: `sqrt`, `abs`, `round`, `floor`, `ceil`, `pow(x,y)`, `min(...)`, `max(...)`, `sin`, `cos`, `tan`, `log`, `exp`
+  - Optional Excel-style leading `=`
+- Editor UX: violet `ƒx` badge, live evaluation preview (`= 59.22` in green or `⚠ syntax error` in red as you type), inline `?` help popover with a cheat-sheet of operators / functions / examples.
+- Cell display when a formula is stored: violet `ƒx` pill + violet number + AG Grid tooltip showing the source formula. Click the cell → editor pre-fills with the original formula, not the resolved number.
+- 20 unit tests cover precedence, exponent associativity, locale decimals, multiplication aliases, function calls, identifier-injection guards (rejects `=window`, `=alert(1)`, etc.), and the user's reported example `=2xPI()^2x3`.
+
+### Fixed — Undo defensive wrapper (was v2.5.4)
+- `BOQService.update_position` wraps the DB write block (`update_fields` → `flush` → `refresh`) in a defensive try/except. Any unexpected SQLAlchemy/IntegrityError now surfaces as `422 Unprocessable Entity` with a helpful "row may have been deleted or modified concurrently — reload and retry" message instead of a bare 500. The full traceback + a type-only field summary is logged via `logger.exception` so the underlying cause is recoverable from server logs (Bug 1, partial).
+
+### Changed — copy
+- About / "Voices" founder bio: tightened the closing two paragraphs — drops the redundant "ten years" / "decade" repetition, ends with "an open-source modular ERP for the construction industry" + a single follow-up paragraph about the AI-tooling consolidation.
+
+### Known issues (still tracking)
+- Bug 1 root cause not yet identified — the defensive wrapper neutralises the user-facing impact (no more silent 500) but the trigger condition is still unknown. Server logs will now expose it on next occurrence.
+- Bug 4 (description cell crash on newly-added position) — needs user-side repro with browser console screenshot.
+
+## [2.5.3] — 2026-04-26
+
+BOQ-editor stability + UX sweep. User reported 23 bugs on a single project's BOQ page (`/boq/{id}`); 21 fixed in this release, the remaining 2 (Undo replay 500 on stale parent_id; description-cell crash on newly-added rows) need a reproducible repro and are tracked separately.
+
+### Fixed (data integrity)
+- **Silent data loss on save failure** — Quantity edits whose server response 500'd were left in the grid as if accepted; the optimistic cache update is now rolled back via `invalidateAll()` in `updateMutation.onError` (Bug 5).
+- **Apply Regional Template crash** — markup cascade calculation was unguarded against null/non-numeric `percentage` and `fixed_amount`; added `Number.isFinite` checks + array guard (Bug 3).
+- **Import freeze (~30 s)** — XLSX/PDF/CAD imports could hang the UI with no signal. Added an immediate "Importing X… (up to 60 s)" toast and a 90 s `AbortController` timeout that surfaces a friendly message instead of an apparent hang (Bug 2).
+
+### Fixed (UX)
+- Lock Estimate now confirms before locking (it's irreversible without admin unlock) — Bug 8.
+- Esc closes the AI Features Setup modal — standard modal behaviour (Bug 10).
+- Right-click Actions menu flips when it would overflow the viewport (Bug 11).
+- Grid Settings dropdown widened from `w-52` → `w-64` so "Manage Columns" / "Renumber Positions" no longer truncate (Bug 12).
+- Footer rows (Direct Cost / Net Total / VAT / Gross Total) no longer show a stray `0` in the Quantity column — totals don't have a quantity (Bug 15).
+- Paste-from-Excel button has a visible `Paste` label at xl breakpoints (Bug 16).
+- BIM Quantity picker element names get a native browser tooltip with the full text + `IfcWallStandardCase` hint when truncated (Bug 21).
+- Toolbar now sticks at `top-[52px]` (under the app header) instead of colliding with it (Bug 7).
+- Right-side AI Smart / AI Cost Finder panels offset by `top-[52px]` so they no longer cover the toolbar's Import/Export/Lock buttons (Bug 13).
+- "AI" group label in the toolbar is decorative — marked `pointer-events-none aria-hidden` (Bug 6).
+- Unit column display now matches the editor (raw lowercase code: `m`, `m2`, `m3`) — `uppercase` CSS removed (Bug 9).
+- Three AI buttons in the toolbar (Find Costs / AI Chat / Analyze) get coloured left borders + a visible label on the previously icon-only middle one (Bug 18).
+- Adding an empty position toasts a one-line hint that Quality Score will dip until quantity/rate are filled (Bug 19).
+- Version History empty state explicitly directs the user to the label-input + Save button instead of just saying "No snapshots yet" (Bug 20).
+- AI Cost Finder demotes the CWICR `code` token to a small grey badge with a `title=` tooltip — internal IDs no longer dominate the row (Bug 22).
+- Feedback URL no longer leaks `error_count=N` query param; the count is logged to console for self-debugging instead (Bug 23).
+- Header's duplicate keyboard-shortcuts trigger removed; the BOQ toolbar's Keyboard icon is the single entry point (Bug 17).
+
+## [2.5.2] — 2026-04-26
+
+QA-report stability sweep. Triaged a 65-bug audit; ~70% were already-fixed or false-positive. Real fixes shipped:
+
+### Security
+- `docker-compose.quickstart.yml`: `JWT_SECRET` and `POSTGRES_PASSWORD` now required via env (or `.env`) — compose fails fast instead of shipping globally-shared defaults.
+- `Dockerfile.unified`: removed baked-in `JWT_SECRET=change-me-in-production` ENV — must be supplied at `docker run` time.
+- `registration_mode` default flipped `open` → `admin-approve`. First registrant still becomes admin (bootstrap path); subsequent self-registrations need approval. Self-hosters who want open registration set `OE_REGISTRATION_MODE=open` in `.env`.
+
+### Fixed
+- `_resolve_demo_password` default is now the documented `DemoPass1234!` instead of a random token — the CLI banner, README, and seed all advertised that string but the actual default was random, so demo logins silently failed on fresh installs.
+- BOQ position parent_id validation returns 422 (FastAPI convention) instead of 400 across self-cycle / missing-parent / cross-BOQ cases.
+- `smart_import` xlsx path now calls `reject_if_xlsx_bomb` — the bomb guard previously only ran in `import_boq_excel`, leaving a DoS vector via this endpoint.
+- Reporting page no longer logs 50× console 404 — `/v1/reporting/kpi` → `/v1/reporting/kpi/`.
+- Finance page no longer 422s on every load — `/v1/finance/budgets` → `/v1/finance/budgets/`.
+- BIM Asset Register page no longer 404s — `/v1/bim_hub/assets/?` was hitting `/{model_id}` route, removed the trailing slash.
+- Onboarding tour no longer blocks first-time project creation — auto-start is now skipped on `/projects/new`, `/onboarding`, `/setup`, `/login`, `/register`.
+- Empty-dashboard for new users replaced with proper EmptyState (FolderPlus + Create-project CTA).
+- `?lang=` URL parameter now honoured at i18n init (validated against supported locales, persisted to localStorage).
+
+### Build / Install
+- `backend/requirements.txt` reduced from 236-line freeze (torch, openai, anthropic, playwright, pyinstaller, etc.) to a 4-line `-e .[server]` shim. Saves GBs on `pip install -r`.
+- `Makefile` `dev` target split: `dev-backend`, `dev-frontend` for two-terminal Windows workflow; `dev-unix` keeps the POSIX-only `&` form.
+- `openestimate init-db --reset` flag added — deletes existing DB before init. Without it, prints a warning if a previous DB is present at the data dir.
+- `pyproject.toml` upper version bounds added on pandas/pyarrow/pydantic/sqlalchemy/alembic/fastapi/uvicorn/duckdb/httpx — prevents pip from resolving breaking-major releases.
+- `Dockerfile.unified` base image bumped `node:20-alpine` → `node:22-alpine` (rollup-plugin-visualizer 8.x requires node>=22).
+
+### UI
+- Header: dev-tool buttons "Report Issue" + "Email Issues" moved into a `⋯` "More" popover.
+
+## [2.5.1] — 2026-04-26
+
+Hotfix release for installer regression on Windows (issue #87).
+
+### Fixed
+- `install.ps1` aborted on `uv`'s stderr progress under `irm | iex` (PS 5.1 wrapped "Resolved 64 packages in 1.28s" as `NativeCommandError`). Switched to `Continue`-policy + `Invoke-Native` helper merging stderr→stdout.
+- `install.sh` `curl` calls now use `-f` to fail-fast on HTTP 4xx/5xx (no more HTML error pages written to `docker-compose.yml`).
+- `install.sh` Python detection picks the first interpreter actually ≥3.12 instead of falling back to whatever `python3` resolves to.
+- `install.sh` and `install.ps1` honour `OE_VERSION` env var for pip/uv paths.
+- Marketing site: replaced dead `get.openconstructionerp.com` install CTAs with raw GitHub install-script URL on hero + final CTA.
+
+## [2.5.0] — 2026-04-25
+
+Stability release. No migration needed for 2.4.0 upgrades.
+
+### Fixed
+- PDF takeoff page indicator no longer resets to `0/31` on Next click.
+- Alembic multiple-head error on fresh clones (new `v232_merge_heads` no-op).
+- PDF/DWG takeoff cross-page/layout state leaks.
+- BIM viewer state leaks on model switch + stale prop callbacks.
+- PDF drop-zone honesty: PDF-only with toast on rejection.
+- Text-annotation Escape race (no more ghost annotations).
+- Vite "Failed to fetch dynamically imported module" (14 deps pre-bundled).
+- `make seed` / `db-reset` Makefile target.
+- `win32_setctime` marker for non-Windows pip installs.
+
+### Added
+- Delete/Backspace shortcut in PDF takeoff.
+
+## [Unreleased]
+
+### Dashboards Phase 0 (T00 scaffolding)
+
+- New modules: `oe_dashboards`, `oe_compliance_ai`, `oe_cost_match` (auto-discovered).
+- `snapshot_storage.py` + `duckdb_pool.py` core primitives.
+- `duckdb>=1.2.0` + `rapidfuzz>=3.0.0` promoted to base deps.
+- ADR-001 (snapshot storage model) + `CLAUDE-DASHBOARDS.md` 13-task plan.
+- 25 new unit tests. Full suite: 1470/1470 green.
+
+## [2.4.0] — 2026-04-22
+
+Audit-driven hardening — observability + i18n.
+
+### Slice C — Structured error logging
+- `reporting.kpi_recalc`: 7 sub-module failure paths logged at WARNING with op + project_id.
+- `takeoff/service`: pdfplumber/PyMuPDF errors logged with input fingerprint, double-fail returns generic 400.
+- `boq/events`: wildcard activity-log gated on PostgreSQL; vector-index failures rate-limited.
+- `StorageBackend.open_stream`: safe default chunked read instead of `NotImplementedError`.
+
+### Slice D — Validation i18n + GAEB
+- New `core/validation/messages/` bundle (en/de/ru, 87 keys each).
+- All 42 rules now flow through `translate()`, locale via `ValidationContext.metadata['locale']`.
+- GAEB ruleset: 1→5 rules (`lv_structure`, `einheitspreis_sanity`, `trade_section_code`, `quantity_decimals`).
+- Total rules 42→46.
+
+### Tests
+- +72 unit tests (28 slice C + 44 slice D). Full suite: 1445/1445 green.
+
+### Deferred
+- IDOR hotfixes (erp_chat, costs autocomplete/search, reporting), pagination (schedule, bim_hub), event bus in 5 silent modules.
 
 ## [2.3.1] — 2026-04-22
 
-### Hardening pass from the v2.3.0 post-release audit
+Post-v2.3.0 audit hardening.
 
-**Pluggable email service** (`app.core.email`)
-- Extracted SMTP / template code from `modules/integrations/email_service.py` into a proper `EmailBackend` abstraction. Backends: `console` (logs at INFO — dev default), `smtp` (production), `noop` (silent drop for CI), `memory` (capture-in-list for tests).
-- `EmailService.send_password_reset()` is the first typed helper; `POST /auth/forgot-password` now actually delivers the reset link through whichever backend is configured (the TODO in `users/service.py:385` is gone).
-- `DeliveryResult` replaces `bool` — structured `ok / backend / reason`, never raises.
-- Settings: `EMAIL_BACKEND` (default `console`) + `FRONTEND_URL` (falls back to first CORS origin) for building reset URLs.
-- Back-compat shim: the old `integrations.email_service.send_email` import still works; returns `bool` for callers that haven't migrated.
-- 30 new unit tests in `test_email_service.py`.
+### Added
+- Pluggable `EmailBackend` (console/smtp/noop/memory) + `send_password_reset()` typed helper.
+- `Contact.tenant_id` column + IDOR guard via tenant scoping (migration `v231`).
+- `openestimate welcome` CLI + first-run interactive browser prompt.
 
-**Contact multi-tenancy fix** (IDOR hardening)
-- New `Contact.tenant_id` column with index. Alembic `v231_contact_tenant_id` backfills `tenant_id := created_by` for every existing row.
-- Repository `list` / `stats` / `list_by_company` now scope via `tenant_id` with a `created_by` fallback for rows inserted before the migration. The IDOR guard at `_require_contact_access` reads `tenant_id` first.
-- Fixes the corner case where a pre-v2.3.1 row with `created_by=NULL` was unreachable even to its author — now admin-only, previously a 403 for everyone.
-- 10 new unit tests covering cross-tenant isolation + legacy-row fallback.
-
-**Cache error logging** (`app.core.cache`)
-- Removed four `except: pass` blocks in `RedisCache.get/set/delete`. Errors now flow through a dedup `_RateLimitedLogger` — first failure per `(operation, error_type)` logs at WARNING, repeats within 60 s are suppressed with a `+N similar` suffix on the next flush.
-- Connect-time Redis unavailability demotes from noisy silent-pass to a single INFO line, matching dev ergonomics without hiding real outages.
-- 9 new unit tests covering rate-limiting window, different error types logging separately, and fallback still serving.
-
-**bim_hub IFC parser — data quality logging**
-- Replaced four silent `except ValueError: pass` handlers in `ifc_processor.py` with DEBUG logs that include the offending raw value, so malformed IFC placements / Revit IDs surface during investigation without being promoted to production noise.
-
-**Pip-install onboarding UX**
-- `openestimate welcome` (alias `openestimate hello`) — zero-network welcome screen with docs / GitHub / issues / Telegram community links. Printed before the server boots on first run.
-- Bare `openestimate` / `openconstructionerp` now detects first run (no `~/.openestimate/openestimate.db`) and shows welcome + interactive `Open … in your browser now? [O/n]` prompt — press `o` + Enter (or just Enter) to launch with the browser, `n` to stay on the terminal (useful over SSH).
-- PyPI short description now ends with `After install, run: openestimate` so `pip show` / PyPI search surfaces the next command.
-- README top adds a blockquote banner pointing at the one command users need to type.
+### Fixed
+- `RedisCache.get/set/delete` errors now logged via rate-limited `_RateLimitedLogger`.
+- `bim_hub/ifc_processor` silent ValueError handlers replaced with DEBUG logs.
 
 ### Tests
-- **Backend**: +49 new unit tests across email / contacts / cache. Full suite: **1373 / 1373 green**.
+- +49 unit tests. Full suite: 1373/1373 green.
 
 ### Migrations
-- `v231_contact_tenant_id` — adds `Contact.tenant_id` + backfills from `created_by` + adds `ix_oe_contacts_contact_tenant_id`. Idempotent.
-
-### Compatibility
-- `EMAIL_BACKEND` defaults to `console`; production deploys should set `EMAIL_BACKEND=smtp` + `SMTP_HOST`. SMTP-without-host falls back to console with a warning — no silent drops.
-- `Contact.created_by` retained as audit field; external scripts that read it keep working.
+- `v231_contact_tenant_id` (idempotent).
 
 ## [2.3.0] — 2026-04-22
 
-### ISO 19650 Phase A — Asset Register, COBie export, Scheduled reports
+ISO 19650 Phase A — Asset Register, COBie export, Scheduled reports.
 
-**Asset Register** (`/assets`)
-- New sidebar page that lists every BIM element flagged as a tracked asset (equipment, fixtures, systems). Columns: element + stable id, manufacturer, model, serial number, operational status (operational / under maintenance / decommissioned / planned), warranty-until, source BIM model, COBie-XLSX download shortcut, edit.
-- Search box filters manufacturer / model / serial / notes (JSON substring search on the backend, indexed).
-- Status-filter chips update the URL (`?status=…`), so filtered views are shareable.
-- Edit modal covers the full COBie field set (manufacturer / model / serial / installation date / warranty until / operational status / parent system / notes). Partial merge semantics — untouched keys survive the PATCH, empty strings clear values.
-- In-viewer asset card (`/bim/{modelId}`): selecting a single element reveals a compact card alongside the BBox Dimensions card showing manufacturer / model / serial / status / warranty and an Edit/Register CTA that opens the same modal.
-- New `BIMElement.asset_info` (JSONB) + `is_tracked_asset` (bool, indexed) columns, idempotent Alembic migration `v230_bim_element_asset_info`.
-- API: `GET /v1/bim_hub/assets?project_id=…` (searchable, status-filterable); `PATCH /v1/bim_hub/assets/{element_id}/asset-info/`.
-
-**COBie UK 2.4 export** (`GET /v1/bim_hub/models/{model_id}/export/cobie.xlsx`)
-- Full seven-sheet workbook (Contact / Facility / Floor / Space / Type / Component / System) generated with `openpyxl`. Tracked assets populate the Component sheet; (element_type, manufacturer, model) tuples aggregate into the Type sheet; `asset_info.parent_system` groups rows on the System sheet.
-- Deterministic `frozen_now` option so exports are reproducible for snapshot testing and audit.
-- 16 unit tests covering structure, headers, row counts, data correctness, determinism, and a 5000-element perf baseline (<5 s).
-
-**Scheduled reports** (`/v1/reporting/templates/{id}/schedule`, `/run-now`, `/scheduled`)
-- Report templates now support a 5-field POSIX cron expression + recipient list + optional project scope. Worker-ready `is_scheduled` boolean, indexed `next_run_at` for cheap due-template queries.
-- Custom minimal cron parser (`app/modules/reporting/cron.py`) — no `croniter` dep added, keeping CLAUDE.md's "LIGHTWEIGHT & SIMPLE" commitment. Supports `*`, `N`, `N,M,…`, `N-M`, `*/N`. Explicitly doesn't support nicknames / day-name aliases — file an issue and we upgrade.
-- `next_occurrence(expr, after)` walks minute-by-minute with coarse field skip; bounded at 5 years so pathological inputs terminate in ms.
-- `POST /templates/{id}/schedule` accepts `ReportScheduleRequest` — computes `next_run_at` on save. `schedule_cron=null` clears schedule; `is_scheduled=false` pauses without clearing the expression.
-- `POST /templates/{id}/run-now` renders immediately and records the run (useful for preview + backfill). Requires `project_id_scope` — portfolio-wide ad-hoc run is not implemented yet.
-- Minute-tick async scheduler wired into the FastAPI lifespan next to the KPI auto-recalc (same single-process asyncio loop, no Celery dep).
+### Added
+- **Asset Register** (`/assets`) — list of tracked BIM assets with manufacturer/model/serial/warranty/status, searchable, URL-shareable filter, edit modal, in-viewer card.
+- **COBie UK 2.4 export** (`/v1/bim_hub/models/{id}/export/cobie.xlsx`) — 7-sheet workbook, deterministic `frozen_now` option.
+- **Scheduled reports** — POSIX cron + recipient list, custom parser (no croniter dep), `POST /schedule` / `/run-now` / `GET /scheduled`, minute-tick async scheduler in FastAPI lifespan.
+- API: `GET /v1/bim_hub/assets`, `PATCH .../asset-info/`.
 
 ### Tests
-- **Backend**: 43 new unit tests — 16 cron parser, 11 schedule service, 9 asset register, 16 COBie exporter. Full unit suite: 1324 / 1324 green.
-- **Frontend**: 4 new Vitest specs for `AssetsPage` (empty / loaded / empty state / edit-modal round-trip). Playwright `assets-register.spec.ts` covers the happy-path load + COBie link wiring.
+- +43 backend (cron, schedule, asset, COBie). Full suite: 1324/1324 green.
+- +4 Vitest + Playwright `assets-register.spec.ts`.
 
 ### Migrations
-- `v230_bim_element_asset_info` — adds `asset_info` / `is_tracked_asset` + `ix_bim_element_tracked` index.
-- `v230_reporting_schedule` — adds six schedule columns + `ix_reporting_template_scheduled` + `ix_reporting_template_next_run`.
+- `v230_bim_element_asset_info` (asset_info JSONB + is_tracked_asset bool + index).
+- `v230_reporting_schedule` (6 schedule columns + 2 indexes).
 
 ## [2.2.0] — 2026-04-21
 
-### Q2 UX deep improvements — pivot visualizations, wider Charts, markup hub, calibration, 4D scrubber, BIM panel
+Q2 UX deep improvements — pivot viz, wider Charts, markup hub, calibration, 4D scrubber.
 
-**Data Explorer — Pivot visualization modes** (`/data-explorer?tab=pivot`)
-- Five view modes for the same aggregated groups: **Table** (original grid with in-cell data bars), **Heatmap** (color intensity per cell), **Bar** (grouped horizontal bars), **Treemap** (area proportional to value), **Matrix** (crosstab when two group-by columns are selected).
-- New `?piv_viz=` URL parameter persists the chosen mode across reloads and shared links. Saved Views now capture viz mode.
-- Matrix button is automatically disabled with a tooltip when fewer than two group-by columns are selected.
-
-**Data Explorer — Charts widened** (`/data-explorer?tab=charts`)
-- Category (group-by) dropdown now surfaces **all** text columns regardless of cardinality. Previously columns with ≥100 unique values (GUIDs, type names, family names) were silently hidden. High-cardinality options are flagged with `⚠︎` but remain selectable.
-- Value dropdown no longer caps at 20 columns — all numeric columns are available.
-- New **Aggregation** picker (sum / avg / min / max / count / count_unique). Switching to `count` or `count_unique` widens the value picker to accept any column dtype, mirroring the Pivot tab behaviour.
-- `?chart_agg=` added to the URL state for shareable chart links.
-
-**DWG Takeoff — annotation render fix** (`/dwg-takeoff`)
-- Annotations created through the panel tools (cloud / arrow / text / rect / highlight / distance) now render on the canvas. The backend response shape (`annotation_type` + `geometry.points`) is normalised at the API boundary so the renderer and undo-stack see the expected `type` + `points` fields.
-- Tool palette no longer crashes with `Cannot read properties of undefined (reading 'map')` when fetching annotations.
-
-**PDF Takeoff — annotation click-through** (`/takeoff?tab=measurements`)
-- Legend overlay now passes clicks through to the canvas when an annotation tool is active. Previously clicking to place a cloud / arrow / text / rect / highlight was intercepted by the legend's hidden-groups handler, silently toggling visibility instead of creating the annotation.
-
-**BIM Viewer — properties panel polish** (`/bim`)
-- Each property / parameter row in the right sidebar now has its own translucent card background instead of sharing a single flat surface. Panel-wide background is softened so nested rows stand out.
-- Top toolbar renamed "Dimensions" to **"BBox Dimensions"** to disambiguate from the unit-specific length / width / height parameters in the quantities table.
-
-**Markups hub** (`/markups`)
-- New **Unified** tab aggregates markups from all three sources: general markup API, DWG annotations, PDF takeoff measurements. Each entry shows source file name, format icon and origin module.
-- Read-only aggregator view — the authoritative stores remain per-module; clicking a markup deep-links into its native editor.
-
-**Q2 features shipped earlier in the series** (re-landing with this release)
-- **Data Explorer — Threshold rules** — conditional formatting for pivot cells with red / amber / green bands per aggregate column, persisted via `?tr=`.
-- **BIM Viewer — 4D timeline scrubber** — play / pause animation through construction sequence when phase data is present.
-- **DWG Takeoff — Calibration dialog + Sheet strip** — click-to-set scale by picking two reference points; sheet thumbnails for multi-layout drawings.
-- **PDF Takeoff — Calibration dialog + Measurement ledger** — same calibration flow as DWG; exportable running ledger of all measurements with totals.
-- **Data Explorer — count / count_unique aggregation** — categorical aggregation for any column dtype.
+### Added
+- **Pivot viz modes**: Table / Heatmap / Bar / Treemap / Matrix. URL persisted via `?piv_viz=`.
+- **Charts**: all text columns surface (high-cardinality flagged with ⚠︎), no 20-column cap, new Aggregation picker (`?chart_agg=`).
+- **Unified Markups hub** (`/markups`) — aggregates general markup / DWG / PDF measurements.
+- **Threshold rules** (R/A/G bands per pivot column, `?tr=`).
+- **BIM 4D timeline scrubber** when phase data present.
+- **DWG calibration + sheet strip**, **PDF calibration + measurement ledger**.
 
 ### Fixed
-- Frontend `APP_VERSION` now reports v2.2.0 (Vite build-time injection from `package.json`).
-- Stale `DashboardPage` visual-regression snapshot regenerated (was pointing at pre-quick-upload layout).
+- DWG annotations render on canvas (backend shape normalised at API boundary).
+- PDF annotation click-through past legend overlay.
+- BIM properties panel: per-row translucent cards, "Dimensions" → "BBox Dimensions".
+- Frontend `APP_VERSION` reports v2.2.0.
 
 ### Tests
-- 135 new Pivot / Charts / aggregation / urlState tests (all green). Total frontend vitest: 923 passing.
-- Backend unit tests: 1272 passing, unchanged.
-- New Playwright spec `_data-explorer-viz-modes.spec.ts` verifies all 5 pivot viz modes render with a real RVT upload (9,512 elements, 798 parameter columns).
+- +135 frontend (Pivot/Charts/aggregation/urlState). Total: 923 vitest, 1272 backend.
+- Playwright `_data-explorer-viz-modes.spec.ts` — 9,512-element RVT.
 
 ## [2.1.0] — 2026-04-20
 
-### Q1 UX deep improvements — keyboard shortcuts, undo/redo, 5D cost visualization, URL deep-links, and security UX
+Q1 UX deep improvements — keyboard shortcuts, undo/redo, 5D cost viz, URL deep-links, RBAC fixes.
 
-Same-day follow-up to v2.0.0 — ships 13 user-experience features
-across the four visual modules (DWG Takeoff, PDF Takeoff, BIM Viewer, CAD-BIM
-BI Explorer), plus three RBAC papercuts that were producing red errors in the
-browser console for freshly-registered users.
+### Added
+- **DWG Takeoff**: per-tool shortcuts (V/H/D/L/P/A/R/C/T/Esc), 50-entry undo/redo, Shift ortho lock, endpoint/midpoint snap.
+- **PDF Takeoff**: 11-tool shortcuts, redo stack, measurement properties panel, color-coded group legend.
+- **BIM Viewer**: screenshot to PNG, 5D cost gradient mode, camera+selection URL state (`?cx,cy,cz,tx,ty,tz,sel=`).
+- **CAD-BIM BI Explorer**: full URL state (tabs/slicers/pivot/chart), Power-BI-style data bars.
 
-**DWG Takeoff** (`/dwg-takeoff`)
-- Per-tool keyboard shortcuts: `V` Select · `H` Pan · `D` Distance · `L` Line · `P` Polyline · `A` Area · `R` Rectangle · `C` Circle · `T` Text pin · `Esc` cancel. Shortcut letters are surfaced in the tool button tooltip.
-- Undo/redo stack (50 entries, linear) with visible toolbar buttons and `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` keyboard shortcuts.
-- Shift-to-lock ortho/angle constraint during distance/line/polyline drawing — ghost ray shows the snapped 0°/45°/90°/135° direction.
-- Snap modes dropdown (endpoint + midpoint) with on-canvas crosshair marker at the snap candidate. Intersection snap UI prepared, implementation deferred.
+### Fixed
+- Notification navigation no longer flashes screen black (Suspense moved inside layout).
+- `useModuleStore` GET path unified with PATCH to `/me/module-preferences/`.
+- Dashboard team-count gated on admin/editor role (no more 403 in viewer console).
+- RBAC bootstrap uses `has_admin()` check; demo user seeded as `viewer`.
 
-**PDF Takeoff** (`/takeoff?tab=measurements`)
-- Per-tool keyboard shortcuts for all 11 tools (quantitative + annotation): `V/D/P/A/O/C/R/T/H/W/X` + `Esc`.
-- Redo stack added alongside the existing undo, with `Ctrl+Y` / `Ctrl+Shift+Z` bindings and a visible toolbar button.
-- Measurement properties panel — right sidebar opens on selection, edit Group / Color (6-color palette) / Annotation / Notes / Delete.
-- Color-coded group legend overlay — docked bottom-left of canvas, one row per group with chip + count + total, click-to-hide.
-
-**BIM 3D Viewer** (`/bim`)
-- Screenshot button in the viewer toolbar — captures the Three.js canvas to PNG, triggers download, attempts clipboard copy (best-effort).
-- 5D cost colour mode — activates a blue → amber → red gradient based on each element's linked BOQ unit rate, with a legend strip in the bottom-right of the viewport. Elements without a BOQ link render grey at 30% opacity.
-- URL deep-link state — camera position + target + selected element IDs serialize to `?cx=...&cy=...&cz=...&tx=...&ty=...&tz=...&sel=a,b,c`. Writes are debounced to 500ms; on load the params are applied once the model is ready.
-
-**CAD-BIM BI Explorer** (`/data-explorer`)
-- URL-driven state — active tab, slicer chips, pivot config (groupBy / aggCols / aggFn / topN), and chart config all serialize to query string. Reload the page and the view is exactly where it was. Debounced 300ms to avoid history pollution.
-- Power-BI-style horizontal data bars in pivot cells — proportional to each column's visible max. Negatives render a red bar anchored left; positives render an oe-blue bar anchored right. Applied across flat, tree-parent, and tree-child rows.
-
-**Reliability & security**
-- Fix: notification navigation no longer flashes the whole screen to black. The outer `Suspense` fallback (full-screen `bg-surface-secondary` = `#161822` in dark mode) caught every lazy chunk load; moved the `Suspense` boundary inside the layout so only the content area shows a small inline spinner while the sidebar + header stay mounted.
-- Fix: `useModuleStore` GET was calling `/api/v1/users/module-preferences` (no `/me/`) — which returns 404 — while PATCH correctly used `/api/v1/users/me/module-preferences/`. Unified both to the canonical `/me/` path so module preferences survive a reload.
-- Fix: Dashboard's team-count query unconditionally hit `/api/v1/users/` (admin-only endpoint, `users.list` permission) — every viewer-role user saw a red HTTP 403 in DevTools. The query is now gated on `userRole === 'admin' || 'editor'` so it silently no-ops for viewers.
-- Fix: RBAC bootstrap — the "first user becomes admin" rule previously looked at total user count, which was always ≥1 in dev installs because `main.py` seeds a demo admin. Replaced with a `UserRepository.has_admin()` check, and the auto-provisioned demo user is now created as `viewer` (not `admin`) so the next human to register via the API is correctly promoted to admin. Includes an integration test (`tests/integration/test_register_bootstrap.py`).
-
-**Tests & tooling**
-- 220/220 frontend unit tests green (138 net-new across 10 test files).
-- 6/6 Q1 Playwright specs green (graceful `test.skip` when seeded data is absent).
-- 0 TypeScript errors across the frontend.
-- New Playwright diagnostic spec `e2e/viewer-errors-audit.spec.ts` that navigates every top-level route as a viewer and logs every 4xx HTTP response + console error — used to validate the RBAC fixes produce a zero-error console.
+### Tests
+- 220/220 frontend (138 new), 6/6 Q1 Playwright, 0 TS errors.
+- New `viewer-errors-audit.spec.ts` (zero-error console as a viewer).
 
 ## [2.0.0] — 2026-04-20
 
-### Second stable release — AI chat reliability, AI-key encryption stability, DWG scale correctness, UI consistency, module developer experience, provenance watermarks
+Second stable release. Supersedes the 1.x line.
 
-This is the second major stable release of OpenConstructionERP. It supersedes
-the entire 1.x line and establishes the platform baseline going forward.
+### Fixed
+- **AI Chat**: SSE streams crashing mid-flush — endpoint now opens own session, writes `asyncio.shield()`-wrapped.
+- **AI key encryption**: `pydantic-settings` resolved by absolute path; rotated-key ciphertexts surface as "not configured" instead of 401.
+- **DWG scale**: DXF `$INSUNITS` routed through `unitFactorToMetres()`; 3.58 m no longer shows 3580.200 m.
+- **48 integration tests**: trailing-slash drift, `promote_to_admin()` after register fix.
+- CDE container POST trailing slash; BOQ create trailing slash; AI Estimate save-as-BOQ trailing slash.
 
-**AI Chat (the headline fix)**
-- `/chat` SSE streams were crashing mid-flush because Starlette's `BaseHTTPMiddleware` stack cancels the request task between chunks, killing every `await session.flush()` with `CancelledError`. The stream endpoint now opens its own `async_session_factory()` scope (detached from the request-scoped `SessionDep`), and every DB write inside the agent loop is wrapped in `asyncio.shield(...)` so middleware cancellation can no longer rip an INSERT in half. Clicking any suggestion in the right-panel data pane now actually sends the prompt and streams an answer back.
+### Added
+- BIM aggregate `/boq-links/` endpoint (3 897 real links render instead of blank).
+- CAD-BIM BI Explorer: KPI strip (6 totals) + pivot data bars.
+- Modules: `MODULES.md`, in-app `/modules/developer-guide`, sidebar "+ Add module" CTA.
+- Dashboard: Quick Start navigation, explicit "New Estimate" button, clickable Quality Score tile.
+- About/branding: Artem photo, DDC logo, book banner, community tiles.
+- Provenance markers (`shared/lib/ddc-integrity.ts` + `middleware/fingerprint.py`).
+- BOQ: PDF-origin icons, `FileTypeChips` per row, MarkupPanel overflow fix.
+- Project Intelligence: safe-markdown renderer (no more raw asterisks).
 
-**AI key encryption — keys finally survive backend restarts**
-- Root cause: `pydantic-settings` was loading `backend/.env` relative to the process CWD. When `uvicorn` was launched from a different directory, the file was silently dropped, `JWT_SECRET` rotated to a default, and every Fernet-encrypted API key became unreadable on the next boot — the UI faithfully showed "Key configured" while every call failed with a 401 "invalid key". `Settings.model_config.env_file` is now resolved by absolute path from the package directory, so stable secret loading is independent of CWD.
-- `_build_settings_response` now marks a provider as "configured" only when `decrypt_secret(...)` actually returns plaintext. A ciphertext under a rotated key surfaces as *not configured*, so the user is prompted to re-enter instead of silently hitting 401s.
-- `resolve_provider_and_key` skips undecryptable keys and falls through to the next provider; if every stored key is undecryptable it raises a clear `ValueError("Stored AI API key could not be decrypted — please re-enter and save...")` instead of handing ciphertext to the provider.
-- `/api/v1/ai/settings/test/` decrypts before calling the provider and returns a self-explanatory error when decryption fails.
-
-**DWG takeoff — scale correctness end-to-end**
-- DXF file `$INSUNITS` now routes through a proper `unitFactorToMetres(...)` helper (mm / cm / m / km / inches / feet / miles). The effective scale applied everywhere is `drawingScale × unitFactor`, so a 3.58 m wall no longer reads as `3580.200 m`.
-- `extractEntityMeasurement` and `toDWGElementPayload` both take `effectiveScale` so the measurement shown on canvas, the number linked into BOQ, and the `ElementInfoPopover` "DWG ENTITY" card all agree.
-- Scale tab shows a small info badge with detected `dxfUnits` and the `effectiveScale` so users can sanity-check.
-
-**BIM**
-- New aggregate endpoint `GET /api/v1/bim_hub/models/{model_id}/boq-links/` returns BOQ-link counts grouped by position. The Linked BOQ panel fetches directly instead of walking 27k skeleton elements client-side; 3,897 real DB links now render instead of a blank panel.
-- BIM Rules button deep-links to `/bim/rules?mode=requirements` (was dropping the mode).
-
-**CAD-BIM BI Explorer** (was *CAD-BIM Explorer*)
-- Renamed to *CAD-BIM BI Explorer* — the module is no longer just a table browser; it's a project-wide BI surface (KPI strip + pivot data bars + slicers + saved views + drill-down from charts).
-- **KPI dashboard strip** — always-visible row of big-number metric tiles above the tab selector. Opportunistically surfaces up to 6 project totals: Elements, Volume m³, Area m², Length m, Weight kg, distinct Categories, distinct Levels. Tiles derive purely from `DescribeResponse.columns.sum` / `.unique`, so no extra API round-trip on session open.
-- **Pivot data bars** — each aggregate cell now renders a Power-BI-style horizontal bar behind the number, scaled to the max value in that column across visible (post-slicer, post-top-N) rows. Magnitudes read at a glance without switching to the Charts tab.
-
-**Modules**
-- New `MODULES.md` at the repo root is the single entry point for building modules (backend Python + frontend React). Covers the 5-minute walkthrough, file conventions, installation, core rules, AI-agent notes, and deep-links into the 450-line `frontend/src/modules/MODULE_DEVELOPMENT_GUIDE.md` and the `modules/oe-module-template/` scaffold.
-- `ModulesPage` header now carries a "Build a module — developer guide" link so contributors discover the docs from the UI.
-- In-app React page at `/modules/developer-guide` replaces the old external-GitHub link: steps, code blocks, install guide, quick-reference table — searchable and deep-linkable.
-- Sidebar — prominent "+ Add module" CTA at the bottom of the nav (dashed brand border, Plus icon tile) routes to the developer guide. First-time contributors discover the entry point without digging through the marketplace.
-
-**Dashboard**
-- Quick Start Estimate — pure-navigation click-through (last BOQ → opens it; else first project → new BOQ; else → new project). Removed the silent API-chain that 403'd on `boq.create` for non-admin users.
-- Explicit "New Estimate" button alongside Quick Start so the primary action is never ambiguous.
-- Quality Score KPI tile — "N/A" replaced with a dashed-circle icon and "run validation" sublabel; tile is now clickable and routes to `/validation`.
-
-**About / Branding**
-- Artem Boiko avatar photo (h-20 rounded-2xl, slate/blue-50 gradient bg) replaces the text placeholder.
-- DDC logo image (same dimensions) replaces the "DDC" text card; two repo cards (CWICR, cad2data) restyled with GitHub icons.
-- Full-width clickable book banner links to `datadrivenconstruction.io/books/` (language picker).
-- Community block with LinkedIn (`/company/78381569`), Telegram (`@datadrivenconstruction`), X (`@datadrivenconst`) — three clean tiles with inline-SVG brand marks and a feedback CTA.
-
-**Provenance / Watermarks**
-- Layered authorship markers (`shared/lib/ddc-integrity.ts` + `middleware/fingerprint.py`): HTML `<meta ddc:*>` tags, CSS custom properties on `<html>`, opaque `_ff_build_hash` localStorage key, `X-DDC-Origin`/`X-DDC-Author`/`X-DDC-License` response headers, console.info banner. Each marker is trivial to strip alone; together they form a provenance trail useful in copyright-enforcement forensics.
-
-**Tests**
-- Fixed 48 integration-test failures in `test_critical_flows.py`, `test_cross_module_flows.py`, `test_requirements_bim_cross.py`: shared fixtures now call `promote_to_admin(email)` after registration (security fix BUG-327/386 demotes self-registered users to `viewer`); trailing-slash drift corrected across I18n / Notifications / RFI respond-close / Finance EVM-snapshot + budgets / Contacts search / Global-search. 61/61 green end-to-end.
-
-**CDE**
-- `POST /api/v1/cde/containers/` — trailing slash restored on the frontend API client so FastAPI's 307 redirect no longer drops the `Authorization` header. Creating a container actually writes now.
-- `CDEPage` optimistic insert writes the created container into the React-Query cache and resets the state filter to *All*, so the new row appears instantly instead of after a 15 s refetch.
-
-**BOQ**
-- `cellRenderers` add a red PDF icon on positions whose origin is a PDF takeoff (detected via `pdfMeasurementId` / `pdfSource` or `TK.NNN` ordinal prefix) with a deep-link to the source page.
-- `MarkupPanel` — removed `overflow-hidden` on the outer wrapper; the Markups & Overheads dropdown is no longer clipped.
-- BOQ list — `FileTypeChips` now shown per-row, pulled from `/v1/documents/file-types-by-project`.
-
-**Projects**
-- Project cards — `FileTypeChips` moved into the same row as Standard / Currency / Region badges, right-aligned (`ml-auto`), bumped to the new `md` size (`text-[11px]`, icon `12px`). No more mismatched tiny second row; a single clean classification panel.
-
-**Estimation**
-- `AI Estimate` sidebar entry carries a BETA badge.
-- `POST /api/v1/ai/estimate/{job_id}/create-boq/` — trailing slash restored so Save-as-BOQ no longer 404s.
-
-**Project Intelligence**
-- `renderTaggedText` rewritten to render a safe markdown subset (headings #/##/###, `**bold**`, `*italic*`, `` `code` ``, bullet lists with `-`/`*`/`•`, paragraphs) instead of just `[SEVERITY]` badges. Inline fast-path avoids `<div>`-inside-`<p>` hydration warnings. Cost Intelligence Advisor no longer shows raw asterisks.
-
-**Layout / Chrome**
-- Sticky header dropped from `z-[100]` to `z-30` so modal backdrops at `z-50` properly cover it.
-- `AppLayout` no longer renders the floating AI Chat bubble on every route (the full-page `/chat` is the entry point now).
-
-**Cleanup**
-- Removed 5 archived duplicate demo projects from the seeded DB. Six regional demos remain: US (Boylston Crossing + Portland Technical School), DACH (Wohnpark Friedrichshain), EU (Residencial Salamanca), LATAM (Residencial Vila Madalena), ASIA-PAC.
-- Removed committed-by-accident diagnostic specs (`_pro-breeze-*`, `*-diagnostic.spec.ts`), `video-output/`, `test-results/`, `backend/audit_output.txt`, one-off seed scripts (`seed_demo_v2*.py`, `seed_*school*.py`). `.gitignore` extended to block these patterns going forward.
-- `ruff --fix` pass over `backend/app/`: 29 import-sort / unused-import / trailing-comma fixes across 29 files.
+### Cleanup
+- 5 duplicate demo projects removed (6 regional demos remain).
+- Diagnostic specs / test artifacts / one-off seed scripts removed; `.gitignore` extended.
+- `ruff --fix`: 29 fixes across 29 files.
 
 ### Quality gates
-
-- Frontend `npm run typecheck`: clean
-- Frontend `npm run build`: production build succeeds (1m 15s)
-- Backend `uvicorn` cold start: clean, 60 modules load, no migration drift
-- No `console.log` / `debugger` left in `frontend/src`
-- No hardcoded secrets in either tree (`sk-`, `Bearer …` patterns scanned)
+- Frontend typecheck clean; backend cold-start clean (60 modules).
 
 ## [1.9.7] — 2026-04-19
 
@@ -2066,7 +2324,7 @@ in one click.
 - **Correspondence** — formal communication register
 - **BIM Hub** — BIM models, elements, BOQ links, quantity maps, model diffs
 - **Reporting** — KPI snapshots, 6 report templates, report generation
-- **8 Regional Packs** — US (AIA/CSI/RSMeans), DACH (DIN 276/GAEB/VOB/HOAI), UK (NRM2/JCT/NEC4/CIS), Russia (GESN/FER/KS-2), Middle East (FIDIC/Hijri/VAT GCC), Asia-Pacific, India, LatAm
+- **8 Regional Packs** — US (AIA/CSI/RSMeans), DACH (DIN 276/GAEB/VOB/HOAI), UK (NRM2/JCT/NEC4/CIS), Russia (GESN/FER/TER), Middle East (FIDIC/Hijri/VAT GCC), Asia-Pacific, India, LatAm
 - **3 Enterprise Packs** — approval workflows, deep EVM (ETC/EAC/VAC/TCPI), RFQ bidding pipeline
 - **CPM Engine** — forward/backward pass, float calculation, critical path, calendar-aware
 

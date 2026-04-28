@@ -2,7 +2,7 @@
  * AboutPage — Application info, author, license, consulting services.
  */
 
-import { useTranslation } from 'react-i18next';
+import { Trans, useTranslation } from 'react-i18next';
 import {
   Mail, Shield, BookOpen, Users, Award,
   Code2, Building2, Briefcase, Globe, ExternalLink,
@@ -44,7 +44,7 @@ export function AboutPage() {
           </span>
           <span className="text-xs font-semibold uppercase tracking-widest text-emerald-600">Open Source</span>
         </div>
-        <h1 className="text-3xl font-bold text-content-primary tracking-tight">Neoconstruction</h1>
+        <h1 className="text-3xl font-bold text-content-primary tracking-tight">OpenConstructionERP</h1>
         <p className="mt-2 text-base text-content-secondary">
           {t('about.tagline', { defaultValue: 'The #1 open-source platform for construction cost estimation' })}
         </p>
@@ -80,7 +80,7 @@ export function AboutPage() {
             ))}
           </div>
           <p className="mt-4 text-sm text-content-secondary leading-relaxed">
-            {t('about.platform_desc', { defaultValue: 'Neoconstruction covers the full construction estimation workflow — BOQ editing, 4D scheduling, 5D cost modeling, AI-powered estimation, CAD/BIM quantity takeoff (RVT, IFC, DWG, DGN), tendering, and reporting. Supports regional classification standards and custom schemas.' })}
+            {t('about.platform_desc', { defaultValue: 'OpenConstructionERP covers the full construction estimation workflow — BOQ editing, 4D scheduling, 5D cost modeling, AI-powered estimation, CAD/BIM quantity takeoff (RVT, IFC, DWG, DGN), tendering, and reporting. Supports regional classification standards and custom schemas.' })}
           </p>
 
           {/* Community — invite for feedback & ideas */}
@@ -205,7 +205,7 @@ export function AboutPage() {
           </div>
 
           <p className="text-sm text-content-secondary leading-relaxed mb-4">
-            {t('about.ddc_desc', { defaultValue: 'The company behind Neoconstruction. Data Driven Construction develops open-source tools and commercial solutions for the global construction industry. Our mission: make professional cost estimation accessible, transparent, and AI-augmented — from a solo quantity surveyor to enterprise-scale contractors.' })}
+            {t('about.ddc_desc', { defaultValue: 'The company behind OpenConstructionERP. Data Driven Construction develops open-source tools and commercial solutions for the global construction industry. Our mission: make professional cost estimation accessible, transparent, and AI-augmented — from a solo quantity surveyor to enterprise-scale contractors.' })}
           </p>
 
           {/* Product cards with links */}
@@ -287,14 +287,84 @@ export function AboutPage() {
               <p className="text-sm text-oe-blue font-medium">
                 {t('about.founder_role', { defaultValue: 'Consultant for Automation & Data in Construction' })}
               </p>
-              <p className="mt-3 text-sm text-content-secondary leading-relaxed">
-                {t('about.founder_bio', { defaultValue: 'Consultant specializing in automation, data engineering, and AI for the construction industry. Author of open-source tools — CWICR (construction cost database, 55,000+ items, 11 regional databases, 9 languages), cad2data (CAD/BIM data extraction pipeline for RVT, IFC, DWG, DGN), and DDC Community Toolkit. Creator of Neoconstruction. Founder of Data Driven Construction — bringing modern technology, AI, and open data standards to the global construction industry.' })}
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Badge variant="blue" size="sm">Automation & Data</Badge>
-                <Badge variant="blue" size="sm">CWICR & cad2data author</Badge>
-                <Badge variant="blue" size="sm">AI & construction</Badge>
-                <Badge variant="blue" size="sm">Open-source advocate</Badge>
+              <div className="mt-3 space-y-3 text-sm text-content-secondary leading-relaxed">
+                <p>
+                  {t('about.founder_bio_p1', {
+                    defaultValue:
+                      'Over the past ten years, I have been deeply involved in resource management for construction projects. This journey inevitably led me to study the history of the technologies that have shaped the industry — from the earliest attempts at design automation to modern ERP platforms (the series of articles "The Lobbyists\' Wars and the Development of BIM" and "The History of the BIM Map"). Without understanding where we came from, it is impossible to see where we are going.',
+                  })}
+                </p>
+                <p>
+                  <Trans
+                    i18nKey="about.founder_bio_p2"
+                    defaults='Over the years, dozens of articles have come off my desk, read by millions of professionals around the world. At the same time, I&rsquo;ve consulted with major construction and consulting firms, developers, and software vendors themselves on data management in projects — helping them navigate processes where data is not a byproduct but the foundation for decision-making. This work gave me a rare opportunity to see the industry from both sides: through the eyes of those who create the tools and through the eyes of those who use them in real projects every day. Many of these observations and reflections are collected in my book <book>Data-Driven Construction</book>, which is now available in 16 languages — <books>datadrivenconstruction.io/books</books>.'
+                    components={{
+                      book: (
+                        <a
+                          href="https://datadrivenconstruction.io/books"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-oe-blue hover:underline italic font-medium"
+                        />
+                      ),
+                      books: (
+                        <a
+                          href="https://datadrivenconstruction.io/books"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-oe-blue hover:underline"
+                        />
+                      ),
+                    }}
+                  />
+                </p>
+                <p>
+                  <Trans
+                    i18nKey="about.founder_bio_p3"
+                    defaults='Two other things have kept me busy: helping non-developers get into proprietary formats that were never meant to be opened, and finding a cleaner way to describe construction work through a resource model. These efforts have resulted in free tools — <cad>DDC CAD/BIM data converters</cad> (Revit, IFC, DWG, DGN → structured data), <gh>available on GitHub</gh>, and the multilingual <cwicr>CWICR database</cwicr> of construction works and resources — over 55,000 items in 11 languages, published as <cwicr>OpenConstructionEstimate-DDC-CWICR</cwicr>. All of this was a necessary step toward an idea I&rsquo;ve been pursuing for the past decade — an open-source modular ERP for the construction industry.'
+                    components={{
+                      cad: (
+                        <a
+                          href="https://github.com/datadrivenconstruction/cad2data-Revit-IFC-DWG-DGN-pipeline-with-conversion-validation-qto"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-oe-blue hover:underline font-medium"
+                        />
+                      ),
+                      gh: (
+                        <a
+                          href="https://github.com/datadrivenconstruction"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-oe-blue hover:underline"
+                        />
+                      ),
+                      cwicr: (
+                        <a
+                          href="https://github.com/datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-oe-blue hover:underline font-medium"
+                        />
+                      ),
+                    }}
+                  />
+                </p>
+                <p>
+                  {t('about.founder_bio_p4', {
+                    defaultValue:
+                      "The recent generation of AI tooling finally made it feasible to consolidate that work — methodology, data models, and prior implementations — into a single platform. It's now public and open source.",
+                  })}
+                </p>
+                <p className="border-l-2 border-oe-blue/40 pl-3 italic text-content-primary">
+                  {t('about.founder_bio_p5', {
+                    defaultValue:
+                      'Progress is born from dialogue — from the clash of perspectives and openness to new approaches. I would be grateful if you would be willing to participate in this conversation on the inevitable Uberization of the construction industry and the transparency of cost and time estimation processes for construction projects.',
+                  })}
+                </p>
+                <p className="text-content-primary font-medium">
+                  {t('about.founder_bio_signoff', { defaultValue: '— Artem Boiko' })}
+                </p>
               </div>
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 <a
@@ -430,7 +500,7 @@ export function AboutPage() {
                   <Handshake size={18} className="text-oe-blue" />
                 </div>
                 <h2 className="text-2xl font-bold tracking-tight text-content-primary">
-                  {t('about.support_title', { defaultValue: 'Support Neoconstruction' })}
+                  {t('about.support_title', { defaultValue: 'Support OpenConstructionERP' })}
                 </h2>
               </div>
               <p className="text-sm text-content-secondary leading-relaxed max-w-xl mx-auto">
@@ -442,7 +512,7 @@ export function AboutPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-px bg-border-light/60 dark:bg-white/[0.06]">
               {/* Star on GitHub */}
               <a
-                href="https://github.com/datadrivenconstruction/Neoconstruction"
+                href="https://github.com/datadrivenconstruction/OpenConstructionERP"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group relative flex flex-col items-center gap-2 bg-surface-primary/80 backdrop-blur-sm px-5 py-6 hover:bg-amber-50/70 dark:hover:bg-amber-900/15 transition-colors"
@@ -579,7 +649,7 @@ export function AboutPage() {
             </h2>
           </div>
           <p className="text-sm text-content-secondary leading-relaxed mb-3">
-            {t('about.license_desc', { defaultValue: 'Neoconstruction is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). This means you can freely use, modify, and distribute the software, as long as any modifications are also made available under the same license.' })}
+            {t('about.license_desc', { defaultValue: 'OpenConstructionERP is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). This means you can freely use, modify, and distribute the software, as long as any modifications are also made available under the same license.' })}
           </p>
           <div className="flex flex-wrap gap-2">
             <Badge variant="success" size="sm">Free to use</Badge>
