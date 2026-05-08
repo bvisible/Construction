@@ -1,6 +1,19 @@
 import { Suspense, lazy, useState, useCallback, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { AppLayout } from './layout';
+// //// NEOFFICE PATCH — Frappe-embedded layout swap
+// WHY: When the SPA boots inside /neoconstruction/* (Frappe Desk page) we
+// swap AppLayout → FrappeLayout so we inherit the Frappe sidebar/header
+// instead of stacking OCE's own chrome on top of Frappe's. The flag is set
+// by main.tsx via the Frappe boot context (window.__FRAPPE_INTEGRATION__).
+// REVIEW: permanent (core Frappe integration). Upstream PR opportunity:
+// expose a Layout slot prop on <App> so this becomes config, not a patch.
+import { AppLayout, FrappeLayout } from './layout';
+
+const EmbeddedLayout =
+  typeof window !== 'undefined' && (window as unknown as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__
+    ? FrappeLayout
+    : AppLayout;
+// //// END NEOFFICE PATCH
 import { DashboardPage } from '@/features/dashboard';
 import { LoginPage, LoginPageNext, RegisterPage, ForgotPasswordPage } from '@/features/auth';
 import { ProjectsPage, CreateProjectPage, ProjectDetailPage, ProjectSettingsPage } from '@/features/projects';
@@ -13,8 +26,21 @@ import { ValidationPage } from '@/features/validation';
 import { NlRuleBuilderPanel } from '@/features/compliance';
 import { QuantitiesPage } from '@/features/quantities';
 import { ModulesPage, ModuleDeveloperGuide } from '@/features/modules';
+// //// NEOFFICE PATCH — Swiss Pack feature import
+// WHY: Adds the /swiss-pack dashboard for the oe_swiss_pack regional module.
+// All Swiss-specific UI lives in @/features/swiss-pack/ (Neoservice-owned,
+// never modified by upstream) — only this single import line is patched here.
+// REVIEW: permanent (CH-specific). Could move into oe_swiss_pack if OCE
+// ever accepts a per-backend-module frontend/ folder convention.
+import { SwissPackPage } from '@/features/swiss-pack';
+// //// END NEOFFICE PATCH
 import { useModuleRouteElements } from '@/modules/ModuleRoutes';
-import { SettingsPage } from '@/features/settings';
+// //// NEOFFICE PATCH — SettingsPage import dropped (route redirected, see /settings route below)
+// WHY: AI provider is forced to Olares (NORA) via backend patch, the
+// settings page would let users break the forced provider. The /settings
+// route is replaced by a redirect to /ai-estimate.
+// import { SettingsPage } from '@/features/settings';
+// //// END NEOFFICE PATCH
 import { DatabaseSetupPage } from '@/features/setup';
 import { IntegrationsPage } from '@/features/integrations';
 import { AboutPage } from '@/features/about/AboutPage';
@@ -210,11 +236,14 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 function P({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <RequireAuth>
-      <AppLayout title={title}>
+      {/* //// NEOFFICE PATCH — Use EmbeddedLayout (FrappeLayout in embedded mode, AppLayout otherwise)
+          Defined at top of file via window.__FRAPPE_INTEGRATION__ flag. */}
+      <EmbeddedLayout title={title}>
         <ErrorBoundary>
           <Suspense fallback={<PageLoadingInline />}>{children}</Suspense>
         </ErrorBoundary>
-      </AppLayout>
+      </EmbeddedLayout>
+      {/* //// END NEOFFICE PATCH */}
     </RequireAuth>
   );
 }
@@ -342,6 +371,18 @@ export default function App() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   useDocumentDirection();
 
+  // //// NEOFFICE PATCH — Frappe-embedded auth bypass flag
+  // WHY: In embedded mode, OCE auth pages (/login, /login-next, /register,
+  // /forgot-password) must never render — the Frappe session is the source
+  // of truth. Stale links or 401 fallbacks landing here would show empty
+  // forms. Frappe's /login handles unauthenticated users upstream.
+  // The actual route bypass is below (search for the next NEOFFICE PATCH).
+  // REVIEW: permanent (couples to FrappeLayout swap above).
+  const isFrappeEmbedded =
+    typeof window !== 'undefined' &&
+    (window as unknown as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__ === true;
+  // //// END NEOFFICE PATCH
+
   // DDC-CWICR-OE integrity verification
   if (typeof window !== 'undefined') {
     (window as any).__ddc_oe = ddcVerifyIntegrity();
@@ -371,11 +412,40 @@ export default function App() {
           next page. */}
       {isAuthenticated && <OnboardingTour />}
       <Routes>
-        {/* Auth — public */}
-        <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />} />
-        <Route path="/login-next" element={isAuthenticated ? <Navigate to="/" replace /> : <LoginPageNext />} />
-        <Route path="/register" element={isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />} />
-        <Route path="/forgot-password" element={isAuthenticated ? <Navigate to="/" replace /> : <ForgotPasswordPage />} />
+        {/* //// NEOFFICE PATCH — Frappe-embedded auth bypass (4 routes use isFrappeEmbedded flag from above) */}
+        <Route
+          path="/login"
+          element={
+            isFrappeEmbedded
+              ? <Navigate to="/" replace />
+              : (isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />)
+          }
+        />
+        <Route
+          path="/login-next"
+          element={
+            isFrappeEmbedded
+              ? <Navigate to="/" replace />
+              : (isAuthenticated ? <Navigate to="/" replace /> : <LoginPageNext />)
+          }
+        />
+        <Route
+          path="/register"
+          element={
+            isFrappeEmbedded
+              ? <Navigate to="/" replace />
+              : (isAuthenticated ? <Navigate to="/" replace /> : <RegisterPage />)
+          }
+        />
+        <Route
+          path="/forgot-password"
+          element={
+            isFrappeEmbedded
+              ? <Navigate to="/" replace />
+              : (isAuthenticated ? <Navigate to="/" replace /> : <ForgotPasswordPage />)
+          }
+        />
+        {/* //// END NEOFFICE PATCH */}
 
         {/* Onboarding — full-screen, no layout */}
         <Route path="/onboarding" element={
@@ -488,9 +558,20 @@ export default function App() {
         <Route path="/users" element={<P title="User Management"><UserManagementPage /></P>} />
         <Route path="/modules" element={<P title="Modules"><ModulesPage /></P>} />
         <Route path="/modules/developer-guide" element={<P title="Module Developer Guide"><ModuleDeveloperGuide /></P>} />
+        {/* //// NEOFFICE PATCH — Swiss Pack route (cf. import at top of file) */}
+        <Route path="/swiss-pack" element={<P title="Suisse — Standards"><SwissPackPage /></P>} />
+        {/* //// END NEOFFICE PATCH */}
 
         <Route path="/setup/databases" element={<P title="Databases & Resources"><DatabaseSetupPage /></P>} />
-        <Route path="/settings" element={<P title="Settings"><SettingsPage /></P>} />
+        {/* //// NEOFFICE PATCH — /settings redirect to /ai-estimate
+            WHY: AI provider is forced to Olares (NORA) via backend patch
+            backend-patches/03-ai-service-eager-perms.patch — the user has
+            nothing to configure here. Avoids exposing the upstream Settings
+            page which would let users break the forced provider config.
+            REVIEW: 2026-12-01 — re-evaluate when we ship a curated, gated
+            settings panel that respects the Olares forcing. */}
+        <Route path="/settings" element={<Navigate to="/ai-estimate" replace />} />
+        {/* //// END NEOFFICE PATCH */}
         <Route path="/integrations" element={<P title="Integrations"><IntegrationsPage /></P>} />
         <Route path="/about" element={<P title="About"><AboutPage /></P>} />
         <Route path="/project-intelligence" element={<P title="Project Intelligence"><ProjectIntelligencePage /></P>} />

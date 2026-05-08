@@ -7,6 +7,21 @@ import { useToastStore } from '@/stores/useToastStore';
 import './app/i18n';
 import './index.css';
 
+// //// NEOFFICE PATCH — Detect Frappe-embedded mode + set router basename
+// WHY: When the SPA boots inside /neoconstruction/* (Frappe Desk page),
+// React Router needs basename="/neoconstruction" to match routes correctly,
+// and the window.__FRAPPE_INTEGRATION__ flag drives the Layout swap +
+// auth bypass in App.tsx (cf. NEOFFICE PATCH markers there).
+// REVIEW: permanent (core Frappe integration).
+const __isFrappeEmbedded =
+  typeof window !== 'undefined' &&
+  window.location.pathname.startsWith('/neoconstruction');
+if (__isFrappeEmbedded) {
+  (window as unknown as { __FRAPPE_INTEGRATION__: boolean }).__FRAPPE_INTEGRATION__ = true;
+}
+const __routerBasename = __isFrappeEmbedded ? '/neoconstruction' : undefined;
+// //// END NEOFFICE PATCH
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -75,9 +90,11 @@ __rootEl.setAttribute(
 ReactDOM.createRoot(__rootEl).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      {/* //// NEOFFICE PATCH — Pass basename when Frappe-embedded */}
+      <BrowserRouter basename={__routerBasename} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <App />
       </BrowserRouter>
+      {/* //// END NEOFFICE PATCH */}
     </QueryClientProvider>
   </React.StrictMode>,
 );
