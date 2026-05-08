@@ -1,4 +1,6 @@
 /**
+ * NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OCE.
+ *
  * FrappeSidebar — Pixel-perfect React reimplementation of the Frappe Desk
  * sidebar (`/app/home`), styled by the same CSS classes as `desk.bundle.css`
  * (.body-sidebar, .standard-sidebar-section, .sidebar-item-container...) and

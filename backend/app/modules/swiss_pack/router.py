@@ -1,4 +1,6 @@
-"""Swiss regional pack API routes.
+"""NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OCE.
+
+Swiss regional pack API routes.
 
 Endpoints:
     GET /config/           — Full Swiss regional configuration

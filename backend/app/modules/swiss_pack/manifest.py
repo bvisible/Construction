@@ -1,4 +1,7 @@
-"""Module manifest for oe_swiss_pack."""
+"""NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OCE.
+
+Module manifest for oe_swiss_pack.
+"""
 
 from app.core.module_loader import ModuleManifest
 

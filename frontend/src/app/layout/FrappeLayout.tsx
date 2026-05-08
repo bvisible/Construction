@@ -1,4 +1,6 @@
 /**
+ * NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OCE.
+ *
  * Layout utilisé quand le SPA tourne embarqué dans Frappe (/neoconstruction/*).
  *
  * Frappe-pattern layout : flex-row at the root, sidebar and main as

@@ -1,4 +1,6 @@
-"""Regional configuration for Switzerland (CH).
+"""NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OCE.
+
+Regional configuration for Switzerland (CH).
 
 This pack provides everything an Estimator / OCE deployment needs to operate
 in the Swiss construction market:

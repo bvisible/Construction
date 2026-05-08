@@ -1,4 +1,6 @@
 /**
+ * NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OCE.
+ *
  * FrappeNavbar — Pixel-perfect React reimplementation of the Frappe Desk navbar.
  *
  * We cannot load desk.bundle.js in our website page (timing + dependency
