@@ -36,6 +36,11 @@ import {
   TableProperties,
   Wallet,
   HardHat,
+  // //// NEOFFICE PATCH — Building2 icon for Swiss Pack nav entry below.
+  // WHY: required by the static /swiss-pack entry in the regional group.
+  // REVIEW: permanent (couples to nav item below).
+  Building2,
+  // //// END NEOFFICE PATCH
   Users,
   HelpCircle,
   AlertOctagon,
@@ -220,6 +225,13 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     hideInSimple: true,
     items: [
+      // //// NEOFFICE PATCH — static Swiss Pack entry in the Regional group
+      // WHY: oe_swiss_pack ships its dashboard at /swiss-pack but isn't
+      // surfaced through the dynamic module registry (which only injects
+      // EXCHANGE modules — import/export formats, not full dashboards).
+      // REVIEW: permanent (CH-specific).
+      { labelKey: 'swiss_pack.nav', to: '/swiss-pack', icon: Building2 },
+      // //// END NEOFFICE PATCH
       // All regional exchange modules injected dynamically from module registry
     ],
   },

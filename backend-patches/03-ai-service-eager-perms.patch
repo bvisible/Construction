@@ -1,0 +1,67 @@
+diff --git a/backend/app/modules/ai/service.py b/backend/app/modules/ai/service.py
+index 094c609b..e1ea7dda 100644
+--- a/backend/app/modules/ai/service.py
++++ b/backend/app/modules/ai/service.py
+@@ -139,6 +139,11 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
+     def _usable(value: Any) -> bool:
+         return bool(decrypt_secret(value)) if value else False
+ 
++    # Neoconstruction: rebrand model label as "NORA" in UI when Olares is active.
++    # The SPA renders settings.preferred_model as the connected-AI badge label
++    # (cf. QuickEstimatePage.tsx "{aiSettings.preferred_model || 'Claude'}").
++    preferred_model_override = "NORA" if _olares_active else settings.preferred_model
++
+     return AISettingsResponse(
+         id=settings.id,
+         user_id=settings.user_id,
+@@ -159,7 +164,7 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
+         baidu_api_key_set=_usable(getattr(settings, "baidu_api_key", None)),
+         yandex_api_key_set=_usable(getattr(settings, "yandex_api_key", None)),
+         gigachat_api_key_set=_usable(getattr(settings, "gigachat_api_key", None)),
+-        preferred_model=settings.preferred_model,
++        preferred_model=preferred_model_override,
+         metadata_=settings.metadata_ or {},
+         created_at=settings.created_at,
+         updated_at=settings.updated_at,
+@@ -360,8 +365,9 @@ class AIService:
+             extra_parts.append(f"Location: {request.location}")
+         extra_context = "\n".join(extra_parts)
+ 
+-        currency = request.currency or "EUR"
+-        standard_val = request.standard or "din276"
++        from app.modules.ai.ai_client import _read_frappe_site_config
++        currency = request.currency or _read_frappe_site_config("oce_default_currency", "EUR")
++        standard_val = request.standard or _read_frappe_site_config("oce_default_standard", "din276")
+ 
+         prompt = TEXT_ESTIMATE_PROMPT.format(
+             description=request.description,
+@@ -529,9 +535,11 @@ class AIService:
+         job_id = job.id  # Save before expire_all() in update_fields
+ 
+         # Build prompt
+-        currency_val = currency or "EUR"
+-        standard_val = standard or "din276"
+-        location_val = location or "Europe"
++        # Neoconstruction: read CH defaults from Frappe site_config
++        from app.modules.ai.ai_client import _read_frappe_site_config as _rsc
++        currency_val = currency or _rsc("oce_default_currency", "EUR")
++        standard_val = standard or _rsc("oce_default_standard", "din276")
++        location_val = location or _rsc("oce_default_location", "Europe")
+ 
+         prompt = PHOTO_ESTIMATE_PROMPT.format(
+             location=location_val,
+@@ -704,9 +712,11 @@ class AIService:
+         job = await self.job_repo.create(job)
+         job_id = job.id  # Save before expire_all() in update_fields
+ 
+-        currency_val = currency or "EUR"
+-        standard_val = standard or "din276"
+-        location_val = location or "Europe"
++        # Neoconstruction: read CH defaults from Frappe site_config
++        from app.modules.ai.ai_client import _read_frappe_site_config as _rsc
++        currency_val = currency or _rsc("oce_default_currency", "EUR")
++        standard_val = standard or _rsc("oce_default_standard", "din276")
++        location_val = location or _rsc("oce_default_location", "Europe")
+ 
+         # ── Extract content based on file category ──
+         extracted_text = ""

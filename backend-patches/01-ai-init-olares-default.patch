@@ -1,0 +1,26 @@
+diff --git a/backend/app/modules/ai/__init__.py b/backend/app/modules/ai/__init__.py
+index 6a887bd6..0b3df4c1 100644
+--- a/backend/app/modules/ai/__init__.py
++++ b/backend/app/modules/ai/__init__.py
+@@ -5,9 +5,18 @@ and building photos. Supports Anthropic Claude, OpenAI, and Google Gemini
+ backends with per-user API key configuration.
+ """
+ 
++# Neoconstruction: register permissions eagerly at import time. The upstream
++# `async def on_startup()` hook is never called by the FastAPI bootstrap
++# in this fork, so `ai.estimate` / `ai.create_boq` / `ai.use` end up unknown
++# and `RequirePermission(...)` denies all non-admin users by default.
++# Registering at import side-step the missing on_startup wiring.
++from app.modules.ai.permissions import register_ai_permissions
++
++register_ai_permissions()
+ 
+-async def on_startup() -> None:
+-    """Module startup hook — register permissions."""
+-    from app.modules.ai.permissions import register_ai_permissions
+ 
++async def on_startup() -> None:
++    """Module startup hook — kept for upstream compatibility (no-op now)."""
++    # Registration already happened at import time, but call it again
++    # idempotently in case startup logic ever wires this up properly.
+     register_ai_permissions()
