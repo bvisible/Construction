@@ -1828,13 +1828,32 @@ export function BIMPage() {
     ) {
       return null;
     }
+    // //// NEOFFICE PATCH — Skip GLB fetch for parametric-only models (RoomPlan)
+    // WHY: Models imported via /api/v1/neoffice/bim/import-roomplan/ carry data
+    //      but no mesh — has_geometry=false, canonical_file_path=null. Without
+    //      this guard the viewer fires GET /geometry/ and the 404 surfaces as
+    //      a popup, even though the element list, BBox dimensions, filters and
+    //      BoQ linking all work fine without 3D geometry.
+    // REVIEW: Drop this guard once we generate a GLB server-side (trimesh
+    //         extrusion of walls/doors from the RoomPlan transforms — Phase 3
+    //         of note 34 in the Obsidian vault).
+    if (activeModel?.has_geometry === false) {
+      return null;
+    }
     const token = useAuthStore.getState().accessToken;
     const base = `/api/v1/bim_hub/models/${encodeURIComponent(activeModelId)}/geometry/`;
     const params = new URLSearchParams();
     if (token) params.set('token', token);
     params.set('_t', activeModel?.updated_at || String(Date.now()));
     return `${base}?${params.toString()}`;
-  }, [activeModelId, activeModel?.status, activeModel?.element_count, activeModel?.updated_at, elements]);
+  }, [
+    activeModelId,
+    activeModel?.status,
+    activeModel?.element_count,
+    activeModel?.has_geometry,
+    activeModel?.updated_at,
+    elements,
+  ]);
 
   const handleElementSelect = useCallback(
     (id: string | null) => {

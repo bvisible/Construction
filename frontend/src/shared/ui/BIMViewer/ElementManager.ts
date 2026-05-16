@@ -215,6 +215,13 @@ export interface BIMModelData {
   /** Whether the raw uploaded CAD file is still on storage.  Drives
    *  retry availability and the disk-usage tooltip.  Added in v2.6.29. */
   has_original?: boolean | null;
+  // //// NEOFFICE PATCH — Mirror the upstream `has_geometry` response field
+  // WHY: Backend `BIMModelResponse` exposes `has_geometry: bool = False` since
+  //      v3.2.0 but the TS interface didn't track it. The BIMPage geometryUrl
+  //      memo needs it to skip Three.js fetch on parametric-only models
+  //      (RoomPlan imports via /api/v1/neoffice/bim/import-roomplan/).
+  // REVIEW: Drop when the type is regenerated from upstream OpenAPI.
+  has_geometry?: boolean;
 }
 
 /* ── Discipline Colors ─────────────────────────────────────────────────── */
