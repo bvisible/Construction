@@ -1254,6 +1254,20 @@ def create_app() -> FastAPI:
             is_outdated = bool(
                 installed and remote and local_sha and remote.get("sha") and local_sha != remote["sha"]
             )
+            # #### NEOFFICE PATCH — Skip SHA mismatch for apt-managed converters
+            # WHY: On Linux the DDC converters come from the apt repo
+            #      pkg.datadrivenconstruction.io (e.g. /usr/bin/DwgExporter,
+            #      ELF ~1-2 MB). The upstream check compares git-blob SHA vs
+            #      the *Windows* .exe on GitHub (~50-140 KB). The SHAs and
+            #      sizes never match by design → is_outdated is always true,
+            #      surfacing a noisy "update available" banner that the admin
+            #      cannot act on (the Update button would download a Windows
+            #      binary onto a Linux box). apt itself handles updates.
+            # REVIEW: drop once upstream ships a Linux-aware version check
+            #         (e.g. comparing dpkg -W ddc-* version to apt-cache
+            #         policy). Tracked in Obsidian note 33.
+            if installed and path is not None and str(path).startswith("/usr/bin/"):
+                is_outdated = False
             if is_outdated:
                 any_outdated = True
 
