@@ -32,6 +32,13 @@ const REGION_GROUPS: OptionGroup[] = [
     group: 'Europe',
     options: [
       { value: 'DACH', label: 'DACH (Germany, Austria, Switzerland)' },
+      // //// NEOFFICE PATCH — Standalone Switzerland option
+      // WHY: dach_pack covers CH only nominally (2 VAT rates, no CFC/eBKP/NPK/SIA).
+      // The Neoservice oe_swiss_pack provides the full Swiss construction stack
+      // and should be the canonical pick for CH-only projects.
+      // REVIEW: permanent (CH-specific).
+      { value: 'Switzerland', label: 'Switzerland (CH) — CFC, eBKP, NPK, SIA' },
+      // //// END NEOFFICE PATCH
       { value: 'UK', label: 'United Kingdom' },
       { value: 'Nordics', label: 'Nordics (Sweden, Norway, Denmark, Finland)' },
       { value: 'France', label: 'France' },
@@ -97,6 +104,10 @@ const REGION_GROUPS: OptionGroup[] = [
 // is a graceful no-op, not an error).
 const REGION_TO_PACK: Record<string, string> = {
   DACH: 'dach',
+  // //// NEOFFICE PATCH — Switzerland → swiss_pack mapping
+  // Backend REGION_PACK has "switzerland": "swiss_pack" — keep keys in sync.
+  Switzerland: 'switzerland',
+  // //// END NEOFFICE PATCH
   UK: 'uk',
   US: 'us',
   Canada: 'us',
@@ -123,6 +134,15 @@ const STANDARD_GROUPS: OptionGroup[] = [
     group: 'Common Standards',
     options: [
       { value: 'din276', label: 'DIN 276 (Germany / DACH)' },
+      // //// NEOFFICE PATCH — Swiss construction standards
+      // CFC = Code des Frais de Construction (SIA 506 500), the Swiss equivalent of DIN 276.
+      // eBKP-H/T = Element-Based Building Cost Plan (SIA 506 511/512).
+      // NPK = Normpositionen-Katalog (CRB), the Swiss standardized BOQ positions catalog.
+      { value: 'cfc', label: 'CFC (Switzerland — SIA 506 500)' },
+      { value: 'ebkp_h', label: 'eBKP-H (Switzerland Buildings — SIA 506 511)' },
+      { value: 'ebkp_t', label: 'eBKP-T (Switzerland Civil — SIA 506 512)' },
+      { value: 'npk', label: 'NPK (Switzerland — CRB)' },
+      // //// END NEOFFICE PATCH
       { value: 'nrm', label: 'NRM 1/2 (United Kingdom)' },
       { value: 'masterformat', label: 'MasterFormat (US / Canada)' },
       { value: 'uniformat', label: 'UniFormat (US)' },

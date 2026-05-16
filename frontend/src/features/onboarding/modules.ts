@@ -168,6 +168,15 @@ export const ALL_MODULES: ModuleDef[] = [
 
   // ── Regional Packs ──────────────────────────────────────────────────
   { key: 'dach_pack', labelKey: 'onboarding.mod_dach_pack', descriptionKey: 'onboarding.mod_dach_pack_desc', group: 'regional' },
+  // //// NEOFFICE PATCH — Swiss Pack in regional suggestions
+  // WHY: upstream dach_pack is 99% German (DIN/VOB/HOAI/GAEB) — its "CH"
+  // coverage is nominal (2 VAT rates only). The Neoservice oe_swiss_pack
+  // module provides the real Swiss construction stack: CFC, eBKP-H/T, NPK,
+  // SIA norms, SIA 118 contracts, CN labor classes, OFAS/SUVA/KBOB.
+  // i18n keys provided by features/swiss-pack/i18n.ts side-effect import.
+  // REVIEW: permanent until upstream splits dach_pack into de+at+ch.
+  { key: 'swiss_pack', labelKey: 'onboarding.mod_swiss_pack', descriptionKey: 'onboarding.mod_swiss_pack_desc', group: 'regional' },
+  // //// END NEOFFICE PATCH
   { key: 'uk_pack', labelKey: 'onboarding.mod_uk_pack', descriptionKey: 'onboarding.mod_uk_pack_desc', group: 'regional' },
   { key: 'us_pack', labelKey: 'onboarding.mod_us_pack', descriptionKey: 'onboarding.mod_us_pack_desc', group: 'regional' },
   { key: 'india_pack', labelKey: 'onboarding.mod_india_pack', descriptionKey: 'onboarding.mod_india_pack_desc', group: 'regional' },
