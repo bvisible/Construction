@@ -290,6 +290,14 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     hideInSimple: true,
     items: [
+      // //// NEOFFICE PATCH — static Swiss Pack entry in the Regional group
+      // WHY: oe_swiss_pack ships its dashboard at /swiss-pack but isn't
+      // surfaced through the dynamic module registry. Note: Building2 is
+      // already imported upstream (used by Property Dev) — no separate
+      // import patch needed in v3.x.
+      // REVIEW: permanent (CH-specific).
+      { labelKey: 'swiss_pack.nav', to: '/swiss-pack', icon: Building2 },
+      // //// END NEOFFICE PATCH
       // All regional exchange modules injected dynamically from module registry
     ],
   },

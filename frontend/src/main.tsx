@@ -3,9 +3,67 @@ import ReactDOM from 'react-dom/client';
 import { QueryClient, QueryClientProvider, MutationCache } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import App from './app/App';
+// //// NEOFFICE PATCH — useAuthStore needed for Frappe-embedded boot
+import { useAuthStore } from '@/stores/useAuthStore';
+// //// END NEOFFICE PATCH
 import { useToastStore } from '@/stores/useToastStore';
 import './app/i18n';
 import './index.css';
+
+// //// NEOFFICE PATCH — Frappe-embedded boot: detect mode, set basename, hydrate auth
+// WHY: When the SPA boots inside /neoconstruction/* (Frappe Desk page), we need to:
+//   1. Pose window.__FRAPPE_INTEGRATION__ flag → drives Layout swap + auth bypass in App.tsx
+//   2. Set BrowserRouter basename="/neoconstruction" → routes match correctly
+//   3. Hydrate useAuthStore with isAuthenticated=true so RequireAuth lets us through
+//      WITHOUT going through OCE /login (Frappe is the source of truth here —
+//      _enforce_access() in www/neoconstruction.py has already validated).
+//   4. Inject window.oce_jwt as the access token so api.ts intercepts /api/v1/* with Bearer.
+// REVIEW: permanent (core Frappe integration). Upstream PR would expose a
+// boot config hook that does all this declaratively.
+interface FrappeWindow {
+  frappe?: { boot?: { user?: { email?: string; name?: string } } };
+  oce_jwt?: string | null;
+  __FRAPPE_INTEGRATION__?: boolean;
+  __FRAPPE_BASENAME__?: string;
+}
+const _w = window as unknown as FrappeWindow;
+// Sticky + multi-signal detection: respect the flag already posted by the
+// Jinja template, fall back to positive signals (frappe.boot / oce_jwt /
+// URL path) when running without a template.
+const FRAPPE_INTEGRATION =
+  _w.__FRAPPE_INTEGRATION__ === true ||
+  Boolean(_w.frappe?.boot) ||
+  Boolean(_w.oce_jwt) ||
+  (typeof window !== 'undefined' && window.location.pathname.startsWith('/neoconstruction'));
+_w.__FRAPPE_INTEGRATION__ = FRAPPE_INTEGRATION;
+_w.__FRAPPE_BASENAME__ = FRAPPE_INTEGRATION ? '/neoconstruction' : '/';
+
+if (FRAPPE_INTEGRATION) {
+  // In Frappe-embedded mode we TRUST the Frappe session: _enforce_access()
+  // on the controller side has already validated (guest → /login Frappe,
+  // role missing → 403). If we're here, the user is legitimate.
+  // The OCE JWT may be absent (provisioning failed, OCE down) — a later
+  // 401 triggers get_oce_jwt to refresh.
+  if (_w.oce_jwt) {
+    // Persist in sessionStorage so loadFromStorage() in App.tsx picks it up
+    // (constant KEY_ACCESS = 'oe_access_token' in useAuthStore).
+    sessionStorage.setItem('oe_access_token', _w.oce_jwt);
+  }
+  const frappeUser = _w.frappe?.boot?.user;
+  const email = frappeUser?.email ?? frappeUser?.name ?? null;
+  if (email) {
+    localStorage.setItem('oe_user_email', email);
+  }
+  useAuthStore.setState({
+    accessToken: _w.oce_jwt ?? null,
+    isAuthenticated: true,  // ALWAYS true in Frappe-embedded mode
+    userEmail: email,
+    userRole: null,
+  });
+}
+
+const __routerBasename = FRAPPE_INTEGRATION ? '/neoconstruction' : undefined;
+// //// END NEOFFICE PATCH
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -75,9 +133,11 @@ __rootEl.setAttribute(
 ReactDOM.createRoot(__rootEl).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      {/* //// NEOFFICE PATCH — Pass basename when Frappe-embedded */}
+      <BrowserRouter basename={__routerBasename} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <App />
       </BrowserRouter>
+      {/* //// END NEOFFICE PATCH */}
     </QueryClientProvider>
   </React.StrictMode>,
 );

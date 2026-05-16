@@ -9,7 +9,22 @@ import { readFileSync } from 'fs';
 // (sidebar, About page, error reports, update checker) stays in sync.
 const pkg = JSON.parse(readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8'));
 
+// //// NEOFFICE PATCH — Frappe build mode
+// WHY: When building for the Frappe `neoconstruction` app, the bundle is
+// served under /assets/neoconstruction/neoconstruction/ (not from /). Set
+// FRAPPE_BUILD=1 to switch the public base + redirect output into the
+// neoconstruction/ checkout. FRAPPE_OUT_DIR can override the target dir.
+// REVIEW: permanent — this is how the SPA gets embedded in Frappe.
+const FRAPPE_BUILD = process.env.FRAPPE_BUILD === '1';
+const FRAPPE_OUT_DIR =
+  process.env.FRAPPE_OUT_DIR ||
+  path.resolve(__dirname, '../../neoconstruction/neoconstruction/public/neoconstruction');
+// //// END NEOFFICE PATCH
+
 export default defineConfig({
+  // //// NEOFFICE PATCH — Frappe build base path
+  base: FRAPPE_BUILD ? '/assets/neoconstruction/neoconstruction/' : '/',
+  // //// END NEOFFICE PATCH
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
@@ -35,17 +50,7 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        // 30 minutes. Catalogue v3 installs (`/costs/catalogues-v3/{id}/install`)
-        // download a 200–500 MB snapshot from Hugging Face, stream it
-        // multipart into Qdrant, then poll Qdrant for collection
-        // registration. The full round-trip routinely runs 5–15 min on a
-        // typical home link; the previous 5-min ceiling killed the
-        // connection mid-install and the browser surfaced it as
-        // "Failed to fetch", with no useful diagnostic. proxyTimeout
-        // covers the upstream-response wait specifically; timeout covers
-        // the socket as a whole — both need to be generous.
-        timeout: 30 * 60 * 1000,
-        proxyTimeout: 30 * 60 * 1000,
+        timeout: 300000,
       },
     },
   },
@@ -81,6 +86,12 @@ export default defineConfig({
     ],
   },
   build: {
+    // //// NEOFFICE PATCH — Frappe build output dir
+    // WHY: redirect Vite output into the neoconstruction/ Frappe app
+    // public folder so `bench build` picks up the new assets.
+    outDir: FRAPPE_BUILD ? FRAPPE_OUT_DIR : 'dist',
+    emptyOutDir: true,
+    // //// END NEOFFICE PATCH
     rollupOptions: {
       output: {
         manualChunks(id) {
