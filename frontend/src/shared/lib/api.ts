@@ -15,7 +15,20 @@ import { useToastStore } from '@/stores/useToastStore';
 import { cacheResponse, getCachedResponse, queueMutation } from './offlineStore';
 import { logApiError, logError } from './errorLogger';
 
-const BASE_URL = '/api';
+// //// NEOFFICE PATCH — Route OCE calls via Frappe proxy in embedded mode
+// WHY: When the SPA boots inside /neoconstruction/* (Frappe Desk page), the
+// browser already has a valid Frappe `sid` cookie. Routing /api/v1/* through
+// /neoconstruction/api/v1/* (proxied by neoconstruction/www/neoconstruction_api_proxy.py)
+// lets Frappe authenticate the request and inject a short-lived OCE JWT
+// server-side — the SPA no longer needs to manage JWT refresh.
+// In standalone OCE mode (dev server, no Frappe), keep the original `/api` base.
+// REVIEW: permanent (core Frappe integration).
+const BASE_URL =
+  typeof window !== 'undefined' &&
+  (window as unknown as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__
+    ? '/neoconstruction/api'
+    : '/api';
+// //// END NEOFFICE PATCH
 
 /** Retrieve the stored JWT token from the auth store. */
 function getToken(): string | null {
