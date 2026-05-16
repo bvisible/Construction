@@ -16,6 +16,7 @@
 | 03 | `03-ai-service-eager-perms.patch` | `app/modules/ai/service.py` | (a) rebrand `preferred_model` → `"NORA"` quand Olares actif ; (b) defaults CH (currency/standard/location) lus depuis Frappe `site_config.json` (`oce_default_currency`, `oce_default_standard`, `oce_default_location`) au lieu de `EUR` / `din276` / `Europe` upstream | (a) permanent rebrand ; (b) à retirer si on bouge les defaults dans la config OCE elle-même |
 | 04 | `04-alembic-v290-boolean-pg.patch` | `alembic/versions/v290_dashboards_presets.py` | `sa.Boolean() server_default=sa.text("0")` → `text("false")` — bug upstream qui bloque tout déploiement Postgres | À retirer dès que upstream merge le fix (PR à ouvrir) |
 | 05 | `05-alembic-v2a0-boolean-pg.patch` | `alembic/versions/v2a0_compliance_dsl_rules.py` | Idem 04 mais sur la colonne `is_active` | Idem 04 |
+| 06 | `06-bim-hub-import-date-string.patch` | `app/modules/bim_hub/router.py` | `model.import_date = _dt.now(_UTC)` → `.isoformat()[:20]`. La colonne est `VARCHAR(20)` mais le code assigne un `datetime.datetime` → asyncpg rejette → **tous les uploads IFC/CAD échouent en mode `error` après la conversion DDC**. Découvert 2026-05-16 en testant `/bim` avec `Building-Architecture.ifc` (status `error` après extraction de 19 éléments). | Permanent jusqu'à fix upstream — à reporter |
 
 ## Application
 
