@@ -83,6 +83,14 @@ function applyTheme(resolved: 'light' | 'dark'): void {
     root.classList.remove('dark');
   }
 
+  // //// NEOFFICE PATCH — Mirror onto [data-theme] for neoffice-theme.css
+  // WHY: The Neoffice shell stylesheet that wraps the SPA (page chrome,
+  //      body background, dropdown panes, etc.) keys all its dark rules
+  //      on `html[data-theme="dark"]`, not on `html.dark`. Without this
+  //      mirror, the SPA's own components dark up correctly via Tailwind
+  //      `.dark` but the host body background stays light → ugly seam.
+  root.setAttribute('data-theme', resolved);
+
   // Remove transition class after animation completes to avoid interfering
   // with normal interactive transitions elsewhere
   window.setTimeout(() => {
@@ -118,6 +126,8 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     } else {
       document.documentElement.classList.remove('dark');
     }
+    // //// NEOFFICE PATCH — Mirror onto [data-theme] for neoffice-theme.css
+    document.documentElement.setAttribute('data-theme', resolved);
 
     set({ theme, resolved });
 
