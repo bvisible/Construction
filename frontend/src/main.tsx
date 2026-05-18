@@ -9,6 +9,9 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
 import './app/i18n';
 import './index.css';
+// //// NEOFFICE PATCH — Brand overrides (must load after index.css so cascade wins)
+import './styles/neoffice-theme-overrides.css';
+// //// END NEOFFICE PATCH
 
 // //// NEOFFICE PATCH — Frappe-embedded boot: detect mode, set basename, hydrate auth
 // WHY: When the SPA boots inside /neoconstruction/* (Frappe Desk page), we need to:

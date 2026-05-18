@@ -1,0 +1,118 @@
+/* NEOFFICE FILE — Owned 100% by Neoservice. Not from upstream OpenConstructionERP.
+ *
+ * Neoffice palette overrides for the OCE SPA. Mirrors the brand we already
+ * ship on the Frappe shell (warm sand-tinted greys + soft indigo accent —
+ * same tokens as `neoffice_theme/css/neoffice-theme.css` on the desk and
+ * `@neoffice/design-system` on mobile). Loaded AFTER `index.css` from
+ * `main.tsx`, so every `--oe-*` we re-declare wins by cascade — zero
+ * touches to the upstream file.
+ *
+ * Why a dedicated file
+ * --------------------
+ * Patching `index.css` inline would create a tonal merge conflict on every
+ * upstream upgrade (it's the canonical OCE palette file). The cleanest
+ * boundary is: keep upstream tokens as a base contract, override the
+ * subset we care about here, in one stable place.
+ *
+ * Naming
+ * ------
+ * Variables prefixed `--neo-*` are Neoffice brand tokens; `--oe-*` lines
+ * are the variables OCE components actually read at runtime — we set them
+ * to the matching `--neo-*` value so OCE pages render with our palette
+ * without any component code changes.
+ */
+
+/* ── Light mode — warm sand-tinted neutrals (Neoffice "Neutral Warm") ───── */
+
+:root {
+  /* Brand */
+  --neo-accent: #6366f1;          /* soft indigo, matches mobile colors.accent */
+  --neo-accent-hover: #4f46e5;
+  --neo-accent-active: #4338ca;
+  --neo-accent-soft: rgba(99, 102, 241, 0.12);
+
+  /* Surfaces — warm off-white sand, not pure white */
+  --neo-bg: #fbfaf6;
+  --neo-bg-secondary: #f4f1ea;
+  --neo-bg-tertiary: #ede9df;
+  --neo-bg-elevated: #ffffff;
+
+  /* Text — warm graphite (no pure black) */
+  --neo-text-primary: #1f2024;
+  --neo-text-secondary: #5b5d65;
+  --neo-text-tertiary: #8a8d96;
+  --neo-text-quaternary: #b0b3bc;
+  --neo-text-inverse: #fbfaf6;
+
+  /* Borders — soft taupe */
+  --neo-border: #e3dfd4;
+  --neo-border-light: #ede9df;
+
+  /* Wire OCE variables to our brand values. */
+  --oe-blue: var(--neo-accent);
+  --oe-blue-hover: var(--neo-accent-hover);
+  --oe-blue-active: var(--neo-accent-active);
+  --oe-blue-subtle: var(--neo-accent-soft);
+
+  --oe-bg: var(--neo-bg);
+  --oe-bg-secondary: var(--neo-bg-secondary);
+  --oe-bg-tertiary: var(--neo-bg-tertiary);
+  --oe-bg-elevated: var(--neo-bg-elevated);
+
+  --oe-text-primary: var(--neo-text-primary);
+  --oe-text-secondary: var(--neo-text-secondary);
+  --oe-text-tertiary: var(--neo-text-tertiary);
+  --oe-text-quaternary: var(--neo-text-quaternary);
+  --oe-text-inverse: var(--neo-text-inverse);
+
+  --oe-border: var(--neo-border);
+  --oe-border-light: var(--neo-border-light);
+}
+
+/* ── Dark mode — warm graphite + indigo glow ─────────────────────────────── */
+
+.dark {
+  /* Brand — slightly brighter so it stays vivid on dark surfaces */
+  --neo-accent: #818cf8;          /* indigo-400, matches mobile dark.accent */
+  --neo-accent-hover: #a5b4fc;
+  --neo-accent-active: #6366f1;
+  --neo-accent-soft: rgba(129, 140, 248, 0.18);
+
+  /* Surfaces — warm dark, not the cold blue-grey OCE shipped (#0f1117).
+   * #1a1a1f is the Neoffice "warm graphite" used on mobile dark. */
+  --neo-bg: #1a1a1f;
+  --neo-bg-secondary: #20212a;
+  --neo-bg-tertiary: #262732;
+  --neo-bg-elevated: #2c2d39;
+
+  /* Text — soft warm white, not glaring */
+  --neo-text-primary: #ece9e0;
+  --neo-text-secondary: #a8a6a0;
+  --neo-text-tertiary: #6f6d68;
+  --neo-text-quaternary: #4d4b48;
+  --neo-text-inverse: #1a1a1f;
+
+  /* Borders — barely-there warm taupe */
+  --neo-border: #34343f;
+  --neo-border-light: #2a2a35;
+
+  /* Wire OCE variables to our brand values. */
+  --oe-blue: var(--neo-accent);
+  --oe-blue-hover: var(--neo-accent-hover);
+  --oe-blue-active: var(--neo-accent-active);
+  --oe-blue-subtle: var(--neo-accent-soft);
+
+  --oe-bg: var(--neo-bg);
+  --oe-bg-secondary: var(--neo-bg-secondary);
+  --oe-bg-tertiary: var(--neo-bg-tertiary);
+  --oe-bg-elevated: var(--neo-bg-elevated);
+
+  --oe-text-primary: var(--neo-text-primary);
+  --oe-text-secondary: var(--neo-text-secondary);
+  --oe-text-tertiary: var(--neo-text-tertiary);
+  --oe-text-quaternary: var(--neo-text-quaternary);
+  --oe-text-inverse: var(--neo-text-inverse);
+
+  --oe-border: var(--neo-border);
+  --oe-border-light: var(--neo-border-light);
+}
