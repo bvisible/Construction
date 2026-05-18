@@ -102,6 +102,24 @@ def parse_roomplan_scan(scan: dict[str, Any]) -> tuple[list[dict[str, Any]], dic
 # ── Internal helpers ───────────────────────────────────────────────────────
 
 
+def _coerce_enum(value: Any) -> str | None:
+    """Apple's Codable serializes Swift enums with associated values as
+    a single-key dict like ``{"wall": {}}`` instead of a string. Older
+    builds may still emit a plain ``"wall"`` string. Accept both.
+
+    Returns the lowered string case name, or None when the value can't
+    be resolved.
+    """
+    if isinstance(value, str):
+        return value.strip() or None
+    if isinstance(value, dict) and value:
+        # Take the first key — RoomPlan enums always have exactly one case set.
+        key = next(iter(value.keys()))
+        if isinstance(key, str) and key:
+            return key
+    return None
+
+
 def _extract_rooms(scan: dict[str, Any]) -> list[dict[str, Any]]:
     """Return a list of room-like dicts to iterate over.
 
@@ -121,9 +139,16 @@ def _extract_rooms(scan: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _storey_label_for_room(room: dict[str, Any], idx: int) -> str:
-    story = room.get("story") or room.get("storyName") or room.get("name")
+    # RoomPlan emits `story` as an int (0, 1, ...) since iOS 17; older
+    # builds may still emit a name. Normalize to a printable label.
+    story = room.get("story")
     if isinstance(story, str) and story.strip():
         return story.strip()[:255]
+    if isinstance(story, int):
+        return f"Level {story}"
+    name = room.get("storyName") or room.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()[:255]
     return f"Level {idx}"
 
 
@@ -133,7 +158,9 @@ def _surface_to_element(
     storey: str,
 ) -> dict[str, Any] | None:
     """Map a RoomPlan Surface (wall/door/window/opening/floor) to a BIMElement payload."""
-    category = surface.get("category") or surface_kind.rstrip("s")  # "walls" → "wall"
+    # Apple sends category as either a string ("wall") or a single-key
+    # dict ({"wall": {}}) depending on the Swift Codable encoder version.
+    category = _coerce_enum(surface.get("category")) or surface_kind.rstrip("s")
     ifc_type = _SURFACE_IFC_MAP.get(category) or _SURFACE_IFC_MAP.get(surface_kind.rstrip("s"))
     if ifc_type is None:
         logger.debug("Skipping unknown surface category: %s", category)
@@ -151,7 +178,7 @@ def _surface_to_element(
     quantities = _quantities_for_surface(dims, ifc_type)
     properties = {
         "roomplan_category": category,
-        "roomplan_confidence": surface.get("confidence"),
+        "roomplan_confidence": _coerce_enum(surface.get("confidence")),
         "roomplan_surface_kind": surface_kind,
     }
     parent_id = surface.get("parentIdentifier") or surface.get("parent_identifier")
@@ -166,6 +193,7 @@ def _surface_to_element(
 
     return {
         "stable_id": f"{ifc_type.lower()}:{identifier}",
+        "mesh_ref": str(identifier),
         "element_type": ifc_type,
         "name": _humanize(category),
         "storey": storey,
@@ -178,7 +206,7 @@ def _surface_to_element(
 
 def _object_to_element(obj: dict[str, Any], storey: str) -> dict[str, Any] | None:
     """Map a RoomPlan Object (furniture, appliance) to a BIMElement payload."""
-    category = obj.get("category")
+    category = _coerce_enum(obj.get("category"))
     identifier = obj.get("identifier") or obj.get("uuid")
     if not identifier:
         return None
@@ -194,11 +222,12 @@ def _object_to_element(obj: dict[str, Any], storey: str) -> dict[str, Any] | Non
     }
     properties = {
         "roomplan_category": category,
-        "roomplan_confidence": obj.get("confidence"),
+        "roomplan_confidence": _coerce_enum(obj.get("confidence")),
         "roomplan_surface_kind": "object",
     }
     return {
         "stable_id": f"ifcfurnishingelement:{identifier}",
+        "mesh_ref": str(identifier),
         "element_type": "IfcFurnishingElement",
         "name": _humanize(category) if category else "Object",
         "storey": storey,
@@ -245,14 +274,13 @@ def _read_transform(item: dict[str, Any]) -> list[float]:
     ]
 
 
-def _bounding_box_from(transform: list[float], dims: tuple[float, float, float]) -> dict[str, list[float]]:
+def _bounding_box_from(transform: list[float], dims: tuple[float, float, float]) -> dict[str, float]:
     """Compute world-space AABB by transforming the 8 corners of the local box.
 
-    transform is column-major:
-        | m0  m4  m8  m12 |
-        | m1  m5  m9  m13 |
-        | m2  m6  m10 m14 |
-        | m3  m7  m11 m15 |
+    Returns the flat ``{min_x, min_y, min_z, max_x, max_y, max_z}`` shape
+    that the BIM viewer (BIMPage.selectedDimensions, BBox overlay)
+    expects — same convention used by ifc_processor for DDC-imported
+    elements.
     """
     hx, hy, hz = dims[0] / 2, dims[1] / 2, dims[2] / 2
     corners = [
@@ -269,8 +297,12 @@ def _bounding_box_from(transform: list[float], dims: tuple[float, float, float])
         wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14]
         xs.append(wx); ys.append(wy); zs.append(wz)
     return {
-        "min": [_round(min(xs)), _round(min(ys)), _round(min(zs))],
-        "max": [_round(max(xs)), _round(max(ys)), _round(max(zs))],
+        "min_x": _round(min(xs)),
+        "min_y": _round(min(ys)),
+        "min_z": _round(min(zs)),
+        "max_x": _round(max(xs)),
+        "max_y": _round(max(ys)),
+        "max_z": _round(max(zs)),
     }
 
 
@@ -291,22 +323,27 @@ def _quantities_for_surface(dims: tuple[float, float, float], ifc_type: str) -> 
     return qty
 
 
-def _global_bounding_box(elements: list[dict[str, Any]]) -> dict[str, list[float]] | None:
+def _global_bounding_box(elements: list[dict[str, Any]]) -> dict[str, float] | None:
+    """Union of per-element bounding boxes — same flat shape as
+    ``_bounding_box_from``."""
     xs, ys, zs = [], [], []
     for el in elements:
         bb = el.get("bounding_box")
         if not isinstance(bb, dict):
             continue
-        mn, mx = bb.get("min"), bb.get("max")
-        if isinstance(mn, list) and len(mn) >= 3:
-            xs.append(mn[0]); ys.append(mn[1]); zs.append(mn[2])
-        if isinstance(mx, list) and len(mx) >= 3:
-            xs.append(mx[0]); ys.append(mx[1]); zs.append(mx[2])
+        if {"min_x", "min_y", "min_z", "max_x", "max_y", "max_z"} <= bb.keys():
+            xs.extend([bb["min_x"], bb["max_x"]])
+            ys.extend([bb["min_y"], bb["max_y"]])
+            zs.extend([bb["min_z"], bb["max_z"]])
     if not xs:
         return None
     return {
-        "min": [_round(min(xs)), _round(min(ys)), _round(min(zs))],
-        "max": [_round(max(xs)), _round(max(ys)), _round(max(zs))],
+        "min_x": _round(min(xs)),
+        "min_y": _round(min(ys)),
+        "min_z": _round(min(zs)),
+        "max_x": _round(max(xs)),
+        "max_y": _round(max(ys)),
+        "max_z": _round(max(zs)),
     }
 
 

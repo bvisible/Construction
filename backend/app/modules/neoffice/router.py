@@ -18,9 +18,11 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.dependencies import SessionDep, get_current_user_id
+from app.modules.bim_hub import file_storage as bim_file_storage
 from app.modules.bim_hub.router import _verify_project_access
 from app.modules.bim_hub.schemas import BIMModelCreate, BIMModelResponse
 from app.modules.bim_hub.service import BIMHubService
+from app.modules.neoffice.roomplan_glb_builder import build_glb_bytes
 from app.modules.neoffice.roomplan_importer import parse_roomplan_scan
 from app.modules.neoffice.schemas import RoomPlanImportRequest
 
@@ -73,16 +75,41 @@ async def import_roomplan(
     )
     model = await service.create_model(model_create, user_id=user_id)
 
-    # Bulk-insert elements via the ORM (single flush at commit time).
+    # Bulk-insert elements via the ORM. The importer pre-populates
+    # `mesh_ref` with the raw RoomPlan identifier (Apple UUID), which
+    # matches the GLB node names emitted by roomplan_glb_builder — that's
+    # how the Three.js viewer crosses a picked mesh back to its row.
     from app.modules.bim_hub.models import BIMElement
     for el in elements_data:
         session.add(BIMElement(model_id=model.id, **el))
+
+    # Build + persist a GLB so the viewer renders the room in 3D.
+    # Best-effort: a build failure must not block the import — the user
+    # still gets the element list, quantities, BoQ linking. We just
+    # leave canonical_file_path null and let the existing
+    # has_geometry=false fallback kick in.
+    glb_key: str | None = None
+    try:
+        glb_bytes = build_glb_bytes(request.scan)
+        glb_key = await bim_file_storage.save_geometry(
+            project_id=request.project_id,
+            model_id=model.id,
+            ext="glb",
+            content=glb_bytes,
+        )
+    except Exception:
+        logger.exception(
+            "RoomPlan GLB build failed for model %s — model created without geometry",
+            model.id,
+        )
 
     # Finalize model fields once elements are queued.
     model.status = "ready"
     model.element_count = meta["element_count"]
     model.storey_count = meta["storey_count"]
     model.import_date = datetime.now(UTC).isoformat()[:20]
+    if glb_key:
+        model.canonical_file_path = glb_key
     await session.flush()
     await session.commit()
     await session.refresh(model)

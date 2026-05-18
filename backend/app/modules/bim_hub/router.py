@@ -2372,6 +2372,26 @@ async def list_elements(
             offset=offset,
             limit=limit,
         )
+        # #### NEOFFICE PATCH — Preserve inline props/quantities for parametric models
+        # WHY: For DDC-imported (IFC/RVT) models the viewer fetches the full
+        #      property set from Parquet on click, so the skeleton can drop
+        #      properties/quantities/metadata to keep big lists slim (~1.5 kB
+        #      × 7000 rows = 16 MB saved). For RoomPlan-imported models there
+        #      is no Parquet — the inline ``properties`` and ``quantities``
+        #      ARE the source of truth, and skinning them leaves the side
+        #      panel showing "No additional properties" plus NaN BBox dims
+        #      because BIMPage.selectedDimensions reads from BIMElement
+        #      directly. RoomPlan scans cap at ~100-200 elements anyway, so
+        #      the extra payload is negligible.
+        # REVIEW: drop when RoomPlan imports also produce a Parquet alongside.
+        try:
+            model = await service.get_model(model_id)
+            is_parametric_inline = (
+                model is not None
+                and (model.model_format or "").lower() == "roomplan"
+            )
+        except Exception:  # noqa: BLE001
+            is_parametric_inline = False
         # Skinny rows: drop the per-element `properties` / `quantities` /
         # `classification` / `metadata` payloads. These can weigh ~1.5 kB per
         # row on a typical Revit export (45+ Revit parameters × short value),
@@ -2381,9 +2401,10 @@ async def list_elements(
         skeleton_items: list[BIMElementResponse] = []
         for e in plain_items:
             resp = BIMElementResponse.model_validate(e)
-            resp.properties = {}
-            resp.quantities = {}
-            resp.metadata = {}
+            if not is_parametric_inline:
+                resp.properties = {}
+                resp.quantities = {}
+                resp.metadata = {}
             skeleton_items.append(resp)
         return BIMElementListResponse(
             items=skeleton_items,
