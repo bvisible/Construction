@@ -1194,7 +1194,7 @@ async def _process_cad_in_background(
                 from datetime import UTC as _UTC
                 from datetime import datetime as _dt
 
-                model.import_date = _dt.now(_UTC)
+                model.import_date = _dt.now(_UTC).isoformat()[:20]  # NEOFFICE PATCH: VARCHAR(20)
                 if glb_key:
                     model.canonical_file_path = glb_key
                 elif geo_key:

@@ -19,6 +19,23 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+
+# ── Neoconstruction override: read Frappe site_config for Olares ─────────────
+def _read_frappe_site_config(key, default=None):
+    """Read a key from Frappe site_config.json. Path overridable via env."""
+    import os
+    import json as _json
+    path = os.environ.get(
+        "FRAPPE_SITE_CONFIG",
+        "/home/neoffice/frappe-bench/sites/prod.local/site_config.json",
+    )
+    try:
+        with open(path) as _f:
+            return _json.load(_f).get(key, default)
+    except Exception:
+        return default
+
+
 # ── Model defaults ───────────────────────────────────────────────────────────
 
 ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
@@ -327,6 +344,14 @@ _OPENAI_COMPAT_CONFIG = {
     },
 }
 
+# ── Neoconstruction: register Olares as OpenAI-compatible provider ─────────
+_olares_base = (_read_frappe_site_config("oce_olares_base_url") or "").rstrip("/")
+if _olares_base:
+    _OPENAI_COMPAT_CONFIG["olares"] = {
+        "url": _olares_base + "/chat/completions",
+        "model": _read_frappe_site_config("oce_olares_model", "Qwen3.6-35B-A3B-UD-Q3_K_XL.gguf"),
+    }
+
 
 async def call_openai_compatible(
     provider: str,
@@ -607,6 +632,22 @@ def _model_override_for(settings: Any, provider: str) -> str | None:
 
 
 def resolve_provider_and_key(
+    settings,
+    preferred_model=None,
+):
+    """Neoconstruction override: always use Olares (NORA local) when configured.
+
+    Reads oce_olares_api_key + oce_olares_base_url + oce_olares_model from
+    Frappe site_config.json. Falls through to original BYOK logic only when
+    Olares is not configured (e.g. dev environments).
+    """
+    olares_key = _read_frappe_site_config("oce_olares_api_key")
+    if olares_key:
+        return "olares", olares_key
+    return _resolve_provider_and_key_original(settings, preferred_model)
+
+
+def _resolve_provider_and_key_original(
     settings: Any,
     preferred_model: str | None = None,
 ) -> tuple[str, str]:

@@ -74,7 +74,7 @@ def upgrade() -> None:
                 "shared_with_project",
                 sa.Boolean(),
                 nullable=False,
-                server_default=sa.text("0"),
+                server_default=sa.text("false"),
             ),
             sa.Column(
                 "created_at",

@@ -164,6 +164,20 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
     def _usable(value: Any) -> bool:
         return bool(decrypt_secret(value)) if value else False
 
+    # #### NEOFFICE PATCH — Rebrand preferred_model as "NORA" when Olares active
+    # WHY: The Neoffice frontend (QuickEstimatePage, ChatLeftPanel) renders
+    #      `aiSettings.preferred_model` as the connected-AI badge label.
+    #      For our Neoffice-branded deployments we want the badge to read
+    #      "NORA" instead of the upstream "claude-sonnet"/"gpt-4o"/… technical
+    #      identifier — keeping the user-facing wording in line with the
+    #      product name. Only kicks in when Olares (our LLM gateway) is
+    #      configured in Frappe's site_config; otherwise upstream behaviour
+    #      is preserved.
+    # REVIEW: drop once upstream exposes a label-override field on AISettings.
+    from app.modules.ai.ai_client import _read_frappe_site_config
+    _olares_configured = bool(_read_frappe_site_config("oce_olares_api_key"))
+    preferred_model_override = "NORA" if _olares_configured else settings.preferred_model
+
     meta = settings.metadata_ or {}
     raw_overrides = meta.get("model_overrides") if isinstance(meta, dict) else None
     model_overrides: dict[str, str] = {}
@@ -195,7 +209,7 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
         baidu_api_key_set=_usable(getattr(settings, "baidu_api_key", None)),
         yandex_api_key_set=_usable(getattr(settings, "yandex_api_key", None)),
         gigachat_api_key_set=_usable(getattr(settings, "gigachat_api_key", None)),
-        preferred_model=settings.preferred_model,
+        preferred_model=preferred_model_override,
         model_overrides=model_overrides,
         default_models=dict(DEFAULT_MODELS),
         metadata_=settings.metadata_ or {},
