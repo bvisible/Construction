@@ -113,7 +113,7 @@ class _StubGRItemRepo:
 
 def _make_service() -> ProcurementService:
     svc = ProcurementService.__new__(ProcurementService)
-    svc.session = SimpleNamespace()
+    svc.session = SimpleNamespace(expunge=lambda _obj: None)
     svc.po_repo = _StubPORepo()
     svc.po_item_repo = _StubPOItemRepo()
     svc.gr_repo = _StubGRRepo()

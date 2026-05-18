@@ -1,7 +1,18 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import i18next from 'i18next';
-import { Sparkles, Database, ArrowUp, AlertTriangle, Settings, Globe } from 'lucide-react';
+import {
+  Sparkles,
+  Database,
+  ArrowUp,
+  AlertTriangle,
+  Settings,
+  Globe,
+  Search,
+  Calculator,
+  MessageSquarePlus,
+  Info,
+} from 'lucide-react';
 import { Breadcrumb, AIDisclaimerBanner } from '@/shared/ui';
 import { apiGet, apiPost } from '@/shared/lib/api';
 import { Link } from 'react-router-dom';
@@ -222,6 +233,7 @@ export function AdvisorPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
   const addToast = useToastStore((s) => s.addToast);
 
   // Check if AI is configured on mount
@@ -318,8 +330,17 @@ export function AdvisorPage() {
         inputRef.current?.focus();
       }
     },
-    [input, loading, activeProjectId, addToast, t],
+    // `messages` and `region` are read inside this callback — they MUST be in
+    // the dependency list or the AI loses conversation history and the region
+    // filter silently stops applying after the first send.
+    [input, loading, messages, region, activeProjectId, addToast, t],
   );
+
+  const clearConversation = useCallback(() => {
+    setMessages([]);
+    setInput('');
+    inputRef.current?.focus();
+  }, []);
 
   const suggestions = useMemo(
     () => [
@@ -379,7 +400,14 @@ export function AdvisorPage() {
               {t('ai.advisor_title', { defaultValue: 'AI Cost Advisor' })}
             </h1>
             <p className="text-[11px] text-content-tertiary leading-tight truncate">
-              {t('ai.advisor_desc_short', { defaultValue: 'Ask about costs, materials, and pricing from CWICR database + AI' })}
+              {activeProjectId && activeProjectName
+                ? t('ai.advisor_scoped', {
+                    defaultValue: 'Using {{project}} region & currency as default context',
+                    project: activeProjectName,
+                  })
+                : t('ai.advisor_desc_short', {
+                    defaultValue: 'Ask about costs, materials, and pricing from CWICR database + AI',
+                  })}
             </p>
           </div>
 
@@ -403,6 +431,17 @@ export function AdvisorPage() {
             </select>
           </div>
 
+          {messages.length > 0 && (
+            <button
+              onClick={clearConversation}
+              className="flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-2.5 py-1.5 text-2xs font-medium text-content-secondary hover:text-content-primary hover:border-border transition-colors shrink-0"
+              title={t('ai.advisor_new_chat', { defaultValue: 'Start a new conversation' })}
+            >
+              <MessageSquarePlus size={13} />
+              {t('ai.advisor_new_chat', { defaultValue: 'New chat' })}
+            </button>
+          )}
+
           {aiConfigured && (
             <span className="flex items-center gap-1.5 text-2xs text-semantic-success font-medium shrink-0">
               <span className="h-1.5 w-1.5 rounded-full bg-semantic-success animate-pulse" />
@@ -422,7 +461,13 @@ export function AdvisorPage() {
               <p className="text-base font-medium text-content-primary mb-1">
                 {t('ai.advisor_empty', { defaultValue: 'Ask me anything about construction costs' })}
               </p>
-              <div className="flex flex-wrap justify-center gap-2 mb-5 max-w-md">
+              <p className="text-xs text-content-tertiary max-w-md mb-4 leading-relaxed">
+                {t('ai.advisor_purpose', {
+                  defaultValue:
+                    'Use this as a research companion while estimating: ask about typical rates, material alternatives, regional price differences or methods. Answers draw on the CWICR cost database plus AI knowledge — they inform decisions, they do not replace a priced BOQ.',
+                })}
+              </p>
+              <div className="flex flex-wrap justify-center gap-2 mb-4 max-w-md">
                 {[
                   { icon: Database, label: t('ai.advisor_cap_db', { defaultValue: '55K+ cost items (CWICR)' }) },
                   { icon: Globe, label: t('ai.advisor_cap_regions', { defaultValue: '11 regional databases' }) },
@@ -436,7 +481,7 @@ export function AdvisorPage() {
               </div>
 
               {/* Suggestion chips */}
-              <div className="flex flex-wrap justify-center gap-2 max-w-lg">
+              <div className="flex flex-wrap justify-center gap-2 max-w-lg mb-6">
                 {suggestions.map((s) => (
                   <button
                     key={s}
@@ -449,6 +494,38 @@ export function AdvisorPage() {
                     {s}
                   </button>
                 ))}
+              </div>
+
+              {/* Cross-module: where to go next */}
+              <div className="w-full max-w-lg rounded-xl border border-border-light bg-surface-secondary/40 px-4 py-3 text-left">
+                <p className="flex items-center gap-1.5 text-2xs font-semibold text-content-tertiary uppercase tracking-wide mb-2">
+                  <Info size={11} />
+                  {t('ai.advisor_next_steps', { defaultValue: 'Turn answers into an estimate' })}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <Link
+                    to="/costs"
+                    className="flex items-center gap-2 rounded-lg bg-surface-primary border border-border-light px-3 py-2 text-xs text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+                  >
+                    <Search size={14} className="shrink-0 text-oe-blue/70" />
+                    <span>
+                      {t('ai.advisor_link_costs', {
+                        defaultValue: 'Browse the full CWICR cost database',
+                      })}
+                    </span>
+                  </Link>
+                  <Link
+                    to="/ai-estimate"
+                    className="flex items-center gap-2 rounded-lg bg-surface-primary border border-border-light px-3 py-2 text-xs text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+                  >
+                    <Calculator size={14} className="shrink-0 text-oe-blue/70" />
+                    <span>
+                      {t('ai.advisor_link_estimate', {
+                        defaultValue: 'Generate a full BOQ with AI Estimate',
+                      })}
+                    </span>
+                  </Link>
+                </div>
               </div>
             </div>
           )}

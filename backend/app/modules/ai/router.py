@@ -22,7 +22,11 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Respo
 logger = logging.getLogger(__name__)
 
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, check_ai_rate_limit
-from app.modules.ai.ai_client import call_ai, resolve_provider_and_key
+from app.modules.ai.ai_client import (
+    call_ai,
+    default_model_for,
+    resolve_provider_key_model,
+)
 from app.modules.ai.schemas import (
     AISettingsResponse,
     AISettingsUpdate,
@@ -233,6 +237,15 @@ async def test_ai_connection(
             "latency_ms": None,
         }
 
+    # Resolve the model id the user configured for this provider (if any),
+    # falling back to the built-in default. Testing with the SAME model the
+    # real estimate calls use is what makes "stale model name" failures
+    # surface here instead of mid-estimate (issue #129).
+    from app.modules.ai.ai_client import _model_override_for
+
+    model_override = _model_override_for(settings, provider)
+    effective_model = model_override or default_model_for(provider)
+
     # Make a minimal test call
     try:
         t0 = time.monotonic()
@@ -242,18 +255,21 @@ async def test_ai_connection(
             system="You are a test assistant.",
             prompt="Reply with exactly: OK",
             max_tokens=10,
+            model=model_override,
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
         return {
             "success": True,
-            "message": f"{provider.title()} API is working.",
+            "message": f"{provider.title()} API is working (model: {effective_model}).",
             "latency_ms": latency_ms,
+            "model": effective_model,
         }
     except ValueError as exc:
         return {
             "success": False,
             "message": str(exc),
             "latency_ms": None,
+            "model": effective_model,
         }
     except Exception as exc:
         logger.warning("AI test failed for %s: %s", provider, exc)
@@ -261,6 +277,7 @@ async def test_ai_connection(
             "success": False,
             "message": f"Connection failed: {str(exc)[:200]}",
             "latency_ms": None,
+            "model": effective_model,
         }
 
 
@@ -885,32 +902,53 @@ async def advisor_chat(
 
     used_db = bool(context_items)
     try:
-        provider, api_key = resolve_provider_and_key(settings)
+        provider, api_key, model_override = resolve_provider_key_model(settings)
         text, _tokens = await call_ai(
             provider=provider,
             api_key=api_key,
             system=system_prompt,
             prompt=user_prompt,
             max_tokens=1500,
+            model=model_override,
         )
         answer = text
     except (ValueError, Exception) as exc:
         # Provider error bodies (especially from third-party LLM APIs) can
         # echo back masked key prefixes, org IDs, or stale CORS headers.
         # We log the full error for ops, but only show the user a generic
-        # localized fallback — never the upstream message.
+        # localized fallback — never the raw upstream message.
         logger.warning(
             "advisor_chat: AI call failed for user=%s provider-error=%r",
             user_id, exc,
         )
-        _err_msgs = {
-            "ru": "ИИ не настроен. Пожалуйста, добавьте API-ключ в Настройках.",
-            "de": "KI nicht konfiguriert. Bitte fügen Sie Ihren API-Schlüssel in den Einstellungen hinzu.",
-            "fr": "IA non configurée. Veuillez ajouter votre clé API dans les Paramètres.",
-            "es": "IA no configurada. Agregue su clave API en Configuración.",
-        }
-        fallback = _err_msgs.get(locale, "AI is not configured. Please set up an AI provider in Settings.")
-        answer = fallback
+        # ai_client raises a sanitized ValueError (only the model id +
+        # truncated provider text — no credentials) when the provider
+        # rejects the *model name*. Surface a clear, localized, actionable
+        # message in that case so users with a stale model id (issue #129)
+        # know to change it instead of seeing a vague "not configured".
+        is_model_problem = isinstance(exc, ValueError) and (
+            "set the model name" in str(exc) or "denied access to model" in str(exc)
+        )
+        if is_model_problem:
+            _model_msgs = {
+                "ru": "Имя модели ИИ устарело или недоступно. Откройте Настройки > ИИ и укажите актуальное имя модели.",
+                "de": "Der KI-Modellname ist veraltet oder nicht verfügbar. Öffnen Sie Einstellungen > KI und geben Sie einen aktuellen Modellnamen ein.",
+                "fr": "Le nom du modèle d'IA est obsolète ou indisponible. Ouvrez Paramètres > IA et indiquez un nom de modèle valide.",
+                "es": "El nombre del modelo de IA está desactualizado o no disponible. Abra Configuración > IA e indique un nombre de modelo válido.",
+            }
+            answer = _model_msgs.get(
+                locale,
+                "The AI model name is outdated or unavailable. Open Settings > AI "
+                "and set a currently valid model name for your provider.",
+            )
+        else:
+            _err_msgs = {
+                "ru": "ИИ не настроен. Пожалуйста, добавьте API-ключ в Настройках.",
+                "de": "KI nicht konfiguriert. Bitte fügen Sie Ihren API-Schlüssel in den Einstellungen hinzu.",
+                "fr": "IA non configurée. Veuillez ajouter votre clé API dans les Paramètres.",
+                "es": "IA no configurada. Agregue su clave API en Configuración.",
+            }
+            answer = _err_msgs.get(locale, "AI is not configured. Please set up an AI provider in Settings.")
         used_db = False
 
     # 6. Build source references — only include if items seem relevant

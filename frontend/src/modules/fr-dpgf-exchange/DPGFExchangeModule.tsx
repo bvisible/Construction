@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Euro,
@@ -23,6 +24,7 @@ import { exportToCSV, downloadBlob } from '../_shared/excelExport';
 import { printBOQReport } from '../_shared/pdfBOQExport';
 import type { ExchangePosition, ImportParseResult } from '../_shared/templateTypes';
 import { DPGF_TEMPLATE, LOTS_TECHNIQUES } from './dpgfTemplate';
+import { SampleTemplateButton } from '../_shared/SampleTemplateButton';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -564,6 +566,11 @@ export default function DPGFExchangeModule() {
             />
           </div>
 
+          {/* Expected layout + ready-to-fill sample — shown before a
+              file is chosen so a country specialist knows the exact
+              column order this importer expects. */}
+          {!importFile && <SampleTemplateButton template={DPGF_TEMPLATE} />}
+
           {/* Lots reference */}
           <LotsReference t={t} locale={i18n.language} />
 
@@ -672,6 +679,15 @@ export default function DPGFExchangeModule() {
                     <li key={`err-${idx}`}>&#8226; {err}</li>
                   ))}
                 </ul>
+              )}
+              {importResult.errors.length === 0 && (
+                <Link
+                  data-testid="regional-open-boq"
+                  to={importTargetBoqId ? `/boq?boq=${importTargetBoqId}` : '/boq'}
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-oe-blue hover:underline"
+                >
+                  {t('dpgf.open_boq', { defaultValue: 'Open in BOQ editor to review & validate \u2192' })}
+                </Link>
               )}
             </div>
           )}

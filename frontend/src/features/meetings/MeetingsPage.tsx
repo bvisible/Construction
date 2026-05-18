@@ -1852,7 +1852,13 @@ export function MeetingsPage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: meetings = [], isLoading } = useQuery({
+  const {
+    data: meetings = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['meetings', projectId, typeFilter, statusFilter],
     queryFn: () =>
       fetchMeetings({
@@ -2177,6 +2183,21 @@ export function MeetingsPage() {
 
       {projectId ? (
       <>
+      {/* Cross-module links — action items flow into Tasks once a meeting
+          is completed; surface that connection up front. */}
+      <div className="flex flex-wrap items-center gap-1.5 mb-4">
+        <span className="text-2xs text-content-tertiary uppercase tracking-wide me-1">
+          {t('meetings.connections_label', { defaultValue: 'Action items flow to' })}
+        </span>
+        <Link
+          to={`/projects/${projectId}/tasks`}
+          className="inline-flex items-center gap-1 rounded-full bg-oe-blue/10 px-2.5 py-1 text-xs font-medium text-oe-blue hover:bg-oe-blue/20 transition-colors"
+        >
+          <ListChecks size={13} />
+          {t('meetings.link_tasks', { defaultValue: 'Project Tasks' })}
+        </Link>
+      </div>
+
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         <Card className="p-4 animate-card-in">
@@ -2279,6 +2300,25 @@ export function MeetingsPage() {
       <div>
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : isError ? (
+          <EmptyState
+            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
+            title={t('meetings.load_failed', {
+              defaultValue: 'Could not load meetings',
+            })}
+            description={
+              error instanceof Error
+                ? error.message
+                : t('meetings.load_failed_hint', {
+                    defaultValue:
+                      'Something went wrong fetching the meetings list. Please try again.',
+                  })
+            }
+            action={{
+              label: t('common.retry', { defaultValue: 'Retry' }),
+              onClick: () => refetch(),
+            }}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<CalendarDays size={28} strokeWidth={1.5} />}

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import {
   useQuery,
   useQueries,
@@ -29,6 +30,7 @@ import {
   RefreshCw,
   Flame,
   AlertOctagon,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -112,6 +114,88 @@ function endOfWeek(): string {
   const d = new Date(startOfWeek());
   d.setDate(d.getDate() + 7);
   return d.toISOString();
+}
+
+/* ─── Workflow intro ───────────────────────────────────────────────────
+ *
+ * Resources is the supply side of crew planning. This banner explains the
+ * propose → confirm → schedule loop and links to where assignments are
+ * consumed: the 4D schedule, tasks, and the equipment fleet (equipment is
+ * also a resource type here, but maintenance lives on its own page).
+ * Dismissible per-session.
+ */
+function WorkflowIntro() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [dismissed, setDismissed] = useState(
+    () => sessionStorage.getItem('oe.res.introDismissed') === '1',
+  );
+  if (dismissed) return null;
+  const dismiss = () => {
+    sessionStorage.setItem('oe.res.introDismissed', '1');
+    setDismissed(true);
+  };
+  return (
+    <Card padding="md" className="border-oe-blue/20 bg-oe-blue-subtle/10">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+          <Users size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-content-primary">
+            {t('resources.intro_title', {
+              defaultValue: 'Plan who works where, and when',
+            })}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-content-secondary">
+            {t('resources.intro_body', {
+              defaultValue:
+                'Register people, crews and equipment, then put them to work: a foreman raises a Request for what they need, a dispatcher Fulfils it by matching an available resource, and the resulting Assignment reserves that resource for a date range — with double-booking conflicts flagged automatically. Confirmed assignments are the source of truth for who is on site each day.',
+            })}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('resources.intro_connects', { defaultValue: 'Connects to' })}
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate('/schedule')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('resources.intro_link_schedule', { defaultValue: '4D Schedule' })}
+              <ArrowRight size={11} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/tasks')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('resources.intro_link_tasks', { defaultValue: 'Tasks' })}
+              <ArrowRight size={11} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/equipment')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('resources.intro_link_equipment', {
+                defaultValue: 'Equipment fleet',
+              })}
+              <ArrowRight size={11} />
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={dismiss}
+          className="shrink-0 rounded-md p-1 text-content-tertiary transition-colors hover:bg-surface-secondary hover:text-content-primary"
+          aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </Card>
+  );
 }
 
 /* ─── Page ─── */
@@ -230,6 +314,8 @@ export function ResourcesPage() {
           )}
         </div>
       </div>
+
+      <WorkflowIntro />
 
       {/* Tabs */}
       <div className="border-b border-border-light">

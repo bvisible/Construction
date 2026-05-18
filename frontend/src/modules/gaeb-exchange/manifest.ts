@@ -10,7 +10,7 @@ export const manifest: ModuleManifest = {
   description: 'Exchange BOQ data in GAEB DA XML 3.3 format — import X81/X83 files and export tender/bid documents',
   version: '1.0.0',
   icon: FileText,
-  category: 'tools',
+  category: 'regional',
   defaultEnabled: true,
   depends: ['boq'],
   routes: [
@@ -25,7 +25,7 @@ export const manifest: ModuleManifest = {
       labelKey: 'nav.gaeb_exchange',
       to: '/gaeb-exchange',
       icon: FileText,
-      group: 'tools',
+      group: 'regional',
     },
   ],
   searchEntries: [

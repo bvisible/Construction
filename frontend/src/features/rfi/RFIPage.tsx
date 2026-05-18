@@ -21,6 +21,7 @@ import {
   ArrowRightLeft,
   UploadCloud,
   Check,
+  Info,
 } from 'lucide-react';
 import {
   Button,
@@ -96,6 +97,8 @@ export const PRIORITY_VALUES: readonly RFIPriority[] = [
   'high',
   'critical',
 ] as const;
+
+const LS_INFO_DISMISSED = 'oe_rfi_info_dismissed';
 
 const inputCls =
   'h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
@@ -1220,15 +1223,28 @@ const RFIRow = React.memo(function RFIRow({
             </div>
           )}
 
-          {/* Linked drawings */}
+          {/* Linked drawings — link through to the deep RFI page where the
+              ids are resolved to real filenames, instead of dumping raw
+              UUIDs the operator cannot act on. */}
           {rfi.linked_drawing_ids && rfi.linked_drawing_ids.length > 0 && (
             <div className="flex items-center gap-2 flex-wrap">
               <FileText size={13} className="text-content-tertiary" />
-              {rfi.linked_drawing_ids.map((d) => (
-                <Badge key={d} variant="neutral" size="sm">
-                  {d}
-                </Badge>
-              ))}
+              <span className="text-xs text-content-secondary">
+                {t('rfi.attached_documents', { defaultValue: 'Attached documents' })}
+              </span>
+              <Badge variant="neutral" size="sm">
+                {t('rfi.attached_documents_count', {
+                  defaultValue: '{{count}} document(s)',
+                  count: rfi.linked_drawing_ids.length,
+                })}
+              </Badge>
+              <Link
+                to={`/rfi/${rfi.id}`}
+                onClick={(e) => e.stopPropagation()}
+                className="text-xs font-medium text-oe-blue hover:underline"
+              >
+                {t('rfi.view_details', { defaultValue: 'View details' })}
+              </Link>
             </div>
           )}
 
@@ -1330,6 +1346,9 @@ export function RFIPage() {
   const [statusFilter, setStatusFilter] = useState<RFIStatus | ''>('');
   const [priorityFilter, setPriorityFilter] = useState<RFIPriority | ''>('');
   const [disciplineFilter, setDisciplineFilter] = useState<string>('');
+  const [infoDismissed, setInfoDismissed] = useState(
+    () => localStorage.getItem(LS_INFO_DISMISSED) === '1',
+  );
 
   // "n" shortcut → open new RFI form
   useCreateShortcut(
@@ -1347,7 +1366,13 @@ export function RFIPage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: rfis = [], isLoading } = useQuery({
+  const {
+    data: rfis = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['rfis', projectId, statusFilter, debouncedSearch],
     queryFn: () =>
       fetchRFIs({
@@ -1671,11 +1696,57 @@ export function RFIPage() {
         </div>
       </div>
 
+      {/* Purpose / help banner — explains the RFI workflow + connections. */}
+      {!infoDismissed && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300 relative">
+          <button
+            onClick={() => {
+              setInfoDismissed(true);
+              localStorage.setItem(LS_INFO_DISMISSED, '1');
+            }}
+            className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/40 dark:hover:text-blue-200 transition-colors"
+            aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+          >
+            <X size={14} />
+          </button>
+          <div className="flex items-center gap-2 mb-1">
+            <Info size={16} />
+            <span className="font-semibold">
+              {t('rfi.info_title', { defaultValue: 'About RFIs' })}
+            </span>
+          </div>
+          <p className="text-xs pr-6">
+            {t('rfi.info_body', {
+              defaultValue:
+                'A Request for Information is the formal channel for resolving design or construction queries with a documented, contractual answer. Each RFI follows a workflow:',
+            })}{' '}
+            <strong>
+              {t('rfi.info_workflow', {
+                defaultValue: 'Open → Answered → Closed',
+              })}
+            </strong>
+            {'. '}
+            {t('rfi.info_link_hint', {
+              defaultValue:
+                'Attach drawings/documents for context, assign a Ball-in-Court, and convert cost-impacting RFIs into a Change Order in one click.',
+            })}
+          </p>
+        </div>
+      )}
+
       {/* Cross-module link */}
       <div className="flex flex-wrap gap-1.5 mb-4">
         <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/changeorders')}>
           <ArrowRightLeft size={13} className="me-1" />
           {t('rfi.link_change_orders', { defaultValue: 'View Change Orders' })}
+        </Button>
+        <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/documents')}>
+          <FileText size={13} className="me-1" />
+          {t('rfi.link_documents', { defaultValue: 'Documents' })}
+        </Button>
+        <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/submittals')}>
+          <Paperclip size={13} className="me-1" />
+          {t('rfi.link_submittals', { defaultValue: 'Submittals' })}
         </Button>
       </div>
 
@@ -1829,6 +1900,23 @@ export function RFIPage() {
       <div>
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : isError ? (
+          <EmptyState
+            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
+            title={t('rfi.load_failed', { defaultValue: 'Could not load RFIs' })}
+            description={
+              error instanceof Error
+                ? error.message
+                : t('rfi.load_failed_hint', {
+                    defaultValue:
+                      'Something went wrong fetching the RFI log. Please try again.',
+                  })
+            }
+            action={{
+              label: t('common.retry', { defaultValue: 'Retry' }),
+              onClick: () => refetch(),
+            }}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<HelpCircle size={28} strokeWidth={1.5} />}

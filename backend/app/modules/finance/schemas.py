@@ -491,3 +491,8 @@ class FinanceDashboardResponse(BaseModel):
     budget_warning_level: str = "normal"  # "normal" | "caution" | "critical"
     total_payments: float = 0.0
     cash_flow_net: float = 0.0
+    # Dominant project currency (budget lines preferred, invoices as
+    # fallback). Empty string when no financial record carries a currency
+    # yet — the UI then renders amounts without a currency symbol rather
+    # than mislabelling them (task #217).
+    currency: str = ""

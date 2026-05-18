@@ -1207,10 +1207,19 @@ export function CatalogPage() {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // Fetch stats (for tab counts)
+  // Fetch stats (for tab + category counts). Scoped to the active
+  // region so a category/type badge never advertises a count the
+  // region-filtered list below it can't show ("count says N but
+  // No resources found"). When region is cleared the counts go
+  // global again, matching the unfiltered list.
   const { data: stats } = useQuery({
-    queryKey: ['catalog', 'stats'],
-    queryFn: () => apiGet<CatalogStatsResponse>('/v1/catalog/stats/'),
+    queryKey: ['catalog', 'stats', region],
+    queryFn: () =>
+      apiGet<CatalogStatsResponse>(
+        region
+          ? `/v1/catalog/stats/?region=${encodeURIComponent(region)}`
+          : '/v1/catalog/stats/',
+      ),
     retry: false,
   });
 

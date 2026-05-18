@@ -24,10 +24,41 @@ logger = logging.getLogger(__name__)
 ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 OPENAI_MODEL = "gpt-4o"
 GEMINI_MODEL = "gemini-2.5-flash"
-OPENROUTER_MODEL = "anthropic/claude-sonnet-4-20250514"
+# OpenRouter uses date-less, vendor-prefixed slugs. The dated Anthropic id
+# ("...-20250514") is NOT a valid OpenRouter model — passing it makes even a
+# perfectly valid OpenRouter key fail with HTTP 400 "not a valid model ID".
+OPENROUTER_MODEL = "anthropic/claude-sonnet-4"
 MISTRAL_MODEL = "mistral-large-latest"
 GROQ_MODEL = "llama-3.3-70b-versatile"
 DEEPSEEK_MODEL = "deepseek-chat"
+
+# Per-provider default model id. This is the single source of truth for the
+# model name sent to each provider's API. Users can override any of these via
+# Settings > AI (stored in AISettings.metadata_["model_overrides"][provider])
+# so that when a provider renames or retires a model the user can point the
+# integration at a current model id WITHOUT waiting for an app release.
+DEFAULT_MODELS: dict[str, str] = {
+    "anthropic": ANTHROPIC_MODEL,
+    "openai": OPENAI_MODEL,
+    "gemini": GEMINI_MODEL,
+    "openrouter": OPENROUTER_MODEL,
+    "mistral": MISTRAL_MODEL,
+    "groq": GROQ_MODEL,
+    "deepseek": DEEPSEEK_MODEL,
+    "together": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    "fireworks": "accounts/fireworks/models/llama-v3p3-70b-instruct",
+    "perplexity": "sonar-pro",
+    "cohere": "command-r-plus",
+    "ai21": "jamba-1.5-large",
+    "xai": "grok-2",
+    "ollama": os.environ.get("OE_OLLAMA_MODEL", "llama3.1"),
+    "vllm": os.environ.get("OE_VLLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
+}
+
+
+def default_model_for(provider: str) -> str:
+    """Return the built-in default model id for a provider (or empty string)."""
+    return DEFAULT_MODELS.get(provider, "")
 
 # Timeout for AI API calls (2 minutes — large BOQ generation can be slow)
 AI_TIMEOUT = 120.0
@@ -42,7 +73,7 @@ async def call_anthropic(
     prompt: str,
     image_base64: str | None = None,
     image_media_type: str = "image/jpeg",
-    model: str = ANTHROPIC_MODEL,
+    model: str | None = None,
     max_tokens: int = 4096,
 ) -> tuple[str, int]:
     """‌⁠‍Call Anthropic Claude API.
@@ -83,7 +114,7 @@ async def call_anthropic(
     content.append({"type": "text", "text": prompt})
 
     payload = {
-        "model": model,
+        "model": model or ANTHROPIC_MODEL,
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": content}],
@@ -113,7 +144,7 @@ async def call_openai(
     prompt: str,
     image_base64: str | None = None,
     image_media_type: str = "image/jpeg",
-    model: str = OPENAI_MODEL,
+    model: str | None = None,
     max_tokens: int = 4096,
 ) -> tuple[str, int]:
     """‌⁠‍Call OpenAI API (ChatCompletions).
@@ -147,7 +178,7 @@ async def call_openai(
     user_content.append({"type": "text", "text": prompt})
 
     payload = {
-        "model": model,
+        "model": model or OPENAI_MODEL,
         "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
@@ -179,7 +210,7 @@ async def call_gemini(
     prompt: str,
     image_base64: str | None = None,
     image_media_type: str = "image/jpeg",
-    model: str = GEMINI_MODEL,
+    model: str | None = None,
     max_tokens: int = 4096,
 ) -> tuple[str, int]:
     """Call Google Gemini API (generateContent).
@@ -196,6 +227,7 @@ async def call_gemini(
     Returns:
         Tuple of (response_text, tokens_used).
     """
+    model = model or GEMINI_MODEL
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
     parts: list[dict[str, Any]] = []
@@ -304,10 +336,15 @@ async def call_openai_compatible(
     image_base64: str | None = None,
     image_media_type: str = "image/jpeg",
     max_tokens: int = 4096,
+    model: str | None = None,
 ) -> tuple[str, int]:
     """Call any OpenAI-compatible API (OpenRouter, Mistral, Groq, DeepSeek).
 
     These providers all implement the OpenAI chat completions format.
+
+    Args:
+        model: Optional model id override. When falsy, the provider's
+            built-in default model is used.
     """
     config = _OPENAI_COMPAT_CONFIG.get(provider)
     if not config:
@@ -333,7 +370,7 @@ async def call_openai_compatible(
     user_content.append({"type": "text", "text": prompt})
 
     payload = {
-        "model": config["model"],
+        "model": model or config["model"],
         "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
@@ -367,6 +404,7 @@ async def call_ai(
     image_base64: str | None = None,
     image_media_type: str = "image/jpeg",
     max_tokens: int = 4096,
+    model: str | None = None,
 ) -> tuple[str, int]:
     """Route an AI call to the correct provider.
 
@@ -378,6 +416,8 @@ async def call_ai(
         image_base64: Optional base64 image.
         image_media_type: Image MIME type.
         max_tokens: Max response tokens.
+        model: Optional model id override. When falsy, the provider's
+            built-in default model is used.
 
     Returns:
         Tuple of (response_text, tokens_used).
@@ -404,6 +444,7 @@ async def call_ai(
                 image_base64,
                 image_media_type,
                 max_tokens=max_tokens,
+                model=model,
             )
 
     elif provider in callers:
@@ -416,12 +457,18 @@ async def call_ai(
                 prompt,
                 image_base64,
                 image_media_type,
+                model=model,
                 max_tokens=max_tokens,
             )
 
     else:
         msg = f"Unknown AI provider: {provider}"
         raise ValueError(msg)
+
+    # The actual model id this call will use (override or built-in default) —
+    # surfaced in "model not found" errors so the user knows exactly what to
+    # change in Settings > AI.
+    effective_model = model or default_model_for(provider)
 
     # Unified error handling for all providers
     try:
@@ -435,11 +482,51 @@ async def call_ai(
         except Exception:
             detail = exc.response.text[:200]
 
+        # Detect "unknown / deprecated / unsupported model" responses. Every
+        # provider phrases this differently and returns it under 400/404 (and
+        # OpenRouter sometimes 400 with "not a valid model ID"). When the
+        # provider rejects the *model* (not the key), tell the user exactly
+        # which model id failed and that they can override it in Settings —
+        # this is the core fix for issue #129 (stale hardcoded model names).
+        low = detail.lower()
+        model_keywords = (
+            "model not found",
+            "not a valid model",
+            "is not a valid model",
+            "unknown model",
+            "model does not exist",
+            "no such model",
+            "unsupported model",
+            "model_not_found",
+            "invalid model",
+            "deprecated",
+            "has been deprecated",
+            "decommissioned",
+            "not supported for generatecontent",
+            "is not found for api version",
+        )
+        is_model_error = status_code in (400, 404) and any(k in low for k in model_keywords)
+        if is_model_error:
+            msg = (
+                f"The AI model \"{effective_model}\" was rejected by {provider} "
+                f"(HTTP {status_code}). Providers rename and retire models over "
+                f"time — open Settings > AI, set the model name to a currently "
+                f"valid {provider} model id, and save. Provider said: {detail[:200]}"
+            )
+            raise ValueError(msg) from exc
+
         if status_code == 400 and image_base64:
             msg = "The image could not be processed by the AI. Please upload a clearer building photo (JPEG/PNG, at least 200x200 pixels)."
             raise ValueError(msg) from exc
         if status_code == 401:
             msg = f"AI API key is invalid or expired ({provider}). Please update your API key in Settings."
+            raise ValueError(msg) from exc
+        if status_code in (403,) and ("model" in low or "access" in low):
+            msg = (
+                f"{provider} denied access to model \"{effective_model}\" with "
+                f"this API key. Pick a model your account/plan can use in "
+                f"Settings > AI. Provider said: {detail[:200]}"
+            )
             raise ValueError(msg) from exc
         if status_code == 429:
             msg = f"AI rate limit exceeded ({provider}). Please wait a moment and try again."
@@ -499,11 +586,36 @@ def extract_json(text: str) -> Any:
     return None
 
 
+def _model_override_for(settings: Any, provider: str) -> str | None:
+    """Read the user's per-provider model id override, if any.
+
+    Overrides live in AISettings.metadata_["model_overrides"][provider] so we
+    avoid a DB migration and keep the feature LIGHTWEIGHT. A blank/whitespace
+    value means "use the built-in default" (None).
+    """
+    if not settings:
+        return None
+    meta = getattr(settings, "metadata_", None) or {}
+    overrides = meta.get("model_overrides") if isinstance(meta, dict) else None
+    if not isinstance(overrides, dict):
+        return None
+    raw = overrides.get(provider)
+    if not isinstance(raw, str):
+        return None
+    raw = raw.strip()
+    return raw or None
+
+
 def resolve_provider_and_key(
     settings: Any,
     preferred_model: str | None = None,
 ) -> tuple[str, str]:
     """Determine which AI provider and API key to use based on user settings.
+
+    NOTE: kept as a 2-tuple for backward compatibility with the many call
+    sites across the codebase. To also get the user's model-id override use
+    :func:`resolve_provider_key_model` (or call :func:`_model_override_for`
+    with the returned provider).
 
     Args:
         settings: AISettings ORM object with api key fields.
@@ -587,3 +699,19 @@ def resolve_provider_and_key(
         "Together, Fireworks, Perplexity, Cohere, AI21, xAI."
     )
     raise ValueError(msg)
+
+
+def resolve_provider_key_model(
+    settings: Any,
+    preferred_model: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Resolve (provider, api_key, model_override) in one call.
+
+    Thin wrapper over :func:`resolve_provider_and_key` that also reads the
+    user's per-provider model-id override. New code should prefer this so the
+    model name stays user-configurable (issue #129). ``model_override`` is
+    ``None`` when the user has not set one — callers pass it straight to
+    :func:`call_ai`, which then falls back to the built-in default.
+    """
+    provider, api_key = resolve_provider_and_key(settings, preferred_model)
+    return provider, api_key, _model_override_for(settings, provider)

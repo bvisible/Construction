@@ -184,7 +184,8 @@ class TestValidationEngine:
     async def test_no_applicable_rules(self, engine):
         report = await engine.validate(data={}, rule_sets=["nonexistent"])
         assert report.status == ValidationStatus.SKIPPED
-        assert report.score == 1.0
+        # A SKIPPED report has no honest score — None, not a misleading 1.0.
+        assert report.score is None
 
     @pytest.mark.asyncio
     async def test_boq_validation_with_data(self):
@@ -324,7 +325,9 @@ class TestScoreHonesty:
         engine = ValidationEngine(registry)
         report = await engine.validate(data={}, rule_sets=["test_crash"])
         assert report.status == ValidationStatus.SKIPPED
-        assert report.score == 1.0
+        # Engine-error-only run is SKIPPED with no honest score (not a fake
+        # passing 1.0) — score-honesty contract.
+        assert report.score is None
         assert report.summary()["counts"]["engine_errors"] == 1
 
 

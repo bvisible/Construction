@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, memo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -26,7 +27,8 @@ import {
   AlertTriangle,
   Loader2,
 } from 'lucide-react';
-import { Card, CardHeader, CardContent, Button, Badge, EmptyState, Skeleton, Breadcrumb } from '@/shared/ui';
+import { Card, CardHeader, CardContent, Button, Badge, EmptyState, Skeleton, Breadcrumb, InfoHint } from '@/shared/ui';
+import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { apiGet, apiPost, apiPatch } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import {
@@ -1869,6 +1871,7 @@ function MonteCarloPanel({ projectId, currency }: { projectId: string; currency:
 
 function FiveDDashboard({ project }: { project: Project }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [selectedBoqId, setSelectedBoqId] = useState('');
@@ -2183,6 +2186,15 @@ function FiveDDashboard({ project }: { project: Project }) {
             <p className="text-sm text-content-tertiary">
               {t('costmodel.evm_needs_schedule', { defaultValue: 'Create a 4D Schedule and track activity progress to see EVM performance metrics (SPI, CPI).' })}
             </p>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="mt-3"
+              icon={<Activity size={14} />}
+              onClick={() => navigate('/schedule')}
+            >
+              {t('costmodel.go_to_schedule', { defaultValue: 'Open 4D Schedule' })}
+            </Button>
           </CardContent>
         </Card>
       ) : null}
@@ -2253,6 +2265,13 @@ function FiveDDashboard({ project }: { project: Project }) {
                   <p className="mt-1 text-xs text-content-tertiary max-w-[200px]">
                     {t('costmodel.perf_needs_schedule_desc', { defaultValue: 'Link a 4D schedule and track progress to see SPI/CPI indicators.' })}
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/schedule')}
+                    className="mt-2 text-xs font-medium text-oe-blue hover:underline"
+                  >
+                    {t('costmodel.go_to_schedule', { defaultValue: 'Open 4D Schedule' })}
+                  </button>
                 </div>
               ) : (
                 <div className="flex flex-col items-center py-8 text-center">
@@ -2460,6 +2479,8 @@ export function CostModelPage() {
   if (selectedProject) {
     return (
       <div className="w-full animate-fade-in">
+        <PlanningCrossLinks active="5d" />
+
         <button
           onClick={handleBack}
           className="mb-4 flex items-center gap-1.5 text-sm text-content-secondary hover:text-content-primary transition-colors"
@@ -2512,8 +2533,11 @@ export function CostModelPage() {
     <div className="w-full animate-fade-in">
       <Breadcrumb items={[{ label: t('nav.dashboard', 'Dashboard'), to: '/' }, { label: t('nav.costmodel', { defaultValue: '5D Cost Model' }) }]} className="mb-4" />
 
+      {/* Cross-module navigation — connects the planning value chain */}
+      <PlanningCrossLinks active="5d" />
+
       {/* Hero header */}
-      <div className="mb-8">
+      <div className="mb-4">
         <h1 className="text-2xl font-bold text-content-primary">
           {t('costmodel.title', '5D Cost Model')}
         </h1>
@@ -2524,6 +2548,15 @@ export function CostModelPage() {
           )}
         </p>
       </div>
+
+      {/* How the 5D model connects to the rest of the platform */}
+      <InfoHint
+        className="mb-6"
+        text={t('costmodel.what_is_5d', {
+          defaultValue:
+            '5D = 3D geometry + 4D schedule time + cost. The budget is generated from your BOQ, planned value comes from the 4D Schedule, and SPI/CPI earned-value metrics need activity progress to be tracked there. Monte Carlo and What-If results inform contingency entries in the Risk Register. Workflow: BOQ → Generate Budget → track actuals → snapshot periodically → analyse (EVM / S-curve / forecast).',
+        })}
+      />
 
       {/* Feature cards grid -- always visible as intro */}
       {(!projects || projects.length === 0) && !isLoading && (

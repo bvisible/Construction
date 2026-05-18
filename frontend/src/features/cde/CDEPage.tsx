@@ -807,9 +807,16 @@ const ContainerRow = React.memo(function ContainerRow({
           {container.container_code}
         </span>
 
-        {/* Title */}
-        <span className="text-sm text-content-primary truncate flex-1 min-w-0">
-          {container.title}
+        {/* Title + description */}
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm text-content-primary truncate">
+            {container.title}
+          </span>
+          {container.description && (
+            <span className="block text-2xs text-content-tertiary truncate">
+              {container.description}
+            </span>
+          )}
         </span>
 
         {/* Discipline badge */}
@@ -831,9 +838,19 @@ const ContainerRow = React.memo(function ContainerRow({
           {container.suitability_code || '-'}
         </span>
 
-        {/* Current Revision */}
-        <span className="text-xs text-content-tertiary w-12 text-center shrink-0 tabular-nums hidden sm:block">
-          {container.current_revision_id ? 'Rev' : '-'}
+        {/* Revision count — exact once expanded (revisions fetched), else
+            a presence indicator derived from current_revision_id. */}
+        <span
+          className="text-xs text-content-tertiary w-12 text-center shrink-0 tabular-nums hidden sm:block"
+          title={t('cde.revision_count_tooltip', {
+            defaultValue: 'Number of document revisions in this container',
+          })}
+        >
+          {expanded
+            ? revisions.length
+            : container.current_revision_id
+              ? '1+'
+              : '0'}
         </span>
 
         {/* Classification */}

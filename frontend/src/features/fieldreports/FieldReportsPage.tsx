@@ -463,6 +463,14 @@ export function FieldReportsPage() {
         </div>
       </div>
 
+      {/* Purpose intro */}
+      <p className="-mt-2 max-w-3xl text-xs leading-relaxed text-content-tertiary">
+        {t('fieldreports.page_intro', {
+          defaultValue:
+            'Field reports are the daily site diary — weather, workforce, work performed, delays and safety incidents. Each report flows Draft → Submitted → Approved. Click a calendar day to log that day; days with reports show a colored dot per report. Export to Excel/PDF for the owner.',
+        })}
+      </p>
+
       {/* Stats cards */}
       {summary && (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
@@ -579,10 +587,22 @@ export function FieldReportsPage() {
                       </span>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {cell.reports.map((r) => (
-                          <span
+                          <button
                             key={r.id}
-                            className={clsx('h-2 w-2 rounded-full', STATUS_DOT_COLOR[r.status])}
+                            type="button"
+                            onClick={(e) => {
+                              // Each dot opens its own report so days with
+                              // more than one report are never a dead-end
+                              // (cell click alone always opened reports[0]).
+                              e.stopPropagation();
+                              handleOpenEdit(r);
+                            }}
+                            className={clsx(
+                              'h-2.5 w-2.5 rounded-full ring-offset-1 transition-transform hover:scale-125 hover:ring-1 hover:ring-oe-blue',
+                              STATUS_DOT_COLOR[r.status],
+                            )}
                             title={`${t(`fieldreports.type_${r.report_type}`, { defaultValue: r.report_type })} — ${t(`fieldreports.status_${r.status}`, { defaultValue: r.status })}`}
+                            aria-label={`${t(`fieldreports.type_${r.report_type}`, { defaultValue: r.report_type })} — ${t(`fieldreports.status_${r.status}`, { defaultValue: r.status })}`}
                           />
                         ))}
                       </div>
@@ -1089,7 +1109,7 @@ function ReportModal({
     report?.temperature_c != null ? String(report.temperature_c) : '',
   );
   const [windSpeed, setWindSpeed] = useState(report?.wind_speed ?? '');
-  const [precipitation, _setPrecipitation] = useState(report?.precipitation ?? '');
+  const [precipitation, setPrecipitation] = useState(report?.precipitation ?? '');
   const [humidity, setHumidity] = useState<string>(
     report?.humidity != null ? String(report.humidity) : '',
   );
@@ -1288,6 +1308,20 @@ function ReportModal({
             placeholder="--"
             min={0}
             max={100}
+            className={inputCls}
+          />
+        </WideModalField>
+        <WideModalField
+          label={t('fieldreports.precipitation_label', { defaultValue: 'Precipitation' })}
+          span={2}
+        >
+          <input
+            type="text"
+            value={precipitation}
+            onChange={(e) => setPrecipitation(e.target.value)}
+            placeholder={t('fieldreports.precipitation_placeholder', {
+              defaultValue: 'e.g. 5 mm rain, light snow…',
+            })}
             className={inputCls}
           />
         </WideModalField>

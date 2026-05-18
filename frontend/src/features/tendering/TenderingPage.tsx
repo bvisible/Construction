@@ -140,18 +140,27 @@ const STATUS_COLORS: Record<string, 'neutral' | 'blue' | 'success' | 'warning' |
   rejected: 'error',
 };
 
-function formatCurrency(amount: number | string, currency: string = 'EUR'): string {
+function formatCurrency(amount: number | string, currency?: string): string {
   const num = typeof amount === 'string' ? parseFloat(amount) || 0 : amount;
-  const safe = /^[A-Z]{3}$/.test(currency) ? currency : 'EUR';
+  const code = (currency || '').trim().toUpperCase();
+  // NEVER hard-fallback to EUR (task #217): a project priced in BRL/INR
+  // must not render its tender amounts with a Euro sign. When the currency
+  // is unknown, show a plain decimal number with no symbol.
+  if (!/^[A-Z]{3}$/.test(code)) {
+    return new Intl.NumberFormat(getIntlLocale(), {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(num);
+  }
   try {
     return new Intl.NumberFormat(getIntlLocale(), {
       style: 'currency',
-      currency: safe,
+      currency: code,
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(num);
   } catch {
-    return `${num.toFixed(0)} ${safe}`;
+    return `${num.toFixed(0)} ${code}`;
   }
 }
 
@@ -459,7 +468,11 @@ function AddBidDialog({
           />
         </WideModalField>
         <WideModalField
-          label={`${t('tendering.total_amount', 'Total Amount')} (${currency})`}
+          label={
+            currency
+              ? `${t('tendering.total_amount', 'Total Amount')} (${currency})`
+              : t('tendering.total_amount', 'Total Amount')
+          }
         >
           <input
             type="number"
@@ -1091,7 +1104,10 @@ export function TenderingPage() {
     [projects, selectedProjectId],
   );
 
-  const currency = selectedProject?.currency || 'EUR';
+  // Currency comes from the selected project — never hardcoded (task #217).
+  // Empty string when the project has none; formatCurrency then renders a
+  // symbol-less number rather than mislabelling amounts as EUR.
+  const currency = selectedProject?.currency || '';
 
   const handleProjectChange = useCallback((id: string) => {
     const name = projects?.find((p) => p.id === id)?.name ?? '';

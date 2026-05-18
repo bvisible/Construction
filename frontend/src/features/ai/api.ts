@@ -45,6 +45,10 @@ export interface AISettings {
   yandex_api_key_set: boolean;
   gigachat_api_key_set: boolean;
   preferred_model: string;
+  /** Per-provider model-id override the user has saved (provider -> model id). */
+  model_overrides: Record<string, string>;
+  /** Built-in default model id per provider (used when no override is set). */
+  default_models: Record<string, string>;
   metadata_: Record<string, unknown>;
   created_at: string;
   updated_at: string;
@@ -57,6 +61,8 @@ export interface AISettings {
 export interface AISettingsUpdate {
   provider?: AIProvider;
   preferred_model?: string;
+  /** Per-provider model-id override. Send a blank string to clear one. */
+  model_overrides?: Record<string, string>;
   anthropic_api_key?: string | null;
   openai_api_key?: string | null;
   gemini_api_key?: string | null;
@@ -80,6 +86,8 @@ export interface AITestResult {
   success: boolean;
   message: string;
   latency_ms?: number;
+  /** Effective model id the test call used (override or built-in default). */
+  model?: string;
 }
 
 export interface QuickEstimateRequest {

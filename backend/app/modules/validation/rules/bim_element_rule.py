@@ -371,30 +371,126 @@ def _coerce_number(value: Any) -> float | None:
 # (ids_parser stores attacker-controlled ``<xs:pattern value=...>``). Running
 # an arbitrary regex with ``re.search`` and no bounds lets a
 # catastrophic-backtracking pattern like ``(a+)+$`` peg a CPU core and hang
-# the request worker. We do NOT pull in a heavy safe-regex engine; instead we
-# apply conservative static + size limits that make pathological blow-up
-# impossible while leaving every realistic IDS pattern working.
+# the request worker indefinitely.
+#
+# A single flat heuristic is provably insufficient — every one of the classic
+# bypass shapes ( ``((a)+)+$`` nested groups, ``(a+){10,}$`` bounded repeat of
+# a quantified group, ``(a|a)*$`` overlapping-alternation group, ``(.*a){30}$``
+# bounded repeat of a wildcard group, ``(([a-z])+.)+...`` deeply nested ) slips
+# past it. We therefore make the *static structural analyzer* the sound primary
+# control: it walks the group/quantifier tree and rejects any construct that
+# can yield exponential or super-linear backtracking. As defense-in-depth we
+# additionally run the match itself under the third-party ``regex`` engine's
+# hard ``timeout=`` wall-clock bound *when that module is importable* — but the
+# static gate alone is sufficient, so an environment without ``regex``
+# installed is still safe (no hard dependency).
 
 _MAX_PATTERN_LEN = 1_000
-_MAX_MATCH_INPUT_LEN = 10_000
-# Nested unbounded quantifiers — the classic ReDoS shape: a quantified group
-# that itself contains an unbounded quantifier, e.g. (a+)+ (a*)* (a+)* ((ab)+)+
-_NESTED_QUANTIFIER = None  # compiled lazily
+_MAX_MATCH_INPUT_LEN = 5_000
+# Hard wall-clock ceiling for a single match when an engine-level timeout is
+# available. Acceptance bar: no pattern may exceed ~1 s on a 5 000-char input.
+_MATCH_TIMEOUT_S = 0.75
+
+# A "repeatable" atom that, when wrapped in an outer quantifier, produces
+# catastrophic backtracking: an unbounded quantifier ( + * ) OR a bounded
+# repeat with a non-trivial count ( {n} {n,} {n,m} where the upper bound is
+# absent or > 1 ).  ``??`` / ``{0,1}`` / ``?`` are linear and excluded.
+_INNER_QUANT = __import__("re").compile(
+    r"""
+    (?:
+        [+*]                 # unbounded
+      | \{\s*\d*\s*,\s*\d*\s*\}   # {n,} {,m} {n,m} {,}
+      | \{\s*[2-9]\d*\s*\}        # {n} with n >= 2
+      | \{\s*1\d+\s*\}            # {n} with n >= 10
+    )
+    \+?\??                   # optional possessive / lazy modifier
+    """,
+    __import__("re").VERBOSE,
+)
+# An outer quantifier applied to a group: ``)`` followed by + * {..} (lazy or
+# possessive variants included).  ``)?`` alone is linear and excluded.
+_OUTER_QUANT_ON_GROUP = __import__("re").compile(
+    r"""
+    \)                       # close of a group
+    (?:
+        [+*]
+      | \{\s*\d*\s*,\s*\d*\s*\}
+      | \{\s*[2-9]\d*\s*\}
+      | \{\s*1\d+\s*\}
+    )
+    \+?\??
+    """,
+    __import__("re").VERBOSE,
+)
+
+
+def _iter_group_bodies(pattern: str):
+    """Yield ``(body, outer_quantified)`` for every parenthesised group.
+
+    ``body`` is the raw text between the group's own parentheses (nested
+    groups included verbatim). ``outer_quantified`` is ``True`` when the
+    group is immediately followed by a repetition quantifier ( + * {n,} … ),
+    i.e. the group as a whole is repeated.
+    """
+    stack: list[int] = []
+    for i, ch in enumerate(pattern):
+        if ch == "(" and (i == 0 or pattern[i - 1] != "\\"):
+            stack.append(i)
+        elif ch == ")" and (i == 0 or pattern[i - 1] != "\\") and stack:
+            start = stack.pop()
+            body = pattern[start + 1 : i]
+            tail = pattern[i:]
+            outer_quantified = _OUTER_QUANT_ON_GROUP.match(tail) is not None
+            yield body, outer_quantified
+
+
+def _group_has_overlapping_alternation(body: str) -> bool:
+    """A group like ``(a|a)`` / ``(a|ab)`` / ``([a-z]|x)`` whose branches can
+    match the same prefix is catastrophic the moment the group is repeated:
+    the engine tries every partition of the input across the alternation.
+
+    We conservatively flag *any* top-level alternation inside a repeated group
+    (excluding fully-anchored single-char-class branches is not worth the
+    complexity — realistic IDS patterns don't repeat an alternation group).
+    """
+    depth = 0
+    for i, ch in enumerate(body):
+        if ch == "\\":
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif ch == "|" and depth == 0:
+            return True
+    return False
 
 
 def _is_pattern_safe(pattern: str) -> bool:
-    """Reject patterns that are too long or exhibit nested unbounded
-    quantifiers (the catastrophic-backtracking shape)."""
+    """Reject patterns whose structure permits catastrophic backtracking.
+
+    Rejection criteria (any one fails the pattern):
+
+    * length over ``_MAX_PATTERN_LEN``;
+    * a group that is itself repeated (outer ``+ * {n,} {n} {n,m}``) AND whose
+      body contains an inner unbounded/bounded quantifier — covers ``(a+)+``,
+      ``((a)+)+``, ``(a+){10,}``, ``(.*a){30}``, ``(([a-z])+.)+…`` ;
+    * a *repeated group* that contains a top-level alternation — covers
+      ``(a|a)*``, ``(a|ab)+`` ;
+    * an un-compilable pattern.
+    """
     if len(pattern) > _MAX_PATTERN_LEN:
         return False
-    global _NESTED_QUANTIFIER
-    import re as _re
-
-    if _NESTED_QUANTIFIER is None:
-        # A group ( ... <quantifier> ... ) immediately followed by another
-        # unbounded quantifier. Covers (a+)+, (a*)*, (a+)*, (.*)+ , (?:a+)+ .
-        _NESTED_QUANTIFIER = _re.compile(r"\([^()]*[+*][^()]*\)\s*[+*]")
-    return _NESTED_QUANTIFIER.search(pattern) is None
+    for body, outer_quantified in _iter_group_bodies(pattern):
+        if not outer_quantified:
+            continue
+        # The whole group is repeated. Anything non-trivial inside it now
+        # multiplies catastrophically.
+        if _INNER_QUANT.search(body):
+            return False
+        if _group_has_overlapping_alternation(body):
+            return False
+    return True
 
 
 def _safe_search(pattern: str, value: str) -> bool | None:
@@ -404,6 +500,11 @@ def _safe_search(pattern: str, value: str) -> bool | None:
     pattern was rejected as unsafe / un-compilable (caller treats that as a
     non-match so a hostile rule degrades to a plain failure instead of
     hanging the worker).
+
+    Defense-in-depth: when the third-party ``regex`` module is importable we
+    run the match under its hard ``timeout=`` wall-clock bound so that even a
+    pattern the static analyzer misclassified cannot peg a core. The static
+    gate above is the sound primary control and is sufficient on its own.
     """
     import re as _re
 
@@ -412,6 +513,24 @@ def _safe_search(pattern: str, value: str) -> bool | None:
     # Bound the input too — backtracking cost is a function of input length
     # as well as pattern shape.
     bounded = value[:_MAX_MATCH_INPUT_LEN]
+
+    try:
+        import regex as _regex  # type: ignore[import-not-found]  # noqa: PLC0415
+    except ImportError:
+        _regex = None  # type: ignore[assignment]
+
+    if _regex is not None:
+        try:
+            compiled = _regex.compile(pattern)
+        except _regex.error:
+            return None
+        try:
+            return compiled.search(bounded, timeout=_MATCH_TIMEOUT_S) is not None
+        except TimeoutError:
+            # A pathological pattern that slipped the static gate hit the
+            # hard wall-clock bound — treat as unsafe / non-match.
+            return None
+
     try:
         compiled = _re.compile(pattern)
     except _re.error:

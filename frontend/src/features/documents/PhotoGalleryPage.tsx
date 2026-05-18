@@ -28,7 +28,7 @@ import {
   Image as ImageIcon,
   CheckSquare,
 } from 'lucide-react';
-import { Card, Button, Badge, EmptyState, Breadcrumb } from '@/shared/ui';
+import { Card, Button, Badge, EmptyState, Breadcrumb, AuthImage } from '@/shared/ui';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -238,10 +238,21 @@ function Lightbox({
         className="relative max-w-[90vw] max-h-[85vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <img
+        <AuthImage
           src={getPhotoFileUrl(photo.id)}
           alt={photo.caption || photo.filename}
           className="max-w-full max-h-[70vh] object-contain rounded-lg"
+          placeholder={
+            <div className="flex h-64 w-64 items-center justify-center">
+              <Loader2 size={28} className="animate-spin text-white/70" />
+            </div>
+          }
+          fallback={
+            <div className="flex h-64 w-64 flex-col items-center justify-center gap-2 text-white/70">
+              <ImageIcon size={40} />
+              <span className="text-xs">{photo.filename}</span>
+            </div>
+          }
         />
 
         {/* Info panel */}
@@ -382,10 +393,20 @@ function EditPhotoModal({
         <div className="p-5 space-y-4">
           {/* Thumbnail */}
           <div className="flex justify-center">
-            <img
+            <AuthImage
               src={getPhotoThumbUrl(photo.id)}
               alt={photo.filename}
               className="h-32 w-auto rounded-lg object-cover"
+              placeholder={
+                <div className="flex h-32 w-32 items-center justify-center rounded-lg bg-surface-secondary">
+                  <Loader2 size={20} className="animate-spin text-content-quaternary" />
+                </div>
+              }
+              fallback={
+                <div className="flex h-32 w-32 items-center justify-center rounded-lg bg-surface-secondary">
+                  <ImageIcon size={28} className="text-content-quaternary" />
+                </div>
+              }
             />
           </div>
 
@@ -498,23 +519,21 @@ function PhotoCard({
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectMode ? onToggleSelect?.() : onClick(); } }}
       aria-label={photo.caption || photo.filename}
     >
-      <img
+      <AuthImage
         src={getPhotoThumbUrl(photo.id)}
         alt={photo.caption || photo.filename}
         className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
         loading="lazy"
-        onError={(e) => {
-          const target = e.currentTarget;
-          target.style.display = 'none';
-          const parent = target.parentElement;
-          if (parent && !parent.querySelector('.photo-fallback')) {
-            const fallback = document.createElement('div');
-            fallback.className = 'photo-fallback absolute inset-0 flex items-center justify-center bg-surface-secondary';
-            // codeql[js/xss-through-dom]: hardcoded SVG literal, no user input — safe.
-            fallback.innerHTML = '<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="text-content-quaternary"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>';
-            parent.appendChild(fallback);
-          }
-        }}
+        placeholder={
+          <div className="absolute inset-0 flex items-center justify-center bg-surface-secondary">
+            <Loader2 size={20} className="animate-spin text-content-quaternary" />
+          </div>
+        }
+        fallback={
+          <div className="absolute inset-0 flex items-center justify-center bg-surface-secondary">
+            <ImageIcon size={32} className="text-content-quaternary" />
+          </div>
+        }
       />
 
       {/* Selection checkbox */}
@@ -619,6 +638,26 @@ function UploadZone({
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Batch metadata — applied to every photo in this upload so the user
+  // classifies once instead of editing each photo afterwards. Category
+  // is the fixed taxonomy; tags are the free-form "type" labels
+  // (e.g. "foundation", "rebar", "ground-floor"). Both reuse the
+  // existing photo fields, so no backend change is needed.
+  const [category, setCategory] = useState<PhotoCategory>('site');
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+
+  const addTag = useCallback(() => {
+    const tag = tagInput.trim();
+    if (tag && !tags.includes(tag)) setTags((prev) => [...prev, tag]);
+    setTagInput('');
+  }, [tagInput, tags]);
+
+  const removeTag = useCallback(
+    (tag: string) => setTags((prev) => prev.filter((x) => x !== tag)),
+    [],
+  );
+
   const handleFiles = useCallback(async (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter((f) => f.type.startsWith('image/'));
     if (fileArray.length === 0) {
@@ -646,7 +685,8 @@ function UploadZone({
         const exif = await extractExifData(file);
 
         await uploadPhoto(projectId, file, {
-          category: 'site',
+          category,
+          tags: tags.length > 0 ? tags : undefined,
           taken_at: exif.taken_at,
           gps_lat: exif.gps_lat,
           gps_lon: exif.gps_lon,
@@ -677,12 +717,76 @@ function UploadZone({
     setProgress(null);
     onUploaded();
     if (inputRef.current) inputRef.current.value = '';
-  }, [projectId, addToast, t, onUploaded]);
+  }, [projectId, addToast, t, onUploaded, category, tags]);
 
   return (
-    <div
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-      onDragLeave={() => setDragOver(false)}
+    <div className="space-y-3">
+      {/* Batch metadata — chosen once, applied to every file in this
+          upload. Lives OUTSIDE the click-to-browse drop area so using
+          the controls never triggers the file dialog. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-content-secondary mb-1">
+            {t('photos.category', { defaultValue: 'Category' })}
+          </label>
+          <select
+            value={category}
+            disabled={uploading}
+            onChange={(e) => setCategory(e.target.value as PhotoCategory)}
+            className="w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary focus:border-oe-blue focus:ring-1 focus:ring-oe-blue/30 outline-none disabled:opacity-60"
+          >
+            {PHOTO_CATEGORIES.map((cat) => (
+              <option key={cat} value={cat}>
+                {t(`photos.cat_${cat}`, { defaultValue: cat })}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-content-secondary mb-1">
+            {t('photos.upload_type_tags', { defaultValue: 'Type / tags' })}
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={tagInput}
+              disabled={uploading}
+              onChange={(e) => setTagInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }}
+              placeholder={t('photos.add_type_tag', { defaultValue: 'e.g. foundation, rebar...' })}
+              className="flex-1 rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary placeholder-content-quaternary focus:border-oe-blue focus:ring-1 focus:ring-oe-blue/30 outline-none disabled:opacity-60"
+            />
+            <Button size="sm" variant="secondary" disabled={uploading} onClick={addTag}>
+              {t('common.add', { defaultValue: 'Add' })}
+            </Button>
+          </div>
+          {tags.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-2">
+              {tags.map((tag) => (
+                <span key={tag} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-surface-secondary text-2xs text-content-secondary">
+                  {tag}
+                  <button
+                    type="button"
+                    onClick={() => removeTag(tag)}
+                    aria-label={t('photos.remove_tag', { defaultValue: 'Remove tag' })}
+                    className="hover:text-red-500"
+                  >
+                    <X size={10} />
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <p className="text-2xs text-content-quaternary">
+        {t('photos.batch_meta_hint', {
+          defaultValue: 'Category and tags apply to every photo in this upload — you can refine each one afterwards.',
+        })}
+      </p>
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
       onDrop={(e) => { e.preventDefault(); setDragOver(false); handleFiles(e.dataTransfer.files); }}
       onClick={() => inputRef.current?.click()}
       className={`relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all
@@ -721,6 +825,7 @@ function UploadZone({
           </p>
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -849,6 +954,17 @@ export function PhotoGalleryPage() {
 
   const photoList = photos ?? [];
   const isLoading = viewMode === 'grid' ? photosLoading : timelineLoading;
+
+  // Flattened, date-ordered photo list backing the timeline view. The
+  // lightbox must page through THESE photos when timeline is active —
+  // previously it always used ``photoList`` (the category/search-filtered
+  // grid query), so opening a timeline photo that wasn't in the grid
+  // result jumped to the wrong image (or index 0).
+  const timelinePhotos = useMemo(
+    () => (timeline ?? []).flatMap((g) => g.photos),
+    [timeline],
+  );
+  const lightboxPhotos = viewMode === 'timeline' ? timelinePhotos : photoList;
 
   // Deep-link: `?photo={id}` (set by /files → "Open in Site Photos")
   // opens the lightbox on that photo as soon as the gallery loads. We
@@ -1038,6 +1154,12 @@ export function PhotoGalleryPage() {
             </p>
           </div>
         </div>
+        <p className="hidden max-w-md text-2xs leading-relaxed text-content-tertiary lg:block">
+          {t('photos.page_intro', {
+            defaultValue:
+              'Visual site documentation — progress, defects, deliveries and safety. EXIF date and GPS are read on upload so photos sort chronologically and on a timeline.',
+          })}
+        </p>
         <div className="flex items-center gap-2 shrink-0 flex-nowrap">
           {/* Project selector */}
           {projects.length > 0 && (
@@ -1242,8 +1364,9 @@ export function PhotoGalleryPage() {
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 ml-11">
                 {group.photos.map((photo) => {
-                  // Find the global index for lightbox navigation
-                  const globalIdx = photoList.findIndex((p) => p.id === photo.id);
+                  // Index into the flattened timeline list (the lightbox
+                  // source while timeline view is active).
+                  const globalIdx = timelinePhotos.findIndex((p) => p.id === photo.id);
                   return (
                     <PhotoCard
                       key={photo.id}
@@ -1277,9 +1400,9 @@ export function PhotoGalleryPage() {
       )}
 
       {/* Lightbox */}
-      {lightboxIndex !== null && photoList.length > 0 && (
+      {lightboxIndex !== null && lightboxPhotos.length > 0 && (
         <Lightbox
-          photos={photoList}
+          photos={lightboxPhotos}
           currentIndex={lightboxIndex}
           onClose={() => setLightboxIndex(null)}
           onNavigate={setLightboxIndex}

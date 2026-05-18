@@ -684,9 +684,21 @@ def vector_status() -> dict[str, Any]:
             info: dict[str, Any] = {"connected": True, "engine": "qdrant", "collections": len(collections)}
             if CT in collections:
                 col = client.get_collection(CT)
+                # qdrant-client >=1.9 dropped ``CollectionInfo.vectors_count``;
+                # prefer ``points_count`` and fall back resiliently so a
+                # client version bump can never crash collection-info reads.
+                count = getattr(col, "points_count", None)
+                if count is None:
+                    count = getattr(col, "vectors_count", None)
+                if count is None:
+                    try:
+                        count = client.count(CT).count
+                    except Exception:
+                        count = 0
+                count = int(count or 0)
                 info["cost_collection"] = {
-                    "vectors_count": col.vectors_count,
-                    "points_count": col.points_count,
+                    "vectors_count": count,
+                    "points_count": count,
                     "status": col.status.value if col.status else "unknown",
                 }
             else:
@@ -929,7 +941,14 @@ def vector_count_collection(collection_name: str) -> int:
             return 0
         try:
             col = client.get_collection(collection_name)
-            return int(col.points_count or 0)
+            # ``points_count`` first, ``vectors_count`` (older clients) next,
+            # then a live count() — version-tolerant across qdrant-client.
+            count = getattr(col, "points_count", None)
+            if count is None:
+                count = getattr(col, "vectors_count", None)
+            if count is None:
+                count = client.count(collection_name).count
+            return int(count or 0)
         except Exception:
             return 0
     return _lancedb_count_generic(collection_name)

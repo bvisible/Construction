@@ -26,6 +26,7 @@ import {
   Link2,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, SkeletonTable } from '@/shared/ui';
+import { SectionIntro } from '@/features/validation';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { apiGet, apiPost } from '@/shared/lib/api';
@@ -675,6 +676,7 @@ const NCRRow = React.memo(function NCRRow({
 
 export function NCRPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { projectId: routeProjectId } = useParams<{ projectId: string }>();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
@@ -770,7 +772,7 @@ export function NCRPage() {
   const createVariationMut = useMutation({
     mutationFn: (ncrId: string) =>
       apiPost<{ change_order_id: string; code: string; title: string }>(
-        `/v1/ncr/${ncrId}/create-variation`,
+        `/v1/ncr/${ncrId}/create-variation/`,
         {},
       ),
     onSuccess: (data) => {
@@ -883,6 +885,32 @@ export function NCRPage() {
           </Button>
         </div>
       </div>
+
+      <SectionIntro
+        storageKey="ncr"
+        title={t('ncr.intro_title', {
+          defaultValue: 'When to raise a Non-Conformance Report',
+        })}
+        links={[
+          {
+            label: t('ncr.intro_link_inspections', { defaultValue: 'Inspections' }),
+            onClick: () => navigate('/inspections'),
+          },
+          {
+            label: t('ncr.intro_link_changeorders', { defaultValue: 'Change Orders' }),
+            onClick: () => navigate('/changeorders'),
+          },
+          {
+            label: t('ncr.intro_link_punch', { defaultValue: 'Punch List' }),
+            onClick: () => navigate('/punchlist'),
+          },
+        ]}
+      >
+        {t('ncr.intro_body', {
+          defaultValue:
+            'An NCR formally documents work that does not meet specification — material, workmanship, design, documentation or safety. Capture the root cause and corrective/preventive actions. NCRs are often raised from a failed inspection; when a defect carries a cost impact you can escalate it to a Change Order so the commercial trail stays connected.',
+        })}
+      </SectionIntro>
 
       {/* No-project warning */}
       {!projectId && (

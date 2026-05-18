@@ -30,7 +30,7 @@ PROJECT_ID = uuid.uuid4()
 
 def _make_service() -> ProcurementService:
     service = ProcurementService.__new__(ProcurementService)
-    service.session = SimpleNamespace()
+    service.session = SimpleNamespace(expunge=lambda _obj: None)
     service.po_repo = _StubPORepo()
     service.po_item_repo = _StubPOItemRepo()
     # Wire the repos so po_repo.get() reflects newly inserted items

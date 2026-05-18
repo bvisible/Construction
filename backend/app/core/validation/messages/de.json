@@ -205,5 +205,11 @@
       "fail": "Einheit '{unit}' in Position {ordinal} ist nicht standardkonform",
       "suggestion": "Standard-Metrikeinheiten verwenden: m, m2, m3, kg, t, 式 usw."
     }
+  },
+  "pipeline": {
+    "side_effecting_requires_gate": {
+      "fail": "Schreibende Knoten ohne Gate: {nodes}",
+      "suggestion": "Füge auf jedem Pfad von einem Trigger-/KI-Knoten zu jedem Schreibknoten ein Validierungs- oder Freigabe-Gate hinzu, bevor du veröffentlichst."
+    }
   }
 }

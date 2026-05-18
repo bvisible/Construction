@@ -301,6 +301,9 @@ function AIConfigurationCard() {
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [hasUnsavedKey, setHasUnsavedKey] = useState(false);
+  // Per-provider model-id override. Empty string = use the platform default.
+  const [modelInput, setModelInput] = useState('');
+  const [modelTouched, setModelTouched] = useState(false);
 
   // Fetch current settings
   const { data: settings } = useQuery({
@@ -338,14 +341,33 @@ function AIConfigurationCard() {
     }
   }, [settings?.preferred_model, settings?.provider]);
 
+  // Reflect the saved model override for the selected provider. When the
+  // user has not overridden it, leave the field blank and show the platform
+  // default as the placeholder so it stays current automatically.
+  useEffect(() => {
+    setModelInput(settings?.model_overrides?.[selectedProvider] ?? '');
+    setModelTouched(false);
+  }, [selectedProvider, settings?.model_overrides]);
+
+  const defaultModel = settings?.default_models?.[selectedProvider] ?? '';
   const hasKeySet = isKeySetForProvider(settings, selectedProvider);
 
-  // Test connection mutation — auto-saves unsaved key before testing
+  // Test connection mutation — auto-saves unsaved key / model before testing
+  // so the test exercises the exact provider + model id the real estimate
+  // calls will use (this is what surfaces stale-model failures early).
   const testMutation = useMutation({
     mutationFn: async () => {
-      if (hasUnsavedKey && apiKeyInput.trim()) {
-        const update: Record<string, string | null> = { preferred_model: selectedProvider };
-        update[`${selectedProvider}_api_key`] = apiKeyInput.trim();
+      const needsSave =
+        (hasUnsavedKey && apiKeyInput.trim()) || modelTouched;
+      if (needsSave) {
+        const update: Record<string, unknown> = { preferred_model: selectedProvider };
+        if (hasUnsavedKey && apiKeyInput.trim()) {
+          update[`${selectedProvider}_api_key`] = apiKeyInput.trim();
+        }
+        if (modelTouched) {
+          // Blank string clears the override (server falls back to default).
+          update.model_overrides = { [selectedProvider]: modelInput.trim() };
+        }
         await aiApi.updateSettings(update as Parameters<typeof aiApi.updateSettings>[0]);
       }
       return aiApi.testConnection(selectedProvider);
@@ -357,21 +379,36 @@ function AIConfigurationCard() {
         setHasUnsavedKey(false);
         setShowKey(false);
       }
+      setModelTouched(false);
       if (result.success) {
+        const parts: string[] = [];
+        if (result.model) {
+          parts.push(
+            t('settings.ai_test_model', {
+              defaultValue: 'Model: {{model}}',
+              model: result.model,
+            }),
+          );
+        }
+        if (result.latency_ms) {
+          parts.push(
+            t('settings.ai_test_latency', {
+              defaultValue: 'Response time: {{ms}}ms',
+              ms: result.latency_ms,
+            }),
+          );
+        }
         addToast({
           type: 'success',
           title: t('settings.ai_test_success', { defaultValue: 'Connection successful' }),
-          message: result.latency_ms
-            ? t('settings.ai_test_latency', {
-                defaultValue: 'Response time: {{ms}}ms',
-                ms: result.latency_ms,
-              })
-            : undefined,
+          message: parts.length ? parts.join(' · ') : undefined,
         });
       } else {
         addToast({
           type: 'error',
           title: t('settings.ai_test_failed', { defaultValue: 'Connection failed' }),
+          // Surface the provider's actual error (e.g. "model not found —
+          // change the model name in Settings > AI") so the user can act.
           message: result.message,
         });
       }
@@ -388,12 +425,16 @@ function AIConfigurationCard() {
   // Save settings mutation
   const saveMutation = useMutation({
     mutationFn: () => {
-      const update: Record<string, string | null> = {
+      const update: Record<string, unknown> = {
         preferred_model: selectedProvider,
       };
       if (hasUnsavedKey && apiKeyInput.trim()) {
         const keyField = `${selectedProvider}_api_key`;
         update[keyField] = apiKeyInput.trim();
+      }
+      if (modelTouched) {
+        // Blank string clears the override (server uses the default).
+        update.model_overrides = { [selectedProvider]: modelInput.trim() };
       }
       return aiApi.updateSettings(update as Parameters<typeof aiApi.updateSettings>[0]);
     },
@@ -402,6 +443,7 @@ function AIConfigurationCard() {
       setApiKeyInput('');
       setHasUnsavedKey(false);
       setShowKey(false);
+      setModelTouched(false);
       addToast({
         type: 'success',
         title: t('settings.ai_saved', { defaultValue: 'AI settings saved' }),
@@ -566,6 +608,45 @@ function AIConfigurationCard() {
             </p>
           </div>
 
+          {/* Model name override — lets users track provider model
+              renames/retirements without waiting for an app update. */}
+          <div>
+            <label
+              htmlFor="ai-model-name"
+              className="text-sm font-medium text-content-primary block mb-1.5"
+            >
+              {t('settings.ai_model_name', { defaultValue: 'Model name' })}
+            </label>
+            <input
+              id="ai-model-name"
+              type="text"
+              value={modelInput}
+              onChange={(e) => {
+                setModelInput(e.target.value);
+                setModelTouched(true);
+              }}
+              placeholder={
+                defaultModel
+                  ? t('settings.ai_model_placeholder', {
+                      defaultValue: 'Default: {{model}}',
+                      model: defaultModel,
+                    })
+                  : t('settings.ai_model_placeholder_generic', {
+                      defaultValue: 'Leave blank to use the provider default',
+                    })
+              }
+              spellCheck={false}
+              autoComplete="off"
+              className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue transition-all duration-normal ease-oe hover:border-content-tertiary"
+            />
+            <p className="mt-1.5 text-xs text-content-tertiary">
+              {t('settings.ai_model_hint', {
+                defaultValue:
+                  'AI providers rename and retire models over time. If a connection fails with a "model not found" error, set the exact current model id here (e.g. gemini-2.5-flash, anthropic/claude-sonnet-4). Leave blank to use the recommended default.',
+              })}
+            </p>
+          </div>
+
           {/* Status */}
           <div className="rounded-lg bg-surface-secondary/50 px-4 py-3">
             <StatusIndicator
@@ -581,7 +662,7 @@ function AIConfigurationCard() {
           variant="secondary"
           onClick={() => testMutation.mutate()}
           disabled={testMutation.isPending || (!hasKeySet && !hasUnsavedKey)}
-          title={hasUnsavedKey ? t('settings.ai_test_save_hint', { defaultValue: 'Save key and test connection' }) : t('settings.ai_test', { defaultValue: 'Test Connection' })}
+          title={hasUnsavedKey || modelTouched ? t('settings.ai_test_save_hint', { defaultValue: 'Save key and test connection' }) : t('settings.ai_test', { defaultValue: 'Test Connection' })}
           icon={
             testMutation.isPending ? (
               <Loader2 size={14} className="animate-spin" />
@@ -595,7 +676,7 @@ function AIConfigurationCard() {
         <Button
           variant="primary"
           onClick={() => saveMutation.mutate()}
-          disabled={saveMutation.isPending || (!hasUnsavedKey && selectedProvider === settings?.provider)}
+          disabled={saveMutation.isPending || (!hasUnsavedKey && !modelTouched && selectedProvider === settings?.provider)}
           loading={saveMutation.isPending}
         >
           {t('settings.ai_save_btn', { defaultValue: 'Save Settings' })}

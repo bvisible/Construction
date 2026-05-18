@@ -15,6 +15,16 @@ export interface BOQ {
   updated_at: string;
 }
 
+/**
+ * Linked-position role (Issue #127 — reuse the same code across a project).
+ *  - `master`   — the definition-of-record for a shared `reference_code`.
+ *  - `instance` — a linked copy that follows the master's definition
+ *                 (description/unit/unit_rate/classification/subtree) but
+ *                 keeps its OWN ordinal and OWN editable quantity.
+ *  - `null`     — a plain standalone position (not part of any link group).
+ */
+export type LinkRole = 'master' | 'instance' | null;
+
 export interface Position {
   id: string;
   boq_id: string;
@@ -32,9 +42,97 @@ export interface Position {
   validation_status: string;
   /** BIM element IDs linked to this position (cross-highlight source). */
   cad_element_ids?: string[];
+  /**
+   * Issue #127 — reusable code, distinct from `ordinal`. When two positions
+   * in the SAME project share a `reference_code` they form a link group: one
+   * `master` plus N `instance`s that inherit its definition.
+   */
+  reference_code?: string | null;
+  /** Role within the link group (see {@link LinkRole}). */
+  link_role?: LinkRole;
+  /** Stable id shared by every member of the link group. */
+  link_group_id?: string | null;
+  /** Number of linked instances — populated for masters on single-position
+   *  GET/PATCH/create/unlink responses (absent on the bulk BOQ fetch). */
+  linked_instance_count?: number | null;
   /** Backend returns `metadata_` (aliased) — normalize to `metadata` in fetch layer */
   metadata: Record<string, unknown>;
   metadata_?: Record<string, unknown>;
+}
+
+/**
+ * Stamped onto `metadata.link_propagation` by the backend AFTER a master
+ * definition edit (Issue #127). `propagated_to` counts the linked instances
+ * the change was fanned out to; `unlinked` is true when the edited row was an
+ * instance whose definition diverged → the backend auto-detached it.
+ */
+export interface LinkPropagationMeta {
+  propagated_to: number;
+  unlinked: boolean;
+  /** Issue #133 — count of linked RESOURCE instances a master resource
+   *  definition edit was fanned out to (separate from position links). */
+  resource_propagated_to?: number;
+}
+
+/** One member of a reference-code link group. */
+export interface PositionLinkMember {
+  id: string;
+  boq_id: string;
+  ordinal: string;
+  description: string;
+  quantity: number;
+  total: number;
+  link_role: LinkRole;
+  is_master: boolean;
+}
+
+/** Response of `GET /v1/boq/positions/{id}/links/`. */
+export interface PositionLinksResponse {
+  reference_code: string | null;
+  link_group_id: string | null;
+  linked: boolean;
+  master_id: string | null;
+  total_count: number;
+  instance_count: number;
+  members: PositionLinkMember[];
+}
+
+/**
+ * Issue #136 — server-enforced BOQ structural limits. The editor reads
+ * `max_nesting_depth` so it can disable "add child" / "add sub-section"
+ * once the configurable cap is reached and surface an i18n tooltip,
+ * keeping the UI in lock-step with the backend validation.
+ */
+export interface BOQLimits {
+  max_nesting_depth: number;
+}
+
+/**
+ * Conservative client-side fallback for {@link BOQLimits.max_nesting_depth}
+ * — mirrors `service.MAX_NESTING_DEPTH`. Used only until the `/limits/`
+ * fetch resolves (or if it fails) so the UI never blocks nesting that the
+ * backend would actually accept.
+ */
+export const DEFAULT_MAX_NESTING_DEPTH = 8;
+
+/** Issue #133 — one existing resource that already uses a given code. */
+export interface ResourceCodeMatch {
+  code: string;
+  name: string;
+  type: string;
+  unit: string;
+  unit_rate: number;
+  currency: string;
+  position_id: string;
+  position_ordinal: string;
+  position_description: string;
+}
+
+/** Response of `GET /v1/boq/projects/{id}/resource-by-code/`. */
+export interface ResourceCodeLookupResponse {
+  found: boolean;
+  code: string;
+  match: ResourceCodeMatch | null;
 }
 
 export interface BOQWithPositions extends BOQ {
@@ -94,6 +192,15 @@ export interface CreateBOQData {
   description?: string;
 }
 
+/**
+ * Issue #127 — how a create/update should resolve when its `reference_code`
+ * collides with an existing code in the project:
+ *  - `link`       — (default) attach as a linked instance of the master.
+ *  - `copy`       — one-time unlinked clone (snapshot, does not follow master).
+ *  - `standalone` — force a plain new position, bypass reuse entirely.
+ */
+export type LinkMode = 'link' | 'copy' | 'standalone';
+
 export interface CreatePositionData {
   boq_id: string;
   ordinal: string;
@@ -103,6 +210,11 @@ export interface CreatePositionData {
   unit_rate: number;
   classification?: Record<string, string>;
   parent_id?: string;
+  /** Issue #127 — reusable code. When it collides with an existing project
+   *  code AND `link_mode` != "standalone", the backend returns 201 with a
+   *  linked instance (own ordinal + own quantity) instead of a 409. */
+  reference_code?: string | null;
+  link_mode?: LinkMode | null;
 }
 
 export interface UpdatePositionData {
@@ -116,19 +228,80 @@ export interface UpdatePositionData {
   source?: string;
   metadata?: Record<string, unknown>;
   sort_order?: number;
+  /** Issue #127 — set/change the reusable code on an existing position. */
+  reference_code?: string | null;
+  link_mode?: LinkMode | null;
 }
 
 /* ── Normalize backend metadata_ → metadata ─────────────────────── */
 
-/** Backend returns `metadata_` due to SQLAlchemy naming. Normalize to `metadata`. */
+/**
+ * Coerce a backend numeric value into a finite JS number.
+ *
+ * Money / quantity columns are SQLAlchemy ``Numeric`` and the API
+ * serialises them as exact decimal *strings* (e.g. ``"1234.5600"``) so
+ * large totals round-trip without float drift. Untouched, those strings
+ * poison the grid: ``0 + "1234.56"`` string-concatenates into a section
+ * subtotal that renders as ``NaN``, and ``Number.isFinite("1234.56")``
+ * is ``false`` so ``convertToBase`` zeroes resource-driven position
+ * totals (Issue #131 — "total shows for <1s then drops to 0"). Coercing
+ * at the fetch boundary makes the runtime match the ``number`` contract
+ * the rest of the editor already assumes.
+ */
+function toFiniteNumber(v: unknown, fallback = 0): number {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
+  if (typeof v === 'string') {
+    const trimmed = v.trim();
+    if (trimmed === '') return fallback;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  return fallback;
+}
+
+/**
+ * Backend returns `metadata_` (SQLAlchemy alias) and serialises Decimal
+ * money/qty fields as strings. Normalize to `metadata` AND coerce every
+ * numeric field — position-level and per-resource — to a real number so
+ * totals/subtotals never string-concatenate or zero out (Issue #131).
+ */
 export function normalizePosition(p: Position): Position {
-  if (!p.metadata && p.metadata_) {
-    return { ...p, metadata: p.metadata_ };
+  // Preserve the original metadata-resolution semantics exactly:
+  //   metadata missing + metadata_ present → metadata_
+  //   metadata missing (no metadata_)      → {}
+  //   metadata present                     → metadata
+  const resolvedMeta: Record<string, unknown> =
+    !p.metadata && p.metadata_ ? p.metadata_ : (p.metadata ?? {});
+
+  // Resource components carry the same string-Decimal money fields and
+  // BOQGrid sums them for the per-position unit_rate rollup + resource
+  // rows — coerce them too so that rollup stays numeric.
+  let normMeta = resolvedMeta;
+  const res = (resolvedMeta as { resources?: unknown }).resources;
+  if (Array.isArray(res)) {
+    normMeta = {
+      ...resolvedMeta,
+      resources: res.map((r) => {
+        if (!r || typeof r !== 'object') return r;
+        const rr = r as Record<string, unknown>;
+        return {
+          ...rr,
+          quantity: toFiniteNumber(rr.quantity),
+          unit_rate: toFiniteNumber(rr.unit_rate),
+          total: toFiniteNumber(rr.total),
+        };
+      }),
+    };
   }
-  if (!p.metadata) {
-    return { ...p, metadata: {} };
-  }
-  return p;
+
+  return {
+    ...p,
+    quantity: toFiniteNumber(p.quantity),
+    unit_rate: toFiniteNumber(p.unit_rate),
+    total: toFiniteNumber(p.total),
+    sort_order: toFiniteNumber(p.sort_order),
+    metadata: normMeta,
+  };
 }
 
 export function normalizePositions(positions: Position[]): Position[] {
@@ -178,14 +351,19 @@ export function groupPositionsIntoSections(
   const fxRates = fxOpts?.fxRates;
 
   const rebase = (pos: Position): number => {
-    if (!baseCurrency) return pos.total;
+    // Coerce defensively — ``pos.total`` may still be a decimal string
+    // here if the list wasn't run through ``normalizePosition`` first;
+    // adding a raw string into ``subtotal`` concatenates → NaN (#131).
+    const total = toFiniteNumber(pos.total);
+    if (!baseCurrency) return total;
     const meta = ((pos as { metadata?: Record<string, unknown> }).metadata
       ?? {}) as Record<string, unknown>;
     const sourceCurrency = (meta.currency as string | undefined) || baseCurrency;
-    if (sourceCurrency === baseCurrency || !fxRates) return pos.total;
+    if (sourceCurrency === baseCurrency || !fxRates) return total;
     const fx = fxRates.find((r) => r.currency === sourceCurrency);
-    if (!fx || !Number.isFinite(fx.rate) || fx.rate <= 0) return pos.total;
-    return pos.total * fx.rate;
+    const fxRate = fx ? Number(fx.rate) : NaN;
+    if (!fx || !Number.isFinite(fxRate) || fxRate <= 0) return total;
+    return total * fxRate;
   };
 
   // First pass: identify sections
@@ -832,9 +1010,14 @@ export const boqApi = {
   duplicatePosition: (posId: string) =>
     apiPost<Position>(`/v1/boq/positions/${posId}/duplicate/`, {}),
 
-  /* Section */
-  addSection: (boqId: string, data: { ordinal: string; description: string }) =>
-    apiPost<Position>(`/v1/boq/boqs/${boqId}/sections/`, { boq_id: boqId, ...data }),
+  /* Issue #136 — server-enforced structural limits (max nesting depth). */
+  getLimits: () => apiGet<BOQLimits>('/v1/boq/limits/'),
+
+  /* Section — Issue #136: optional parent_id nests a section under another. */
+  addSection: (
+    boqId: string,
+    data: { ordinal: string; description: string; parent_id?: string | null },
+  ) => apiPost<Position>(`/v1/boq/boqs/${boqId}/sections/`, { boq_id: boqId, ...data }),
 
   /* Position CRUD */
   addPosition: (data: CreatePositionData) =>
@@ -856,6 +1039,25 @@ export const boqApi = {
       { variant_code: variantCode },
     ),
   deletePosition: (posId: string) => apiDelete(`/v1/boq/positions/${posId}`),
+
+  /* ── Linked positions (Issue #127 — reuse the same code) ──────────── */
+  /** List every member of this position's reference-code link group. */
+  getPositionLinks: (posId: string) =>
+    apiGet<PositionLinksResponse>(`/v1/boq/positions/${posId}/links/`),
+  /** Value-preserving detach: keeps the code & current values, stops
+   *  following the master, may promote another instance to master.
+   *  Returns the updated PositionResponse. */
+  unlinkPosition: (posId: string) =>
+    apiPost<Position>(`/v1/boq/positions/${posId}/unlink/`, {}),
+
+  /* ── Resource code reuse (Issue #133) ─────────────────────────────── */
+  /** Project-wide lookup: is this resource code already in use? Returns
+   *  the existing resource's reusable definition (no quantity) so the
+   *  manual-resource form can offer "insert existing" vs "change code". */
+  lookupResourceByCode: (projectId: string, code: string) =>
+    apiGet<ResourceCodeLookupResponse>(
+      `/v1/boq/projects/${projectId}/resource-by-code/?code=${encodeURIComponent(code)}`,
+    ),
 
   /* Position reorder (drag-and-drop) */
   reorderPositions: (boqId: string, positionIds: string[]) =>

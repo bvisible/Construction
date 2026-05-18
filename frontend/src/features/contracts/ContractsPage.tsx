@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -18,6 +19,8 @@ import {
   Send,
   DollarSign,
   ShieldAlert,
+  Users,
+  FilePlus2,
 } from 'lucide-react';
 import {
   Button,
@@ -34,7 +37,9 @@ import {
 } from '@/shared/ui/WideModal';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { PipelineBanner } from './PipelineBanner';
 import { useToastStore } from '@/stores/useToastStore';
+import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import { projectsApi, type Project } from '@/features/projects/api';
 import {
@@ -167,6 +172,7 @@ function ContractTypeChip({ type }: { type: ContractType }) {
 export function ContractsPage() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('contracts');
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<ContractType | ''>('');
@@ -181,11 +187,10 @@ export function ContractsPage() {
   });
 
   useEffect(() => {
-    if (!projectId && projectsQ.data?.length) {
-      const first = projectsQ.data[0];
-      if (first) setProjectId(first.id);
-    }
-  }, [projectsQ.data, projectId]);
+    if (projectId) return;
+    const seed = activeProjectId || projectsQ.data?.[0]?.id;
+    if (seed) setProjectId(seed);
+  }, [activeProjectId, projectsQ.data, projectId]);
 
   const contractsQ = useQuery({
     queryKey: ['contracts', 'list', projectId],
@@ -280,6 +285,28 @@ export function ContractsPage() {
             : t('contracts.new_contract', { defaultValue: 'New Contract' })}
         </Button>
       </div>
+
+      <PipelineBanner
+        intro={t('contracts.pipeline_intro', {
+          defaultValue:
+            'A contract formalises a won opportunity or an awarded bid package. Build the schedule of values, then bill work through progress claims and settle in the final account. Variations adjust the contract sum mid-flight.',
+        })}
+        steps={[
+          { label: t('contracts.step_crm', { defaultValue: 'CRM' }), to: '/crm' },
+          {
+            label: t('contracts.step_bid', { defaultValue: 'Bid Management' }),
+            to: '/bid-management',
+          },
+          {
+            label: t('contracts.step_contract', { defaultValue: 'Contracts' }),
+            current: true,
+          },
+          {
+            label: t('contracts.step_variations', { defaultValue: 'Variations' }),
+            to: '/variations',
+          },
+        ]}
+      />
 
       {/* Tabs */}
       <div className="border-b border-border-light">
@@ -1064,24 +1091,14 @@ function ContractDetailDrawer({
               </Button>
             )}
             {contract.status === 'active' && (
-              <>
-                <Button
-                  variant="secondary"
-                  icon={<PauseCircle size={14} />}
-                  onClick={() => suspendMut.mutate()}
-                  loading={suspendMut.isPending}
-                >
-                  {t('contracts.suspend', { defaultValue: 'Suspend' })}
-                </Button>
-                <Button
-                  variant="secondary"
-                  icon={<Archive size={14} />}
-                  onClick={() => closeMut.mutate()}
-                  loading={closeMut.isPending}
-                >
-                  {t('contracts.close', { defaultValue: 'Close' })}
-                </Button>
-              </>
+              <Button
+                variant="secondary"
+                icon={<PauseCircle size={14} />}
+                onClick={() => suspendMut.mutate()}
+                loading={suspendMut.isPending}
+              >
+                {t('contracts.suspend', { defaultValue: 'Suspend' })}
+              </Button>
             )}
             {contract.status === 'suspended' && (
               <Button
@@ -1094,15 +1111,52 @@ function ContractDetailDrawer({
               </Button>
             )}
             {(contract.status === 'active' || contract.status === 'suspended') && (
-              <Button
-                variant="ghost"
-                icon={<XCircle size={14} />}
-                onClick={() => terminateMut.mutate()}
-                loading={terminateMut.isPending}
-              >
-                {t('contracts.terminate', { defaultValue: 'Terminate' })}
-              </Button>
+              <>
+                <Button
+                  variant="secondary"
+                  icon={<Archive size={14} />}
+                  onClick={() => closeMut.mutate()}
+                  loading={closeMut.isPending}
+                >
+                  {t('contracts.close', { defaultValue: 'Close' })}
+                </Button>
+                <Button
+                  variant="ghost"
+                  icon={<XCircle size={14} />}
+                  onClick={() => terminateMut.mutate()}
+                  loading={terminateMut.isPending}
+                >
+                  {t('contracts.terminate', { defaultValue: 'Terminate' })}
+                </Button>
+              </>
             )}
+          </div>
+
+          {/* Cross-module pipeline links */}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="text-content-tertiary">
+              {t('contracts.related', { defaultValue: 'Related:' })}
+            </span>
+            {contract.counterparty_type === 'subcontractor' && (
+              <Link
+                to="/subcontractors"
+                className="inline-flex items-center gap-1 rounded-md border border-border-light px-2 py-1 text-content-secondary hover:text-oe-blue hover:border-oe-blue transition-colors"
+              >
+                <Users size={12} />
+                {t('contracts.view_subcontractor', {
+                  defaultValue: 'Subcontractor',
+                })}
+              </Link>
+            )}
+            <Link
+              to="/variations"
+              className="inline-flex items-center gap-1 rounded-md border border-border-light px-2 py-1 text-content-secondary hover:text-oe-blue hover:border-oe-blue transition-colors"
+            >
+              <FilePlus2 size={12} />
+              {t('contracts.raise_variation', {
+                defaultValue: 'Variations on this contract',
+              })}
+            </Link>
           </div>
 
           {/* Header fields */}

@@ -26,7 +26,8 @@ import {
   Trash2,
   GripVertical,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, ViewInBIMButton } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, ViewInBIMButton, InfoHint } from '@/shared/ui';
+import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useCreateShortcut } from '@/shared/hooks/useCreateShortcut';
@@ -1318,8 +1319,11 @@ export function TasksPage() {
         className="mb-4"
       />
 
+      {/* Cross-module navigation — connects the planning value chain */}
+      <PlanningCrossLinks active="tasks" />
+
       {/* Header */}
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-3 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-content-primary">
             {t('tasks.title', { defaultValue: 'Tasks' })}
@@ -1393,6 +1397,15 @@ export function TasksPage() {
           </Button>
         </div>
       </div>
+
+      {/* How Tasks connects to the rest of the platform */}
+      <InfoHint
+        className="mb-4"
+        text={t('tasks.what_are_tasks', {
+          defaultValue:
+            'Tasks are lightweight action items: assignments, decisions, and follow-ups with assignee, due date, priority and a checklist. They complement the 4D Schedule (which plans the construction timeline) and Last Planner weekly commitments. Tasks can be created from meetings and pinned to BIM elements. Use "My Tasks" for a cross-project view of everything assigned to you.',
+        })}
+      />
 
       {/* No-project warning — suppressed in "My Tasks" mode, which is
           cross-project and doesn't require a selected project. */}

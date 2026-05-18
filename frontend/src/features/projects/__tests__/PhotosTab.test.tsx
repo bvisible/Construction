@@ -100,6 +100,24 @@ function renderWithProviders(ui: React.ReactNode) {
 describe('PhotosTab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Photo thumbnails/originals are served behind JWT auth, so the UI
+    // fetches them with a Bearer header and renders an object URL via
+    // <AuthImage>. Stub the blob fetch + object-URL plumbing.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        blob: async () => new Blob(['x'], { type: 'image/jpeg' }),
+      }),
+    );
+    if (!('createObjectURL' in URL)) {
+      // jsdom may not implement these.
+      (URL as unknown as { createObjectURL: unknown }).createObjectURL = () => '';
+      (URL as unknown as { revokeObjectURL: unknown }).revokeObjectURL = () => {};
+    }
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock-photo');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   });
 
   it('renders the no-project empty state when projectId is null', () => {
@@ -163,10 +181,14 @@ describe('PhotosTab', () => {
     await waitFor(() => {
       expect(screen.getByTestId('photos-tab-lightbox')).toBeInTheDocument();
     });
-    // Full-res image should be rendered
-    expect(screen.getByTestId('photos-tab-lightbox-image')).toHaveAttribute(
-      'src',
+    // Full-res image is fetched with auth (AuthImage) — a plain <img src>
+    // would 401 because the originals endpoint requires a Bearer token.
+    await waitFor(() => {
+      expect(screen.getByTestId('photos-tab-lightbox-image')).toBeInTheDocument();
+    });
+    expect(global.fetch).toHaveBeenCalledWith(
       '/api/v1/files/photo-1/raw',
+      expect.objectContaining({ headers: expect.anything() }),
     );
 
     // Press ESC

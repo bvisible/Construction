@@ -110,7 +110,9 @@ export function BIDashboardsPage() {
   const kpisQ = useQuery({
     queryKey: ['bi', 'kpis'],
     queryFn: () => listKpis(),
-    enabled: tab === 'kpis',
+    // Also load on the Alerts tab so the "New Alert" modal can offer a
+    // real KPI dropdown instead of degrading to a free-text code field.
+    enabled: tab === 'kpis' || tab === 'alerts',
   });
   const reportsQ = useQuery({
     queryKey: ['bi', 'reports'],
@@ -345,7 +347,8 @@ function KpiLibrary({ rows }: { rows: KpiDefinition[] }) {
           icon={<Activity size={22} />}
           title={t('bi.empty_kpis', { defaultValue: 'No KPIs registered' })}
           description={t('bi.empty_kpis_desc', {
-            defaultValue: 'KPI definitions are seeded per role; check the seed loader.',
+            defaultValue:
+              'KPIs (CPI, SPI, cost variance, schedule health…) are provisioned per role. None are available for your account yet — an administrator can enable the relevant KPI pack.',
           })}
         />
       </Card>

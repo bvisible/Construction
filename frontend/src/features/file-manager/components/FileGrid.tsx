@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import { ExternalLink, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag } from 'lucide-react';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { AuthImage } from '@/shared/ui';
 import { primaryModule } from '../kindModule';
 import { CDEBadge } from './CDEBadge';
 import type { FileRow, FileKind } from '../types';
@@ -103,11 +104,13 @@ export function FileGrid({ items, selectedIds, onSelect, onOpen, isLoading }: Fi
             >
               <div className={clsx('relative aspect-[4/3] flex items-center justify-center', tint)}>
                 {row.thumbnail_url ? (
-                  <img
+                  <AuthImage
                     src={row.thumbnail_url}
                     alt=""
                     loading="lazy"
                     className="w-full h-full object-cover"
+                    placeholder={<Icon size={32} strokeWidth={1.5} />}
+                    fallback={<Icon size={32} strokeWidth={1.5} />}
                   />
                 ) : (
                   <Icon size={32} strokeWidth={1.5} />

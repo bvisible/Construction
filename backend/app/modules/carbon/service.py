@@ -783,6 +783,15 @@ class CarbonService:
 
     # ── EPD ──────────────────────────────────────────────────────────────
     async def create_epd(self, data: EPDRecordCreate) -> EPDRecord:
+        # ``EPDRecord.epd_id`` is unique. Reject a duplicate with a clean 409
+        # instead of letting the DB raise an uncaught IntegrityError that
+        # surfaces to the client as an opaque 500.
+        existing = await self.epd_repo.get_by_epd_id(data.epd_id)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"An EPD record with id '{data.epd_id}' already exists",
+            )
         epd = EPDRecord(**data.model_dump(exclude={"metadata"}))
         epd.metadata_ = data.metadata
         return await self.epd_repo.create(epd)

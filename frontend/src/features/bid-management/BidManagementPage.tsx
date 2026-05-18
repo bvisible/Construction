@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -15,6 +16,7 @@ import {
   Loader2,
   Calculator,
   Award,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -29,6 +31,7 @@ import {
 } from '@/shared/ui';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { PipelineBanner } from './PipelineBanner';
 import { apiGet, getErrorMessage } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -240,6 +243,30 @@ export function BidManagementPage() {
           </Button>
         </div>
       </div>
+
+      <PipelineBanner
+        intro={t('bid_management.pipeline_intro', {
+          defaultValue:
+            'Take won work to market: bundle scope into a package, invite prequalified subcontractors, collect priced submissions, level them side by side, and award. The award becomes a contract.',
+        })}
+        steps={[
+          { label: t('bid_management.step_crm', { defaultValue: 'CRM' }), to: '/crm' },
+          {
+            label: t('bid_management.step_subs', {
+              defaultValue: 'Subcontractors',
+            }),
+            to: '/subcontractors',
+          },
+          {
+            label: t('bid_management.step_bid', { defaultValue: 'Bid Management' }),
+            current: true,
+          },
+          {
+            label: t('bid_management.step_contract', { defaultValue: 'Contracts' }),
+            to: '/contracts',
+          },
+        ]}
+      />
 
       <div className="border-b border-border-light">
         <nav className="flex gap-1 -mb-px" role="tablist">
@@ -599,8 +626,12 @@ function SubmissionsLevelingView({
   currency: string;
 }) {
   const { t } = useTranslation();
-  const [activePkg, setActivePkg] = useState<string>(packages[0]?.id ?? '');
-  const pkg = packages.find((p) => p.id === activePkg) || packages[0];
+  // Controlled selection that *defaults* to the first package even when
+  // `packages` arrives after first render — a bare useState(packages[0]?.id)
+  // would freeze at '' and the dropdown would look broken.
+  const [activePkg, setActivePkg] = useState<string>('');
+  const pkg =
+    packages.find((p) => p.id === activePkg) || packages[0] || undefined;
 
   if (!pkg) {
     return (
@@ -632,12 +663,43 @@ function SubmissionsLevelingView({
           ))}
         </select>
       </div>
-      <LevelingTable packageId={pkg.id} currency={pkg.currency || currency} />
+      {(pkg.status === 'awarded' || pkg.status === 'cancelled') && (
+        <div
+          className={clsx(
+            'rounded-lg border px-3 py-2 text-xs',
+            pkg.status === 'awarded'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200'
+              : 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-200',
+          )}
+        >
+          {pkg.status === 'awarded'
+            ? t('bid_management.already_awarded', {
+                defaultValue:
+                  'This package has been awarded. Leveling is read-only — open Contracts to manage the awarded scope.',
+              })
+            : t('bid_management.pkg_cancelled', {
+                defaultValue: 'This package was cancelled — no further awards possible.',
+              })}
+        </div>
+      )}
+      <LevelingTable
+        packageId={pkg.id}
+        currency={pkg.currency || currency}
+        awardable={pkg.status !== 'awarded' && pkg.status !== 'cancelled'}
+      />
     </div>
   );
 }
 
-function LevelingTable({ packageId, currency }: { packageId: string; currency: string }) {
+function LevelingTable({
+  packageId,
+  currency,
+  awardable,
+}: {
+  packageId: string;
+  currency: string;
+  awardable: boolean;
+}) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
@@ -803,6 +865,15 @@ function LevelingTable({ packageId, currency }: { packageId: string; currency: s
                   variant="secondary"
                   icon={<Award size={12} />}
                   loading={awardMut.isPending}
+                  disabled={!awardable}
+                  title={
+                    awardable
+                      ? t('bid_management.award', { defaultValue: 'Award' })
+                      : t('bid_management.award_disabled', {
+                          defaultValue:
+                            'Package already awarded or cancelled',
+                        })
+                  }
                   onClick={() => awardMut.mutate(sub)}
                 >
                   {t('bid_management.award', { defaultValue: 'Award' })}
@@ -820,7 +891,7 @@ function LevelingTable({ packageId, currency }: { packageId: string; currency: s
 
 function QAView({ packages }: { packages: BidPackage[] }) {
   const { t } = useTranslation();
-  const [activePkg, setActivePkg] = useState<string>(packages[0]?.id ?? '');
+  const [activePkg, setActivePkg] = useState<string>('');
 
   if (packages.length === 0) {
     return (
@@ -1213,6 +1284,15 @@ function PackageDrawer({
                 >
                   {t('bid_management.run_leveling', { defaultValue: 'Compute Leveling' })}
                 </Button>
+                {pkg.status === 'awarded' && (
+                  <Link to="/contracts">
+                    <Button variant="primary" icon={<ArrowRight size={14} />}>
+                      {t('bid_management.create_contract', {
+                        defaultValue: 'Formalise as Contract',
+                      })}
+                    </Button>
+                  </Link>
+                )}
               </div>
 
               <Card padding="sm">

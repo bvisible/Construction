@@ -17,6 +17,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Skeleton, Breadcrumb } from '@/shared/ui';
+import { SectionIntro } from './SectionIntro';
 import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
@@ -80,6 +81,41 @@ function getRuleDescriptions(t: (key: string, opts?: Record<string, unknown>) =>
     'din276.valid_cost_group': t('validation.rule_valid_cost_group', { defaultValue: 'Validates that DIN 276 codes are proper 3-digit codes.' }),
     'gaeb.ordinal_format': t('validation.rule_ordinal_format', { defaultValue: 'Checks ordinal numbers follow GAEB LV format XX.XX.XXXX.' }),
   };
+}
+
+/* ── Rule-set descriptions (badge tooltips) ───────────────────────────── */
+
+function getRuleSetDescription(
+  ruleSet: string,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  const map: Record<string, string> = {
+    boq_quality: t('validation.rs_boq_quality', {
+      defaultValue: 'Universal BOQ hygiene: missing quantities/rates, duplicate ordinals, outlier rates.',
+    }),
+    din276: t('validation.rs_din276', {
+      defaultValue: 'DIN 276 (DACH) cost-group structure & Kostengruppe completeness.',
+    }),
+    gaeb: t('validation.rs_gaeb', {
+      defaultValue: 'GAEB tender format: LV structure & ordinal format checks.',
+    }),
+    nrm: t('validation.rs_nrm', {
+      defaultValue: 'NRM 1/2 (UK) element compliance & measurement rules.',
+    }),
+    masterformat: t('validation.rs_masterformat', {
+      defaultValue: 'MasterFormat (US) division structure & code format.',
+    }),
+    bim_compliance: t('validation.rs_bim', {
+      defaultValue: 'CAD/BIM data: required properties, geometry validity, classification mapped.',
+    }),
+    project_completeness: t('validation.rs_completeness', {
+      defaultValue: 'All trades covered, cost benchmarks, missing-scope detection.',
+    }),
+  };
+  return map[ruleSet] ?? t('validation.rs_generic', {
+    defaultValue: '{{name}} validation rules',
+    name: ruleSet,
+  });
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
@@ -206,13 +242,29 @@ function SummaryCard({ report }: { report: ValidationReportData }) {
             <span className="text-xs text-content-tertiary">
               {t('validation.rule_sets', 'Rule sets')}:
             </span>
-            {report.rule_sets.map((rs) => (
-              <Badge key={rs} variant="neutral" size="sm">
-                {rs}
-              </Badge>
-            ))}
+            {report.rule_sets.length > 0 ? (
+              report.rule_sets.map((rs) => (
+                <span key={rs} title={getRuleSetDescription(rs, t)} className="inline-flex">
+                  <Badge variant="neutral" size="sm">
+                    {rs}
+                  </Badge>
+                </span>
+              ))
+            ) : (
+              <span className="text-xs text-content-tertiary italic">
+                {t('validation.no_rule_sets', {
+                  defaultValue: 'none configured for this project',
+                })}
+              </span>
+            )}
           </div>
-          <p className="mt-1.5 text-xs text-content-tertiary tabular-nums">
+          <p className="mt-1.5 text-xs text-content-tertiary">
+            {t('validation.rule_sets_auto_hint', {
+              defaultValue:
+                'Rule sets are chosen automatically from the project’s region & classification standard.',
+            })}
+          </p>
+          <p className="mt-1 text-xs text-content-tertiary tabular-nums">
             {t('validation.duration', 'Duration')}: {report.duration_ms.toFixed(1)}ms
           </p>
         </div>
@@ -540,7 +592,7 @@ export function ValidationPage() {
       });
       if (!response.ok) throw new Error(`Export failed: ${response.status}`);
       const blob = await response.blob();
-      triggerDownload(blob, `validation_report.pdf`);
+      triggerDownload(blob, `boq_${selectedBoqId.slice(0, 8)}.pdf`);
     } catch (err) {
       addToast({
         type: 'error',
@@ -549,6 +601,35 @@ export function ValidationPage() {
       });
     }
   }, [selectedBoqId, addToast, t]);
+
+  // Validation findings are produced on-the-fly (this run is not persisted as
+  // a server-side ValidationReport, so there is no SARIF/PDF artefact for it).
+  // A faithful CSV is generated client-side from exactly what the user sees.
+  const handleExportCsv = useCallback(() => {
+    if (!report) return;
+    const esc = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const header = ['rule_id', 'rule_name', 'severity', 'status', 'message', 'element_ref', 'suggestion'];
+    const lines = report.results.map((r) =>
+      [
+        r.rule_id,
+        r.rule_name,
+        r.severity,
+        r.passed ? 'passed' : r.severity === 'error' ? 'error' : 'warning',
+        r.message,
+        r.element_ref ?? '',
+        r.suggestion ?? '',
+      ]
+        .map((c) => esc(String(c)))
+        .join(','),
+    );
+    const csv = [header.join(','), ...lines].join('\r\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    triggerDownload(blob, `validation_findings_${selectedBoqId.slice(0, 8)}.csv`);
+    addToast({
+      type: 'success',
+      title: t('validation.csv_exported', { defaultValue: 'Findings exported' }),
+    });
+  }, [report, selectedBoqId, addToast, t]);
 
   const projectOptions = (projects || []).map((p) => ({
     value: p.id,
@@ -579,6 +660,28 @@ export function ValidationPage() {
           )}
         </p>
       </div>
+
+      <SectionIntro
+        storageKey="validation"
+        title={t('validation.intro_title', {
+          defaultValue: 'How validation fits the workflow',
+        })}
+        links={[
+          {
+            label: t('validation.intro_link_boq', { defaultValue: 'Open BOQ editor' }),
+            onClick: () => navigate('/boq'),
+          },
+          {
+            label: t('validation.intro_link_bim', { defaultValue: 'BIM / canonical model' }),
+            onClick: () => navigate('/bim'),
+          },
+        ]}
+      >
+        {t('validation.intro_body', {
+          defaultValue:
+            'Validation is a first-class step in the Import → Validate → Enrich → Estimate pipeline. It checks a Bill of Quantities (and its linked canonical/BIM elements) against the rule sets configured for the project — these are derived automatically from the project’s region and classification standard (DIN 276, GAEB, NRM, MasterFormat, boq_quality, …). Each finding links back to the exact BOQ position so you can fix it at the source.',
+        })}
+      </SectionIntro>
 
       {/* Selector bar */}
       <Card className="mb-6">
@@ -760,21 +863,29 @@ export function ValidationPage() {
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center gap-3 border-t border-border-light pt-6">
+          <div className="flex flex-wrap items-center gap-3 border-t border-border-light pt-6">
             <Button
               variant="secondary"
               size="md"
               icon={<Download size={16} />}
+              onClick={handleExportCsv}
+            >
+              {t('validation.export_csv', { defaultValue: 'Export Findings (CSV)' })}
+            </Button>
+            <Button
+              variant="ghost"
+              size="md"
+              icon={<Download size={16} />}
               onClick={handleExportPdf}
             >
-              {t('validation.export_pdf', 'Export Report PDF')}
+              {t('validation.export_boq_pdf', { defaultValue: 'Export BOQ PDF' })}
             </Button>
             {(report.counts.warnings > 0 || report.counts.errors > 0) && (
               <Button
                 variant="ghost"
                 size="md"
                 icon={<Wand2 size={16} />}
-                onClick={() => setFilter('warnings')}
+                onClick={() => setFilter('errors')}
               >
                 {t('validation.show_issues', 'Show All Issues')}
               </Button>

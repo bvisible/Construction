@@ -17,6 +17,7 @@ import {
   Info,
   Pencil,
   Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   Button,
@@ -885,7 +886,13 @@ export function TransmittalsPage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: transmittals = [], isLoading } = useQuery({
+  const {
+    data: transmittals = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['transmittals', projectId, statusFilter],
     queryFn: () =>
       fetchTransmittals({
@@ -1262,6 +1269,25 @@ export function TransmittalsPage() {
       <div>
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : isError ? (
+          <EmptyState
+            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
+            title={t('transmittals.load_failed', {
+              defaultValue: 'Could not load transmittals',
+            })}
+            description={
+              error instanceof Error
+                ? error.message
+                : t('transmittals.load_failed_hint', {
+                    defaultValue:
+                      'Something went wrong fetching the transmittals log. Please try again.',
+                  })
+            }
+            action={{
+              label: t('common.retry', { defaultValue: 'Retry' }),
+              onClick: () => refetch(),
+            }}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<Send size={28} strokeWidth={1.5} />}

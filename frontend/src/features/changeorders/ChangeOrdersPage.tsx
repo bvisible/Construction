@@ -745,6 +745,15 @@ function DetailView({
           <p className={`mt-1 text-sm font-semibold ${order.cost_impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
             {order.cost_impact >= 0 ? '+' : ''}{formatCurrency(order.cost_impact, order.currency)}
           </p>
+          <p className="mt-1 text-2xs text-content-tertiary leading-snug">
+            {order.status === 'approved'
+              ? t('changeorders.cost_impact_applied', {
+                  defaultValue: 'Applied to the project budget (revised budget).',
+                })
+              : t('changeorders.cost_impact_pending', {
+                  defaultValue: 'Applied to the project budget once approved.',
+                })}
+          </p>
         </Card>
         <Card className="p-4">
           <p className="text-xs text-content-tertiary uppercase tracking-wide">
@@ -860,7 +869,7 @@ function DetailView({
                       {item.new_quantity} {item.unit}
                     </td>
                     <td className={`px-4 py-3 text-right font-medium tabular-nums ${item.cost_delta >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                      {item.cost_delta >= 0 ? '+' : ''}{item.cost_delta.toFixed(2)}
+                      {item.cost_delta >= 0 ? '+' : ''}{formatCurrency(item.cost_delta, order.currency)}
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3 text-center">

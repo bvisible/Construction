@@ -1,13 +1,16 @@
 import { useState, useRef, useCallback, type KeyboardEvent, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
+import { MessageSquarePlus } from 'lucide-react';
 
 interface InputBarProps {
   onSend: (text: string) => void;
+  onClear: () => void;
+  hasMessages: boolean;
   isStreaming: boolean;
   suggestions: string[];
 }
 
-export default function InputBar({ onSend, isStreaming, suggestions }: InputBarProps) {
+export default function InputBar({ onSend, onClear, hasMessages, isStreaming, suggestions }: InputBarProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { t } = useTranslation();
@@ -58,6 +61,52 @@ export default function InputBar({ onSend, isStreaming, suggestions }: InputBarP
         background: 'var(--chat-surface-1)',
       }}
     >
+      {/* New chat — lets the user reset the conversation + data panel.
+          The chat-specific top bar was removed in v1.3.29, leaving no way
+          to start over; this restores that without re-adding the bar. */}
+      {hasMessages && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            marginBottom: 8,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onClear}
+            disabled={isStreaming}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '4px 10px',
+              fontSize: 12,
+              fontFamily: 'var(--chat-font-body)',
+              color: isStreaming ? 'var(--chat-text-tertiary)' : 'var(--chat-text-secondary)',
+              background: 'var(--chat-surface-2)',
+              border: '1px solid var(--chat-border-subtle)',
+              borderRadius: 16,
+              cursor: isStreaming ? 'not-allowed' : 'pointer',
+              transition: 'border-color 0.15s, color 0.15s',
+            }}
+            onMouseEnter={(e) => {
+              if (!isStreaming) {
+                (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--chat-accent)';
+                (e.currentTarget as HTMLButtonElement).style.color = 'var(--chat-text-primary)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              (e.currentTarget as HTMLButtonElement).style.borderColor = 'var(--chat-border-subtle)';
+              (e.currentTarget as HTMLButtonElement).style.color = 'var(--chat-text-secondary)';
+            }}
+          >
+            <MessageSquarePlus size={13} strokeWidth={1.85} />
+            {t('chat.new_chat', { defaultValue: 'New chat‌⁠‍' })}
+          </button>
+        </div>
+      )}
+
       {/* Suggestion chips */}
       {suggestions.length > 0 && (
         <div

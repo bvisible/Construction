@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -33,6 +34,7 @@ import {
 } from '@/shared/ui/WideModal';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { PipelineBanner } from './PipelineBanner';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import {
@@ -47,6 +49,7 @@ import {
   createActivity,
   qualifyLead,
   disqualifyLead,
+  convertLead,
   moveOpportunityStage,
   winOpportunity,
   loseOpportunity,
@@ -283,6 +286,31 @@ export function CRMPage() {
         </Button>
       </div>
 
+      <PipelineBanner
+        intro={t('crm.pipeline_intro', {
+          defaultValue:
+            'CRM is the front of the commercial pipeline: capture an account, qualify a lead, then convert it into an opportunity. Won opportunities flow on to bid packages and contracts.',
+        })}
+        steps={[
+          {
+            label: t('crm.step_crm', { defaultValue: 'CRM (lead → deal)' }),
+            current: true,
+          },
+          {
+            label: t('crm.step_bid', { defaultValue: 'Bid Management' }),
+            to: '/bid-management',
+          },
+          {
+            label: t('crm.step_contract', { defaultValue: 'Contracts' }),
+            to: '/contracts',
+          },
+          {
+            label: t('crm.step_variations', { defaultValue: 'Variations' }),
+            to: '/variations',
+          },
+        ]}
+      />
+
       {/* Tabs */}
       <div className="border-b border-border-light">
         <nav className="flex gap-1 -mb-px">
@@ -428,8 +456,15 @@ export function CRMPage() {
         <LeadDetailDrawer
           leadId={selectedLeadId}
           leads={leadsQ.data ?? []}
+          accounts={accountsQ.data ?? []}
           accountsById={accountsById}
+          stages={stagesQ.data ?? []}
           onClose={() => setSelectedLeadId(null)}
+          onConverted={(oppId) => {
+            setSelectedLeadId(null);
+            setTab('opportunities');
+            setSelectedOpportunityId(oppId);
+          }}
         />
       )}
       {selectedOpportunityId && (
@@ -815,19 +850,47 @@ function ActivitiesTable({
 function LeadDetailDrawer({
   leadId,
   leads,
+  accounts,
   accountsById,
+  stages,
   onClose,
+  onConverted,
 }: {
   leadId: string;
   leads: Lead[];
+  accounts: Account[];
   accountsById: Record<string, Account>;
+  stages: PipelineStage[];
   onClose: () => void;
+  onConverted: (opportunityId: string) => void;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const lead = leads.find((l) => l.id === leadId);
   const [notes, setNotes] = useState(lead?.qualification_notes ?? '');
+  const [convertOpen, setConvertOpen] = useState(false);
+  const firstStageId = useMemo(
+    () =>
+      [...stages].sort((a, b) => a.display_order - b.display_order)[0]?.id ?? '',
+    [stages],
+  );
+  const [convertForm, setConvertForm] = useState({
+    account_id: lead?.account_id ?? accounts[0]?.id ?? '',
+    title: '',
+    estimated_value: '0',
+    currency: 'EUR',
+    stage_id: '',
+  });
+
+  useEffect(() => {
+    setConvertForm((f) => ({
+      ...f,
+      account_id: f.account_id || lead?.account_id || accounts[0]?.id || '',
+      title: f.title || (lead ? `${lead.contact_name} — opportunity` : ''),
+      stage_id: f.stage_id || firstStageId,
+    }));
+  }, [lead, accounts, firstStageId]);
 
   useEffect(() => {
     setNotes(lead?.qualification_notes ?? '');
@@ -861,6 +924,29 @@ function LeadDetailDrawer({
         type: 'success',
         title: t('crm.lead_disqualified', { defaultValue: 'Lead disqualified' }),
       });
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
+  const convertMut = useMutation({
+    mutationFn: () =>
+      convertLead(leadId, {
+        account_id: convertForm.account_id,
+        title: convertForm.title.trim(),
+        estimated_value: Number(convertForm.estimated_value) || 0,
+        currency: convertForm.currency.trim().toUpperCase() || 'EUR',
+        stage_id: convertForm.stage_id,
+      }),
+    onSuccess: (opp) => {
+      qc.invalidateQueries({ queryKey: ['crm', 'leads'] });
+      qc.invalidateQueries({ queryKey: ['crm', 'opportunities'] });
+      addToast({
+        type: 'success',
+        title: t('crm.lead_converted', {
+          defaultValue: 'Lead converted to opportunity',
+        }),
+      });
+      onConverted(opp.id);
     },
     onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
   });
@@ -966,6 +1052,146 @@ function LeadDetailDrawer({
                   {t('crm.disqualify', { defaultValue: 'Disqualify' })}
                 </Button>
               </div>
+            </Card>
+          )}
+
+          {lead.status === 'qualified' && (
+            <Card padding="sm">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary">
+                    {t('crm.next_step', { defaultValue: 'Next step' })}
+                  </p>
+                  <p className="mt-1 text-sm text-content-secondary">
+                    {t('crm.convert_hint', {
+                      defaultValue:
+                        'This lead is qualified — convert it into a pipeline opportunity to start tracking value, stage and close date.',
+                    })}
+                  </p>
+                </div>
+                {!convertOpen && (
+                  <Button
+                    variant="primary"
+                    icon={<ArrowRight size={14} />}
+                    onClick={() => setConvertOpen(true)}
+                  >
+                    {t('crm.convert', { defaultValue: 'Convert' })}
+                  </Button>
+                )}
+              </div>
+              {convertOpen && (
+                <div className="mt-3 space-y-2 border-t border-border-light pt-3">
+                  <div>
+                    <p className="text-xs text-content-tertiary mb-1">
+                      {t('crm.account', { defaultValue: 'Account' })}
+                    </p>
+                    <select
+                      value={convertForm.account_id}
+                      onChange={(e) =>
+                        setConvertForm({ ...convertForm, account_id: e.target.value })
+                      }
+                      className={inputCls}
+                    >
+                      <option value="">—</option>
+                      {accounts.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <input
+                    value={convertForm.title}
+                    onChange={(e) =>
+                      setConvertForm({ ...convertForm, title: e.target.value })
+                    }
+                    placeholder={t('crm.title_col', { defaultValue: 'Title' })}
+                    className={inputCls}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="number"
+                      value={convertForm.estimated_value}
+                      onChange={(e) =>
+                        setConvertForm({
+                          ...convertForm,
+                          estimated_value: e.target.value,
+                        })
+                      }
+                      aria-label={t('crm.value', { defaultValue: 'Value' })}
+                      placeholder={t('crm.value', { defaultValue: 'Value' })}
+                      className={inputCls}
+                    />
+                    <input
+                      value={convertForm.currency}
+                      onChange={(e) =>
+                        setConvertForm({ ...convertForm, currency: e.target.value })
+                      }
+                      aria-label={t('crm.currency', { defaultValue: 'Currency' })}
+                      placeholder={t('crm.currency', { defaultValue: 'Currency' })}
+                      maxLength={8}
+                      className={inputCls}
+                    />
+                  </div>
+                  <select
+                    value={convertForm.stage_id}
+                    onChange={(e) =>
+                      setConvertForm({ ...convertForm, stage_id: e.target.value })
+                    }
+                    aria-label={t('crm.stage', { defaultValue: 'Stage' })}
+                    className={inputCls}
+                  >
+                    <option value="">
+                      — {t('crm.stage', { defaultValue: 'Stage' })} —
+                    </option>
+                    {[...stages]
+                      .sort((a, b) => a.display_order - b.display_order)
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name}
+                        </option>
+                      ))}
+                  </select>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="primary"
+                      icon={<ArrowRight size={14} />}
+                      onClick={() => convertMut.mutate()}
+                      loading={convertMut.isPending}
+                      disabled={
+                        !convertForm.account_id ||
+                        !convertForm.title.trim() ||
+                        !convertForm.stage_id
+                      }
+                    >
+                      {t('crm.convert_to_opportunity', {
+                        defaultValue: 'Convert to opportunity',
+                      })}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      onClick={() => setConvertOpen(false)}
+                      disabled={convertMut.isPending}
+                    >
+                      {t('common.cancel', { defaultValue: 'Cancel' })}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </Card>
+          )}
+
+          {lead.status === 'converted' && lead.converted_opportunity_id && (
+            <Card padding="sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary mb-1">
+                {t('crm.converted', { defaultValue: 'Converted' })}
+              </p>
+              <p className="text-sm text-content-secondary">
+                {t('crm.converted_to_opp', {
+                  defaultValue:
+                    'This lead has been converted into an opportunity. Open the Opportunities tab to manage it through the pipeline.',
+                })}
+              </p>
             </Card>
           )}
 
@@ -1215,6 +1441,33 @@ function OpportunityDetailDrawer({
                     {t('crm.lose', { defaultValue: 'Lose' })}
                   </Button>
                 </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Won → forward to tendering / contracts */}
+          {opp.status === 'won' && (
+            <Card padding="sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary mb-1">
+                {t('crm.next_step', { defaultValue: 'Next step' })}
+              </p>
+              <p className="text-sm text-content-secondary mb-2">
+                {t('crm.won_next_hint', {
+                  defaultValue:
+                    'Deal won. Take it forward by issuing bid packages to subcontractors, then formalising the award as a contract.',
+                })}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Link to="/bid-management">
+                  <Button variant="secondary" icon={<ArrowRight size={14} />}>
+                    {t('crm.go_bid', { defaultValue: 'Bid Management' })}
+                  </Button>
+                </Link>
+                <Link to="/contracts">
+                  <Button variant="ghost" icon={<ArrowRight size={14} />}>
+                    {t('crm.go_contracts', { defaultValue: 'Contracts' })}
+                  </Button>
+                </Link>
               </div>
             </Card>
           )}

@@ -141,7 +141,17 @@ export function formatMeasurement(value: number, unit: string): string {
 
 /** Derive scale from a known reference measurement.
  *  pixelLength = measured pixel distance on drawing
- *  realLength  = known real-world length in meters
+ *  realLength  = known real-world length **in metres**
+ *
+ *  METRIC-CANONICAL CONTRACT (D-TKC-016): the returned `unitLabel` is
+ *  always `'m'` and `pixelsPerUnit` is always pixels-per-metre, even when
+ *  the estimator calibrated using feet or inches. `CalibrationDialog`
+ *  converts the user's ft/in entry to metres via `toMeters()` *before*
+ *  calling this, so every downstream consumer (`presetScale`,
+ *  `ratioFromScale`, the recalc effect, persisted measurements) can rely
+ *  on a single unit system. The estimator's original unit is **not lost**:
+ *  it is surfaced separately on the calibration badge / dialog note so a
+ *  feet calibration is no longer silently relabelled as metres.
  */
 export function deriveScale(
   pixelLength: number,

@@ -166,11 +166,14 @@ class MessageBundle:
                 self._warned_missing.add(key)
                 logger.warning(
                     "Validation message key '%s' not found in any locale "
-                    "(requested '%s') — rendering raw key verbatim",
+                    "(requested '%s') — rendering humanised fallback",
                     key,
                     locale,
                 )
-            return _render_raw(key, params)
+            # Never leak the raw dotted key to an end user (NEW-I18N-001):
+            # humanise the last path segment into a readable phrase. The
+            # logged WARNING above still carries the exact key for devs.
+            return _render_missing(key, params)
 
         if not params:
             return template
@@ -221,12 +224,52 @@ def _flatten(data: dict[str, Any], prefix: str = "") -> dict[str, str]:
     return flat
 
 
-def _render_raw(key: str, params: dict[str, Any]) -> str:
-    """Render a missing-key fallback. Include params to keep debug info."""
+def _humanise_key(key: str) -> str:
+    """Turn a dotted lookup key into a readable phrase.
+
+    ``"din276.cost_group_required.fail"`` → ``"Cost group required"``.
+    The last path segment is the most specific label; ``fail`` / ``pass``
+    / ``warn`` / ``info`` / ``error`` / ``message`` / ``suggestion`` are
+    boilerplate result-state suffixes, so when the final segment is one of
+    those we humanise the segment before it instead.
+    """
+    _STATE_SUFFIXES = {
+        "fail",
+        "pass",
+        "warn",
+        "warning",
+        "info",
+        "error",
+        "ok",
+        "message",
+        "suggestion",
+    }
+    segments = [s for s in key.replace("/", ".").split(".") if s]
+    if not segments:
+        return "Validation issue"
+    label = segments[-1]
+    if label.lower() in _STATE_SUFFIXES and len(segments) >= 2:
+        label = segments[-2]
+    words = label.replace("_", " ").replace("-", " ").strip()
+    if not words:
+        return "Validation issue"
+    return words[0].upper() + words[1:]
+
+
+def _render_missing(key: str, params: dict[str, Any]) -> str:
+    """Graceful missing-key fallback (NEW-I18N-001).
+
+    Returns a human-readable phrase derived from the key's last meaningful
+    path segment instead of the raw dotted key — an end user must never see
+    ``"nonexistent.key.xyz"``. The exact key is still logged at WARNING for
+    developers, and any interpolation ``params`` are appended in brackets so
+    debugging context survives.
+    """
+    human = _humanise_key(key)
     if not params:
-        return key
+        return human
     formatted_params = ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
-    return f"{key} [{formatted_params}]"
+    return f"{human} ({formatted_params})"
 
 
 # ── Module-level singleton & convenience API ────────────────────────────────

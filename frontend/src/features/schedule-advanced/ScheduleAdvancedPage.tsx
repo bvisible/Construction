@@ -29,9 +29,12 @@ import {
   SkeletonTable,
   WideModal,
   ConfirmDialog,
+  InfoHint,
 } from '@/shared/ui';
+import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
+import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import { projectsApi } from '@/features/projects/api';
 import {
@@ -154,6 +157,7 @@ function pctNumber(value: string | number | null | undefined): number {
 export function ScheduleAdvancedPage() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('master');
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
   const [masterId, setMasterId] = useState<string>('');
   const [lookAheadId, setLookAheadId] = useState<string>('');
@@ -169,13 +173,14 @@ export function ScheduleAdvancedPage() {
     queryFn: () => projectsApi.list(),
   });
 
-  // Auto-select first project once loaded
+  // Prefer the globally-selected active project; fall back to the first
+  // project only when no active project is set. Never override an explicit
+  // in-page selection.
   useEffect(() => {
-    if (!projectId && projectsQ.data && projectsQ.data.length > 0) {
-      const first = projectsQ.data[0];
-      if (first) setProjectId(first.id);
-    }
-  }, [projectId, projectsQ.data]);
+    if (projectId) return;
+    const seed = activeProjectId || projectsQ.data?.[0]?.id;
+    if (seed) setProjectId(seed);
+  }, [activeProjectId, projectsQ.data, projectId]);
 
   const masterQ = useQuery({
     queryKey: ['schedule-advanced', 'master', projectId],
@@ -273,6 +278,9 @@ export function ScheduleAdvancedPage() {
         ]}
       />
 
+      {/* Cross-module navigation — connects the planning value chain */}
+      <PlanningCrossLinks active="schedule-advanced" />
+
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-content-primary">
@@ -304,6 +312,14 @@ export function ScheduleAdvancedPage() {
           </select>
         )}
       </div>
+
+      {/* How Last Planner connects to the rest of the platform */}
+      <InfoHint
+        text={t('schedule_advanced.what_is_lps', {
+          defaultValue:
+            'The Last Planner System is pull-based production control that complements the 4D Schedule. Master schedule sets milestones, Phase Plans pull work backwards from them, Look-Aheads (6 weeks) make work ready by removing constraints, and Weekly Work Plans capture crew commitments. PPC (Percent Plan Complete) and constraint logs measure reliability. Use the 4D Schedule for the CPM critical path; use this for what the team actually commits to do next.',
+        })}
+      />
 
       {/* Tabs */}
       <div className="border-b border-border-light">

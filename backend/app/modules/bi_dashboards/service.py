@@ -492,6 +492,22 @@ class BIDashboardsService:
         *,
         owner_user_id: uuid.UUID | None,
     ) -> ReportDefinition:
+        # ``ReportDefinition.code`` is globally UNIQUE. A blind insert on a
+        # duplicate code raised an unhandled IntegrityError → 500. Detect
+        # the collision up front and return a clean 409 (mirrors how the
+        # contacts module reports a unique-key conflict, including the
+        # existing id so callers can re-run idempotently).
+        existing = await self.repo.get_report_by_code(payload.code)
+        if existing is not None:
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"A report definition with code '{payload.code}' "
+                    f"already exists (id={existing.id})."
+                ),
+            )
         report = ReportDefinition(
             code=payload.code,
             name=payload.name,

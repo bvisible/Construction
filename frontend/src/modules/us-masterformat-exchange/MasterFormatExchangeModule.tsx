@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   DollarSign,
@@ -23,6 +24,7 @@ import { exportToCSV, downloadBlob } from '../_shared/excelExport';
 import { printBOQReport } from '../_shared/pdfBOQExport';
 import type { ExchangePosition, ImportParseResult } from '../_shared/templateTypes';
 import { MF_TEMPLATE, MF_DIVISIONS } from './mfTemplate';
+import { SampleTemplateButton } from '../_shared/SampleTemplateButton';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -547,6 +549,11 @@ export default function MasterFormatExchangeModule() {
             />
           </div>
 
+          {/* Expected layout + ready-to-fill sample — shown before a
+              file is chosen so a country specialist knows the exact
+              column order this importer expects. */}
+          {!importFile && <SampleTemplateButton template={MF_TEMPLATE} />}
+
           {/* Preview */}
           {parsedPositions && parsedPositions.length > 0 && (
             <ImportPreview positions={parsedPositions} t={t} />
@@ -652,6 +659,15 @@ export default function MasterFormatExchangeModule() {
                     <li key={`err-${idx}`}>&bull; {err}</li>
                   ))}
                 </ul>
+              )}
+              {importResult.errors.length === 0 && (
+                <Link
+                  data-testid="regional-open-boq"
+                  to={importTargetBoqId ? `/boq?boq=${importTargetBoqId}` : '/boq'}
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-oe-blue hover:underline"
+                >
+                  {t('mf.open_boq', { defaultValue: 'Open in BOQ editor to review & validate \u2192' })}
+                </Link>
               )}
             </div>
           )}

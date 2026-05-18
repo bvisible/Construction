@@ -73,9 +73,14 @@ class _StubReportRepo:
         return report
 
 
+async def _execute_no_existing(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+    """Stub session.execute: no prior snapshot → create-new (else) branch."""
+    return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+
 def _make_service() -> ReportingService:
     svc = ReportingService.__new__(ReportingService)
-    svc.session = SimpleNamespace()
+    svc.session = SimpleNamespace(execute=_execute_no_existing)
     svc.kpi_repo = _StubKpiRepo()
     svc.template_repo = _StubTemplateRepo()
     svc.report_repo = _StubReportRepo()

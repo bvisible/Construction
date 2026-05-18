@@ -1140,6 +1140,11 @@ class SubcontractorService:
 
         # Roll-up onto the subcontractor itself.
         await self.subs.update_fields(data.subcontractor_id, rating_score=overall)
+        # ``update_fields`` runs ``session.expire_all()``, which also
+        # expires the rating ``entity`` created/updated above. Reload it
+        # before returning so the response serializer doesn't trigger a
+        # lazy load outside the async greenlet (MissingGreenlet -> 500).
+        await self.session.refresh(entity)
         return entity
 
     # ── Dashboard ──────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
-import { Button, EmptyState, Skeleton } from '@/shared/ui';
+import { Button, EmptyState, Skeleton, AuthImage } from '@/shared/ui';
 import { useFileList } from '@/features/file-manager/hooks';
 import { UploadDialog } from '@/features/file-manager/components/UploadDialog';
 import type { FileRow } from '@/features/file-manager/types';
@@ -319,11 +319,21 @@ export function PhotosTab({ projectId }: PhotosTabProps): React.ReactElement {
               >
                 <div className="relative aspect-square w-full bg-surface-tertiary">
                   {row.thumbnail_url ? (
-                    <img
+                    <AuthImage
                       src={row.thumbnail_url}
                       alt={row.name}
                       loading="lazy"
                       className="absolute inset-0 h-full w-full object-cover"
+                      placeholder={
+                        <div className="absolute inset-0 flex items-center justify-center text-content-tertiary">
+                          <ImageIcon size={32} strokeWidth={1.5} />
+                        </div>
+                      }
+                      fallback={
+                        <div className="absolute inset-0 flex items-center justify-center text-content-tertiary">
+                          <ImageIcon size={32} strokeWidth={1.5} />
+                        </div>
+                      }
                     />
                   ) : (
                     <div className="absolute inset-0 flex items-center justify-center text-content-tertiary">
@@ -413,11 +423,21 @@ export function PhotosTab({ projectId }: PhotosTabProps): React.ReactElement {
             onClick={(e) => e.stopPropagation()}
           >
             {activePhoto.download_url ? (
-              <img
+              <AuthImage
                 src={activePhoto.download_url}
                 alt={activePhoto.name}
                 className="max-w-full max-h-[80vh] object-contain rounded shadow-2xl"
                 data-testid="photos-tab-lightbox-image"
+                placeholder={
+                  <div className="flex h-64 w-64 items-center justify-center rounded bg-white/10 text-white">
+                    <ImageIcon size={40} strokeWidth={1.25} className="animate-pulse" />
+                  </div>
+                }
+                fallback={
+                  <div className="flex h-64 w-64 items-center justify-center rounded bg-white/10 text-white">
+                    <ImageIcon size={40} strokeWidth={1.25} />
+                  </div>
+                }
               />
             ) : (
               <div className="flex h-64 w-64 items-center justify-center rounded bg-white/10 text-white">

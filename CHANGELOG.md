@@ -5,6 +5,110 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.6.0] — 2026-05-18 · Multi-level BOQ hierarchy + resource-code dedup + match-pipeline restore
+
+### Added
+
+- BOQ multi-level hierarchy: sections-in-sections and partidas-in-partidas up to 8 nesting tiers, depth-capped on every create/bulk/section/re-parent path; `GET /v1/boq/limits/` exposes the cap (#136).
+- BOQ resource code: full duplicate handling — reuse the existing resource or create-new-with-changed-code; a master-resource edit propagates its definition to every reusing instance (quantity never propagates, user-overridden resources preserved) (#133).
+- New Project "Show all options": optional fields grouped into iconed cards — Description, Localization, Identification, Site address, Schedule & budget.
+
+### Changed
+
+- /match-elements: the deep 7-stage pipeline (Convert→Load→Schema→Filter→Group→Match→Rollup, per-stage Adjust, editable prompts) is the visible primary flow again — single rail, prominent resume doorway.
+
+### Fixed
+
+- Qdrant collection-info reads are version-tolerant (`points_count`→`vectors_count`→`count()`); fixes the `'CollectionInfo' object has no attribute 'vectors_count'` crash on /match-elements.
+- "Vector DB unreachable" banner is now actionable — explains the optional dependency, points to native Qdrant install, lexical-fallback note, wired Retry button.
+- Takeoff measurements tab fits in one viewport at desktop sizes — no page scrollbars (real fix after #181/#182).
+
+## [3.5.0] — 2026-05-18 · Pipeline Builder + BOQ FX-correct exports + reuse codes
+
+### Added
+
+- Pipeline Builder: visual automation canvas + graph executor + node registry (6 node types), per-run states, publish-gated structural validation.
+- BOQ manual resources gain a `code` field with a project-wide reuse prompt: insert the existing resource or create-new-with-changed-code (#133 stage 1).
+- Exchange modules (22 regions) ship a one-click sample-template download.
+- BOQ CSV & Excel exports gain a Currency column + a frozen FX-rate appendix (rates can't be retroactively changed on a delivered BOQ).
+
+### Changed
+
+- New Project page: collapsible "Optional details" with progressive disclosure — fast path stays 3–4 fields (#195).
+- §4–12 deep-improvement wave across AI, Planning, Field Ops, Finance, Commercial, Communication, Documentation, Quality and Regional modules.
+
+### Fixed
+
+- BOQ reuse codes: a master edit now propagates to every linked instance's child/subtree (instance edits still diverge/unlink as intended) (#132).
+- BOQ section subtotals, Direct Cost and Grand Total now FX-convert foreign-currency positions in the export path (CSV/Excel/PDF/GAEB) — the export-side twin of the #131 grid fix (#111).
+- /catalog resources not displaying for anonymous/demo access (#196).
+- BIM converters status panel is now dismissible (#194).
+- GitHub issues #128, #129, #131, #134, #135 resolved; takeoff measurements horizontal scroll (#182).
+- Finance/procurement project-currency inheritance is now best-effort — a failed lookup never 500s a budget/PO create.
+
+### Security
+
+- Pipeline Builder endpoints (list / get / update / **delete** / runs / node-types) required no authentication — all now require an authenticated user.
+
+## [3.4.1] — 2026-05-17 · Authenticated media loading + dual IFC/RVT showcase
+
+### Fixed
+
+- Photo & file-grid thumbnails and full-size images failed to load (HTTP 401) — JWT-protected media endpoints can't authenticate a plain `<img src>`. New shared `AuthImage` fetches with the bearer token and renders an object URL; applied across the photo gallery, file manager grid and project photos tab. Affects every real uploaded photo, not only the showcase.
+
+### Changed
+
+- Showcase snapshot regenerated: each of the 7 projects now ships a second Autodesk Revit (.rvt) structural model alongside the IFC architectural model — both visible in the BIM viewer and the Match Elements (data-analytics) module.
+
+## [3.4.0] — 2026-05-17 · Professional showcase BOQ + colored real-IFC BIM + viewer fix
+
+### Added
+
+- Edit + Delete on Finance, Inspections, Procurement and Variations (notices / VR / VO / daywork / EoT) — full prefilled edit modals + guarded delete.
+
+### Changed
+
+- Showcase BOQs rebuilt professionally: 12 WBS divisions × ~49 priced positions per project, each broken into 3–6 real region-catalogue resources at average price, fully localized; reconciliation deterministically recomputed (BAC/EVM/cash-flow stays green, ALL 7 PASS).
+- Showcase BIM now a real 48 MB IFC2X3 model with 380 real parsed elements (walls/slabs/windows/doors/beams + BaseQuantities), every priced position linked, downloadable original, rendered in color (66 materials).
+
+### Fixed
+
+- BIM 3D viewer z-fighting ("jumping triangles") on real IFC/RVT models — logarithmic depth buffer + model-scaled camera near/far instead of a fixed 1e8 range.
+
+## [3.3.1] — 2026-05-17 · 7-project localized showcase on fresh install
+
+### Added
+
+- Fresh install seeds the 7-project localized showcase (EN/DE/ZH/AR/HI/RU/pt-BR) from a committed snapshot — real CWICR-resource estimates, linked BIM, WBS, cost-model/EVM and every operational module filled, each in its own language and currency.
+- Idempotent boot loader with demo-owner re-mapping; never breaks boot.
+- `SEED_SHOWCASE=false` opts out; the classic 5 demo projects remain the fallback when the snapshot or SQLite is unavailable.
+
+### Fixed
+
+- Showcase entities were seeded into terminal/locked statuses (meeting `completed`, RFI `closed`, contract `active`, EOT-claim invalid `approved`, field-report `submitted`, CDE `shared`/S0) so API state-machine guards blocked edit/delete; reset to editable create-default states across all 7 projects. Numeric/financial columns untouched — BAC/EVM/cash-flow reconciliation preserved.
+
+## [3.3.0] — 2026-05-16 · Reusable BOQ codes (linked positions) + deep correctness pass
+
+### Added
+
+- BOQ code reuse / linked positions (#127): type or pick an existing code → a linked instance is created with the master's full definition + child subtree, its own unique ordinal and its own independently-editable quantity (no more "code already exists" dead-end).
+- Master-definition edits propagate project-wide to every linked instance; quantity/ordinal never propagate.
+- Editing a linked instance's definition auto-unlinks it and warns the user instead of back-propagating.
+- Codeless positions/resources get an auto unique internal `reference_code` so they are always referenceable.
+- "Show Linked Positions" panel + value-preserving "Unlink"; grid badges (amber master with count / blue instance).
+- Alembic `v3036_linked_positions` (reference_code / link_group_id / link_role, idempotent).
+
+### Fixed
+
+- Unlink a master with linked instances returned HTTP 500 (`update_fields` `expire_all` expired the ORM instance → `MissingGreenlet`); now 200, value-preserving, survivor promoted.
+- Deep correctness pass (W1–W7) across assemblies/catalog, BOQ core, projects/documents, risk/schedule/variations, validation/costs/core, CAD/BIM unit honesty, takeoff labels & frontend perf.
+- Validation `RunValidationResponse.score` accepts `None` (SKIPPED reports no longer 500 the response model).
+- i18n validation bundle: humanised fallback for missing keys (raw dotted keys never surface to users).
+
+### Verification
+
+- #127 verified end-to-end live (reuse, propagation, unlink, independent quantities, child subtree) + new integration regression tests; frontend type-check clean.
+
 ## [3.2.0] — 2026-05-16 · Backlog triage, Planning/Field-Ops audit, clean-install fix, per-country demo data
 
 ### Clean install

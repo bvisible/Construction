@@ -280,6 +280,105 @@ class PositionRepository:
         result = (await self.session.execute(stmt)).scalar_one()
         return int(result) > 0
 
+    # ── Issue #127: linked-position group access ──────────────────────────
+
+    async def project_id_for_boq(self, boq_id: uuid.UUID) -> uuid.UUID | None:
+        """Resolve the owning project id for a BOQ id.
+
+        Linked-position groups are scoped to ONE project (all BOQs of that
+        project), so reuse-by-code lookups must join through the project.
+        """
+        stmt = select(BOQ.project_id).where(BOQ.id == boq_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def find_master_by_reference_code(
+        self,
+        project_id: uuid.UUID,
+        reference_code: str,
+    ) -> Position | None:
+        """Return the definition-owner Position for ``reference_code`` in a project.
+
+        Searches every BOQ of the project (Position → BOQ → project_id).
+        Preference order:
+
+        1. an explicit ``link_role='master'`` row, else
+        2. the oldest standalone owner of that code (will be promoted to
+           master by the service when a reuse instance is created).
+
+        Returns ``None`` when the code is unused anywhere in the project.
+        """
+        rc = (reference_code or "").strip()
+        if not rc:
+            return None
+        base = (
+            select(Position)
+            .join(BOQ, BOQ.id == Position.boq_id)
+            .where(BOQ.project_id == project_id, Position.reference_code == rc)
+        )
+        # 1. explicit master wins
+        master_stmt = base.where(Position.link_role == "master").order_by(
+            Position.created_at
+        )
+        master = (await self.session.execute(master_stmt)).scalars().first()
+        if master is not None:
+            return master
+        # 2. oldest standalone owner of the code
+        standalone_stmt = base.order_by(Position.created_at)
+        return (await self.session.execute(standalone_stmt)).scalars().first()
+
+    async def list_link_group(self, link_group_id: uuid.UUID) -> list[Position]:
+        """Return every position in a link group, oldest first.
+
+        Ordered by ``created_at`` so master-promotion picks the oldest
+        instance deterministically.
+        """
+        stmt = (
+            select(Position)
+            .where(Position.link_group_id == link_group_id)
+            .order_by(Position.created_at, Position.sort_order)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def list_for_project(self, project_id: uuid.UUID) -> list[Position]:
+        """Return EVERY position across all BOQs of a project, oldest first.
+
+        Issue #133. Resource codes live in ``metadata.resources[].code``
+        (JSON, no SQL column), so a project-wide resource-by-code lookup
+        must scan positions of every BOQ in the project. Ordered by
+        ``created_at`` so the first match is the original definition.
+        """
+        stmt = (
+            select(Position)
+            .join(BOQ, BOQ.id == Position.boq_id)
+            .where(BOQ.project_id == project_id)
+            .order_by(Position.created_at, Position.sort_order)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def reference_code_exists_in_project(
+        self,
+        project_id: uuid.UUID,
+        reference_code: str,
+    ) -> bool:
+        """True if any position in the project already uses ``reference_code``.
+
+        Used to keep auto-generated internal codes ("R-XXXXXXXX") unique
+        across the whole project.
+        """
+        rc = (reference_code or "").strip()
+        if not rc:
+            return False
+        stmt = (
+            select(func.count())
+            .select_from(Position)
+            .join(BOQ, BOQ.id == Position.boq_id)
+            .where(BOQ.project_id == project_id, Position.reference_code == rc)
+        )
+        result = (await self.session.execute(stmt)).scalar_one()
+        return int(result) > 0
+
 
 class MarkupRepository:
     """Data access for BOQMarkup model."""

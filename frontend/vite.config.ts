@@ -95,22 +95,55 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          // Vendor chunks
-          if (id.includes('node_modules/react-dom/')) return 'vendor-react';
-          if (id.includes('node_modules/react/') || id.includes('node_modules/react-router-dom/')) return 'vendor-react';
-          if (id.includes('node_modules/ag-grid-')) return 'vendor-ag-grid';
-          if (id.includes('node_modules/@tanstack/react-query')) return 'vendor-query';
-          if (id.includes('node_modules/i18next') || id.includes('node_modules/react-i18next') || id.includes('node_modules/i18next-browser-languagedetector') || id.includes('node_modules/i18next-http-backend')) return 'vendor-i18n';
-          if (id.includes('node_modules/pdfjs-dist')) return 'vendor-pdf';
-          if (id.includes('node_modules/yjs') || id.includes('node_modules/y-webrtc')) return 'vendor-collab';
-          if (id.includes('node_modules/jspdf') || id.includes('node_modules/html2canvas')) return 'vendor-charts';
-          if (id.includes('node_modules/exceljs')) return 'vendor-exceljs';
           // i18n locales: each ``src/app/locales/<code>.ts`` is fetched
           // on demand via dynamic import in ``i18n.ts``. Vite emits one
           // chunk per locale automatically; pin a stable name so cache
-          // keys survive minor unrelated edits.
+          // keys survive minor unrelated edits.  Checked first because
+          // these are source files, not node_modules (the guard below
+          // would otherwise skip them).
           const localeMatch = id.match(/[\\/]src[\\/]app[\\/]locales[\\/]([a-z]{2})\.ts$/);
           if (localeMatch) return `i18n-${localeMatch[1]}`;
+          if (!id.includes('node_modules')) return;
+          // ── Heavy, route-only vendors → dedicated async chunks ───────
+          // These libraries are only reached through `lazy()` route
+          // chunks (BOQ editor, dashboard map, PDF/DWG takeoff, Excel
+          // export, flow editor).  Pinning each to its own chunk keeps
+          // them OUT of the initial `index` chunk and lets multiple
+          // routes share a single cached copy instead of duplicating the
+          // payload per route chunk (V320-PERF-01).  Order: most specific
+          // first; map rule before any generic react rule so the
+          // `react-map-gl` adapter rides with maplibre, not vendor-react.
+          if (id.includes('node_modules/exceljs')) return 'vendor-exceljs';
+          if (
+            id.includes('node_modules/maplibre-gl') ||
+            id.includes('node_modules/react-map-gl')
+          )
+            return 'vendor-maplibre';
+          if (id.includes('node_modules/ag-grid-')) return 'vendor-ag-grid';
+          if (id.includes('node_modules/recharts') || id.includes('node_modules/d3-'))
+            return 'vendor-recharts';
+          if (id.includes('node_modules/@xyflow/')) return 'vendor-flow';
+          if (id.includes('node_modules/@dnd-kit/')) return 'vendor-dnd';
+          if (id.includes('node_modules/three')) return 'vendor-three';
+          if (id.includes('node_modules/pdfjs-dist')) return 'vendor-pdf';
+          // jsPDF + html2canvas (PDF report export) — distinct from the
+          // recharts charting stack so a page that only charts doesn't
+          // drag in the PDF generator and vice-versa.
+          if (id.includes('node_modules/jspdf') || id.includes('node_modules/html2canvas'))
+            return 'vendor-pdf-export';
+          if (
+            id.includes('node_modules/yjs') ||
+            id.includes('node_modules/y-webrtc') ||
+            id.includes('node_modules/y-websocket') ||
+            id.includes('node_modules/y-protocols') ||
+            id.includes('node_modules/lib0')
+          )
+            return 'vendor-collab';
+          // ── Framework / always-loaded vendors ────────────────────────
+          if (id.includes('node_modules/react-dom/')) return 'vendor-react';
+          if (id.includes('node_modules/react/') || id.includes('node_modules/react-router-dom/') || id.includes('node_modules/react-router/')) return 'vendor-react';
+          if (id.includes('node_modules/@tanstack/react-query')) return 'vendor-query';
+          if (id.includes('node_modules/i18next') || id.includes('node_modules/react-i18next') || id.includes('node_modules/i18next-browser-languagedetector') || id.includes('node_modules/i18next-http-backend')) return 'vendor-i18n';
         },
       },
     },

@@ -42,7 +42,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import String
 
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep
+from app.dependencies import (
+    CurrentUserId,
+    OptionalUserPayload,
+    RequirePermission,
+    SessionDep,
+)
 from app.modules.catalog.schemas import (
     CatalogResourceCreate,
     CatalogResourceResponse,
@@ -73,6 +78,36 @@ def _fmt_price(value: float) -> str:
     # multiply/divide cycles, then normalise -0.0 → 0.
     out = f"{value:.12g}"
     return "0" if out in ("-0", "-0.0") else out
+
+
+def _normalise_band(
+    base: float, lo: float, hi: float
+) -> tuple[float, float, float]:
+    """Enforce the price-band invariant ``min <= base <= max`` (CAT-001).
+
+    ``CatalogResourceCreate._check_price_band`` rejects an inverted /
+    out-of-band resource at create time, but the bulk ``adjust-prices``
+    and GitHub-import write paths bypassed that model validator, so an
+    inverted band could still be *persisted* (a pre-existing inversion
+    survives a uniform multiply; a CSV row may already be inverted).
+    Every downstream "is the rate within band?" check then becomes
+    meaningless.
+
+    A band is only meaningful when both ``lo`` and ``hi`` are > 0 (0 is
+    the documented "no band" sentinel, mirroring the create validator);
+    single-price resources are left untouched. We *normalise* rather
+    than reject so a bulk run / large import is not aborted by a few
+    dirty rows: swap an inverted ``lo``/``hi``, then clamp ``base`` into
+    ``[lo, hi]``. Returns the corrected ``(base, lo, hi)`` triple.
+    """
+    if lo > 0 and hi > 0:
+        if lo > hi:
+            lo, hi = hi, lo
+        if base < lo:
+            base = lo
+        elif base > hi:
+            base = hi
+    return base, lo, hi
 
 
 # ── Region-to-GitHub mapping ─────────────────────────────────────────────
@@ -201,6 +236,14 @@ async def import_catalog_from_github(
                 specifications[key] = val
 
         try:
+            # CAT-001: normalise the price band on import — a CSV row may
+            # ship price_min > price_max (or an avg outside the band),
+            # and this write path bypasses the create-time validator.
+            _b, _lo, _hi = _normalise_band(
+                float(row.get("price_avg") or 0),
+                float(row.get("price_min") or 0),
+                float(row.get("price_max") or 0),
+            )
             resource = CatalogResource(
                 resource_code=resource_code,
                 name=(row.get("name") or resource_code).strip()[:500],
@@ -209,9 +252,9 @@ async def import_catalog_from_github(
                 unit=(row.get("unit") or "unit").strip()[:20],
                 # CAT-003: preserve source precision; do not truncate to
                 # 2dp on import (compounds with later adjust-prices passes).
-                base_price=_fmt_price(float(row.get("price_avg") or 0)),
-                min_price=_fmt_price(float(row.get("price_min") or 0)),
-                max_price=_fmt_price(float(row.get("price_max") or 0)),
+                base_price=_fmt_price(_b),
+                min_price=_fmt_price(_lo),
+                max_price=_fmt_price(_hi),
                 currency=(row.get("currency") or "").strip(),
                 usage_count=int(float(row.get("usage_count") or 0)),
                 source="github_import",
@@ -339,9 +382,21 @@ async def adjust_prices(
                 # so repeated factor passes drifted (and factor→1/factor
                 # never restored the original). ``_fmt_price`` trims only
                 # trailing-zero noise, not significant digits.
-                res.base_price = _fmt_price(float(res.base_price) * factor)
-                res.min_price = _fmt_price(float(res.min_price) * factor)
-                res.max_price = _fmt_price(float(res.max_price) * factor)
+                new_base = float(res.base_price) * factor
+                new_lo = float(res.min_price) * factor
+                new_hi = float(res.max_price) * factor
+                # CAT-001: a uniform positive multiply preserves order,
+                # so it cannot *create* an inversion — but a row that
+                # was ALREADY inverted (e.g. from an old import that
+                # predated the band validator) would survive every bulk
+                # run untouched. Normalise here so the invariant is
+                # restored on the next adjust-prices pass.
+                new_base, new_lo, new_hi = _normalise_band(
+                    new_base, new_lo, new_hi
+                )
+                res.base_price = _fmt_price(new_base)
+                res.min_price = _fmt_price(new_lo)
+                res.max_price = _fmt_price(new_hi)
                 adjusted_ids.append(str(res.id))
             except (ValueError, TypeError):
                 pass
@@ -397,7 +452,17 @@ async def adjust_prices(
 
 @router.get("/", response_model=CatalogSearchResponse)
 async def search_catalog(
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    # Public endpoint (mirrors the unauthenticated ``/regions/`` route and
+    # the "(public, query params)" contract in this module's docstring).
+    # Use OPTIONAL auth: ``CurrentUserId = None`` looks optional but is an
+    # ``Annotated[..., Depends()]`` param — FastAPI ignores the ``= None``
+    # default and ALWAYS resolves the dependency, so an anonymous /
+    # expired-token request got a 401 here while ``/regions/`` returned
+    # 200. The catalog page then rendered region tabs (with counts) but an
+    # empty resource list. ``OptionalUserPayload`` returns ``None`` for an
+    # anonymous request instead of raising, restoring the intended public
+    # behaviour. ``_user`` is unused — kept only as a presence marker.
+    _user: OptionalUserPayload = None,
     service: CatalogResourceService = Depends(_get_service),
     q: str | None = Query(default=None, description="Text search on code and name"),
     resource_type: str | None = Query(default=None, description="Filter: material, equipment, labor, operator"),
@@ -437,11 +502,18 @@ async def search_catalog(
 
 @router.get("/stats/", response_model=CatalogStatsResponse)
 async def catalog_stats(
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    region: str | None = Query(
+        default=None,
+        description="Scope counts to a single region so they match the "
+        "region-filtered resource list",
+    ),
+    # Public endpoint — same optional-auth fix as ``search_catalog`` above
+    # (a forced 401 here left the page's type/category badges empty).
+    _user: OptionalUserPayload = None,
     service: CatalogResourceService = Depends(_get_service),
 ) -> CatalogStatsResponse:
-    """Get aggregated counts by type and category."""
-    return await service.get_stats()
+    """Get aggregated counts by type and category (optionally per region)."""
+    return await service.get_stats(region=region)
 
 
 # ── Inverse lookup: positions that use a resource ─────────────────────────

@@ -121,7 +121,17 @@ def normalize_unit_token(raw: Any) -> str:
         return ""
     for sup, ascii_digit in _SUPERSCRIPT_UNIT_MAP.items():
         text = text.replace(sup, ascii_digit)
-    return text.lower()
+    text = text.lower()
+    # BUG-D-TKC-NEW-02 — German / European BOQ conventions abbreviate
+    # count units WITH a trailing period: "Stk.", "St.", "Stck.", "Pos.".
+    # Folding the trailing period(s)/whitespace here (the single unit
+    # write/compare boundary) makes "Stk." collapse to "stk" so it hits
+    # the same _COUNT_UNITS branch as "Stk" / "Stück" instead of falling
+    # through to the "unknown unit → untouched" branch. No real unit
+    # token legitimately ends in '.', so this is safe for geometric
+    # units (m2/m3/lfm) too.
+    text = text.rstrip(". \t")
+    return text
 
 
 # Units that denote a *count of discrete items* (not a geometric
@@ -141,11 +151,19 @@ _COUNT_UNITS: frozenset[str] = frozenset(
         "units",
         "item",
         "items",
+        # German / DIN / GAEB count units. ``normalize_unit_token`` now
+        # strips a trailing period so "Stk." → "stk"; the dotted spellings
+        # are kept here too as belt-and-braces (D-TKC-NEW-02).
         "st",
+        "st.",
         "stk",
+        "stk.",
         "stck",
+        "stck.",
         "stück",
+        "stück.",
         "stueck",
+        "stueck.",
         "u",
         "lsum",
         "ls",

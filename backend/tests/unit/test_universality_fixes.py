@@ -861,8 +861,10 @@ def test_risk_stats_initial_currency_is_empty():
     from app.modules.risk.service import RiskService
 
     src = inspect.getsource(RiskService.get_summary)
-    assert 'currency = "EUR"' not in src, (
-        "Risk summary still seeds currency with 'EUR' — must start empty so a "
-        "USD/BRL/CNY project shows the right currency."
+    assert '"EUR"' not in src, (
+        "Risk summary still seeds currency with 'EUR' — must resolve from the "
+        "project so a USD/BRL/CNY project shows the right currency."
     )
-    assert 'currency = ""' in src
+    # Currency is data-driven: resolved from the owning project (empty string
+    # when the project has none), not a hardcoded seed.
+    assert "_get_project_currency" in src

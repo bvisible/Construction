@@ -545,7 +545,13 @@ function StatsBar({ summary }: { summary: MarkupsSummary | undefined }) {
 
 /* ── Expanded Row Detail ─────────────────────────────────────────────── */
 
-function MarkupDetail({ markup }: { markup: Markup }) {
+function MarkupDetail({
+  markup,
+  documentName,
+}: {
+  markup: Markup;
+  documentName?: string;
+}) {
   const { t } = useTranslation();
   return (
     <div className="px-6 py-3 bg-surface-secondary/40 border-t border-border-light">
@@ -560,12 +566,22 @@ function MarkupDetail({ markup }: { markup: Markup }) {
         </div>
         <div>
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide mb-0.5">
-            {t('markups.geometry_preview', { defaultValue: 'Geometry' })}
+            {t('markups.document', { defaultValue: 'Document' })}
           </p>
           <p className="text-sm text-content-secondary">
-            {markup.geometry && Object.keys(markup.geometry).length > 0
-              ? t('markups.has_geometry', { defaultValue: 'Geometry data available' })
-              : t('markups.no_geometry', { defaultValue: 'No geometry data' })}
+            {markup.document_id
+              ? documentName || t('markups.unknown_document', { defaultValue: 'Document' })
+              : t('markups.no_document_link', {
+                  defaultValue: 'Project-level annotation (no document)',
+                })}
+            {markup.document_id && (
+              <>
+                {' · '}
+                <span className="text-content-tertiary">
+                  {t('markups.page_n', { defaultValue: 'page {{n}}', n: markup.page })}
+                </span>
+              </>
+            )}
           </p>
         </div>
         <div>
@@ -573,8 +589,9 @@ function MarkupDetail({ markup }: { markup: Markup }) {
             {t('markups.linked_boq', { defaultValue: 'Linked BOQ Position' })}
           </p>
           <p className="text-sm text-content-secondary">
-            {markup.linked_boq_position_id ||
-              t('markups.not_linked', { defaultValue: 'Not linked' })}
+            {markup.linked_boq_position_id
+              ? t('markups.linked_to_boq', { defaultValue: 'Linked to a BOQ position' })
+              : t('markups.not_linked', { defaultValue: 'Not linked' })}
           </p>
         </div>
       </div>
@@ -704,12 +721,14 @@ function MarkupTableRow({
   onToggleExpand,
   onChangeStatus,
   onDelete,
+  documentName,
 }: {
   markup: Markup;
   isExpanded: boolean;
   onToggleExpand: () => void;
   onChangeStatus: (status: MarkupStatus) => void;
   onDelete: () => void;
+  documentName?: string;
 }) {
   const { t } = useTranslation();
   const TypeIcon = TYPE_ICONS[markup.type] ?? PenTool;
@@ -764,8 +783,13 @@ function MarkupTableRow({
         <td className="px-3 py-2.5">
           <div className="flex items-center gap-1">
             <FileText size={12} className="text-content-tertiary shrink-0" />
-            <span className="text-xs text-content-secondary truncate max-w-[130px] block">
-              {markup.document_id ? markup.document_id.slice(0, 8) + '...' : '-'}
+            <span
+              className="text-xs text-content-secondary truncate max-w-[130px] block"
+              title={documentName || markup.document_id || undefined}
+            >
+              {markup.document_id
+                ? documentName || t('markups.unknown_document', { defaultValue: 'Document' })
+                : t('markups.hub_only', { defaultValue: 'Hub' })}
             </span>
           </div>
         </td>
@@ -824,7 +848,7 @@ function MarkupTableRow({
       {isExpanded && (
         <tr>
           <td colSpan={8}>
-            <MarkupDetail markup={markup} />
+            <MarkupDetail markup={markup} documentName={documentName} />
           </td>
         </tr>
       )}
@@ -912,6 +936,14 @@ export function MarkupsPage() {
     queryFn: () => fetchStampTemplates(projectId),
     enabled: !!projectId,
   });
+
+  // Resolve document_id → human name so the table/detail show the
+  // filename instead of an opaque UUID slice (was "ab12cd34...").
+  const docNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const d of documents) map.set(d.id, d.name);
+    return map;
+  }, [documents]);
 
   // Client-side search filter
   const filteredMarkups = useMemo(() => {
@@ -1140,6 +1172,14 @@ export function MarkupsPage() {
         </div>
       ) : (
         <>
+          {/* ── Purpose intro ─────────────────────────────────────────────── */}
+          <p className="mt-2 text-xs text-content-tertiary max-w-3xl leading-relaxed">
+            {t('markups.page_intro', {
+              defaultValue:
+                'Markups are review annotations — clouds, arrows, stamps and measurements placed on project documents. "All annotations" merges markups from the PDF/DWG takeoff tools and this hub; "Hub only" shows the ones created here. Upload drawings on the Documents page, then annotate them.',
+            })}
+          </p>
+
           {/* ── Stats Bar ──────────────────────────────────────────────────── */}
           <div className="mt-3">
             <StatsBar summary={summary} />
@@ -1384,6 +1424,11 @@ export function MarkupsPage() {
                         <MarkupTableRow
                           key={markup.id}
                           markup={markup}
+                          documentName={
+                            markup.document_id
+                              ? docNameById.get(markup.document_id)
+                              : undefined
+                          }
                           isExpanded={expandedRowId === markup.id}
                           onToggleExpand={() =>
                             setExpandedRowId(

@@ -45,6 +45,7 @@ export interface Project {
 }
 
 export interface CreateProjectData {
+  /** The ONLY hard-required field on the backend `ProjectCreate` schema. */
   name: string;
   description?: string;
   region?: string;
@@ -54,6 +55,14 @@ export interface CreateProjectData {
   regional_factor?: number;
   /** Optional postal address — used to anchor the project map + weather. */
   address?: ProjectAddress | null;
+  /** Phase-12 expansion fields — all optional on the backend schema. */
+  project_code?: string | null;
+  project_type?: string | null;
+  client_id?: string | null;
+  contract_value?: string | null;
+  budget_estimate?: string | null;
+  planned_start_date?: string | null;
+  planned_end_date?: string | null;
 }
 
 /** Patch payload — every field is optional; only included keys are updated. */

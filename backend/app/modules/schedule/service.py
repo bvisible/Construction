@@ -211,8 +211,27 @@ def get_work_calendar(region: str | None = None) -> dict:
             "BRAZIL": "BRAZIL",
             "CHINA": "CHINA",
             "INDIA": "INDIA",
+            # Human-readable region labels actually stored on projects
+            # (e.g. demo projects carry region="Middle East" /
+            # "United States"). Keyed by the uppercased first token so the
+            # prefix-match below resolves them. Without these, "Middle East"
+            # → prefix "MIDDLE" fell through to DEFAULT and the Gulf 6-day
+            # calendar was never applied.
+            "MIDDLE": "GULF",
+            "UNITED": "US",  # "United States" / "United Kingdom" → see override
         }
-        prefix = region.split("_")[0].upper()
+        # Full-label overrides take priority over the first-token prefix so
+        # "United Kingdom" doesn't collide with "United States" on "UNITED".
+        full_label_map = {
+            "MIDDLE EAST": "GULF",
+            "UNITED STATES": "US",
+            "UNITED KINGDOM": "UK",
+        }
+        normalized = region.strip().upper()
+        for label, mapped_cal in full_label_map.items():
+            if normalized.startswith(label):
+                return WORK_CALENDARS.get(mapped_cal, WORK_CALENDARS["DEFAULT"])
+        prefix = region.split("_")[0].split()[0].upper() if region.strip() else ""
         mapped = region_map.get(prefix)
         if mapped:
             return WORK_CALENDARS.get(mapped, WORK_CALENDARS["DEFAULT"])

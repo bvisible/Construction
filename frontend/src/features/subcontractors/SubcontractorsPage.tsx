@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -32,6 +33,7 @@ import {
 } from '@/shared/ui';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { PipelineBanner } from './PipelineBanner';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import {
@@ -175,6 +177,39 @@ export function SubcontractorsPage() {
           {t('subcontractors.new', { defaultValue: 'New Subcontractor' })}
         </Button>
       </div>
+
+      <PipelineBanner
+        intro={t('subcontractors.pipeline_intro', {
+          defaultValue:
+            'Subcontractors are your prequalified supply chain. Approved firms can be invited to bid packages, bound by subcontract agreements, and paid via payment applications — with certificates and ratings gating eligibility.',
+        })}
+        steps={[
+          {
+            label: t('subcontractors.step_subs', {
+              defaultValue: 'Subcontractors',
+            }),
+            current: true,
+          },
+          {
+            label: t('subcontractors.step_bid', {
+              defaultValue: 'Bid Management',
+            }),
+            to: '/bid-management',
+          },
+          {
+            label: t('subcontractors.step_contract', {
+              defaultValue: 'Contracts',
+            }),
+            to: '/contracts',
+          },
+          {
+            label: t('subcontractors.step_procurement', {
+              defaultValue: 'Procurement',
+            }),
+            to: '/procurement',
+          },
+        ]}
+      />
 
       {/* Tabs (single tab — left for layout parity with ServicePage) */}
       <div className="border-b border-border-light">
@@ -578,6 +613,28 @@ function DetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                 label={t('subcontractors.tax_id', { defaultValue: 'Tax ID' })}
                 value={sub.tax_id || '—'}
               />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 px-5 py-3 text-xs border-b border-border-light">
+              <span className="text-content-tertiary">
+                {t('subcontractors.related', { defaultValue: 'Related:' })}
+              </span>
+              <Link
+                to="/bid-management"
+                className="inline-flex items-center gap-1 rounded-md border border-border-light px-2 py-1 text-content-secondary hover:text-oe-blue hover:border-oe-blue transition-colors"
+              >
+                {t('subcontractors.invite_to_bid', {
+                  defaultValue: 'Invite to a bid package',
+                })}
+              </Link>
+              <Link
+                to="/contracts"
+                className="inline-flex items-center gap-1 rounded-md border border-border-light px-2 py-1 text-content-secondary hover:text-oe-blue hover:border-oe-blue transition-colors"
+              >
+                {t('subcontractors.subcontract', {
+                  defaultValue: 'Subcontract agreement',
+                })}
+              </Link>
             </div>
 
             <div className="border-b border-border-light px-5">

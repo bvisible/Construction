@@ -38,6 +38,7 @@ import {
   Star,
   Database,
   Plus,
+  Search,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { Card, CardContent, Button, Badge, AIDisclaimerBanner } from '@/shared/ui';
@@ -424,9 +425,9 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
             const bestMatch = enriched?.best_match ?? null;
 
             return (
-              <>
+              <React.Fragment key={`${item.ordinal}-${idx}`}>
                 {showCategory && (
-                  <tr key={`cat-${idx}`} className="bg-surface-secondary/50">
+                  <tr className="bg-surface-secondary/50">
                     <td
                       colSpan={6}
                       className="px-4 py-2 text-xs font-semibold text-content-secondary uppercase tracking-wider"
@@ -436,7 +437,6 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
                   </tr>
                 )}
                 <tr
-                  key={item.ordinal}
                   className="border-b border-border-light/50 transition-colors duration-fast hover:bg-surface-secondary/30"
                   style={{ animationDelay: `${idx * 30}ms` }}
                 >
@@ -491,7 +491,7 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
                     )}
                   </td>
                 </tr>
-              </>
+              </React.Fragment>
             );
           })}
         </tbody>
@@ -1884,9 +1884,17 @@ export function QuickEstimatePage() {
     addToast({
       type: 'success',
       title: t('ai.qto_saved', { defaultValue: 'QTO ready' }),
-      message: t('ai.qto_saved_msg', { defaultValue: '{{count}} positions prepared for BOQ import', count: items.length }),
+      message: t('ai.qto_saved_msg', {
+        defaultValue:
+          '{{count}} positions prepared. Open a project BOQ and use Import to bring them in.',
+        count: items.length,
+      }),
+      action: {
+        label: t('ai.qto_open_boq', { defaultValue: 'Go to BOQ' }),
+        onClick: () => navigate('/boq'),
+      },
     });
-  }, [filteredGroups, cadColumnsData, cadGroupResult, addToast, t]);
+  }, [filteredGroups, cadColumnsData, cadGroupResult, addToast, t, navigate]);
 
   // ── Create BOQ from CAD QTO (server-side) ───────────────────────────
 
@@ -2094,6 +2102,55 @@ export function QuickEstimatePage() {
           </div>
         </div>
       ) : null}
+
+      {/* How it works — concise workflow context (AI Estimate route only,
+          before any result is generated). Tells construction specialists
+          exactly what the tool produces and where it fits in the pipeline. */}
+      {!isCadRoute && !result && !cadResult && !cadGroupResult && (
+        <div
+          className="animate-card-in rounded-xl border border-border-light bg-surface-secondary/40 px-4 py-3"
+          style={{ animationDelay: '80ms' }}
+        >
+          <div className="flex items-start gap-3">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-oe-blue/10">
+              <Info size={15} className="text-oe-blue" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-content-primary mb-1">
+                {t('ai.estimate_intro_title', {
+                  defaultValue: 'A first-pass estimate in seconds — then you refine it',
+                })}
+              </p>
+              <p className="text-xs text-content-secondary leading-relaxed">
+                {t('ai.estimate_intro_desc', {
+                  defaultValue:
+                    'Pick a source below. The AI returns a structured BOQ with quantities and indicative unit rates. Match those rates against the real CWICR cost database, save it as a project BOQ, then validate it. Treat AI numbers as a starting point — always review before pricing a tender.',
+                })}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-2xs text-content-tertiary">
+                {[
+                  t('ai.estimate_step_1', { defaultValue: 'Describe / upload' }),
+                  t('ai.estimate_step_2', { defaultValue: 'AI drafts BOQ' }),
+                  t('ai.estimate_step_3', { defaultValue: 'Match Cost DB' }),
+                  t('ai.estimate_step_4', { defaultValue: 'Save & validate' }),
+                ].map((step, i, arr) => (
+                  <span key={step} className="flex items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-surface-primary border border-border-light px-2 py-0.5">
+                      <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-oe-blue/10 text-[9px] font-bold text-oe-blue">
+                        {i + 1}
+                      </span>
+                      {step}
+                    </span>
+                    {i < arr.length - 1 && (
+                      <ArrowRight size={10} className="text-content-quaternary" />
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Source type selector (hidden on /data-explorer) */}
       {!isCadRoute && (
@@ -3461,6 +3518,61 @@ export function QuickEstimatePage() {
                 </span>
               </div>
             )}
+          </div>
+
+          {/* Next steps — make the AI→BOQ→validate→tender pipeline explicit.
+              Without this, "Save as BOQ" feels like the end of the road. */}
+          <div className="rounded-xl border border-oe-blue/15 bg-oe-blue-subtle/20 p-4">
+            <p className="flex items-center gap-1.5 text-xs font-semibold text-content-primary mb-1.5">
+              <Info size={13} className="text-oe-blue" />
+              {t('ai.estimate_after_title', { defaultValue: 'Recommended next steps' })}
+            </p>
+            <ul className="space-y-1 text-xs text-content-secondary leading-relaxed list-none">
+              <li className="flex gap-2">
+                <span className="text-oe-blue font-bold shrink-0">1.</span>
+                {t('ai.estimate_after_1', {
+                  defaultValue:
+                    'Match rates against the CWICR cost database above so prices reflect real regional data, not AI guesses.',
+                })}
+              </li>
+              <li className="flex gap-2">
+                <span className="text-oe-blue font-bold shrink-0">2.</span>
+                {t('ai.estimate_after_2', {
+                  defaultValue:
+                    'Save as a project BOQ — then review every quantity and rate in the BOQ editor before relying on the total.',
+                })}
+              </li>
+              <li className="flex gap-2">
+                <span className="text-oe-blue font-bold shrink-0">3.</span>
+                {t('ai.estimate_after_3', {
+                  defaultValue:
+                    'Run validation (DIN 276 / GAEB / quality rules) to catch missing scope, zero prices and classification gaps.',
+                })}
+              </li>
+            </ul>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Link
+                to="/match-elements"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-3 py-1.5 text-xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+              >
+                <Database size={13} />
+                {t('ai.estimate_link_match', { defaultValue: 'Match Elements' })}
+              </Link>
+              <Link
+                to="/validation"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-3 py-1.5 text-xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+              >
+                <CheckCircle2 size={13} />
+                {t('ai.estimate_link_validation', { defaultValue: 'Validation' })}
+              </Link>
+              <Link
+                to="/costs"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-3 py-1.5 text-xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+              >
+                <Search size={13} />
+                {t('ai.estimate_link_costs', { defaultValue: 'Cost Database' })}
+              </Link>
+            </div>
           </div>
 
           {/* Action buttons */}

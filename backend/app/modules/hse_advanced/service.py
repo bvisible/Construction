@@ -1021,6 +1021,15 @@ class HSEAdvancedService:
     # ── Toolbox topic catalogue ─────────────────────────────────────────
 
     async def create_topic(self, data: ToolboxTopicCreate) -> ToolboxTopic:
+        # ``ToolboxTopic.code`` is globally unique. Reject a duplicate with a
+        # clean 409 instead of letting the DB raise an uncaught IntegrityError
+        # that surfaces to the client as an opaque 500.
+        existing = await self.topic_repo.get_by_code(data.code)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"A toolbox topic with code '{data.code}' already exists",
+            )
         obj = ToolboxTopic(**data.model_dump())
         return await self.topic_repo.create(obj)
 

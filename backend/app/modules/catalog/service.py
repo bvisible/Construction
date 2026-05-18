@@ -183,11 +183,16 @@ class CatalogResourceService:
             limit=query.limit,
         )
 
-    async def get_stats(self) -> CatalogStatsResponse:
-        """Get aggregated statistics for the catalog."""
-        total = await self.repo.count()
-        by_type_raw = await self.repo.stats_by_type()
-        by_category_raw = await self.repo.stats_by_category()
+    async def get_stats(self, region: str | None = None) -> CatalogStatsResponse:
+        """Get aggregated statistics for the catalog.
+
+        ``region`` scopes every aggregate (total, by_type, by_category)
+        so the UI's tab/category counts match the region-filtered
+        resource list instead of advertising rows it can never display.
+        """
+        total = await self.repo.count(region=region)
+        by_type_raw = await self.repo.stats_by_type(region=region)
+        by_category_raw = await self.repo.stats_by_category(region=region)
 
         return CatalogStatsResponse(
             total=total,

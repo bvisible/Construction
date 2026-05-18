@@ -55,7 +55,14 @@ async def _on_cost_item_updated(event: Event) -> None:
     rate — older publishers may not include it.
     """
     data = event.data or {}
-    raw_id = data.get("cost_item_id") or data.get("id")
+    # The costs module publishes ``costs.item.updated`` with the key
+    # ``item_id`` (see ``costs/service.update_cost_item``). The previous
+    # reads (``cost_item_id`` / ``id``) never matched, so every
+    # cost-price edit was silently dropped here and assemblies kept a
+    # stale unit_cost / total_rate forever (ASM-007 wiring bug a).
+    # ``cost_item_id`` / ``id`` kept as fallbacks for any other / future
+    # publisher shape.
+    raw_id = data.get("item_id") or data.get("cost_item_id") or data.get("id")
     if not raw_id:
         return
 
@@ -171,25 +178,49 @@ async def _recalc_assemblies(session, assembly_ids: set[uuid.UUID]) -> None:
     await session.flush()
 
 
+def _parse_uuids(values: object) -> list[uuid.UUID]:
+    """Best-effort parse of an iterable of id strings into UUIDs."""
+    out: list[uuid.UUID] = []
+    if not isinstance(values, (list, tuple, set)):
+        return out
+    for v in values:
+        try:
+            out.append(uuid.UUID(str(v)))
+        except (ValueError, AttributeError, TypeError):
+            continue
+    return out
+
+
 async def _on_catalog_resource_updated(event: Event) -> None:
-    """``catalog.resource.updated`` / ``catalog.resource.price_adjusted`` →
-    refresh every Component linked via ``catalog_resource_id``.
+    """``catalog.resources.updated`` (bulk adjust-prices) and the
+    legacy ``catalog.resource.updated`` / ``catalog.resource.price_adjusted``
+    single-edit names → refresh every Component linked via
+    ``catalog_resource_id``.
 
     Mirrors the cost-item flow (ASM-007): a Component built from a
     catalog resource carried a frozen ``unit_cost`` snapshot and never
     picked up a later catalog price edit or bulk ``adjust-prices`` run.
 
-    Two shapes are handled:
+    Three payload shapes are handled (CAT-002):
 
-    * single resource — payload has ``resource_id`` (+ optionally the
-      new ``base_price``); only matching Components are refreshed.
-    * bulk adjust — no ``resource_id``; every Component that points at
-      *any* catalog resource is re-priced from the current
-      ``CatalogResource.base_price`` (the only correct source of truth
-      after a filtered bulk multiply).
+    * **bulk adjust** — ``catalog.resources.updated`` carries
+      ``{count, resource_ids, factor, filters}``. The catalog router
+      has already written the new ``base_price`` to every matched row
+      *before* publishing, so we re-price exactly the Components whose
+      ``catalog_resource_id`` is in ``resource_ids`` from the current
+      authoritative ``CatalogResource.base_price``.
+    * **single resource** — payload has ``resource_id`` (+ optionally
+      the new ``base_price``); only matching Components are refreshed.
+    * **legacy / unknown bulk** — neither id list nor single id: every
+      Component that points at *any* catalog resource is re-priced from
+      the current ``CatalogResource.base_price`` (the only correct
+      source of truth after a filtered bulk multiply).
     """
     data = event.data or {}
     raw_id = data.get("resource_id") or data.get("catalog_resource_id")
+    # ``catalog.resources.updated`` (the name the catalog router
+    # actually emits) ships the affected ids under ``resource_ids``.
+    scoped_ids = _parse_uuids(data.get("resource_ids"))
 
     try:
         async with async_session_factory() as session:
@@ -202,6 +233,13 @@ async def _on_catalog_resource_updated(event: Event) -> None:
                     return
                 comp_stmt = select(Component).where(
                     Component.catalog_resource_id == res_id
+                )
+            elif scoped_ids:
+                # Bulk adjust-prices — only the resources that were
+                # actually re-priced. Keeps the blast radius tight
+                # instead of re-walking every catalog-linked component.
+                comp_stmt = select(Component).where(
+                    Component.catalog_resource_id.in_(scoped_ids)
                 )
             else:
                 # Bulk price adjust — every catalog-linked component.
@@ -255,7 +293,8 @@ async def _on_catalog_resource_updated(event: Event) -> None:
                 "across %d assembly(s) after catalog resource %s changed",
                 len(components),
                 len(affected_assembly_ids),
-                raw_id or "(bulk)",
+                raw_id
+                or (f"(bulk: {len(scoped_ids)} ids)" if scoped_ids else "(bulk)"),
             )
     except Exception:
         logger.warning(
@@ -268,16 +307,22 @@ async def _on_catalog_resource_updated(event: Event) -> None:
 def register_assemblies_subscribers() -> None:
     """Wire the cost / catalog refresh subscribers to the global event bus."""
     event_bus.subscribe("costs.item.updated", _on_cost_item_updated)
-    # ASM-007: keep catalog-resource-linked components fresh. The
-    # publishers (catalog single-edit + bulk adjust-prices) live in the
-    # catalog module — this side is ready the moment they emit either
-    # event name; until then the subscription is inert (no behaviour
-    # change for installs whose catalog module doesn't publish yet).
+    # ASM-007 / CAT-002: keep catalog-resource-linked components fresh.
+    # ``catalog.resources.updated`` (PLURAL) is the name the catalog
+    # router actually emits from its bulk ``adjust-prices`` endpoint —
+    # the prior subscriptions used the singular / ``.price_adjusted``
+    # names that nothing published, so a catalog price change never
+    # propagated to assemblies. The singular names are kept as
+    # additional subscriptions in case a single-edit publisher is added
+    # later (the handler already understands the single-resource shape).
+    event_bus.subscribe(
+        "catalog.resources.updated", _on_catalog_resource_updated
+    )
     event_bus.subscribe("catalog.resource.updated", _on_catalog_resource_updated)
     event_bus.subscribe(
         "catalog.resource.price_adjusted", _on_catalog_resource_updated
     )
     logger.info(
         "Assemblies: subscribed to costs.item.updated + "
-        "catalog.resource.updated / .price_adjusted"
+        "catalog.resources.updated (+ legacy singular names)"
     )

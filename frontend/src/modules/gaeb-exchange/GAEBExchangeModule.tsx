@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -255,6 +256,23 @@ export default function GAEBExchangeModule() {
     setImportResult(null);
   }, []);
 
+  // Generate a tiny, valid sample GAEB X83 so a first-time user can see
+  // exactly what a well-formed file looks like (and verify the importer
+  // round-trips) without having to source one from their AVA software.
+  const handleDownloadSample = useCallback(() => {
+    const result = generateGAEBXML({
+      format: 'X83',
+      projectName: 'Sample Project',
+      boqName: 'Sample BOQ',
+      positions: [
+        { id: 's0', ordinal: '01', description: 'Substructure', unit: '', quantity: 0, unitRate: 0, total: 0, isSection: true },
+        { id: 's1', ordinal: '01.01.001', description: 'Reinforced concrete C30/37, foundation slab', unit: 'm3', quantity: 125, unitRate: 142.5, total: 17812.5, section: 'Substructure' },
+        { id: 's2', ordinal: '01.01.002', description: 'Formwork to slab edges', unit: 'm2', quantity: 48, unitRate: 38, total: 1824, section: 'Substructure' },
+      ],
+    });
+    downloadGAEBXML(result);
+  }, []);
+
   // ---------------------------------------------------------------------------
   // Export handlers
   // ---------------------------------------------------------------------------
@@ -419,6 +437,16 @@ export default function GAEBExchangeModule() {
                 <p className="text-2xs text-content-quaternary">
                   {t('gaeb.formats_hint', { defaultValue: 'Supported: .x81, .x83, .xml (GAEB DA XML 3.3)' })}
                 </p>
+                <button
+                  type="button"
+                  onClick={handleDownloadSample}
+                  className="mt-1 inline-flex items-center gap-1.5 text-2xs font-medium text-oe-blue hover:underline"
+                >
+                  <Download size={12} />
+                  {t('gaeb.download_sample', {
+                    defaultValue: 'No file yet? Download a sample GAEB X83 to try it',
+                  })}
+                </button>
               </div>
             )}
             <input
@@ -513,6 +541,17 @@ export default function GAEBExchangeModule() {
                     <li key={`err-${err.slice(0, 40)}-${idx}`}>• {err}</li>
                   ))}
                 </ul>
+              )}
+              {importResult.imported > 0 && (
+                <Link
+                  data-testid="regional-open-boq"
+                  to={importTargetBoqId ? `/boq?boq=${importTargetBoqId}` : '/boq'}
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-oe-blue hover:underline"
+                >
+                  {t('gaeb.open_boq', {
+                    defaultValue: 'Open in BOQ editor to review & validate →',
+                  })}
+                </Link>
               )}
             </div>
           )}

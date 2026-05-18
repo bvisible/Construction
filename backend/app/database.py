@@ -52,12 +52,25 @@ class GUID(TypeDecorator):
             return str(value)
         return value
 
-    def process_result_value(self, value: str | None, dialect: object) -> uuid.UUID | None:
+    def process_result_value(
+        self, value: str | None, dialect: object
+    ) -> uuid.UUID | str | None:
         if value is None:
             return None
         if isinstance(value, uuid.UUID):
             return value
-        return uuid.UUID(value)
+        try:
+            return uuid.UUID(value)
+        except (ValueError, AttributeError, TypeError):
+            # Some columns typed GUID() are, by their owning schema, free
+            # text (e.g. RFI/Submittal ``ball_in_court`` is documented as a
+            # role label such as "Architect"; ``assigned_to`` may hold a
+            # contact reference that is not a canonical UUID). The Pydantic
+            # response models for these fields are ``str | None``, so a
+            # non-UUID value round-trips fine. Raising here instead poisoned
+            # the request session and 500'd EVERY subsequent read of the
+            # row. Return the raw string so the row stays readable.
+            return value
 
 
 class Base(DeclarativeBase):

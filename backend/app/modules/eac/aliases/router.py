@@ -45,6 +45,7 @@ from app.modules.eac.aliases.schemas import (
     EacParameterAliasUpdate,
 )
 from app.modules.eac.aliases.service import (
+    AliasConflictError,
     AliasInUseError,
     create_alias,
     delete_alias,
@@ -188,7 +189,19 @@ async def create_alias_route(
         _check_kind(syn.kind)
         _check_source_filter(syn.source_filter)
     tenant_id = await _resolve_tenant_id(session, user_id)
-    alias = await create_alias(session, payload, tenant_id=tenant_id)
+    try:
+        alias = await create_alias(session, payload, tenant_id=tenant_id)
+    except AliasConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "alias_name_conflict",
+                "message": str(exc),
+                "scope": exc.scope,
+                "scope_id": str(exc.scope_id) if exc.scope_id else None,
+                "name": exc.name,
+            },
+        ) from exc
     return EacParameterAliasRead.model_validate(alias)
 
 

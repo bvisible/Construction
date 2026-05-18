@@ -10,11 +10,12 @@
 // Mounted above the classic toolset on the page; collapsing it returns
 // the user to the legacy single-shot flow without losing anything.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ChevronDown,
+  ChevronsRight,
   ChevronUp,
   Loader2,
   PlayCircle,
@@ -48,6 +49,16 @@ export function MatchPipeline({ sessionId }: Props) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState(true);
+  // The pipeline is the headline experience of /match-elements. When it
+  // mounts (a session is active) bring it into view so the deep 7-stage
+  // flow — not the legacy toolset below it — is what the user lands on.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    rootRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // Run once per session — re-scrolling on every refetch would be
+    // hostile while the user is editing a downstream stage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
   const [adjust, setAdjust] = useState<StageState | null>(null);
   const [runningStage, setRunningStage] = useState<StageName | null>(null);
   const [runAll, setRunAll] = useState(false);
@@ -143,9 +154,15 @@ export function MatchPipeline({ sessionId }: Props) {
   const busy = runAll || runningStage != null || anyRunning;
 
   return (
-    <section className="mt-2 rounded-xl border border-border bg-surface-primary shadow-sm">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3 px-3 py-2.5 border-b border-border">
+    <section
+      ref={rootRef}
+      className="mt-2 rounded-xl border border-indigo-200/70 dark:border-indigo-800/50 bg-surface-primary shadow-sm scroll-mt-20"
+    >
+      {/* Header — this is the headline deep wizard of /match-elements,
+          not a collapsible afterthought. The 7-step preview strip below
+          makes the full Convert → … → Rollup journey self-evident even
+          before the user expands a single stage. */}
+      <div className="flex items-center justify-between gap-3 px-3 py-2.5 border-b border-border bg-gradient-to-r from-indigo-50/70 via-white to-white dark:from-indigo-950/20 dark:via-surface-primary dark:to-surface-primary">
         <div className="flex items-center gap-2 min-w-0">
           <span className="w-7 h-7 rounded-lg bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-200 inline-flex items-center justify-center">
             <Workflow className="w-4 h-4" />
@@ -204,6 +221,43 @@ export function MatchPipeline({ sessionId }: Props) {
           </button>
         </div>
       </div>
+
+      {/* 7-step preview strip — always visible (even collapsed) so the
+          full depth of the journey is advertised at a glance. This is
+          the explanatory affordance the old "Open the pipeline" entry
+          card carried; folding it into the pipeline header keeps it on
+          ONE rail instead of as a separate competing card. */}
+      <ol className="flex items-center gap-1.5 flex-wrap px-3 py-2 border-b border-border">
+        {ORDER.map((name, i) => {
+          const st = stages.find((s) => s.stage_name === name);
+          const status = st?.status ?? 'pending';
+          return (
+            <li
+              key={name}
+              className="inline-flex items-center gap-1 text-[10px] font-semibold"
+            >
+              <span
+                className={`px-1.5 py-0.5 rounded border ${
+                  status === 'done'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-300/70 dark:border-emerald-700/50 text-emerald-800 dark:text-emerald-200'
+                    : status === 'running'
+                      ? 'bg-blue-50 dark:bg-blue-950/30 border-blue-300/70 dark:border-blue-700/50 text-blue-800 dark:text-blue-200'
+                      : status === 'error'
+                        ? 'bg-rose-50 dark:bg-rose-950/30 border-rose-300/70 dark:border-rose-700/50 text-rose-800 dark:text-rose-200'
+                        : 'bg-surface-secondary border-border text-content-tertiary'
+                }`}
+              >
+                {i + 1}.{' '}
+                {st?.title ??
+                  t(`match_elements.pipeline.step_${name}`, name)}
+              </span>
+              {i < ORDER.length - 1 && (
+                <ChevronsRight className="w-2.5 h-2.5 opacity-50 text-content-tertiary" />
+              )}
+            </li>
+          );
+        })}
+      </ol>
 
       {/* Body */}
       {expanded && (

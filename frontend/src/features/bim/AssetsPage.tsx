@@ -149,6 +149,14 @@ export function AssetsPage() {
         </div>
       </div>
 
+      {/* ── Purpose intro ─────────────────────────────────────────────── */}
+      <p className="mb-4 max-w-3xl text-xs leading-relaxed text-content-tertiary">
+        {t('assets.page_intro', {
+          defaultValue:
+            'The Asset Register is your facility-management handover list. Any BIM element tagged with a manufacturer, model or serial in the CAD-BIM Viewer appears here. Track operational status and warranties, then export the whole register as a COBie spreadsheet for the operator.',
+        })}
+      </p>
+
       {/* ── Filters ──────────────────────────────────────────────────── */}
       <Card className="mb-4">
         <div className="flex flex-wrap items-center gap-3 p-3">
@@ -293,43 +301,46 @@ export function AssetsPage() {
                     {asset.asset_info.warranty_until ?? <span className="text-content-quaternary">—</span>}
                   </td>
                   <td className="px-3 py-2">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/bim/${asset.model_id}?element=${asset.id}`);
-                      }}
-                      className="inline-flex items-center gap-1 text-oe-blue hover:underline"
-                      title={t('assets.open_in_bim', {
-                        defaultValue: 'Open in 3D Viewer',
-                      })}
-                    >
-                      {asset.model_name}
-                      <ArrowUpRight size={12} className="opacity-60" />
-                    </button>
-                    {' '}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        downloadCobieXlsx(
-                          asset.model_id,
-                          `${asset.model_name || 'model'}-cobie.xlsx`,
-                        ).catch((err) => {
-                          toast({
-                            type: 'error',
-                            title: t('assets.cobie_failed', {
-                              defaultValue: 'COBie export failed',
-                            }),
-                            message: err instanceof Error ? err.message : undefined,
+                    <div className="flex flex-col items-start gap-0.5">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/bim/${asset.model_id}?element=${asset.id}`);
+                        }}
+                        className="inline-flex max-w-[180px] items-center gap-1 truncate text-oe-blue hover:underline"
+                        title={t('assets.open_in_bim', {
+                          defaultValue: 'Open in 3D Viewer',
+                        })}
+                      >
+                        <span className="truncate">{asset.model_name}</span>
+                        <ArrowUpRight size={12} className="shrink-0 opacity-60" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          downloadCobieXlsx(
+                            asset.model_id,
+                            `${asset.model_name || 'model'}-cobie.xlsx`,
+                          ).catch((err) => {
+                            toast({
+                              type: 'error',
+                              title: t('assets.cobie_failed', {
+                                defaultValue: 'COBie export failed',
+                              }),
+                              message: err instanceof Error ? err.message : undefined,
+                            });
                           });
-                        });
-                      }}
-                      className="ml-2 inline-flex items-center gap-1 text-xs text-content-tertiary hover:text-oe-blue"
-                      title={t('assets.cobie_export', { defaultValue: 'Download COBie (XLSX)' })}
-                    >
-                      <Download size={12} /> COBie
-                    </button>
+                        }}
+                        className="inline-flex items-center gap-1 text-2xs text-content-tertiary hover:text-oe-blue"
+                        title={t('assets.cobie_export', {
+                          defaultValue: 'Download COBie (XLSX) for this model',
+                        })}
+                      >
+                        <Download size={11} /> COBie
+                      </button>
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
                     <Button

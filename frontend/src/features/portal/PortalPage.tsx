@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Users,
@@ -13,6 +14,7 @@ import {
   Send,
   Ban,
   RotateCcw,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -77,6 +79,82 @@ const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
 
 // Legacy labelCls removed — modals migrated to <WideModalField>.
+
+/* ─── Workflow intro ───────────────────────────────────────────────────
+ *
+ * The portal is the controlled outside door of the platform. This banner
+ * states the invite → grant → audit loop and the principle of least
+ * privilege (each rule = one resource, one permission). Links to the
+ * project data these external users are scoped against. Dismissible
+ * per-session.
+ */
+function WorkflowIntro() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [dismissed, setDismissed] = useState(
+    () => sessionStorage.getItem('oe.portal.introDismissed') === '1',
+  );
+  if (dismissed) return null;
+  const dismiss = () => {
+    sessionStorage.setItem('oe.portal.introDismissed', '1');
+    setDismissed(true);
+  };
+  return (
+    <Card padding="md" className="border-oe-blue/20 bg-oe-blue-subtle/10">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+          <ShieldCheck size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-content-primary">
+            {t('portal.intro_title', {
+              defaultValue: 'Give outsiders exactly what they need — nothing more',
+            })}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-content-secondary">
+            {t('portal.intro_body', {
+              defaultValue:
+                'Invite a client, investor or subcontractor with a magic link, then Grant Access — one rule per resource (a single project, document or invoice) and one permission (view, comment, submit or sign). Every view, download and signature they make is recorded in the audit log with IP and timestamp. Revoke access any time; nothing is visible until you explicitly grant it.',
+            })}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('portal.intro_connects', { defaultValue: 'Connects to' })}
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate('/subcontractors')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('portal.intro_link_subs', {
+                defaultValue: 'Subcontractors',
+              })}
+              <ArrowRight size={11} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/files')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('portal.intro_link_files', {
+                defaultValue: 'Project documents',
+              })}
+              <ArrowRight size={11} />
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={dismiss}
+          className="shrink-0 rounded-md p-1 text-content-tertiary transition-colors hover:bg-surface-secondary hover:text-content-primary"
+          aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </Card>
+  );
+}
 
 /* ─── Page ─── */
 
@@ -209,6 +287,8 @@ export function PortalPage() {
           onDismiss={() => setLastInviteLink(null)}
         />
       )}
+
+      <WorkflowIntro />
 
       {/* Tabs */}
       <div className="border-b border-border-light">

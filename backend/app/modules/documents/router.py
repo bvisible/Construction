@@ -247,7 +247,7 @@ async def list_documents(
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=100),
+    limit: int = Query(default=50, ge=1, le=500),
     category: str | None = Query(default=None),
     search: str | None = Query(default=None),
     sort_by: str | None = Query(default=None, description="Sort field: name, created_at, category"),
@@ -1629,6 +1629,13 @@ async def documents_similar(
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+
+    # Cross-tenant IDOR gate — mirror ``get_document`` so a caller with no
+    # access to the document's project gets a 404 (not a 200 leaking a
+    # populated vector index). Was previously missing here while every
+    # sibling /{id}/* endpoint enforces it.
+    if row.project_id is not None:
+        await _verify_project_membership_or_404(row.project_id, _user_id, session)
 
     project_id = str(row.project_id) if row.project_id is not None else None
     hits = await find_similar(

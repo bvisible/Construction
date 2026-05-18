@@ -6,14 +6,20 @@ No network calls — all tests are pure unit tests.
 
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.modules.ai.ai_client import (
     ANTHROPIC_MODEL,
+    DEFAULT_MODELS,
     GEMINI_MODEL,
     OPENAI_MODEL,
+    OPENROUTER_MODEL,
+    _model_override_for,
+    default_model_for,
     extract_json,
     resolve_provider_and_key,
+    resolve_provider_key_model,
 )
 
 # ── extract_json ─────────────────────────────────────────────────────────────
@@ -168,3 +174,138 @@ class TestResolveProviderAndKey:
     def test_none_settings_raises_error(self):
         with pytest.raises(ValueError, match="No AI API key configured"):
             resolve_provider_and_key(None)
+
+
+# ── Model defaults & user-overridable model id (issue #129) ──────────────────
+
+
+class TestModelDefaults:
+    def test_openrouter_default_is_dateless_slug(self):
+        # The dated Anthropic id is NOT a valid OpenRouter slug — the
+        # default must be the date-less form or every OpenRouter key fails.
+        assert OPENROUTER_MODEL == "anthropic/claude-sonnet-4"
+        assert "20250514" not in OPENROUTER_MODEL
+
+    def test_default_models_covers_core_providers(self):
+        for provider in ("anthropic", "openai", "gemini", "openrouter"):
+            assert provider in DEFAULT_MODELS
+            assert DEFAULT_MODELS[provider]
+
+    def test_default_model_for_known_and_unknown(self):
+        assert default_model_for("gemini") == GEMINI_MODEL
+        assert default_model_for("does-not-exist") == ""
+
+
+class TestModelOverride:
+    def _settings(self, overrides):
+        return SimpleNamespace(metadata_={"model_overrides": overrides})
+
+    def test_override_returned_when_set(self):
+        s = self._settings({"gemini": "gemini-2.5-flash"})
+        assert _model_override_for(s, "gemini") == "gemini-2.5-flash"
+
+    def test_blank_override_treated_as_none(self):
+        s = self._settings({"gemini": "   "})
+        assert _model_override_for(s, "gemini") is None
+
+    def test_missing_override_is_none(self):
+        s = self._settings({"openrouter": "x/y"})
+        assert _model_override_for(s, "gemini") is None
+
+    def test_no_metadata_is_none(self):
+        assert _model_override_for(SimpleNamespace(metadata_=None), "gemini") is None
+        assert _model_override_for(None, "gemini") is None
+
+    def test_resolve_provider_key_model_includes_override(self):
+        settings = SimpleNamespace(
+            anthropic_api_key=None,
+            openai_api_key=None,
+            gemini_api_key="AIza-key",
+            openrouter_api_key=None,
+            mistral_api_key=None,
+            groq_api_key=None,
+            deepseek_api_key=None,
+            preferred_model="gemini-flash",
+            metadata_={"model_overrides": {"gemini": "gemini-2.5-pro"}},
+        )
+        provider, key, model = resolve_provider_key_model(settings)
+        assert provider == "gemini"
+        assert key == "AIza-key"
+        assert model == "gemini-2.5-pro"
+
+    def test_resolve_provider_key_model_none_when_no_override(self):
+        settings = SimpleNamespace(
+            anthropic_api_key="sk-ant-1",
+            openai_api_key=None,
+            gemini_api_key=None,
+            openrouter_api_key=None,
+            mistral_api_key=None,
+            groq_api_key=None,
+            deepseek_api_key=None,
+            preferred_model="claude-sonnet",
+            metadata_={},
+        )
+        provider, key, model = resolve_provider_key_model(settings)
+        assert provider == "anthropic"
+        assert model is None
+
+
+# ── "Model not found" error surfacing (issue #129) ───────────────────────────
+
+
+class TestModelErrorSurfacing:
+    @pytest.mark.asyncio
+    async def test_unknown_model_message_is_actionable(self, monkeypatch):
+        """A provider 400 "not a valid model ID" must produce a clear,
+        actionable ValueError naming the model and pointing at Settings."""
+        from app.modules.ai import ai_client
+
+        request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+        response = httpx.Response(
+            400,
+            json={"error": {"message": "anthropic/claude-sonnet-4-x is not a valid model ID"}},
+            request=request,
+        )
+
+        async def _boom(*args, **kwargs):
+            raise httpx.HTTPStatusError("bad", request=request, response=response)
+
+        monkeypatch.setattr(ai_client, "call_openai_compatible", _boom)
+
+        with pytest.raises(ValueError) as exc:
+            await ai_client.call_ai(
+                provider="openrouter",
+                api_key="sk-or-test",
+                system="s",
+                prompt="p",
+                model="anthropic/claude-sonnet-4-x",
+            )
+        msg = str(exc.value)
+        assert "anthropic/claude-sonnet-4-x" in msg
+        assert "Settings > AI" in msg
+        assert "model name" in msg
+
+    @pytest.mark.asyncio
+    async def test_401_still_maps_to_key_error(self, monkeypatch):
+        """A genuine auth failure must NOT be misreported as a model error."""
+        from app.modules.ai import ai_client
+
+        request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+        response = httpx.Response(
+            401,
+            json={"error": {"message": "Incorrect API key provided"}},
+            request=request,
+        )
+
+        async def _boom(*args, **kwargs):
+            raise httpx.HTTPStatusError("unauth", request=request, response=response)
+
+        monkeypatch.setattr(ai_client, "call_openai", _boom)
+
+        with pytest.raises(ValueError, match="API key is invalid or expired"):
+            await ai_client.call_ai(
+                provider="openai",
+                api_key="sk-bad",
+                system="s",
+                prompt="p",
+            )

@@ -39,10 +39,6 @@ export default function ChatFullPage() {
     clearChat,
     setActivePanelIndex,
   } = useChatFullPage();
-  // Reference clearChat so the import warning doesn't fire — the action
-  // is now exposed via ChatLeftPanel's "New chat" link in the input bar
-  // header instead of the removed ChatTopBar.
-  void clearChat;
 
   // Mirror the site-wide theme so /chat respects light/dark preference.
   const resolvedTheme = useThemeStore((s) => s.resolved);
@@ -101,6 +97,7 @@ export default function ChatFullPage() {
               isStreaming={isStreaming}
               suggestions={suggestions}
               onSend={sendMessage}
+              onClear={clearChat}
               aiConfigured={aiConfigured}
             />
           </Panel>

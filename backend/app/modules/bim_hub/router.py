@@ -105,6 +105,25 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _to_qty_float(val: object) -> float:
+    """Best-effort numeric coercion for quantity-presence checks.
+
+    Used by the upload-cad honesty gate (BUG-V320-DDC-01) to decide
+    whether *any* imported element carries a real (non-zero, finite)
+    quantity.  A string ``"0"`` or ``""`` or a NaN must read as 0.0 so a
+    quantity-less import is not mistaken for a successful one.
+    """
+    if val is None or isinstance(val, bool):
+        return 0.0
+    try:
+        f = float(val)
+    except (ValueError, TypeError):
+        return 0.0
+    if f != f or f in (float("inf"), float("-inf")):
+        return 0.0
+    return f
+
 # Legacy on-disk path kept only for backward compatibility with any
 # external code that may still import ``_BIM_DATA_DIR``.  New code MUST
 # go through :mod:`app.modules.bim_hub.file_storage` which wraps the
@@ -1126,10 +1145,25 @@ async def _process_cad_in_background(
                 # viewer can self-detect placeholders without an extra API
                 # round-trip for the model metadata.
                 result_quality = result.get("geometry_quality") or result.get("geometry_type")
+                # BUG-V320-DDC-01 / D-TKC-NEW-01 — honesty gate.  When the DDC
+                # cad2data converter is unavailable the IFC text-parser still
+                # imports element geometry, but it can only recover quantities
+                # if the file happens to ship explicit IfcElementQuantity
+                # blocks.  Track whether *any* element carries a non-empty
+                # quantities map; if none do, we must NOT advertise the model
+                # as a clean 'ready' import with error_message=null — that is
+                # the dishonest "successful import, zero quantities" state the
+                # QA audit flagged.
+                any_quantities = False
                 for elem_data in result["elements"]:
                     el_props = dict(elem_data.get("properties", {}) or {})
                     if elem_data.get("is_placeholder") or result_quality == "placeholder":
                         el_props["is_placeholder"] = True
+                    el_quantities = elem_data.get("quantities", {}) or {}
+                    if el_quantities and any(
+                        _to_qty_float(v) for v in el_quantities.values()
+                    ):
+                        any_quantities = True
                     el = BIMElement(
                         model_id=model_uuid,
                         stable_id=elem_data["stable_id"],
@@ -1138,12 +1172,15 @@ async def _process_cad_in_background(
                         storey=elem_data.get("storey"),
                         discipline=elem_data.get("discipline"),
                         properties=el_props,
-                        quantities=elem_data.get("quantities", {}),
+                        quantities=el_quantities,
                         geometry_hash=elem_data.get("geometry_hash"),
                         bounding_box=elem_data.get("bounding_box"),
                         mesh_ref=elem_data.get("mesh_ref"),
                     )
                     session.add(el)
+
+                converter_absent = result_quality == "placeholder"
+                no_quantities = not any_quantities
 
                 model.status = "ready"
                 model.element_count = element_count
@@ -1172,10 +1209,68 @@ async def _process_cad_in_background(
                         "geometry_quality", result.get("geometry_type", "unknown"),
                     ),
                 }
-                logger.info(
-                    "Background CAD processed: %d elements, %d storeys → model %s ready",
-                    element_count, len(result["storeys"]), model_id,
-                )
+
+                # BUG-V320-DDC-01 / D-TKC-NEW-01 — non-destructive honesty
+                # path.  The elements were imported (geometry is useful for
+                # the viewer / element linking) but if the DDC converter was
+                # absent OR no quantities could be extracted we downgrade the
+                # status from a misleading 'ready' to a distinct 'degraded'
+                # state and populate a user-facing warning so the UI can show
+                # "imported, but no quantities — DDC converter required"
+                # instead of pretending the import fully succeeded.
+                if converter_absent or no_quantities:
+                    model.status = "degraded"
+                    meta_warn = dict(model.metadata_ or {})
+                    if converter_absent and no_quantities:
+                        warn_msg = (
+                            "Geometry imported, but no quantities could be "
+                            "extracted: the DDC cad2data converter is not "
+                            "available on this server, and the file does not "
+                            "carry explicit IFC BaseQuantities. Elements were "
+                            "imported for geometry/linking only. Install the "
+                            "DDC converter (Settings → BIM Converters) and "
+                            "click Retry to recover area/volume/length "
+                            "quantities."
+                        )
+                        meta_warn["error_code"] = "no_quantities_converter_absent"
+                    elif converter_absent:
+                        warn_msg = (
+                            "Imported with placeholder geometry: the DDC "
+                            "cad2data converter is not available on this "
+                            "server, so quantities were read from the file's "
+                            "embedded IFC BaseQuantities only and may be "
+                            "incomplete. Install the DDC converter "
+                            "(Settings → BIM Converters) and click Retry for "
+                            "full geometry-derived quantities."
+                        )
+                        meta_warn["error_code"] = "converter_absent"
+                    else:
+                        warn_msg = (
+                            "Geometry imported, but no quantities "
+                            "(area/volume/length) could be extracted from "
+                            "this file. Elements were imported for "
+                            "geometry/linking only."
+                        )
+                        meta_warn["error_code"] = "no_quantities"
+                    model.error_message = warn_msg
+                    meta_warn["warning"] = warn_msg
+                    meta_warn["degraded"] = True
+                    meta_warn["converter_id"] = "ifc"
+                    meta_warn["install_endpoint"] = (
+                        "/api/v1/takeoff/converters/ifc/install/"
+                    )
+                    model.metadata_ = meta_warn
+                    logger.warning(
+                        "Background CAD processed but DEGRADED (converter_absent=%s "
+                        "no_quantities=%s): %d elements → model %s degraded",
+                        converter_absent, no_quantities, element_count, model_id,
+                    )
+                else:
+                    logger.info(
+                        "Background CAD processed: %d elements, %d storeys → "
+                        "model %s ready",
+                        element_count, len(result["storeys"]), model_id,
+                    )
 
                 # Storage policy — drop the raw upload after a *successful*
                 # conversion when ``keep_original_cad`` is False (production

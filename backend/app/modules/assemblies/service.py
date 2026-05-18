@@ -102,18 +102,24 @@ def _compute_typed_total(
     rt = (resource_type or "").lower()
     try:
         if rt == "material":
-            waste = Decimal(str(metadata.get("waste_pct", 0) or 0))
-            if waste > 0:
-                return str(base * (Decimal("1") + waste / Decimal("100")))
+            waste = _safe_meta_multiplier(metadata.get("waste_pct"))
+            if waste is not None and waste > 0:
+                result = base * (Decimal("1") + waste / Decimal("100"))
+                if result.is_finite():
+                    return str(result)
         elif rt == "labor":
-            burden = Decimal(str(metadata.get("burden_pct", 0) or 0))
-            if burden > 0:
-                return str(base * (Decimal("1") + burden / Decimal("100")))
+            burden = _safe_meta_multiplier(metadata.get("burden_pct"))
+            if burden is not None and burden > 0:
+                result = base * (Decimal("1") + burden / Decimal("100"))
+                if result.is_finite():
+                    return str(result)
         elif rt == "equipment":
-            days = Decimal(str(metadata.get("rental_days", 0) or 0))
-            fuel = Decimal(str(metadata.get("fuel_cost", 0) or 0))
-            if days > 0 and fuel > 0:
-                return str(base + days * fuel)
+            days = _safe_meta_multiplier(metadata.get("rental_days"))
+            fuel = _safe_meta_multiplier(metadata.get("fuel_cost"))
+            if days is not None and fuel is not None and days > 0 and fuel > 0:
+                result = base + days * fuel
+                if result.is_finite():
+                    return str(result)
     except (InvalidOperation, ValueError):
         return base_str
 
@@ -128,6 +134,40 @@ def _str_to_float(value: str | None) -> float:
         return float(value)
     except (ValueError, TypeError):
         return 0.0
+
+
+# Upper bound for a metadata multiplier (waste_pct / burden_pct /
+# rental_days / fuel_cost). Mirrors ``schemas._NUM_MAX`` — far beyond
+# any real estimating value, yet keeps the typed-total product finite.
+_META_NUM_MAX = Decimal("1e12")
+
+
+def _safe_meta_multiplier(raw: object) -> Decimal | None:
+    """Coerce a FE-supplied metadata multiplier to a sane Decimal.
+
+    The typed-total formula (``_compute_typed_total``) reads free-form
+    ``metadata`` keys (waste_pct / burden_pct / rental_days /
+    fuel_cost). Those are NOT covered by the Pydantic ``ge/le/
+    allow_inf_nan`` bounds on factor/quantity/unit_cost, so a payload
+    like ``{"waste_pct": "Infinity"}`` or ``{"burden_pct": -50}`` would
+    otherwise flow straight into ``base * (1 + x/100)`` and persist a
+    non-finite / negative total (NEW-ASM-102).
+
+    Returns ``None`` for anything that is not a finite, non-negative,
+    in-range number — the caller then treats the multiplier as absent
+    (no-op), matching the existing "never punish the user with a
+    smaller total than the raw inputs imply" fall-through contract
+    rather than raising. Garbage never reaches the stored total.
+    """
+    if raw is None or isinstance(raw, (bool, dict, list)):
+        return None
+    try:
+        dec = Decimal(str(raw).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+    if not dec.is_finite() or dec < 0 or dec > _META_NUM_MAX:
+        return None
+    return dec
 
 
 # Upper bound for an imported component numeric — mirrors
@@ -203,22 +243,44 @@ def _parse_import_decimal(raw: object, field: str, idx: int) -> Decimal:
 
 
 def _sum_component_totals(components: list[Component]) -> Decimal:
-    """Sum all component totals as Decimal."""
+    """Sum all component totals as Decimal.
+
+    ``Decimal("Infinity")`` / ``Decimal("NaN")`` parse WITHOUT raising,
+    so a single component carrying a non-finite stored ``total`` (e.g.
+    written by a legacy snapshot or an older code path) would otherwise
+    poison the whole subtotal and ultimately persist ``Infinity`` /
+    ``NaN`` into ``Assembly.total_rate`` (NEW-ASM-104). Skip any
+    non-finite component total instead of letting it propagate.
+    """
     total = Decimal("0")
     for comp in components:
         try:
-            total += Decimal(str(comp.total))
+            val = Decimal(str(comp.total))
         except (InvalidOperation, ValueError):
-            pass
+            continue
+        if not val.is_finite():
+            continue
+        total += val
     return total
 
 
 def _compute_assembly_total(components: list[Component], bid_factor: str) -> str:
-    """Compute assembly total_rate = sum(component totals) * bid_factor."""
+    """Compute assembly total_rate = sum(component totals) * bid_factor.
+
+    Hardened (NEW-ASM-104): a non-finite ``bid_factor`` string (or a
+    product that overflows to ``Infinity``) is rejected to "0" rather
+    than persisted, so ``Assembly.total_rate`` is always a finite
+    number the API can serialise.
+    """
     try:
         subtotal = _sum_component_totals(components)
         bf = Decimal(str(bid_factor))
-        return str(subtotal * bf)
+        if not bf.is_finite():
+            return "0"
+        result = subtotal * bf
+        if not result.is_finite():
+            return "0"
+        return str(result)
     except (InvalidOperation, ValueError):
         return "0"
 
@@ -673,20 +735,26 @@ class AssemblyService:
 
         assembly = await self.get_assembly(assembly_id)
 
-        # ── Cross-currency guard (ASM-006) ──────────────────────────────
-        # An assembly priced in EUR dropped into a GBP project's BOQ
-        # would land a raw EUR number in a GBP bill with no conversion
-        # and no flag. We resolve the target project's currency and
-        # refuse the mismatch with a clear 409 unless the caller has
-        # explicitly opted in — in which case the position carries a
-        # loud ``currency_mismatch`` warning so the contamination is at
-        # least visible (no silent corruption).
+        # ── Cross-currency handling (ASM-006, Issue #128) ───────────────
+        # An assembly priced in a currency other than the target
+        # project's base used to be hard-refused with a 409 — which made
+        # every foreign-currency assembly impossible to place, even when
+        # the project HAD an FX rate configured for that currency. We now
+        # mirror how foreign-currency *resources* already behave: convert
+        # via the project's ``fx_rates`` when a rate exists; otherwise let
+        # it through with a visible, non-blocking ``currency_mismatch``
+        # flag — never silent corruption, never a dead end for the user.
+        from app.modules.boq.service import _project_fx_map
+
         currency_warning: dict | None = None
+        currency_converted: dict | None = None
+        fx_multiplier = Decimal("1")
         asm_currency = (assembly.currency or "").strip().upper()
+        project = None
+        project_currency = ""
         try:
             boq_repo = BOQRepository(self.session)
             target_boq = await boq_repo.get_by_id(data.boq_id)
-            project_currency = ""
             if target_boq is not None:
                 project_repo = ProjectRepository(self.session)
                 project = await project_repo.get_by_id(target_boq.project_id)
@@ -694,7 +762,8 @@ class AssemblyService:
                     project_currency = (project.currency or "").strip().upper()
         except Exception:
             # Never let the currency lookup itself break apply-to-boq;
-            # absence of currency data simply skips the guard.
+            # absence of currency data simply skips conversion.
+            project = None
             project_currency = ""
 
         if (
@@ -702,26 +771,51 @@ class AssemblyService:
             and project_currency
             and asm_currency != project_currency
         ):
-            if not data.allow_currency_mismatch:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        f"Assembly currency '{asm_currency}' does not match "
-                        f"the target project currency '{project_currency}'. "
-                        f"No FX conversion is applied. Re-send with "
-                        f"allow_currency_mismatch=true to proceed anyway "
-                        f"(the position will be flagged)."
+            # Project ``fx_rates`` projected to {CODE: "<base units per 1
+            # unit of foreign currency>"} — same convention the BOQ
+            # resource rollup uses, so foreign→base is multiplication.
+            fx_map = _project_fx_map(project)
+            raw_rate = fx_map.get(asm_currency)
+            conv_rate: Decimal | None = None
+            if raw_rate is not None:
+                try:
+                    candidate = Decimal(str(raw_rate))
+                    if candidate.is_finite() and candidate > 0:
+                        conv_rate = candidate
+                except (InvalidOperation, ValueError):
+                    conv_rate = None
+
+            if conv_rate is not None:
+                # Convert the whole assembly into the project's currency.
+                fx_multiplier = conv_rate
+                currency_converted = {
+                    "type": "currency_converted",
+                    "from": asm_currency,
+                    "to": project_currency,
+                    "rate": str(conv_rate),
+                    "message": (
+                        f"Assembly priced in {asm_currency} was converted "
+                        f"to {project_currency} at {conv_rate} "
+                        f"({asm_currency}->{project_currency})."
                     ),
-                )
-            currency_warning = {
-                "type": "currency_mismatch",
-                "assembly_currency": asm_currency,
-                "project_currency": project_currency,
-                "message": (
-                    f"Unit rate is in {asm_currency} but the project is "
-                    f"{project_currency}; no FX conversion was applied."
-                ),
-            }
+                }
+            else:
+                # No FX rate configured for this currency — proceed
+                # anyway. The legacy hard 409 trapped the user with no
+                # UI escape hatch (Issue #128). Flag it loudly so the
+                # un-converted foreign value is visible, not silent.
+                currency_warning = {
+                    "type": "currency_mismatch",
+                    "assembly_currency": asm_currency,
+                    "project_currency": project_currency,
+                    "message": (
+                        f"Unit rate is in {asm_currency} but the project "
+                        f"is {project_currency}, and no FX rate is "
+                        f"configured for {asm_currency}; the value was "
+                        f"kept in {asm_currency} (no conversion). Add an "
+                        f"FX rate in Project Settings to convert it."
+                    ),
+                }
 
         # Determine effective rate (apply regional factor if provided)
         try:
@@ -737,6 +831,14 @@ class AssemblyService:
                 effective_rate = base_rate
         else:
             effective_rate = base_rate
+
+        # Issue #128 — when the assembly is priced in a foreign currency
+        # for which the project has an FX rate, fold the conversion into
+        # the rate (and the component money fields below) so the BOQ
+        # position lands in the project's base currency. ``fx_multiplier``
+        # is Decimal("1") when no conversion applies, so this is a no-op
+        # for same-currency / unconfigured-rate paths.
+        effective_rate = effective_rate * fx_multiplier
 
         ordinal = data.ordinal if data.ordinal else f"ASM-{assembly.code}"
 
@@ -762,9 +864,13 @@ class AssemblyService:
         # carry a structured M/L/E split (and a UI on /boq can render
         # "60% Mat · 30% Lab · 10% Eq" without re-walking the components).
         breakdown_totals: dict[str, Decimal] = {}
+        # Issue #128 — scale each component's money fields by the same FX
+        # multiplier as the rate so the resource breakdown stays
+        # consistent with the converted unit_rate.
+        fx_mult_f = float(fx_multiplier)
         for comp in components:
             res_type = comp.resource_type or _infer_legacy(comp.description or "")
-            comp_total = _str_to_float(comp.total)
+            comp_total = _str_to_float(comp.total) * fx_mult_f
             try:
                 breakdown_totals[res_type] = breakdown_totals.get(
                     res_type, Decimal("0")
@@ -779,7 +885,7 @@ class AssemblyService:
                     "type": res_type,
                     "unit": comp.unit or "",
                     "quantity": _str_to_float(comp.quantity),
-                    "unit_rate": _str_to_float(comp.unit_cost),
+                    "unit_rate": _str_to_float(comp.unit_cost) * fx_mult_f,
                     "total": comp_total,
                     # Pass through useful metadata (vendor, waste_pct,
                     # crew_size, …) so downstream consumers can inspect
@@ -814,14 +920,26 @@ class AssemblyService:
                 "assembly_code": assembly.code,
                 "bid_factor": assembly.bid_factor,
                 "region": data.region,
-                "currency": assembly.currency,
+                # When converted, the position now holds project-currency
+                # values, so its currency IS the project currency. When
+                # not converted it stays in the assembly's own currency.
+                "currency": (
+                    project_currency if currency_converted else assembly.currency
+                ),
                 "resources": resources,
                 # Standard key the BOQ UI reads to render the M/L/E
                 # mini-badge — see ``backend/app/modules/boq/models.py``
                 # docstring for the metadata vocabulary.
                 "resource_breakdown": resource_breakdown,
-                # Present only when the caller knowingly applied an
-                # assembly priced in a different currency (ASM-006).
+                # Audit trail: exactly one of these is present when the
+                # assembly currency differed from the project's — a
+                # ``currency_converted`` record (FX applied) or a
+                # non-blocking ``currency_mismatch`` flag (Issue #128).
+                **(
+                    {"currency_converted": currency_converted}
+                    if currency_converted
+                    else {}
+                ),
                 **(
                     {"currency_mismatch": currency_warning}
                     if currency_warning
@@ -935,7 +1053,17 @@ class AssemblyService:
         )
 
         logger.info("Assembly cloned: %s → %s", source.code, new_code)
-        return cloned
+        # Re-fetch WITH components eagerly loaded. ``cloned`` came from
+        # ``create()`` (only ``refresh()``-ed its column attrs) so its
+        # ``components`` selectin relationship is unloaded; the router's
+        # ``_assembly_to_response`` reads ``assembly.components`` which
+        # would trigger a sync lazy-load outside the async greenlet
+        # (MissingGreenlet → HTTP 500 / component_count=0). The
+        # with-components query the GET endpoint uses materialises the
+        # collection inside the greenlet so the response carries the
+        # real component_count (NEW-ASM-103 / ASM-001).
+        reloaded = await self.assembly_repo.get_by_id_with_components(cloned.id)
+        return reloaded if reloaded is not None else cloned
 
     # ── Stats ─────────────────────────────────────────────────────────────
 
@@ -1193,7 +1321,19 @@ class AssemblyService:
         )
 
         logger.info("Assembly imported: %s (%s)", code, data.name)
-        return assembly
+        # Re-fetch WITH components + the freshly recalculated total_rate.
+        # ``assembly`` is the object returned by ``create()`` (its
+        # ``components`` selectin relationship is unloaded and its
+        # ``total_rate`` still reads the pre-recalc "0"). The router's
+        # ``_assembly_to_response`` touches ``assembly.components``,
+        # which would otherwise trigger a sync lazy-load outside the
+        # async greenlet → MissingGreenlet → HTTP 500 for EVERY valid
+        # import payload (ASM-001). Reloading via the with-components
+        # query (same one the GET endpoint uses) materialises the
+        # collection inside the greenlet and surfaces the correct
+        # total_rate + component_count (NEW-ASM-103).
+        reloaded = await self.assembly_repo.get_by_id_with_components(assembly.id)
+        return reloaded if reloaded is not None else assembly
 
     # ── Tags ─────────────────────────────────────────────────────────────
 

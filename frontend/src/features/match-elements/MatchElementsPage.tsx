@@ -222,9 +222,13 @@ function vectorBandPalette(band: VectorReadiness['status_band']): {
 function VectorReadinessPill({
   readiness,
   isLoading,
+  onRetry,
+  isRetrying,
 }: {
   readiness: VectorReadiness | undefined;
   isLoading: boolean;
+  onRetry: () => void;
+  isRetrying: boolean;
 }) {
   const { t } = useTranslation();
   if (isLoading) {
@@ -311,12 +315,73 @@ function VectorReadinessPill({
       break;
   }
 
+  // Qdrant truly unreachable — replace the dead-end one-liner with an
+  // actionable explainer: what semantic search needs, how to bring it up
+  // (the QdrantHealthCard below has the one-click native installer), a
+  // retry, and the reassurance that matching still works without it.
+  if (readiness.status_band === 'disconnected') {
+    return (
+      <div
+        className={`flex flex-col gap-2.5 px-4 py-3 rounded-lg border text-xs ${palette.border} ${palette.bg}`}
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-2">
+          <Database className={`w-4 h-4 ${palette.text} shrink-0 mt-0.5`} />
+          <div className="flex flex-col gap-0.5 min-w-0">
+            <span className={`font-medium ${palette.text}`}>{label}</span>
+            <span className="text-content-tertiary break-words">
+              {detail}
+            </span>
+          </div>
+        </div>
+        <p className="text-content-secondary leading-relaxed">
+          {t(
+            'match_elements.vector_status_disconnected_explainer',
+            'Semantic vector search is optional — it sharpens matches by meaning but needs a running Qdrant vector database. Use the "Vector database" panel below to start or install Qdrant natively (no Docker required), then retry.',
+          )}
+        </p>
+        <p className="text-content-secondary leading-relaxed">
+          {t(
+            'match_elements.vector_status_disconnected_fallback',
+            'You can still proceed now: matching automatically falls back to lexical (keyword) and rule-based scoring while the vector DB is offline.',
+          )}
+        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={isRetrying}
+            className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-medium ${palette.border} ${palette.text} hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed`}
+          >
+            {isRetrying ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5" />
+            )}
+            {t('match_elements.vector_status_retry', 'Retry connection')}
+          </button>
+          <Link
+            to="/costs"
+            className={`shrink-0 inline-flex items-center gap-1 underline ${palette.text} hover:opacity-80`}
+          >
+            {t(
+              'match_elements.vector_status_open_costs_long',
+              'Open cost-database tools',
+            )}
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   const isAmber = ['empty', 'missing', 'no_country', 'non_qdrant'].includes(
     readiness.status_band,
   );
-  // Only the no_country / non_qdrant / disconnected cases benefit from the
-  // raw "Open /costs" link; missing & empty are handled by the
-  // CatalogueAdvisor below with one-click bindable recommendations.
+  // Only the no_country / non_qdrant cases benefit from the raw
+  // "Open /costs" link; missing & empty are handled by the
+  // CatalogueAdvisor below with one-click bindable recommendations, and
+  // the disconnected band has its own actionable block above.
   const showCostsLink =
     isAmber &&
     readiness.status_band !== 'no_country' &&
@@ -389,142 +454,6 @@ function ProjectRegionLangChip({
         </span>
       )}
     </div>
-  );
-}
-
-/** Workflow step indicator. Visualises the four-step BIM→BOQ flow as a
- *  horizontal "stepper" with completed checks, the current active dot,
- *  and pending dots. Lives in the hero block so the user always knows
- *  what step they are on without reading the section labels.
- *
- *  Steps: 1) BIM model · 2) Session · 3) Review groups · 4) Apply to BOQ */
-function WorkflowStepIndicator({
-  step,
-  totalGroups,
-  confirmedCount,
-  appliedCount,
-  hasModel,
-  hasSession,
-}: {
-  step: 1 | 2 | 3 | 4;
-  totalGroups: number;
-  confirmedCount: number;
-  appliedCount: number;
-  hasModel: boolean;
-  hasSession: boolean;
-}) {
-  const { t } = useTranslation();
-  const items: Array<{
-    n: 1 | 2 | 3 | 4;
-    label: string;
-    detail: string;
-  }> = [
-    {
-      n: 1,
-      label: t('match_elements.step_1_label', 'Pick model'),
-      detail: hasModel
-        ? t('match_elements.step_1_done', 'Selected')
-        : t('match_elements.step_1_help', 'Choose BIM model'),
-    },
-    {
-      n: 2,
-      label: t('match_elements.step_2_label', 'Open session'),
-      detail: hasSession
-        ? t('match_elements.step_2_done', 'Active')
-        : t('match_elements.step_2_help', 'Resume or create'),
-    },
-    {
-      n: 3,
-      label: t('match_elements.step_3_label', 'Review matches'),
-      detail:
-        totalGroups === 0
-          ? t('match_elements.step_3_empty', 'No groups yet')
-          : t(
-              'match_elements.step_3_progress',
-              '{{confirmed}}/{{total}} confirmed',
-              { confirmed: confirmedCount, total: totalGroups },
-            ),
-    },
-    {
-      n: 4,
-      label: t('match_elements.step_4_label', 'Apply to BOQ'),
-      detail:
-        appliedCount > 0
-          ? t('match_elements.step_4_done', '{{n}} applied', {
-              n: appliedCount,
-            })
-          : t('match_elements.step_4_help', 'Write to BOQ'),
-    },
-  ];
-
-  return (
-    <ol className="flex items-center gap-1 w-full overflow-x-auto" role="list">
-      {items.map((it, idx) => {
-        const isDone = step > it.n;
-        const isActive = step === it.n;
-        return (
-          <li
-            key={it.n}
-            className="flex items-center gap-1 min-w-0"
-            aria-current={isActive ? 'step' : undefined}
-          >
-            <div
-              className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg transition ${
-                isActive
-                  ? 'bg-white dark:bg-surface-primary shadow-sm border border-indigo-300 dark:border-indigo-600 ring-2 ring-indigo-200/60 dark:ring-indigo-700/40'
-                  : isDone
-                    ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200/70 dark:border-emerald-800/60'
-                    : 'bg-white/40 dark:bg-surface-primary/40 border border-transparent'
-              }`}
-            >
-              <span
-                className={`shrink-0 w-5 h-5 rounded-full inline-flex items-center justify-center text-[10px] font-bold ${
-                  isDone
-                    ? 'bg-emerald-500 text-white'
-                    : isActive
-                      ? 'bg-gradient-to-br from-indigo-500 to-sky-500 text-white shadow-sm shadow-indigo-500/20'
-                      : 'bg-content-tertiary/15 text-content-tertiary'
-                }`}
-              >
-                {isDone ? <CheckCircle2 className="w-3 h-3" /> : it.n}
-              </span>
-              <div className="min-w-0">
-                <div
-                  className={`text-[11px] font-semibold leading-tight ${
-                    isActive
-                      ? 'text-content-primary'
-                      : isDone
-                        ? 'text-emerald-800 dark:text-emerald-200'
-                        : 'text-content-tertiary'
-                  }`}
-                >
-                  {it.label}
-                </div>
-                <div
-                  className={`text-[10px] leading-tight ${
-                    isActive
-                      ? 'text-indigo-700 dark:text-indigo-300'
-                      : 'text-content-tertiary'
-                  }`}
-                >
-                  {it.detail}
-                </div>
-              </div>
-            </div>
-            {idx < items.length - 1 && (
-              <ChevronRight
-                className={`w-3.5 h-3.5 shrink-0 ${
-                  step > it.n
-                    ? 'text-emerald-400 dark:text-emerald-500'
-                    : 'text-content-tertiary/40'
-                }`}
-                aria-hidden
-              />
-            )}
-          </li>
-        );
-      })}
-    </ol>
   );
 }
 
@@ -654,6 +583,10 @@ function ProjectContextCard({
       <VectorReadinessPill
         readiness={readinessQ.data}
         isLoading={readinessQ.isLoading}
+        onRetry={() => {
+          void readinessQ.refetch();
+        }}
+        isRetrying={readinessQ.isFetching}
       />
       <CatalogueAdvisor
         projectRegion={project?.region ?? null}
@@ -1859,21 +1792,6 @@ export function MatchElementsPage() {
     visibleSession?.construction_stage ?? '';
 
   // ── Render ───────────────────────────────────────────────────────────
-  // Derive workflow step (1-4) from current state to drive the step
-  // indicator. Step transitions are intentionally one-way semaphores —
-  // once you reach a step you stay until the prior signal goes missing.
-  const stepperTotalGroups = groupAgg.total;
-  const stepperConfirmedCount = groupAgg.confirmed;
-  const stepperAppliedCount = groupAgg.applied;
-
-  const workflowStep: 1 | 2 | 3 | 4 = !activeBimModelId
-    ? 1
-    : !sessionId
-      ? 2
-      : stepperAppliedCount > 0
-        ? 4
-        : 3;
-
   return (
     <div className="p-3 lg:p-4 max-w-[1600px] mx-auto">
       {/* Qdrant readiness — only renders when vector DB is unreachable.
@@ -2001,18 +1919,6 @@ export function MatchElementsPage() {
               <Sparkles className="w-2.5 h-2.5" />
               {t('match_elements.hero_eyebrow', 'BIM → BOQ')}
             </span>
-            {projectId && (
-              <div className="hidden md:block flex-1 min-w-0 ms-2">
-                <WorkflowStepIndicator
-                  step={workflowStep}
-                  totalGroups={stepperTotalGroups}
-                  confirmedCount={stepperConfirmedCount}
-                  appliedCount={stepperAppliedCount}
-                  hasModel={!!activeBimModelId}
-                  hasSession={!!sessionId}
-                />
-              </div>
-            )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             {/* "New match" — opens the wizard. Visible only inside the
@@ -2078,21 +1984,6 @@ export function MatchElementsPage() {
             </button>
           </div>
         </div>
-        {/* Mobile-only workflow indicator (the desktop one is inline in
-            the hero strip above; on narrow screens we drop it to a second
-            row to avoid wrap-overflow). */}
-        {projectId && (
-          <div className="md:hidden px-3 pb-2">
-            <WorkflowStepIndicator
-              step={workflowStep}
-              totalGroups={stepperTotalGroups}
-              confirmedCount={stepperConfirmedCount}
-              appliedCount={stepperAppliedCount}
-              hasModel={!!activeBimModelId}
-              hasSession={!!sessionId}
-            />
-          </div>
-        )}
       </section>
 
       {/* "Beta · feedback wanted" banner.
@@ -2128,12 +2019,17 @@ export function MatchElementsPage() {
 
       <ProjectContextCard projectId={projectId} />
 
-      {/* Pipeline entry card — the headline path. Shown when a project
-          is picked but no session is active yet. One click creates a
-          session and drops the user straight into the visible 7-stage
-          pipeline. The legacy step-wizard stays below for power users
-          who want to pre-pick catalogue / source / construction stage. */}
-      {projectId && !sessionId && !matchInFlight && (
+      {/* Single guided rail. There is exactly one stepper on the page —
+          MatchWizard drives Stage → Catalogue → Source → Run, then the
+          journey CONTINUES (not branches) into the visible deep 7-stage
+          pipeline (Convert → Load → Schema → Filter → Group → Match →
+          Rollup), each step tunable (editable LLM prompt, provider,
+          group keys). The doorway below is NOT a second competing
+          stepper: it only appears once prior sessions exist and is purely
+          the "resume straight into the deep pipeline" continuation that
+          was lost when the explicit pipeline entry card was removed in
+          v3.3.0. New matches still go through the single wizard rail. */}
+      {projectId && !sessionId && (sessionsQ.data?.length ?? 0) > 0 && (
         <div className="mt-2 rounded-xl border border-indigo-200/70 dark:border-indigo-800/50 bg-gradient-to-br from-indigo-50/80 via-white to-white dark:from-indigo-950/30 dark:via-surface-primary dark:to-surface-primary p-4 shadow-sm">
           <div className="flex items-start gap-3 flex-wrap">
             <span className="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-200 inline-flex items-center justify-center shrink-0">
@@ -2167,7 +2063,11 @@ export function MatchElementsPage() {
                     className="inline-flex items-center gap-1 text-[10px] font-semibold text-content-tertiary"
                   >
                     <span className="px-1.5 py-0.5 rounded bg-surface-secondary border border-border">
-                      {i + 1}. {s}
+                      {i + 1}.{' '}
+                      {t(
+                        `match_elements.pipeline.step_${s.toLowerCase()}`,
+                        s,
+                      )}
                     </span>
                     {i < 6 && (
                       <ChevronsRight className="w-2.5 h-2.5 opacity-50" />
@@ -2178,46 +2078,41 @@ export function MatchElementsPage() {
             </div>
             <div className="flex flex-col gap-1.5 shrink-0">
               <button
+                onClick={() => {
+                  const last = sessionsQ.data?.[0];
+                  if (last) {
+                    setSessionId(last.id);
+                    matchElementsApi.touchSession(last.id).catch(() => {});
+                  }
+                }}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-oe-blue text-white hover:opacity-90"
+              >
+                <PlayCircle className="w-4 h-4" />
+                {t(
+                  'match_elements.pipeline.intro_resume',
+                  'Resume last session',
+                )}
+              </button>
+              <button
                 onClick={() => createSessionMut.mutate()}
                 disabled={createSessionMut.isPending}
-                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold bg-oe-blue text-white hover:opacity-90 disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-content-secondary hover:bg-surface-secondary disabled:opacity-50"
               >
                 {createSessionMut.isPending ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-3 h-3 animate-spin" />
                 ) : (
-                  <PlayCircle className="w-4 h-4" />
+                  <Layers className="w-3 h-3" />
                 )}
                 {t(
                   'match_elements.pipeline.intro_cta',
                   'Open the pipeline',
                 )}
               </button>
-              {(sessionsQ.data?.length ?? 0) > 0 && (
-                <button
-                  onClick={() => {
-                    const last = sessionsQ.data?.[0];
-                    if (last) setSessionId(last.id);
-                  }}
-                  className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-border text-content-secondary hover:bg-surface-secondary"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  {t(
-                    'match_elements.pipeline.intro_resume',
-                    'Resume last session',
-                  )}
-                </button>
-              )}
             </div>
           </div>
         </div>
       )}
 
-      {/* New wizard entry — visible only when no session is active.
-          The wizard guides the user through stage → catalogue → source →
-          run, then sets sessionId via onComplete to drop them into the
-          existing matching/results UI. Power users with a saved session
-          (or who pick one in the wizard's Resume strip) skip straight
-          past this and see the full toolset below. */}
       {projectId && !sessionId && (
         <MatchWizard
           projectId={projectId}

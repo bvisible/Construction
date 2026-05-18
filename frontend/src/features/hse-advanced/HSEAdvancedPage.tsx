@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -27,6 +27,7 @@ import {
   SkeletonTable,
 } from '@/shared/ui';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { SectionIntro } from '@/features/validation';
 import { normalizeListResponse } from '@/shared/lib/apiHelpers';
 import { getErrorMessage } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -99,6 +100,7 @@ const textareaCls =
 
 export function HSEAdvancedPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const projectName = useProjectContextStore((s) => s.activeProjectName);
@@ -166,6 +168,24 @@ export function HSEAdvancedPage() {
           })}
         </p>
       </div>
+
+      <SectionIntro
+        storageKey="hse_advanced"
+        title={t('hse_advanced.intro_title', {
+          defaultValue: 'Beyond basic incident logging',
+        })}
+        links={[
+          {
+            label: t('hse_advanced.intro_link_safety', { defaultValue: 'Safety (incidents)' }),
+            onClick: () => navigate('/safety'),
+          },
+        ]}
+      >
+        {t('hse_advanced.intro_body', {
+          defaultValue:
+            'HSE Advanced handles the formal side of site safety: 5-Whys incident investigations, Job Safety Analyses, permits-to-work, toolbox talks, PPE issue tracking, safety audits and CAPA (corrective/preventive action) close-out. For quick incident and observation logging use the Safety page; escalate here when an event needs root-cause analysis and tracked corrective actions.',
+        })}
+      </SectionIntro>
 
       {!projectId && (
         <EmptyState

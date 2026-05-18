@@ -49,9 +49,14 @@ def main(snapshot_path: str) -> int:
         print(f"  - {c.name}")
 
     info = client.get_collection(target)
+    _count = (
+        getattr(info, "points_count", None)
+        if getattr(info, "points_count", None) is not None
+        else getattr(info, "vectors_count", None)
+    )
     print(f"\nCollection {target}:")
-    print(f"  vectors_count:  {info.vectors_count}")
-    print(f"  points_count:   {info.points_count}")
+    print(f"  vectors_count:  {_count}")
+    print(f"  points_count:   {getattr(info, 'points_count', None)}")
     print(f"  status:         {info.status}")
     print("  vector schemas:")
     config = info.config.params

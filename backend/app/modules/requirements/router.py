@@ -25,7 +25,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
@@ -196,14 +196,26 @@ async def create_set(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="project_id is required (body or ?project_id= query parameter)",
         )
-    payload = RequirementSetCreate(
-        project_id=effective_project_id,
-        name=data.name,
-        description=data.description,
-        source_type=data.source_type,
-        source_filename=data.source_filename,
-        metadata=data.metadata,
-    )
+    effective_name = (data.name or "").strip()
+    if not effective_name:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="name is required and must be at least 1 character",
+        )
+    try:
+        payload = RequirementSetCreate(
+            project_id=effective_project_id,
+            name=effective_name,
+            description=data.description,
+            source_type=data.source_type,
+            source_filename=data.source_filename,
+            metadata=data.metadata,
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=exc.errors(include_url=False),
+        ) from exc
     try:
         item = await service.create_set(payload, user_id=user_id)
         return _set_to_response(item)

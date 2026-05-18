@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Calendar,
@@ -17,6 +18,8 @@ import {
   ChevronRight,
   AlertTriangle,
   Trash2,
+  ArrowRight,
+  X,
 } from 'lucide-react';
 import {
   Button,
@@ -31,6 +34,7 @@ import {
 } from '@/shared/ui';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
+import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import { projectsApi } from '@/features/projects/api';
 import {
@@ -118,11 +122,97 @@ function formatSha(sha: string): string {
   return `${sha.slice(0, 8)}…${sha.slice(-6)}`;
 }
 
+/* ── Workflow intro ──────────────────────────────────────────────────────
+ *
+ * Site teams open this page without always knowing WHY the diary matters
+ * downstream. This banner states the purpose, the daily next-action, and
+ * the legal/audit weight of a signed record — plus one-click jumps to the
+ * modules the diary feeds into (schedule progress, tasks, photo files).
+ * It is dismissible per-session so power users aren't slowed down.
+ */
+function WorkflowIntro() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [dismissed, setDismissed] = useState(
+    () => sessionStorage.getItem('oe.dd.introDismissed') === '1',
+  );
+  if (dismissed) return null;
+  const dismiss = () => {
+    sessionStorage.setItem('oe.dd.introDismissed', '1');
+    setDismissed(true);
+  };
+  return (
+    <Card
+      padding="md"
+      className="border-oe-blue/20 bg-oe-blue-subtle/10"
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+          <BookOpen size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-content-primary">
+            {t('daily_diary.intro_title', {
+              defaultValue: 'One signed record per site day',
+            })}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-content-secondary">
+            {t('daily_diary.intro_body', {
+              defaultValue:
+                'Each day, open the diary and log weather, headcount, deliveries and events, attach site photos, then close and sign it. A signed diary is sealed with a sha256 fingerprint — it becomes tamper-evident evidence for delay claims, progress verification and dispute resolution.',
+            })}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('daily_diary.intro_connects', { defaultValue: 'Feeds into' })}
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate('/schedule')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('daily_diary.intro_link_schedule', {
+                defaultValue: 'Schedule progress',
+              })}
+              <ArrowRight size={11} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/tasks')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('daily_diary.intro_link_tasks', { defaultValue: 'Tasks' })}
+              <ArrowRight size={11} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/files')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('daily_diary.intro_link_files', { defaultValue: 'Site photos' })}
+              <ArrowRight size={11} />
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={dismiss}
+          className="shrink-0 rounded-md p-1 text-content-tertiary transition-colors hover:bg-surface-secondary hover:text-content-primary"
+          aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </Card>
+  );
+}
+
 /* ── Page ────────────────────────────────────────────────────────────── */
 
 export function DailyDiaryPage() {
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<Tab>('diaries');
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
   const today = new Date();
   const [year, setYear] = useState(today.getFullYear());
@@ -137,11 +227,10 @@ export function DailyDiaryPage() {
   });
 
   useEffect(() => {
-    if (!projectId && projectsQ.data && projectsQ.data.length > 0) {
-      const first = projectsQ.data[0];
-      if (first) setProjectId(first.id);
-    }
-  }, [projectId, projectsQ.data]);
+    if (projectId) return;
+    const seed = activeProjectId || projectsQ.data?.[0]?.id;
+    if (seed) setProjectId(seed);
+  }, [activeProjectId, projectsQ.data, projectId]);
 
   const bounds = useMemo(() => monthBounds(year, month), [year, month]);
 
@@ -252,6 +341,8 @@ export function DailyDiaryPage() {
           </Button>
         </div>
       </div>
+
+      <WorkflowIntro />
 
       <div className="border-b border-border-light">
         <nav className="flex gap-1 -mb-px">
@@ -1243,6 +1334,24 @@ function CreateDiaryModal({
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
+    if (!diaryDate) {
+      addToast({
+        type: 'error',
+        title: t('daily_diary.date_required', {
+          defaultValue: 'Pick a date for the diary.',
+        }),
+      });
+      return;
+    }
+    if (diaryDate > todayIso()) {
+      addToast({
+        type: 'error',
+        title: t('daily_diary.date_future', {
+          defaultValue: 'A site diary cannot be dated in the future.',
+        }),
+      });
+      return;
+    }
     setBusy(true);
     try {
       await createDiary({
@@ -1285,10 +1394,15 @@ function CreateDiaryModal({
           label={t('daily_diary.date', { defaultValue: 'Date' })}
           required
           span={2}
+          hint={t('daily_diary.date_hint', {
+            defaultValue:
+              'Today or a past day you are back-filling. Future-dated site diaries are not allowed.',
+          })}
         >
           <input
             type="date"
             value={diaryDate}
+            max={todayIso()}
             onChange={(e) => setDiaryDate(e.target.value)}
             className={inputCls}
           />

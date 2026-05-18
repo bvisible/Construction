@@ -16,7 +16,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.events import event_bus
 from app.modules.risk.models import RiskItem
 from app.modules.risk.repository import RiskRepository
-from app.modules.risk.schemas import RiskCreate, RiskUpdate
+from app.modules.risk.schemas import (
+    SEVERITY_ALIASES,
+    SEVERITY_CANONICAL,
+    RiskCreate,
+    RiskUpdate,
+)
 
 logger = logging.getLogger(__name__)
 _logger_events = logging.getLogger(__name__ + ".events")
@@ -33,19 +38,21 @@ async def _safe_publish(
     except Exception:
         _logger_events.debug("Event publish skipped: %s", name)
 
+# Severity → 1-5 numeric scale. Built from the canonical vocabulary in
+# schemas.py so the request-schema regex and this map are derived from a
+# single source and can never drift (F-PFO-RISK-03). SEVERITY_CANONICAL is
+# ordered very_low→critical, so its index+1 is the 1-5 rank; each legacy
+# alias maps onto the canonical level at the same ordinal position
+# (negligible≈very_low … catastrophic≈critical).
 SEVERITY_NUMERIC: dict[str, int] = {
-    "very_low": 1,
-    "low": 2,
-    "medium": 3,
-    "high": 4,
-    "critical": 5,
-    # Aliases for legacy / PMBOK-style enum values:
-    "negligible": 1,
-    "minor": 2,
-    "moderate": 3,
-    "major": 4,
-    "catastrophic": 5,
+    level: rank for rank, level in enumerate(SEVERITY_CANONICAL, start=1)
 }
+SEVERITY_NUMERIC.update(
+    {
+        alias: rank
+        for rank, alias in enumerate(SEVERITY_ALIASES, start=1)
+    }
+)
 
 # 5x5 matrix scoring: maps probability to a 1-5 score
 PROBABILITY_SCORE_MAP: list[tuple[float, int]] = [
@@ -57,25 +64,9 @@ PROBABILITY_SCORE_MAP: list[tuple[float, int]] = [
 ]
 
 # Impact severity to 1-5 score for the canonical 5x5 PMBOK risk matrix.
-# The canonical level set is: very_low / low / medium / high / critical.
-# Legacy enum values (negligible / minor / moderate / major / catastrophic)
-# are accepted as aliases so existing seed / demo data keeps working.
-# TODO (v1.4): proper enum migration — right now `impact_severity` is a
-# free-text String(20) in the DB, so no CHECK constraint / Alembic step is
-# needed yet, but the schemas should be tightened alongside a data backfill.
-IMPACT_SCORE_MAP: dict[str, int] = {
-    "very_low": 1,
-    "low": 2,
-    "medium": 3,
-    "high": 4,
-    "critical": 5,
-    # Aliases — same numeric scale as above:
-    "negligible": 1,
-    "minor": 2,
-    "moderate": 3,
-    "major": 4,
-    "catastrophic": 5,
-}
+# Identical scale to SEVERITY_NUMERIC and likewise derived from the shared
+# schema vocabulary — kept as a separate name for call-site clarity.
+IMPACT_SCORE_MAP: dict[str, int] = dict(SEVERITY_NUMERIC)
 
 
 def _probability_to_score(probability: float) -> int:
@@ -113,6 +104,24 @@ class RiskService:
         self.session = session
         self.repo = RiskRepository(session)
 
+    async def _get_project_currency(self, project_id: uuid.UUID) -> str:
+        """Return the owning project's configured currency.
+
+        Currency is strictly data-driven — it comes from the project record
+        and nowhere else. When the project has no currency set (or the
+        lookup fails) we return an empty string rather than fabricating a
+        default (mirrors costmodel/finance). The UI renders a currency-less
+        number instead of silently mislabelling, e.g., AED costs as EUR.
+        """
+        try:
+            from app.modules.projects.repository import ProjectRepository
+
+            repo = ProjectRepository(self.session)
+            project = await repo.get_by_id(project_id)
+            return project.currency if project and project.currency else ""
+        except Exception:
+            return ""
+
     # ── Create ────────────────────────────────────────────────────────────
 
     async def create_risk(
@@ -124,6 +133,10 @@ class RiskService:
         """Create a new risk item with auto-generated code."""
         count = await self.repo.count_for_project(data.project_id)
         code = f"R-{count + 1:03d}"
+
+        # Currency is data-driven: an explicit payload value wins, else it
+        # is inherited from the owning project. Never a hardcoded "EUR".
+        currency = data.currency or await self._get_project_currency(data.project_id)
 
         risk_score = _compute_risk_score(data.probability, data.impact_severity)
 
@@ -142,6 +155,7 @@ class RiskService:
             impact_cost=str(data.impact_cost),
             impact_schedule_days=data.impact_schedule_days,
             impact_severity=data.impact_severity,
+            status=data.status,
             risk_score=str(risk_score),
             probability_score=prob_score,
             impact_score_cost=impact_score,
@@ -152,7 +166,7 @@ class RiskService:
             owner_name=data.owner_name,
             owner_user_id=data.owner_user_id,
             response_cost=str(data.response_cost),
-            currency=data.currency,
+            currency=currency,
             metadata_=data.metadata,
         )
         item = await self.repo.create(item)
@@ -318,10 +332,13 @@ class RiskService:
         mitigated_count = 0
         with_mitigation = 0
         without_mitigation = 0
-        total_exposure = 0.0
+        # Exposure grouped per currency. Summing impact across mixed
+        # currencies under one last-wins label is wrong (F-PFO-RISK-04);
+        # we keep each currency separate. "" is the bucket for risks with
+        # no resolvable currency.
+        exposure_by_currency: dict[str, float] = {}
         risk_scores: list[float] = []
         scored_items: list[tuple[str, float]] = []
-        currency = ""
 
         for item in items:
             by_status[item.status] = by_status.get(item.status, 0) + 1
@@ -343,22 +360,28 @@ class RiskService:
             else:
                 without_mitigation += 1
 
-            # Exposure = impact_cost * probability
+            # Exposure = impact_cost * probability, accumulated per currency.
             try:
-                total_exposure += float(item.impact_cost) * float(item.probability)
+                exposure = float(item.impact_cost) * float(item.probability)
+                cur = item.currency or ""
+                exposure_by_currency[cur] = exposure_by_currency.get(cur, 0.0) + exposure
             except (ValueError, TypeError):
                 pass
 
-            # Risk score tracking
+            # Risk score: ALWAYS recompute on the single canonical 0-5 scale
+            # (probability x severity_numeric) instead of trusting the stored
+            # risk_score, which is heterogeneous — seed rows carry a
+            # cost-scaled value while API-created rows store 0-5
+            # (F-PFO-RISK-06). Recomputing makes the average and ranking
+            # scale-correct and comparable across seed + runtime data.
             try:
-                score = float(item.risk_score)
+                score = _compute_risk_score(
+                    float(item.probability), item.impact_severity or "medium"
+                )
                 risk_scores.append(score)
                 scored_items.append((item.title, score))
             except (ValueError, TypeError):
                 pass
-
-            if item.currency:
-                currency = item.currency
 
         avg_risk_score = 0.0
         if risk_scores:
@@ -368,6 +391,20 @@ class RiskService:
         scored_items.sort(key=lambda x: x[1], reverse=True)
         top_risks = [{"title": t, "score": s} for t, s in scored_items[:5]]
 
+        # Project currency is data-driven (resolved from the project), not
+        # last-wins from item rows. total_exposure is only emitted when all
+        # exposure shares a single currency; otherwise it stays 0.0 and
+        # callers must read exposure_by_currency.
+        project_currency = await self._get_project_currency(project_id)
+        non_empty = {c: v for c, v in exposure_by_currency.items() if c}
+        if len(non_empty) == 1:
+            total_exposure = round(next(iter(non_empty.values())), 2)
+        elif not non_empty and exposure_by_currency:
+            # All exposure is currency-less — a single (unknown) bucket.
+            total_exposure = round(sum(exposure_by_currency.values()), 2)
+        else:
+            total_exposure = 0.0
+
         return {
             "total": len(items),
             "total_risks": len(items),
@@ -376,12 +413,15 @@ class RiskService:
             "by_category": by_category,
             "high_critical_count": high_critical_count,
             "avg_risk_score": avg_risk_score,
-            "total_exposure": round(total_exposure, 2),
+            "total_exposure": total_exposure,
+            "exposure_by_currency": {
+                c: round(v, 2) for c, v in exposure_by_currency.items()
+            },
             "with_mitigation": with_mitigation,
             "without_mitigation": without_mitigation,
             "mitigated_count": mitigated_count,
             "top_risks": top_risks,
-            "currency": currency,
+            "currency": project_currency,
         }
 
     # ── Risk Matrix ───────────────────────────────────────────────────────

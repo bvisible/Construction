@@ -703,7 +703,12 @@ class PhotoService:
             from sqlalchemy import text as _text
 
             doc_id = str(uuid.uuid4())
-            now = datetime.now(UTC).isoformat()
+            # Write a NAIVE UTC timestamp so the cross-linked Document row
+            # round-trips identical to every other oe_documents_document row
+            # (SQLAlchemy stores model created_at/updated_at as naive UTC on
+            # SQLite). Mixing aware here with naive elsewhere previously broke
+            # the file-manager modified-sort with a TypeError → HTTP 500.
+            now = datetime.now(UTC).replace(tzinfo=None).isoformat()
             tags_json = _json.dumps(["photo", category or "site"])
             await self.session.execute(
                 _text(

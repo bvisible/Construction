@@ -25,6 +25,8 @@ import {
   User,
   Pencil,
   Trash2,
+  Info,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   Button,
@@ -81,6 +83,8 @@ const TAG_GROUPS: { prefix: string; label: string }[] = [
 
 /* Cap per group so the strip stays scannable at 6.6K contacts. */
 const TAG_GROUP_CAP = 8;
+
+const LS_INFO_DISMISSED = 'oe_contacts_info_dismissed';
 
 const TYPE_BADGE_VARIANT: Record<ContactType, 'blue' | 'warning' | 'success' | 'neutral'> = {
   client: 'blue',
@@ -789,6 +793,9 @@ export function ContactsPage() {
   const [typeFilter, setTypeFilter] = useState<ContactType | ''>('');
   const [countryFilter, setCountryFilter] = useState('');
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [infoDismissed, setInfoDismissed] = useState(
+    () => localStorage.getItem(LS_INFO_DISMISSED) === '1',
+  );
 
   // "n" shortcut → open new contact form
   useCreateShortcut(
@@ -797,7 +804,13 @@ export function ContactsPage() {
   );
 
   // Data
-  const { data: contacts = [], isLoading } = useQuery({
+  const {
+    data: contacts = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['contacts', typeFilter, selectedTags],
     queryFn: () =>
       fetchContacts({
@@ -1090,6 +1103,39 @@ export function ContactsPage() {
         </div>
       </div>
 
+      {/* Purpose / help banner — explains the directory and how it
+          connects to the rest of the platform. */}
+      {!infoDismissed && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300 relative">
+          <button
+            onClick={() => {
+              setInfoDismissed(true);
+              localStorage.setItem(LS_INFO_DISMISSED, '1');
+            }}
+            className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/40 dark:hover:text-blue-200 transition-colors"
+            aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+          >
+            <X size={14} />
+          </button>
+          <div className="flex items-center gap-2 mb-1">
+            <Info size={16} />
+            <span className="font-semibold">
+              {t('contacts.info_title', { defaultValue: 'About the Contacts Directory' })}
+            </span>
+          </div>
+          <p className="text-xs pr-6">
+            {t('contacts.info_body', {
+              defaultValue:
+                'A single, shared address book for every organisation and person on your projects — clients, subcontractors, suppliers, and consultants. Prequalification status flags who is approved to bid or be awarded work.',
+            })}{' '}
+            {t('contacts.info_link_hint', {
+              defaultValue:
+                'Contacts are reused across the platform: as RFI / submittal ball-in-court, transmittal recipients, correspondence parties, and tender invitees. Keep this list clean and everything downstream stays consistent.',
+            })}
+          </p>
+        </div>
+      )}
+
       {/* CRM tag-chip strip — surfaces metadata.tags from imported
           contacts so a user can pivot the list by tier / topic / language /
           country / inbox / consent without typing into search. AND-combined:
@@ -1260,6 +1306,25 @@ export function ContactsPage() {
               </Card>
             ))}
           </div>
+        ) : isError ? (
+          <EmptyState
+            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
+            title={t('contacts.load_failed', {
+              defaultValue: 'Could not load contacts',
+            })}
+            description={
+              error instanceof Error
+                ? error.message
+                : t('contacts.load_failed_hint', {
+                    defaultValue:
+                      'Something went wrong fetching the directory. Please try again.',
+                  })
+            }
+            action={{
+              label: t('common.retry', { defaultValue: 'Retry' }),
+              onClick: () => refetch(),
+            }}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<Building2 size={28} strokeWidth={1.5} />}

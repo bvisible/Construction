@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Info,
   Edit3,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   Button,
@@ -559,6 +560,21 @@ const SubmittalRow = React.memo(function SubmittalRow({
             })}
           </p>
 
+          {/* Reviewer instruction when a resubmission is required so the
+              submitter knows the next step instead of hitting a dead end. */}
+          {submittal.status === 'revise_and_resubmit' && (
+            <div className="flex items-start gap-2 rounded-lg border border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950/20 p-3 text-xs text-orange-700 dark:text-orange-300">
+              <Info size={14} className="mt-0.5 shrink-0" />
+              <span>
+                {t('submittals.resubmit_hint', {
+                  defaultValue:
+                    'The reviewer requested changes. Edit this submittal, then resubmit it to start a new revision (R{{next}}).',
+                  next: submittal.revision + 1,
+                })}
+              </span>
+            </div>
+          )}
+
           {/* Actions */}
           <div className="flex items-center gap-2 pt-1">
             {submittal.status === 'draft' && (
@@ -571,6 +587,18 @@ const SubmittalRow = React.memo(function SubmittalRow({
                 }}
               >
                 {t('submittals.action_submit', { defaultValue: 'Submit' })}
+              </Button>
+            )}
+            {submittal.status === 'revise_and_resubmit' && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSubmit(submittal.id);
+                }}
+              >
+                {t('submittals.action_resubmit', { defaultValue: 'Resubmit' })}
               </Button>
             )}
             {(submittal.status === 'submitted' || submittal.status === 'under_review') && (
@@ -632,7 +660,13 @@ export function SubmittalsPage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: submittals = [], isLoading } = useQuery({
+  const {
+    data: submittals = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['submittals', projectId, statusFilter],
     queryFn: () =>
       fetchSubmittals({
@@ -1000,6 +1034,25 @@ export function SubmittalsPage() {
       <div>
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : isError ? (
+          <EmptyState
+            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
+            title={t('submittals.load_failed', {
+              defaultValue: 'Could not load submittals',
+            })}
+            description={
+              error instanceof Error
+                ? error.message
+                : t('submittals.load_failed_hint', {
+                    defaultValue:
+                      'Something went wrong fetching the submittals log. Please try again.',
+                  })
+            }
+            action={{
+              label: t('common.retry', { defaultValue: 'Retry' }),
+              onClick: () => refetch(),
+            }}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<FileCheck size={28} strokeWidth={1.5} />}

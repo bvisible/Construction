@@ -36,6 +36,14 @@ class AISettingsUpdate(BaseModel):
     yandex_api_key: str | None = None
     gigachat_api_key: str | None = None
     preferred_model: str | None = Field(default=None, max_length=100)
+    # Per-provider model-id override, e.g. {"gemini": "gemini-2.5-flash",
+    # "openrouter": "anthropic/claude-sonnet-4"}. Lets users track provider
+    # model renames/retirements without an app release (issue #129). A blank
+    # value for a provider clears the override (falls back to the default).
+    model_overrides: dict[str, str] | None = Field(
+        default=None,
+        description="Per-provider model id override (provider -> model id).",
+    )
 
 
 class AISettingsResponse(BaseModel):
@@ -66,6 +74,11 @@ class AISettingsResponse(BaseModel):
     yandex_api_key_set: bool = False
     gigachat_api_key_set: bool = False
     preferred_model: str
+    # Effective per-provider model id the platform will send (override if the
+    # user set one, otherwise the built-in default). Drives the editable
+    # "Model name" field in Settings > AI.
+    model_overrides: dict[str, str] = Field(default_factory=dict)
+    default_models: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
     created_at: datetime
     updated_at: datetime

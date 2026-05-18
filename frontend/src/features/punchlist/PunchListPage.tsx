@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -25,10 +26,13 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  ConfirmDialog,
   WideModal,
   WideModalSection,
   WideModalField,
 } from '@/shared/ui';
+import { useConfirm } from '@/shared/hooks/useConfirm';
+import { SectionIntro } from '@/features/validation';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -628,8 +632,10 @@ function KanbanView({
 
 export function PunchListPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  const { confirm, ...confirmProps } = useConfirm();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
 
   // State
@@ -775,15 +781,20 @@ export function PunchListPage() {
   );
 
   const handleDelete = useCallback(
-    (id: string) => {
-      const ok = window.confirm(
-        t('punchlist.confirm_delete', {
+    async (id: string) => {
+      const ok = await confirm({
+        title: t('punch.confirm_delete_title', {
+          defaultValue: 'Delete punch list item?',
+        }),
+        message: t('punchlist.confirm_delete', {
           defaultValue: 'Delete this punch list item? This cannot be undone.',
         }),
-      );
+        confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+        variant: 'danger',
+      });
       if (ok) delMut.mutate(id);
     },
-    [delMut, t],
+    [delMut, confirm, t],
   );
 
   return (
@@ -833,6 +844,30 @@ export function PunchListPage() {
             {t('punch.new_item', { defaultValue: 'New Item' })}
           </Button>
         </div>
+      </div>
+
+      <div className="mt-4">
+        <SectionIntro
+          storageKey="punchlist"
+          title={t('punch.intro_title', {
+            defaultValue: 'Track snags & deficiencies to close-out',
+          })}
+          links={[
+            {
+              label: t('punch.intro_link_inspections', { defaultValue: 'Inspections' }),
+              onClick: () => navigate('/inspections'),
+            },
+            {
+              label: t('punch.intro_link_ncr', { defaultValue: 'NCRs' }),
+              onClick: () => navigate('/ncr'),
+            },
+          ]}
+        >
+          {t('punch.intro_body', {
+            defaultValue:
+              'Punch list items capture outstanding work, snags and minor defects. Move each item through Open → In Progress → Resolved → Verified → Closed. Items raised from a failed inspection or an NCR are tagged with their source so you can trace them back. Use the Kanban view to manage flow, the list view for bulk triage.',
+          })}
+        </SectionIntro>
       </div>
 
       {/* Stats */}
@@ -1094,6 +1129,8 @@ export function PunchListPage() {
           teamMembers={teamMembers}
         />
       )}
+
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Mail,
@@ -14,6 +14,14 @@ import {
   FileText,
   Cloud,
   Webhook,
+  Info,
+  X,
+  Pencil,
+  Trash2,
+  AlertTriangle,
+  Send,
+  HelpCircle,
+  Link2,
 } from 'lucide-react';
 import {
   Button,
@@ -23,22 +31,29 @@ import {
   Breadcrumb,
   DateDisplay,
   SkeletonTable,
+  ConfirmDialog,
   WideModal,
   WideModalSection,
   WideModalField,
 } from '@/shared/ui';
 import { ContactSearchInput } from '@/shared/ui/ContactSearchInput';
+import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import {
   fetchCorrespondence,
   createCorrespondence,
+  updateCorrespondence,
+  deleteCorrespondence,
   type Correspondence,
   type CorrespondenceDirection,
   type CorrespondenceType,
   type CreateCorrespondencePayload,
+  type UpdateCorrespondencePayload,
 } from './api';
+
+const LS_INFO_DISMISSED = 'oe_correspondence_info_dismissed';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -122,17 +137,23 @@ function CreateCorrespondenceModal({
   onClose,
   onSubmit,
   isPending,
+  initialData,
+  isEdit,
 }: {
   onClose: () => void;
   onSubmit: (data: CorrespondenceFormData) => void;
   isPending: boolean;
+  initialData?: CorrespondenceFormData | null;
+  isEdit?: boolean;
 }) {
   const { t } = useTranslation();
-  const [form, setForm] = useState<CorrespondenceFormData>({
-    ...EMPTY_FORM,
-    date_sent: todayDate(),
-    date_received: todayDate(),
-  });
+  const [form, setForm] = useState<CorrespondenceFormData>(
+    initialData ?? {
+      ...EMPTY_FORM,
+      date_sent: todayDate(),
+      date_received: todayDate(),
+    },
+  );
   const [touched, setTouched] = useState(false);
 
   const set = <K extends keyof CorrespondenceFormData>(
@@ -155,7 +176,11 @@ function CreateCorrespondenceModal({
       onClose={onClose}
       busy={isPending}
       size="xl"
-      title={t('correspondence.new_entry', { defaultValue: 'New Entry‌⁠‍' })}
+      title={
+        isEdit
+          ? t('correspondence.edit_entry', { defaultValue: 'Edit Entry' })
+          : t('correspondence.new_entry', { defaultValue: 'New Entry‌⁠‍' })
+      }
       footer={
         <>
           <Button variant="ghost" onClick={onClose} disabled={isPending}>
@@ -164,10 +189,14 @@ function CreateCorrespondenceModal({
           <Button variant="primary" onClick={handleSubmit} disabled={isPending || !canSubmit}>
             {isPending ? (
               <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent mr-2 shrink-0" />
-            ) : (
+            ) : !isEdit ? (
               <Plus size={16} className="mr-1.5 shrink-0" />
-            )}
-            <span>{t('correspondence.create_entry', { defaultValue: 'Create Entry' })}</span>
+            ) : null}
+            <span>
+              {isEdit
+                ? t('correspondence.save_entry', { defaultValue: 'Save Changes' })
+                : t('correspondence.create_entry', { defaultValue: 'Create Entry' })}
+            </span>
           </Button>
         </>
       }
@@ -386,9 +415,23 @@ function CreateCorrespondenceModal({
 
 /* ── Correspondence Row (expandable) ──────────────────────────────────── */
 
-const CorrespondenceRow = React.memo(function CorrespondenceRow({ item }: { item: Correspondence }) {
+const CorrespondenceRow = React.memo(function CorrespondenceRow({
+  item,
+  onEdit,
+  onDelete,
+}: {
+  item: Correspondence;
+  onEdit: (item: Correspondence) => void;
+  onDelete: (item: Correspondence) => void;
+}) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
+  const fromLabel = item.from_contact_id || '—';
+  const toLabel =
+    (item.to_contact_ids ?? []).length > 0
+      ? (item.to_contact_ids ?? []).join(', ')
+      : '—';
+  const docCount = (item.linked_document_ids ?? []).length;
 
   return (
     <div className="border-b border-border-light last:border-b-0">
@@ -445,13 +488,19 @@ const CorrespondenceRow = React.memo(function CorrespondenceRow({ item }: { item
         </Badge>
 
         {/* From */}
-        <span className="text-xs text-content-tertiary w-24 truncate shrink-0 hidden lg:block">
-          {item.from_contact_id}
+        <span
+          className="text-xs text-content-tertiary w-24 truncate shrink-0 hidden lg:block"
+          title={fromLabel}
+        >
+          {fromLabel}
         </span>
 
         {/* To */}
-        <span className="text-xs text-content-tertiary w-24 truncate shrink-0 hidden lg:block">
-          {(item.to_contact_ids ?? []).length > 0 ? (item.to_contact_ids ?? []).join(', ') : '-'}
+        <span
+          className="text-xs text-content-tertiary w-24 truncate shrink-0 hidden lg:block"
+          title={toLabel}
+        >
+          {toLabel}
         </span>
 
         {/* Date */}
@@ -462,13 +511,22 @@ const CorrespondenceRow = React.memo(function CorrespondenceRow({ item }: { item
           />
         </span>
 
-        {/* Linked docs count */}
-        {(item.created_by || "").length > 0 && (
-          <span className="flex items-center gap-1 text-xs text-content-tertiary shrink-0">
-            <FileText size={12} />
-            {item.created_by}
+        {/* Linked documents count — real count of referenced documents */}
+        <span
+          className="flex items-center gap-1 text-xs w-10 shrink-0 justify-end tabular-nums"
+          title={t('correspondence.docs_count_title', {
+            defaultValue: '{{count}} linked document(s)',
+            count: docCount,
+          })}
+        >
+          <FileText
+            size={12}
+            className={docCount > 0 ? 'text-oe-blue' : 'text-content-quaternary'}
+          />
+          <span className={docCount > 0 ? 'text-content-secondary' : 'text-content-quaternary'}>
+            {docCount}
           </span>
-        )}
+        </span>
       </div>
 
       {/* Expanded detail */}
@@ -500,6 +558,78 @@ const CorrespondenceRow = React.memo(function CorrespondenceRow({ item }: { item
               <p className="text-sm text-content-primary whitespace-pre-wrap">{item.notes}</p>
             </div>
           )}
+
+          {/* Linked references — connections to Documents / Transmittals / RFI */}
+          {((item.linked_document_ids ?? []).length > 0 ||
+            item.linked_transmittal_id ||
+            item.linked_rfi_id) && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="inline-flex items-center gap-1 text-2xs uppercase tracking-wide text-content-tertiary">
+                <Link2 size={11} />
+                {t('correspondence.label_linked', { defaultValue: 'Linked' })}
+              </span>
+              {(item.linked_document_ids ?? []).length > 0 && (
+                <Badge variant="neutral" size="sm">
+                  <FileText size={11} className="mr-1" />
+                  {t('correspondence.linked_docs', {
+                    defaultValue: '{{count}} document(s)',
+                    count: (item.linked_document_ids ?? []).length,
+                  })}
+                </Badge>
+              )}
+              {item.linked_transmittal_id && (
+                <Link
+                  to="/transmittals"
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 rounded-full bg-oe-blue/10 px-2 py-0.5 text-xs font-medium text-oe-blue hover:bg-oe-blue/20 transition-colors"
+                >
+                  <Send size={11} />
+                  {t('correspondence.linked_transmittal', {
+                    defaultValue: 'View transmittal',
+                  })}
+                </Link>
+              )}
+              {item.linked_rfi_id && (
+                <Link
+                  to={`/rfi/${item.linked_rfi_id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="inline-flex items-center gap-1 rounded-full bg-oe-blue/10 px-2 py-0.5 text-xs font-medium text-oe-blue hover:bg-oe-blue/20 transition-colors"
+                >
+                  <HelpCircle size={11} />
+                  {t('correspondence.linked_rfi', { defaultValue: 'View RFI' })}
+                </Link>
+              )}
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<Pencil size={13} />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onEdit(item);
+              }}
+              data-testid={`correspondence-edit-${item.id}`}
+            >
+              {t('common.edit', { defaultValue: 'Edit' })}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="text-semantic-error hover:bg-red-50 dark:hover:bg-red-950/30"
+              icon={<Trash2 size={13} />}
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(item);
+              }}
+              data-testid={`correspondence-delete-${item.id}`}
+            >
+              {t('common.delete', { defaultValue: 'Delete' })}
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -576,9 +706,14 @@ export function CorrespondencePage() {
 
   // State
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingItem, setEditingItem] = useState<Correspondence | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [directionFilter, setDirectionFilter] = useState<CorrespondenceDirection | ''>('');
   const [typeFilter, setTypeFilter] = useState<CorrespondenceType | ''>('');
+  const [infoDismissed, setInfoDismissed] = useState(
+    () => localStorage.getItem(LS_INFO_DISMISSED) === '1',
+  );
+  const { confirm, ...confirmProps } = useConfirm();
 
   // Data
   const { data: projects = [] } = useQuery({
@@ -590,7 +725,13 @@ export function CorrespondencePage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: items = [], isLoading } = useQuery({
+  const {
+    data: items = [],
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['correspondence', projectId, directionFilter, typeFilter],
     queryFn: () =>
       fetchCorrespondence({
@@ -638,28 +779,110 @@ export function CorrespondencePage() {
       }),
   });
 
+  const updateMut = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: UpdateCorrespondencePayload }) =>
+      updateCorrespondence(id, data),
+    onSuccess: () => {
+      invalidateAll();
+      setEditingItem(null);
+      addToast({
+        type: 'success',
+        title: t('correspondence.updated', { defaultValue: 'Entry updated' }),
+      });
+    },
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: e.message,
+      }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => deleteCorrespondence(id),
+    onSuccess: () => {
+      invalidateAll();
+      addToast({
+        type: 'success',
+        title: t('correspondence.deleted', { defaultValue: 'Entry deleted' }),
+      });
+    },
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: e.message,
+      }),
+  });
+
+  const buildPayload = useCallback(
+    (formData: CorrespondenceFormData) => ({
+      subject: formData.subject,
+      direction: formData.direction,
+      correspondence_type: formData.type,
+      from_contact_id: formData.from_contact || undefined,
+      to_contact_ids: (formData.to_display || formData.to_contacts)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+      date_sent: formData.date_sent || undefined,
+      date_received: formData.date_received || undefined,
+      notes: formData.notes || undefined,
+    }),
+    [],
+  );
+
   const handleCreateSubmit = useCallback(
     (formData: CorrespondenceFormData) => {
       if (!projectId) {
         addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: t('common.select_project_first', { defaultValue: 'Please select a project first' }) });
         return;
       }
-      createMut.mutate({
-        project_id: projectId,
-        subject: formData.subject,
-        direction: formData.direction,
-        correspondence_type: formData.type,
-        from_contact_id: formData.from_contact || undefined,
-        to_contact_ids: (formData.to_display || formData.to_contacts)
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean),
-        date_sent: formData.date_sent || undefined,
-        date_received: formData.date_received || undefined,
-        notes: formData.notes || undefined,
-      });
+      createMut.mutate({ project_id: projectId, ...buildPayload(formData) });
     },
-    [createMut, projectId, addToast, t],
+    [createMut, projectId, addToast, t, buildPayload],
+  );
+
+  const handleEditSubmit = useCallback(
+    (formData: CorrespondenceFormData) => {
+      if (!editingItem) return;
+      updateMut.mutate({ id: editingItem.id, data: buildPayload(formData) });
+    },
+    [updateMut, editingItem, buildPayload],
+  );
+
+  const formDataFromItem = useCallback(
+    (c: Correspondence): CorrespondenceFormData => ({
+      subject: c.subject,
+      direction: c.direction,
+      type: c.correspondence_type,
+      from_contact: c.from_contact_id || '',
+      from_display: c.from_contact_id || '',
+      to_contacts: (c.to_contact_ids ?? []).join(', '),
+      to_display: (c.to_contact_ids ?? []).join(', '),
+      date_sent: c.date_sent || '',
+      date_received: c.date_received || '',
+      notes: c.notes || '',
+    }),
+    [],
+  );
+
+  const handleDelete = useCallback(
+    async (item: Correspondence) => {
+      const ok = await confirm({
+        title: t('correspondence.confirm_delete_title', {
+          defaultValue: 'Delete entry?',
+        }),
+        message: t('correspondence.confirm_delete_msg', {
+          defaultValue: 'This permanently removes the entry "{{subject}}".',
+          subject: item.subject,
+        }),
+        confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+        variant: 'danger',
+      });
+      if (ok) deleteMut.mutate(item.id);
+    },
+    [deleteMut, confirm, t],
   );
 
   return (
@@ -726,13 +949,60 @@ export function CorrespondencePage() {
         </div>
       )}
 
-      {/* Integration hint */}
-      <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-950/30 p-4 text-sm text-blue-800 dark:text-blue-300">
-        {t('correspondence.integration_hint', {
-          defaultValue:
-            'Configure email and webhook integrations in Settings \u2192 Integrations to auto-import correspondence.',
-        })}
-      </div>
+      {/* Purpose / help banner \u2014 explains what this register is for and how
+          it connects to the rest of the platform. */}
+      {!infoDismissed && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300 relative">
+          <button
+            onClick={() => {
+              setInfoDismissed(true);
+              localStorage.setItem(LS_INFO_DISMISSED, '1');
+            }}
+            className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/40 dark:hover:text-blue-200 transition-colors"
+            aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+          >
+            <X size={14} />
+          </button>
+          <div className="flex items-center gap-2 mb-1">
+            <Info size={16} />
+            <span className="font-semibold">
+              {t('correspondence.info_title', { defaultValue: 'About the Correspondence Log' })}
+            </span>
+          </div>
+          <p className="text-xs pr-6">
+            {t('correspondence.info_body', {
+              defaultValue:
+                'A contemporaneous register of every formal letter, notice, email, and memo exchanged with project parties \u2014 the audit trail that protects you in disputes and claims. Log entries manually, or auto-import them via email/webhook integrations.',
+            })}{' '}
+            {t('correspondence.info_link_hint', {
+              defaultValue:
+                'Entries can be linked to Documents, Transmittals, and RFIs so a single thread of communication is traceable end-to-end.',
+            })}
+          </p>
+        </div>
+      )}
+
+      {/* Cross-module links */}
+      {projectId && (
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/transmittals')}>
+            <Send size={13} className="me-1" />
+            {t('correspondence.link_transmittals', { defaultValue: 'Transmittals' })}
+          </Button>
+          <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/rfi')}>
+            <HelpCircle size={13} className="me-1" />
+            {t('correspondence.link_rfi', { defaultValue: 'RFIs' })}
+          </Button>
+          <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/documents')}>
+            <FileText size={13} className="me-1" />
+            {t('correspondence.link_documents', { defaultValue: 'Documents' })}
+          </Button>
+          <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/contacts')}>
+            <Mail size={13} className="me-1" />
+            {t('correspondence.link_contacts', { defaultValue: 'Contacts' })}
+          </Button>
+        </div>
+      )}
 
       {/* Connectors */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
@@ -835,6 +1105,25 @@ export function CorrespondencePage() {
       <div>
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : isError ? (
+          <EmptyState
+            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
+            title={t('correspondence.load_failed', {
+              defaultValue: 'Could not load correspondence',
+            })}
+            description={
+              error instanceof Error
+                ? error.message
+                : t('correspondence.load_failed_hint', {
+                    defaultValue:
+                      'Something went wrong fetching the correspondence log. Please try again.',
+                  })
+            }
+            action={{
+              label: t('common.retry', { defaultValue: 'Retry' }),
+              onClick: () => refetch(),
+            }}
+          />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<Mail size={28} strokeWidth={1.5} />}
@@ -892,14 +1181,19 @@ export function CorrespondencePage() {
                 <span className="w-20 hidden sm:block">
                   {t('correspondence.col_date', { defaultValue: 'Date' })}
                 </span>
-                <span className="w-10">
+                <span className="w-10 text-right">
                   {t('correspondence.col_docs', { defaultValue: 'Docs' })}
                 </span>
               </div>
 
               {/* Rows */}
               {filtered.map((c) => (
-                <CorrespondenceRow key={c.id} item={c} />
+                <CorrespondenceRow
+                  key={c.id}
+                  item={c}
+                  onEdit={setEditingItem}
+                  onDelete={handleDelete}
+                />
               ))}
             </Card>
           </>
@@ -914,6 +1208,20 @@ export function CorrespondencePage() {
           isPending={createMut.isPending}
         />
       )}
+
+      {/* Edit Modal */}
+      {editingItem && (
+        <CreateCorrespondenceModal
+          isEdit
+          initialData={formDataFromItem(editingItem)}
+          onClose={() => setEditingItem(null)}
+          onSubmit={handleEditSubmit}
+          isPending={updateMut.isPending}
+        />
+      )}
+
+      {/* Confirm Dialog (for delete) */}
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

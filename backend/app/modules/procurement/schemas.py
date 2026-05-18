@@ -52,7 +52,9 @@ class POCreate(BaseModel):
     po_type: str = Field(default="standard", max_length=50)
     issue_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", max_length=20)
     delivery_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$", max_length=20)
-    currency_code: str = Field(default="EUR", max_length=10)
+    # Empty by default — the service inherits the parent project's currency
+    # when the caller does not supply one. Never hardcode EUR (task #217).
+    currency_code: str = Field(default="", max_length=10)
     amount_subtotal: str = Field(default="0", max_length=50)
     tax_amount: str = Field(default="0", max_length=50)
     amount_total: str = Field(default="0", max_length=50)

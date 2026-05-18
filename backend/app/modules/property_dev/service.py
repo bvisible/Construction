@@ -1125,8 +1125,15 @@ class PropertyDevService:
             metadata_=data.metadata,
         )
         item = await self.selection_items.create(item)
+        item_id = item.id
+        # ``_recompute_selection_total`` calls ``update_fields`` which runs
+        # ``session.expire_all()`` — that expires the freshly-created ``item``
+        # too, so returning it would force a lazy-load outside the async
+        # session (MissingGreenlet 500). Re-fetch after recompute so the
+        # router serialises a live, attribute-populated instance.
         await self._recompute_selection_total(selection_id)
-        return item
+        refreshed = await self.selection_items.get_by_id(item_id)
+        return refreshed if refreshed is not None else item
 
     async def remove_selection_item(self, item_id: uuid.UUID) -> None:
         item = await self.selection_items.get_by_id(item_id)

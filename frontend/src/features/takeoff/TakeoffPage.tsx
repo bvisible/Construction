@@ -725,7 +725,7 @@ function TakeoffDocFilmstrip({
   const [expanded, setExpanded] = useState(true);
 
   return (
-    <div className="shrink-0 bg-surface-primary border border-border-light rounded-xl mt-6 overflow-hidden">
+    <div className="shrink-0 bg-surface-primary border border-border-light rounded-xl mt-3 overflow-hidden">
       {/* Header — always visible */}
       <button
         type="button"
@@ -1478,7 +1478,7 @@ export function TakeoffPage() {
   /* ── Render ─────────────────────────────────────────────────────────── */
 
   return (
-    <div className="relative w-full animate-fade-in">
+    <div className="relative w-full overflow-x-hidden animate-fade-in">
       {/* Barely-visible field-surveyor geometry — rectangles, irregular
           polygons, distance dimension lines, vertex pins — the kind of
           marks an estimator drags across a drawing to measure area or
@@ -1553,11 +1553,11 @@ export function TakeoffPage() {
 
       {/* Tabs — Measurements primary (first), AI second. Lower radius
           for a sharper, more "tool-like" feel; no ring-halo. */}
-      <div className="mb-6 flex gap-1 rounded-md border border-border-light/80 bg-surface-secondary/40 p-1">
+      <div className="mb-3 flex gap-1 rounded-md border border-border-light/80 bg-surface-secondary/40 p-1">
         <button
           onClick={() => setActiveTab('measurements')}
           className={clsx(
-            'flex flex-1 items-center justify-center gap-2 rounded-sm px-4 py-2.5 text-sm font-semibold transition-colors',
+            'flex flex-1 items-center justify-center gap-2 rounded-sm px-4 py-2 text-sm font-semibold transition-colors',
             activeTab === 'measurements'
               ? 'bg-surface-primary text-oe-blue shadow-sm'
               : 'text-content-tertiary hover:text-content-primary hover:bg-surface-primary/60',
@@ -1569,7 +1569,7 @@ export function TakeoffPage() {
         <button
           onClick={() => setActiveTab('documents')}
           className={clsx(
-            'flex flex-1 items-center justify-center gap-2 rounded-sm px-4 py-2.5 text-sm font-semibold transition-colors',
+            'flex flex-1 items-center justify-center gap-2 rounded-sm px-4 py-2 text-sm font-semibold transition-colors',
             activeTab === 'documents'
               ? 'bg-surface-primary text-oe-blue shadow-sm'
               : 'text-content-tertiary hover:text-content-primary hover:bg-surface-primary/60',
@@ -1751,19 +1751,34 @@ export function TakeoffPage() {
 
         </>
       ) : (
-        <>
-          <Suspense
-            fallback={
-              <div className="flex items-center justify-center py-20">
-                <Loader2 size={24} className="animate-spin text-oe-blue" />
-              </div>
-            }
-          >
-            <TakeoffViewerModule
-              initialPdfUrl={viewerDoc?.url}
-              initialPdfName={viewerDoc?.name}
-            />
-          </Suspense>
+        // Viewport-bounded column so the bottom file panel is always
+        // visible without scrolling the page: the viewer takes the
+        // remaining height and scrolls internally; the filmstrip is a
+        // shrink-0 footer pinned in view.
+        //
+        // Height budget: the column already sits below the sticky header
+        // (--oe-header-height, 52px), the <main> pt-6 (1.5rem) and the
+        // takeoff tabs bar (~3.25rem incl. its mb-3) — all of which the
+        // 100vh calc must NOT count again. Empirically, 7rem total is the
+        // smallest reservation that keeps the column fully inside the
+        // viewport (no page-level scrollbar) while giving the viewer the
+        // most internal height — 8rem wasted ~1rem that was shrinking the
+        // viewer enough to force an internal scrollbar on laptop screens.
+        <div className="flex flex-col h-[calc(100vh-var(--oe-header-height,52px)-7rem)] min-h-0 overflow-x-hidden">
+          <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+            <Suspense
+              fallback={
+                <div className="flex items-center justify-center py-20">
+                  <Loader2 size={24} className="animate-spin text-oe-blue" />
+                </div>
+              }
+            >
+              <TakeoffViewerModule
+                initialPdfUrl={viewerDoc?.url}
+                initialPdfName={viewerDoc?.name}
+              />
+            </Suspense>
+          </div>
 
           {/* Bottom filmstrip — list previously uploaded takeoff documents. */}
           <TakeoffDocFilmstrip
@@ -1791,7 +1806,7 @@ export function TakeoffPage() {
               if (filmstripUploadRef.current) filmstripUploadRef.current.value = '';
             }}
           />
-        </>
+        </div>
       )}
     </div>
   );

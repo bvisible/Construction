@@ -167,12 +167,26 @@ class InvoiceRepository:
         overdue_result = await self.session.execute(overdue_base)
         overdue_row = overdue_result.one()
 
+        # Dominant invoice currency — used as a dashboard fallback when no
+        # budget line carries a currency yet.
+        cur_stmt = (
+            select(Invoice.currency_code, func.count().label("cnt"))
+            .where(Invoice.currency_code != "")
+            .group_by(Invoice.currency_code)
+            .order_by(func.count().desc())
+        )
+        if project_id is not None:
+            cur_stmt = cur_stmt.where(Invoice.project_id == project_id)
+        cur_row = (await self.session.execute(cur_stmt)).first()
+        currency = cur_row[0] if cur_row else ""
+
         return {
             "total_payable": round(total_payable, 2),
             "total_receivable": round(total_receivable, 2),
             "total_overdue": round(float(overdue_row.total), 2),
             "overdue_count": overdue_row.cnt,
             "status_counts": status_counts,
+            "currency": currency,
         }
 
 
@@ -305,11 +319,31 @@ class BudgetRepository:
         result = await self.session.execute(base)
         row = result.one()
 
+        # Resolve the dominant currency for the dashboard so the UI does
+        # not have to hardcode one. We pick the most-used non-empty
+        # currency_code among this project's budget lines. Empty when no
+        # budget line carries a currency (the UI then leaves it unstamped
+        # rather than mislabelling totals).
+        cur_stmt = (
+            select(
+                ProjectBudget.currency_code,
+                func.count().label("cnt"),
+            )
+            .where(ProjectBudget.currency_code != "")
+            .group_by(ProjectBudget.currency_code)
+            .order_by(func.count().desc())
+        )
+        if project_id is not None:
+            cur_stmt = cur_stmt.where(ProjectBudget.project_id == project_id)
+        cur_row = (await self.session.execute(cur_stmt)).first()
+        currency = cur_row[0] if cur_row else ""
+
         return {
             "total_budget_original": round(float(row[0]), 2),
             "total_budget_revised": round(float(row[1]), 2),
             "total_committed": round(float(row[2]), 2),
             "total_actual": round(float(row[3]), 2),
+            "currency": currency,
         }
 
     async def create(self, budget: ProjectBudget) -> ProjectBudget:

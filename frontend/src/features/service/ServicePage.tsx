@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Wrench,
@@ -16,6 +17,7 @@ import {
   DollarSign,
   Trash2,
   ShieldAlert,
+  ArrowRight,
 } from 'lucide-react';
 import {
   Button,
@@ -129,6 +131,90 @@ function dateToIsoDatetime(date: string): string | undefined {
   // Already a datetime (defensive — future callers may pass one through).
   if (date.includes('T') || date.includes(' ')) return date;
   return `${date}T00:00:00+00:00`;
+}
+
+/* ─── Workflow intro ───────────────────────────────────────────────────
+ *
+ * Makes the contract → asset → ticket → work order → bill lifecycle
+ * explicit so a coordinator knows the order of operations and where the
+ * money lands. Links to the modules this depends on: customers come from
+ * Contacts, on-site engineers from Subcontractors, and billed work orders
+ * roll into Finance. Dismissible per-session.
+ */
+function WorkflowIntro() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const [dismissed, setDismissed] = useState(
+    () => sessionStorage.getItem('oe.svc.introDismissed') === '1',
+  );
+  if (dismissed) return null;
+  const dismiss = () => {
+    sessionStorage.setItem('oe.svc.introDismissed', '1');
+    setDismissed(true);
+  };
+  return (
+    <Card padding="md" className="border-oe-blue/20 bg-oe-blue-subtle/10">
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+          <Wrench size={16} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-semibold text-content-primary">
+            {t('service.intro_title', {
+              defaultValue: 'From customer call to billed visit',
+            })}
+          </p>
+          <p className="mt-1 text-xs leading-relaxed text-content-secondary">
+            {t('service.intro_body', {
+              defaultValue:
+                'Set up a service Contract for a customer, register the Assets it covers, then log a Ticket whenever something needs attention. Dispatching a ticket creates a Work Order that schedules an engineer; once completed with a debrief it can be Billed. Work the tabs left-to-right — each step unlocks the next.',
+            })}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('service.intro_connects', { defaultValue: 'Connects to' })}
+            </span>
+            <button
+              type="button"
+              onClick={() => navigate('/contacts')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('service.intro_link_contacts', {
+                defaultValue: 'Customers (Contacts)',
+              })}
+              <ArrowRight size={11} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/subcontractors')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('service.intro_link_subs', {
+                defaultValue: 'Subcontractors',
+              })}
+              <ArrowRight size={11} />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/finance')}
+              className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
+            >
+              {t('service.intro_link_finance', { defaultValue: 'Finance' })}
+              <ArrowRight size={11} />
+            </button>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={dismiss}
+          className="shrink-0 rounded-md p-1 text-content-tertiary transition-colors hover:bg-surface-secondary hover:text-content-primary"
+          aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+        >
+          <X size={14} />
+        </button>
+      </div>
+    </Card>
+  );
 }
 
 /* ─── Page ─── */
@@ -277,6 +363,8 @@ export function ServicePage() {
                 : t('service.new_asset', { defaultValue: 'New Asset' })}
         </Button>
       </div>
+
+      <WorkflowIntro />
 
       {/* Tabs */}
       <div className="border-b border-border-light">

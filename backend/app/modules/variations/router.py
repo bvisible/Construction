@@ -94,7 +94,7 @@ async def list_notices(
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=500),
     status: str | None = Query(default=None),
     _perm: None = Depends(RequirePermission("variations.read")),
     service: VariationsService = Depends(_get_service),
@@ -214,7 +214,7 @@ async def list_variation_requests(
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: int = Query(default=50, ge=1, le=500),
     status: str | None = Query(default=None),
     _perm: None = Depends(RequirePermission("variations.read")),
     service: VariationsService = Depends(_get_service),

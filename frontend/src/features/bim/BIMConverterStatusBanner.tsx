@@ -19,7 +19,7 @@
  * preflight in BIMPage so an install / verify here invalidates both.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -106,6 +106,23 @@ export function BIMConverterStatusBanner({
       return false;
     }
   });
+  // The upstream-version signature in effect when the user last pressed
+  // the panel "X". Persisted so a dismissal survives reloads, but is
+  // scoped to that specific set of converter builds: when DDC ships a
+  // *newer* version the signature changes and the dismissal auto-expires,
+  // so the user still learns about future updates instead of an "X" click
+  // silencing the panel forever (the original bug — see notes below).
+  const [dismissedVersionSig, setDismissedVersionSig] = useState<string>(
+    () => {
+      try {
+        return (
+          localStorage.getItem('oe_bim_converter_panel_dismissed_sig') ?? ''
+        );
+      } catch {
+        return '';
+      }
+    },
+  );
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try {
       const persisted = localStorage.getItem('oe_bim_converter_panel_collapsed');
@@ -146,12 +163,30 @@ export function BIMConverterStatusBanner({
     }
   };
 
-  const setDismissedPersist = (val: boolean): void => {
+  // True while a dismissal was recorded before the version-check query had
+  // resolved (collapsed strip / mini-icon X, or the X pressed during the
+  // brief post-mount window). The reconciliation effect below backfills the
+  // real signature once it is known so the dismissal is correctly scoped to
+  // the update the user actually saw — instead of expiring the instant the
+  // SHA arrives (the original "reappears forever" bug).
+  const dismissedBeforeSigKnown = useRef<boolean>(false);
+
+  const setDismissedPersist = (
+    val: boolean,
+    versionSig = '',
+    sigResolved = true,
+  ): void => {
     setDismissed(val);
+    setDismissedVersionSig(val ? versionSig : '');
+    dismissedBeforeSigKnown.current = val ? !sigResolved : false;
     try {
       localStorage.setItem(
         'oe_bim_converter_panel_dismissed',
         val ? '1' : '0',
+      );
+      localStorage.setItem(
+        'oe_bim_converter_panel_dismissed_sig',
+        val ? versionSig : '',
       );
     } catch {
       /* storage unavailable */
@@ -360,17 +395,85 @@ export function BIMConverterStatusBanner({
     onSettled: () => setVerifyingId(null),
   });
 
-  // Honour the "dismissed" flag *unless* there is something the user
-  // genuinely needs to see — an outdated converter SHA from the GitHub
-  // version-check, or a missing/failed converter binary. Otherwise a user
-  // who closed the banner once would never learn about a converter
-  // update, even months later when DDC pushes a fix. We prefer surfacing
-  // genuinely-actionable state over honouring a six-month-old "X" click.
+  // Stable signature for the *current* set of upstream converter builds.
+  // Built from the latest-SHA of every converter flagged outdated, sorted
+  // so order is irrelevant. When DDC ships a new release this string
+  // changes — that is what lets a dismissal expire for genuinely new
+  // updates while still honouring an "X" press for the update the user
+  // already saw and chose to ignore for now.
+  const currentVersionSig = (versionCheck?.converters ?? [])
+    .filter((v) => v.is_outdated)
+    .map((v) => `${v.id}:${v.latest_sha ?? ''}`)
+    .sort()
+    .join('|');
+
+  // Reconcile a dismissal that was recorded before the version-check query
+  // resolved (collapsed strip / mini-icon X, or X pressed in the brief
+  // post-mount window). Without this, ``dismissedVersionSig`` stays '' while
+  // ``currentVersionSig`` becomes a real SHA, the equality check below flips
+  // false, and the dismissed panel re-surfaces for good. Backfilling the now
+  // -known signature scopes the dismissal to exactly the update the user
+  // acknowledged; a genuinely newer upstream build later yields a *different*
+  // non-empty signature and still re-surfaces the notice as intended.
+  useEffect(() => {
+    if (!dismissed || currentVersionSig === '') return;
+    const wasUnscoped =
+      dismissedBeforeSigKnown.current || dismissedVersionSig === '';
+    if (wasUnscoped && dismissedVersionSig !== currentVersionSig) {
+      dismissedBeforeSigKnown.current = false;
+      setDismissedVersionSig(currentVersionSig);
+      try {
+        localStorage.setItem(
+          'oe_bim_converter_panel_dismissed_sig',
+          currentVersionSig,
+        );
+      } catch {
+        /* storage unavailable */
+      }
+    }
+  }, [dismissed, dismissedVersionSig, currentVersionSig]);
+
+  // A *blocking* signal is one the user must act on for BIM upload to work
+  // at all — a missing or broken converter binary. These always override a
+  // prior dismissal: silencing a broken converter would leave the user
+  // unable to load models with no on-screen explanation.
+  const hasBlockingSignal = (data?.converters ?? []).some(
+    (c) => !c.installed || c.health === 'failed' || c.health === 'not_installed',
+  );
+
+  // An "update available" signal is informational, not blocking — the
+  // converters still work. The previous code treated it as actionable and
+  // unconditionally re-showed the panel, so on the very state the user
+  // complained about ("4/4 working · update available") the panel's "X"
+  // appeared to do nothing.
+  //
+  // Root cause of the "X does nothing / reappears forever" bug: the
+  // ``['bim-converters-version-check']`` query has a 30 min staleTime and
+  // is briefly ``undefined`` on every fresh mount/navigation, **and** the
+  // collapsed-strip / mini-icon render paths expose the X before that
+  // query has resolved. ``setDismissedPersist`` therefore persisted an
+  // *empty* ``currentVersionSig``; once the version-check resolved with a
+  // real outdated SHA the recomputed ``currentVersionSig`` became
+  // non-empty, so ``dismissedVersionSig('') === currentVersionSig('rvt:…')``
+  // was false on every subsequent render — the dismissal silently expired
+  // and the panel re-surfaced permanently.
+  //
+  // Fix: an explicit dismissal of this *informational* notice stays in
+  // effect unless a *concretely different, fully-resolved* signature
+  // appears. An empty ``currentVersionSig`` means "version-check not yet
+  // settled" — that is "no new information", so it must NOT re-surface a
+  // panel the user already dismissed. A genuinely newer upstream build
+  // produces a different non-empty signature and still re-surfaces it, so
+  // future updates are never silently missed.
+  const versionSigResolved = currentVersionSig !== '';
+  const updateSignalSuppressed =
+    dismissed &&
+    (!versionSigResolved || dismissedVersionSig === currentVersionSig);
+
   const hasActionableSignal =
-    Boolean(versionCheck?.any_outdated) ||
-    (data?.converters ?? []).some(
-      (c) => !c.installed || c.health === 'failed' || c.health === 'not_installed',
-    );
+    hasBlockingSignal ||
+    (Boolean(versionCheck?.any_outdated) && !updateSignalSuppressed);
+
   if (dismissible && dismissed && !hasActionableSignal) return null;
   if (isLoading || !data) return null;
 
@@ -510,7 +613,13 @@ export function BIMConverterStatusBanner({
           {dismissible && (
             <button
               type="button"
-              onClick={() => setDismissedPersist(true)}
+              onClick={() =>
+                setDismissedPersist(
+                  true,
+                  currentVersionSig,
+                  versionSigResolved,
+                )
+              }
               className="p-1 rounded-md text-content-tertiary hover:bg-black/5 dark:hover:bg-white/10"
               title={t('bim.converters_dismiss', { defaultValue: 'Dismiss' })}
               aria-label={t('bim.converters_dismiss', {
@@ -621,7 +730,13 @@ export function BIMConverterStatusBanner({
             {dismissible && (
               <button
                 type="button"
-                onClick={() => setDismissedPersist(true)}
+                onClick={() =>
+                setDismissedPersist(
+                  true,
+                  currentVersionSig,
+                  versionSigResolved,
+                )
+              }
                 className={clsx(
                   'p-1 rounded-md transition-colors',
                   !allHealthy && 'ms-auto',

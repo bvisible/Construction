@@ -155,22 +155,55 @@ class ReportingService:
         data: KPISnapshotCreate,
         user_id: str | None = None,
     ) -> KPISnapshot:
-        """Create a new KPI snapshot."""
-        snapshot = KPISnapshot(
-            project_id=data.project_id,
-            snapshot_date=data.snapshot_date,
-            cpi=data.cpi,
-            spi=data.spi,
-            budget_consumed_pct=data.budget_consumed_pct,
-            open_defects=data.open_defects,
-            open_observations=data.open_observations,
-            schedule_progress_pct=data.schedule_progress_pct,
-            open_rfis=data.open_rfis,
-            open_submittals=data.open_submittals,
-            risk_score_avg=data.risk_score_avg,
-            metadata_=data.metadata,
-        )
-        snapshot = await self.kpi_repo.create(snapshot)
+        """Create (or upsert) a KPI snapshot for a project + date.
+
+        ``oe_reporting_kpi_snapshot`` has a UNIQUE(project_id,
+        snapshot_date) constraint: a project has exactly one snapshot per
+        day. A blind INSERT on a date that already had a snapshot raised an
+        unhandled ``IntegrityError`` → 500. We upsert instead — the same
+        date-idempotent behaviour ``auto_recalculate_kpis`` already
+        implements — so re-posting a day's KPIs updates that day's row.
+        """
+        from sqlalchemy import select
+
+        existing = (
+            await self.session.execute(
+                select(KPISnapshot).where(
+                    KPISnapshot.project_id == data.project_id,
+                    KPISnapshot.snapshot_date == data.snapshot_date,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None:
+            existing.cpi = data.cpi
+            existing.spi = data.spi
+            existing.budget_consumed_pct = data.budget_consumed_pct
+            existing.open_defects = data.open_defects
+            existing.open_observations = data.open_observations
+            existing.schedule_progress_pct = data.schedule_progress_pct
+            existing.open_rfis = data.open_rfis
+            existing.open_submittals = data.open_submittals
+            existing.risk_score_avg = data.risk_score_avg
+            existing.metadata_ = data.metadata
+            await self.session.flush()
+            snapshot = existing
+        else:
+            snapshot = KPISnapshot(
+                project_id=data.project_id,
+                snapshot_date=data.snapshot_date,
+                cpi=data.cpi,
+                spi=data.spi,
+                budget_consumed_pct=data.budget_consumed_pct,
+                open_defects=data.open_defects,
+                open_observations=data.open_observations,
+                schedule_progress_pct=data.schedule_progress_pct,
+                open_rfis=data.open_rfis,
+                open_submittals=data.open_submittals,
+                risk_score_avg=data.risk_score_avg,
+                metadata_=data.metadata,
+            )
+            snapshot = await self.kpi_repo.create(snapshot)
 
         await _safe_publish(
             "reporting.kpi_snapshot.created",

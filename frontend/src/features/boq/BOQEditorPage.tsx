@@ -23,6 +23,7 @@ import {
   type Markup,
   type ActivityEntry,
   type CostAutocompleteItem,
+  DEFAULT_MAX_NESTING_DEPTH,
 } from './api';
 import { ApiError } from '@/shared/lib/api';
 import { projectsApi } from '@/features/projects/api';
@@ -78,6 +79,7 @@ import { CatalogPickerModal, type CatalogResource } from './CatalogPickerModal';
 import { CustomColumnsDialog } from './CustomColumnsDialog';
 import { BOQVariablesDialog } from './BOQVariablesDialog';
 import { RenumberDialog } from './RenumberDialog';
+import { LinkedPositionsModal } from './LinkedPositionsModal';
 
 /* ── Re-exports for tests ────────────────────────────────────────────── */
 
@@ -200,6 +202,20 @@ export function BOQEditorPage() {
 
   const markups: Markup[] = markupsData?.markups ?? [];
 
+  /* Issue #136 — server-enforced deep-nesting cap. Static across the
+   * session; the editor disables "add child / sub-section" once a row is
+   * this deep and shows an i18n tooltip. Falls back to the mirrored
+   * constant so the UI never blocks nesting the backend would accept. */
+  const { data: boqLimits } = useQuery({
+    queryKey: ['boq-limits'],
+    queryFn: () => boqApi.getLimits(),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    retry: false,
+  });
+  const maxNestingDepth =
+    boqLimits?.max_nesting_depth ?? DEFAULT_MAX_NESTING_DEPTH;
+
   /**
    * VAT rate driven from the `tax`-category markup row — single source of
    * truth shared with the backend PDF/Excel exports. Returns 0 (No VAT)
@@ -321,7 +337,30 @@ export function BOQEditorPage() {
           } catch { /* ignore */ }
         }
       }, 500);
-      addToast({ type: 'success', title: t('boq.position_added', { defaultValue: 'Position added‌⁠‍' }), message: t('boq.click_to_edit', { defaultValue: 'Click any cell to edit‌⁠‍' }) });
+      // Issue #127 — when the create collided with an existing project code
+      // and reuse applied, the backend returns a LINKED INSTANCE (its own
+      // ordinal + own editable quantity) instead of a 409. Surface that
+      // clearly so the user understands the code was reused, not rejected.
+      if (addedPosition.link_role === 'instance') {
+        const sharedCount =
+          (typeof addedPosition.linked_instance_count === 'number'
+            ? addedPosition.linked_instance_count
+            : 0) + 1;
+        addToast({
+          type: 'success',
+          title: t('boq.reuse_code_title', {
+            defaultValue: 'Reused code {{code}}‌⁠‍',
+            code: addedPosition.reference_code ?? addedPosition.ordinal,
+          }),
+          message: t('boq.reuse_code_msg', {
+            defaultValue:
+              'Linked instance created — {{count}} positions share this code. Its quantity is independently editable.‌⁠‍',
+            count: sharedCount,
+          }),
+        });
+      } else {
+        addToast({ type: 'success', title: t('boq.position_added', { defaultValue: 'Position added‌⁠‍' }), message: t('boq.click_to_edit', { defaultValue: 'Click any cell to edit‌⁠‍' }) });
+      }
       // Record undo entry for the newly added position (skip if triggered by undo/redo)
       if (!isUndoRedoInProgressRef.current) {
         undoStackRef.current.push({
@@ -417,6 +456,87 @@ export function BOQEditorPage() {
       // Sibling rollups depend on totals; refresh them with a debounce so
       // bursts of edits coalesce into a single refresh wave.
       invalidateSiblingsDebounced();
+
+      // ── Issue #127: linked-position feedback ─────────────────────────
+      const meta = (normalized.metadata ?? {}) as Record<string, unknown>;
+      const prop = meta.link_propagation as
+        | {
+            propagated_to?: number;
+            unlinked?: boolean;
+            resource_propagated_to?: number;
+          }
+        | undefined;
+
+      // (a) Master definition edit fanned out to N linked instances. Those
+      // rows live elsewhere in the BOQ (possibly another section) so the
+      // spliced single-position cache update above is NOT enough — pull a
+      // fresh BOQ so every linked instance repaints with the new definition.
+      if (prop && typeof prop.propagated_to === 'number' && prop.propagated_to > 0) {
+        queryClient.invalidateQueries({ queryKey: ['boq', boqId] });
+        addToast({
+          type: 'info',
+          title: t('boq.link_propagated_title', {
+            defaultValue: 'Definition propagated‌⁠‍',
+          }),
+          message: t('boq.link_propagated_msg', {
+            defaultValue:
+              'Updated {{count}} linked position(s) across this project.‌⁠‍',
+            count: prop.propagated_to,
+          }),
+        });
+      }
+
+      // (a2) Issue #133 — a master RESOURCE definition edit fanned out to
+      // resource instances on OTHER positions sharing that code. Those
+      // rows are elsewhere in the BOQ, so refetch and inform the user.
+      if (
+        prop &&
+        typeof prop.resource_propagated_to === 'number' &&
+        prop.resource_propagated_to > 0
+      ) {
+        queryClient.invalidateQueries({ queryKey: ['boq', boqId] });
+        addToast({
+          type: 'info',
+          title: t('boq.resource_link_propagated_title', {
+            defaultValue: 'Resource definition propagated‌⁠‍',
+          }),
+          message: t('boq.resource_link_propagated_msg', {
+            defaultValue:
+              'Updated the shared resource on {{count}} other position(s) across this project.‌⁠‍',
+            count: prop.resource_propagated_to,
+          }),
+        });
+      }
+
+      // (b) Editing a linked INSTANCE's definition diverged it — the backend
+      // auto-unlinked it (link_role now null) and attached a quality
+      // warning. Surface that PROMINENTLY so the user knows this position no
+      // longer follows the shared code (customer: "alertar al usuario").
+      const warnings = Array.isArray(meta.boq_quality_warnings)
+        ? (meta.boq_quality_warnings as unknown[]).filter(
+            (w): w is string => typeof w === 'string',
+          )
+        : [];
+      const unlinkWarning = warnings.find((w) =>
+        w.toLowerCase().includes('unlinked it from code'),
+      );
+      if (prop?.unlinked || unlinkWarning) {
+        addToast(
+          {
+            type: 'warning',
+            title: t('boq.link_unlinked_title', {
+              defaultValue: 'Position unlinked from shared code‌⁠‍',
+            }),
+            message:
+              unlinkWarning ??
+              t('boq.link_unlinked_msg', {
+                defaultValue:
+                  'Your edit changed this linked copy, so it no longer follows the shared code. If you did not mean to diverge it, change its code back instead.‌⁠‍',
+              }),
+          },
+          { duration: 9000 },
+        );
+      }
     },
     onError: (err: Error, _vars, ctx) => {
       // Restore the snapshot synchronously — no refetch flicker.
@@ -1472,7 +1592,7 @@ export function BOQEditorPage() {
   /* ── Handlers ──────────────────────────────────────────────────────── */
 
   const sectionMutation = useMutation({
-    mutationFn: (data: { ordinal: string; description: string }) =>
+    mutationFn: (data: { ordinal: string; description: string; parent_id?: string | null }) =>
       boqApi.addSection(boqId!, data),
     onSuccess: () => {
       invalidateAll();
@@ -1482,6 +1602,33 @@ export function BOQEditorPage() {
       addToast({ type: 'error', title: t('boq.section_add_failed', { defaultValue: 'Failed to add section' }), message: err.message });
     },
   });
+
+  /**
+   * Issue #136 — create a sub-section nested under ``parentSectionId``.
+   * Backend enforces the depth cap; the grid already disables the menu
+   * item at the cap, so this is a straightforward nested create. The
+   * ordinal is derived from the parent + its existing direct sub-sections
+   * (gap-of-10, mirroring handleAddPosition).
+   */
+  const handleAddSubSection = useCallback(
+    (parentSectionId: string) => {
+      if (!boqId) return;
+      const all = boq?.positions ?? [];
+      const parent = all.find((p) => p.id === parentSectionId);
+      const parentOrdinal = parent?.ordinal ?? '01';
+      const prefix = `${parentOrdinal}.`;
+      let maxSuffix = 0;
+      for (const p of all) {
+        if (p.parent_id !== parentSectionId) continue;
+        if (!p.ordinal?.startsWith(prefix)) continue;
+        const suffix = parseInt(p.ordinal.slice(prefix.length), 10);
+        if (!isNaN(suffix) && suffix > maxSuffix) maxSuffix = suffix;
+      }
+      const ordinal = `${parentOrdinal}.${String(maxSuffix + 10).padStart(2, '0')}`;
+      sectionMutation.mutate({ ordinal, description: '', parent_id: parentSectionId });
+    },
+    [boqId, boq?.positions, sectionMutation],
+  );
 
   /** Section name modal */
   const [showSectionModal, setShowSectionModal] = useState(false);
@@ -1531,6 +1678,18 @@ export function BOQEditorPage() {
         return `${parentOrdinal}.${String(nextSuffix).padStart(2, '0')}`;
       };
 
+      // Issue #134 — when invoked without an explicit parent (the
+      // Ctrl+Enter shortcut, or the toolbar "Add Position" button),
+      // insert into the SELECTED row's section instead of always the
+      // last section. A selected section → add as its child; a selected
+      // child → add as a sibling in the same section. Falls through to
+      // the last-section default below only when nothing is selected.
+      if (!parentId && selectedPosition) {
+        parentId = isSection(selectedPosition)
+          ? selectedPosition.id
+          : (selectedPosition.parent_id ?? undefined);
+      }
+
       let ordinal: string;
 
       if (parentId) {
@@ -1564,6 +1723,9 @@ export function BOQEditorPage() {
         quantity: 0,
         unit_rate: 0,
         parent_id: parentId,
+        // Issue #127 — register a reusable code mirroring the ordinal so this
+        // position can later be reused elsewhere via "Reuse existing code…".
+        reference_code: ordinal,
       });
       addToast({
         type: 'info',
@@ -1572,8 +1734,135 @@ export function BOQEditorPage() {
         }),
       });
     },
-    [boqId, boq, grouped, addMutation, addToast, t],
+    [boqId, boq, grouped, selectedPosition, addMutation, addToast, t],
   );
+
+  /**
+   * Issue #127 — reuse an existing project code. Prompts for a code, then
+   * creates a LINKED INSTANCE via the create endpoint (`link_mode: 'link'`).
+   * The backend copies the master definition + child subtree, assigns a
+   * fresh unique ordinal, and keeps an independently-editable quantity. The
+   * addMutation.onSuccess handler surfaces the reuse toast.
+   */
+  const handleReuseCode = useCallback(
+    (parentId?: string) => {
+      if (!boqId) return;
+      const allPositions = boq?.positions ?? [];
+      const known = Array.from(
+        new Set(
+          allPositions
+            .map((p) => p.reference_code || p.ordinal)
+            .filter((c): c is string => !!c),
+        ),
+      ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      const code = window
+        .prompt(
+          t('boq.reuse_code_prompt', {
+            defaultValue:
+              'Enter an existing code to reuse it here (its definition & sub-items are copied; quantity stays independent):',
+          }) +
+            (known.length > 0
+              ? `\n\n${t('boq.reuse_code_existing', {
+                  defaultValue: 'Existing codes: {{codes}}',
+                  codes: known.slice(0, 40).join(', '),
+                })}`
+              : ''),
+          '',
+        )
+        ?.trim();
+      if (!code) return;
+
+      // Resolve a placement parent (mirror handleAddPosition's default).
+      // Issue #134 — prefer the selected row's section over the last one.
+      let targetParent = parentId;
+      if (!targetParent && selectedPosition) {
+        targetParent = isSection(selectedPosition)
+          ? selectedPosition.id
+          : (selectedPosition.parent_id ?? undefined);
+      }
+      if (!targetParent) {
+        const lastSection = grouped.sections[grouped.sections.length - 1];
+        if (lastSection) targetParent = lastSection.section.id;
+      }
+
+      // Provisional ordinal — the backend assigns its own unique ordinal for
+      // a reused code; this is just the create payload's required field.
+      let maxTop = 0;
+      for (const p of allPositions) {
+        const num = parseInt(p.ordinal ?? '', 10);
+        if (!isNaN(num) && num > maxTop) maxTop = num;
+      }
+      const provisionalOrdinal = String(
+        (Math.floor(maxTop / 10) + 1) * 10,
+      ).padStart(4, '0');
+
+      addMutation.mutate({
+        boq_id: boqId,
+        ordinal: provisionalOrdinal,
+        description: '',
+        unit: 'm2',
+        quantity: 0,
+        unit_rate: 0,
+        parent_id: targetParent,
+        reference_code: code,
+        link_mode: 'link',
+      });
+    },
+    [boqId, boq, grouped, selectedPosition, addMutation, t],
+  );
+
+  /* ── Issue #127: linked-positions modal + unlink ──────────────────── */
+  const [linksModalFor, setLinksModalFor] = useState<{
+    id: string;
+    ordinal: string;
+  } | null>(null);
+
+  const handleShowLinks = useCallback(
+    (positionId: string) => {
+      const pos = (boq?.positions ?? []).find((p) => p.id === positionId);
+      setLinksModalFor({ id: positionId, ordinal: pos?.ordinal ?? '' });
+    },
+    [boq],
+  );
+
+  const unlinkMutation = useMutation({
+    mutationFn: (positionId: string) => boqApi.unlinkPosition(positionId),
+    onSuccess: (updated) => {
+      // Unlink may promote another instance to master and detaches this row
+      // value-preserving — repaint the whole BOQ so every member's badge,
+      // role and counts are correct.
+      invalidateAll();
+      setLinksModalFor(null);
+      addToast({
+        type: 'success',
+        title: t('boq.unlink_done_title', {
+          defaultValue: 'Position unlinked‌⁠‍',
+        }),
+        message: t('boq.unlink_done_msg', {
+          defaultValue:
+            'Code {{code}} kept. This position no longer follows the shared code; its values were preserved.‌⁠‍',
+          code: updated.reference_code ?? updated.ordinal,
+        }),
+      });
+    },
+    onError: (err) => {
+      addToast({
+        type: 'error',
+        title: t('boq.unlink_failed', {
+          defaultValue: 'Failed to unlink position‌⁠‍',
+        }),
+        message: err instanceof Error ? err.message : '',
+      });
+    },
+  });
+
+  const handleUnlinkPosition = useCallback(
+    (positionId: string) => {
+      unlinkMutation.mutate(positionId);
+    },
+    [unlinkMutation],
+  );
+
   // Keep ref in sync for keyboard shortcut access
   addPositionRef.current = handleAddPosition;
 
@@ -2396,16 +2685,30 @@ export function BOQEditorPage() {
 
   /** Add a manual resource (not from database) to a position. */
   const handleAddManualResource = useCallback(
-    (positionId: string, resource: { name: string; type: string; unit: string; quantity: number; unit_rate: number }) => {
+    (
+      positionId: string,
+      resource: {
+        name: string;
+        type: string;
+        unit: string;
+        quantity: number;
+        unit_rate: number;
+        currency?: string;
+        code?: string;
+      },
+    ) => {
       const pos = boq?.positions.find((p) => p.id === positionId);
       if (!pos) return;
       const newRes = {
         name: resource.name,
-        code: '',
+        // Issue #133 — persist the reusable code so it stays
+        // referenceable for future reuse / collision detection.
+        code: (resource.code ?? '').trim(),
         type: resource.type,
         unit: resource.unit,
         quantity: resource.quantity,
         unit_rate: resource.unit_rate,
+        ...(resource.currency ? { currency: resource.currency } : {}),
         total: Math.round(resource.quantity * resource.unit_rate * 100) / 100,
       };
       const existing = [...((pos.metadata?.resources ?? []) as Array<Record<string, unknown>>)];
@@ -2422,6 +2725,24 @@ export function BOQEditorPage() {
       addToast({ type: 'success', title: t('boq.resource_added', { defaultValue: 'Resource added' }) });
     },
     [boq?.positions, updateMutation, addToast, t],
+  );
+
+  /** Issue #133 — project-wide resource-code lookup for the manual
+   *  resource form's "this code is already used" prompt. Returns the
+   *  existing resource's reusable definition, or null when the code is
+   *  free / unresolvable. */
+  const handleLookupResourceByCode = useCallback(
+    async (code: string) => {
+      const projectId = boq?.project_id;
+      if (!projectId || !code.trim()) return null;
+      try {
+        const res = await boqApi.lookupResourceByCode(projectId, code.trim());
+        return res.found && res.match ? res.match : null;
+      } catch {
+        return null;
+      }
+    },
+    [boq?.project_id],
   );
 
   /** Duplicate a position (copy description, unit, rate, resources). */
@@ -3312,7 +3633,14 @@ export function BOQEditorPage() {
           onOpenCostDbForPosition={handleOpenCostDbForPosition}
           onOpenCatalogForPosition={handleOpenCatalogForPosition}
           onAddManualResource={handleAddManualResource}
+          onLookupResourceByCode={handleLookupResourceByCode}
           onDuplicatePosition={handleDuplicatePosition}
+          onReuseCode={handleReuseCode}
+          onAddChildPosition={(parentId) => handleAddPosition(parentId)}
+          onAddSubSection={handleAddSubSection}
+          maxNestingDepth={maxNestingDepth}
+          onShowLinks={handleShowLinks}
+          onUnlinkPosition={handleUnlinkPosition}
           onSuggestRate={handleSuggestRate}
           onClassify={handleClassify}
           onCheckAnomalies={handleCheckAnomalies}
@@ -3689,6 +4017,19 @@ export function BOQEditorPage() {
           parent_id: p.parent_id ?? null,
         }))}
       />
+
+      {/* ── Linked Positions Modal (Issue #127) ───────────────────── */}
+      {linksModalFor && (
+        <LinkedPositionsModal
+          positionId={linksModalFor.id}
+          positionOrdinal={linksModalFor.ordinal}
+          locale={locale}
+          currencyCode={currencyCode}
+          onClose={() => setLinksModalFor(null)}
+          onUnlink={handleUnlinkPosition}
+          unlinking={unlinkMutation.isPending}
+        />
+      )}
 
       {/* ── Section Name Modal ────────────────────────────────────── */}
       {showSectionModal && (

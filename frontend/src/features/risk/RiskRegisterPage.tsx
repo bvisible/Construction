@@ -1,13 +1,14 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { normalizeListResponse } from '@/shared/lib/apiHelpers';
 import {
   ShieldAlert, Plus, ChevronRight, ArrowLeft, DollarSign,
-  AlertTriangle, Shield, Trash2, X, Search, Filter,
+  AlertTriangle, Shield, Trash2, X, Search, Filter, CalendarDays, TrendingUp,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, InfoHint } from '@/shared/ui';
+import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import SimilarItemsPanel from '@/shared/ui/SimilarItemsPanel';
 import { UserSearchInput } from '@/shared/ui/UserSearchInput';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
@@ -327,6 +328,7 @@ function CreateDialog({ projectId, currency, onClose, onCreated }: { projectId: 
 
 function DetailView({ riskId, onBack }: { riskId: string; onBack: () => void }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const { data: risk, isLoading } = useQuery({ queryKey: ['risk', riskId], queryFn: () => apiGet<RiskItem>(`/v1/risk/${riskId}`) });
@@ -380,6 +382,55 @@ function DetailView({ riskId, onBack }: { riskId: string; onBack: () => void }) 
           </Card>
         ))}
       </div>
+
+      {/* Cross-module impact: a risk with schedule/cost impact ties back to
+          the 4D Schedule (timeline buffer) and the 5D Cost Model
+          (contingency). Make those relationships navigable. */}
+      {(risk.impact_schedule_days > 0 || risk.impact_cost > 0) && (
+        <Card className="p-4 mb-6">
+          <p className="text-xs text-content-tertiary uppercase tracking-wide mb-2">
+            {t('risk.cross_impact', { defaultValue: 'Project Impact' })}
+          </p>
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            {risk.impact_schedule_days > 0 && (
+              <div className="flex items-center gap-2">
+                <CalendarDays size={15} className="text-content-tertiary" />
+                <span className="text-sm text-content-primary">
+                  {t('risk.schedule_impact_value', {
+                    defaultValue: '+{{days}} days schedule slip',
+                    days: risk.impact_schedule_days,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => navigate('/schedule')}
+                  className="text-xs font-medium text-oe-blue hover:underline"
+                >
+                  {t('risk.open_schedule', { defaultValue: 'View 4D Schedule' })}
+                </button>
+              </div>
+            )}
+            {risk.impact_cost > 0 && (
+              <div className="flex items-center gap-2">
+                <TrendingUp size={15} className="text-content-tertiary" />
+                <span className="text-sm text-content-primary">
+                  {t('risk.cost_impact_value', {
+                    defaultValue: '{{amount}} cost exposure',
+                    amount: fmtCur(risk.impact_cost, risk.currency),
+                  })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => navigate('/5d')}
+                  className="text-xs font-medium text-oe-blue hover:underline"
+                >
+                  {t('risk.open_5d', { defaultValue: 'Reflect in 5D contingency' })}
+                </button>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {editing ? (
         <Card className="p-5 space-y-4">
@@ -493,6 +544,11 @@ export function RiskRegisterPage() {
     <div className="w-full animate-fade-in">
       <Breadcrumb items={[{ label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' }, { label: t('nav.risk_register', { defaultValue: 'Risk Register' }) }]} />
 
+      {/* Cross-module navigation — connects the planning value chain */}
+      <div className="mt-3">
+        <PlanningCrossLinks active="risks" />
+      </div>
+
       <div className="mt-4 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-content-primary">{t('nav.risk_register', { defaultValue: 'Risk Register' })}</h1>
@@ -532,6 +588,15 @@ export function RiskRegisterPage() {
           </div>
         </div>
       )}
+
+      {/* How the Risk Register connects to the rest of the platform */}
+      <InfoHint
+        className="mt-4"
+        text={t('risk.what_is_register', {
+          defaultValue:
+            'The Risk Register tracks project threats with probability x impact scoring. Risk score = probability x cost impact; the matrix and heatmap visualise concentration. Schedule risk (from the 4D Schedule PERT analysis) and cost contingency (from 5D Monte Carlo) should be logged here as risks with mitigation and contingency plans. Similar risks and their mitigations are surfaced cross-project on each risk via semantic search.',
+        })}
+      />
 
       {summary && (
         <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-4">

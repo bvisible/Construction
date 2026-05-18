@@ -468,12 +468,18 @@ export function convertToBase(
   baseCurrency: string | undefined | null,
   fxRates: Array<{ currency: string; rate: number }> | undefined | null,
 ): number {
-  if (!Number.isFinite(value)) return 0;
-  if (!sourceCurrency) return value;
-  if (!baseCurrency || sourceCurrency === baseCurrency) return value;
+  // Defensive: backend Numeric columns serialise as decimal *strings*.
+  // The TS type says ``number`` but a string can still arrive at runtime
+  // from a path that skipped ``normalizePosition`` — coerce instead of
+  // letting ``Number.isFinite("123")`` (false) zero a real value (#131).
+  const v = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(v)) return 0;
+  if (!sourceCurrency) return v;
+  if (!baseCurrency || sourceCurrency === baseCurrency) return v;
   const list = fxRates ?? [];
   const fx = list.find((r) => r.currency === sourceCurrency);
-  if (!fx || !Number.isFinite(fx.rate) || fx.rate <= 0) {
+  const fxRate = fx ? Number(fx.rate) : NaN;
+  if (!fx || !Number.isFinite(fxRate) || fxRate <= 0) {
     // No rate configured — surface the gap in dev tools but don't crash.
     if (typeof console !== 'undefined' && console.warn) {
       console.warn(
@@ -481,9 +487,9 @@ export function convertToBase(
         `position total left unconverted.`,
       );
     }
-    return value;
+    return v;
   }
-  return value * fx.rate;
+  return v * fxRate;
 }
 
 /* ── Quality Score ───────────────────────────────────────────────────── */

@@ -289,10 +289,13 @@ def test_component_repo_update_fields_has_no_global_expire():
 
 
 @pytest.mark.asyncio
-async def test_apply_to_boq_blocks_currency_mismatch(session):
-    """ASM-006: EUR assembly → GBP-equivalent project blocked with 409."""
+async def test_apply_to_boq_currency_mismatch_no_rate_flags_not_blocks(session):
+    """Issue #128: a foreign-currency assembly with NO FX rate configured
+    must NOT hard-block (the old 409 trapped the user). It applies and
+    carries a visible, non-blocking ``currency_mismatch`` flag instead.
+    """
     svc = AssemblyService(session)
-    # Project is EUR; make an assembly priced in USD.
+    # Project (PROJECT_ID) is EUR with no fx_rates; assembly is USD.
     asm = await svc.create_assembly(
         AssemblyCreate(code="ASM-FX", name="FX", unit="m", currency="USD"),
         owner_id=str(OWNER_ID),
@@ -307,22 +310,67 @@ async def test_apply_to_boq_blocks_currency_mismatch(session):
     session.add(boq)
     await session.flush()
 
-    with pytest.raises(HTTPException) as exc:
-        await svc.apply_to_boq(
-            asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0)
-        )
-    assert exc.value.status_code == 409
-
-    # Opt-in succeeds and tags the position.
+    # No exception — the apply succeeds.
     pos = await svc.apply_to_boq(
-        asm.id,
-        ApplyToBOQRequest(
-            boq_id=boq.id, quantity=1.0, allow_currency_mismatch=True
-        ),
+        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0)
     )
     meta = getattr(pos, "metadata_", {}) or {}
     assert "currency_mismatch" in meta
+    assert "currency_converted" not in meta
     assert meta["currency_mismatch"]["assembly_currency"] == "USD"
+    assert meta["currency_mismatch"]["project_currency"] == "EUR"
+    # Value kept in the assembly's own currency (unconverted, but visible).
+    assert meta["currency"] == "USD"
+    assert meta["resources"][0]["unit_rate"] == 100.0
+
+
+@pytest.mark.asyncio
+async def test_apply_to_boq_converts_when_fx_rate_present(session):
+    """Issue #128: when the project HAS an FX rate for the assembly's
+    currency, the assembly is converted into the project currency
+    (rate + every component money field) and tagged ``currency_converted``
+    — no warning, no error.
+    """
+    from app.modules.boq.models import BOQ
+    from app.modules.projects.models import Project
+
+    proj = Project(
+        id=uuid.uuid4(),
+        name="FX Project",
+        owner_id=OWNER_ID,
+        currency="EUR",
+        fx_rates=[{"code": "USD", "rate": "0.92", "label": "US Dollar"}],
+    )
+    session.add(proj)
+    await session.flush()
+    boq = BOQ(project_id=proj.id, name="FXB")
+    session.add(boq)
+    await session.flush()
+
+    svc = AssemblyService(session)
+    asm = await svc.create_assembly(
+        AssemblyCreate(code="ASM-FX2", name="FX2", unit="m", currency="USD"),
+        owner_id=str(OWNER_ID),
+    )
+    await svc.add_component(
+        asm.id,
+        ComponentCreate(unit="m", description="c", factor=1.0, quantity=1.0, unit_cost=100.0),
+    )
+
+    pos = await svc.apply_to_boq(
+        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0)
+    )
+    meta = getattr(pos, "metadata_", {}) or {}
+    assert "currency_converted" in meta
+    assert "currency_mismatch" not in meta
+    cc = meta["currency_converted"]
+    assert cc["from"] == "USD"
+    assert cc["to"] == "EUR"
+    assert cc["rate"] == "0.92"
+    # Position now holds project-currency values.
+    assert meta["currency"] == "EUR"
+    # Component money field converted: 100 USD × 0.92 = 92 EUR.
+    assert meta["resources"][0]["unit_rate"] == pytest.approx(92.0)
 
 
 @pytest.mark.asyncio

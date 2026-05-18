@@ -91,6 +91,13 @@ class EPDRecordRepository(_BaseRepo):
         result = await self.session.execute(stmt.limit(1))
         return result.scalars().first()
 
+    async def get_by_epd_id(self, epd_id: str) -> EPDRecord | None:
+        """Look up a record by its tenant-unique external EPD identifier."""
+        result = await self.session.execute(
+            select(EPDRecord).where(EPDRecord.epd_id == epd_id).limit(1),
+        )
+        return result.scalars().first()
+
 
 # ── Material factors ──────────────────────────────────────────────────────
 

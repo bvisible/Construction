@@ -647,15 +647,100 @@ def _to_float(val: object) -> float:
     return f
 
 
-def _norm_col(name: str) -> str:
-    """Normalise a column name for alias matching.
+# BUG-D-TKC-004b / D-TKC-NEW-05 — canonical quantity synonym map.
+#
+# DDC / Revit / IFC exporters emit the same physical quantity under a
+# wide range of spellings.  The old ``_norm_col`` only stripped a single
+# trailing ``(m2|m3)`` suffix when ``len > 4``, so IFC-standard names
+# like ``NetVolume`` / ``Qto_WallBaseQuantities.NetVolume`` /
+# ``Volume cbm`` / ``sqm`` / ``m³`` never resolved to the canonical
+# ``volume`` / ``area`` / ``length`` keys and ``_resolve_column_value``
+# silently returned 0.0.
+#
+# Strategy (applied in order, to a separator-stripped lowercase token):
+#   1. Take the LAST dotted segment of an IFC ``Qto_*.X`` form
+#      (``qto_wallbasequantities.netvolume`` → ``netvolume``).
+#   2. Drop a leading ``net`` / ``gross`` / ``base`` qualifier.
+#   3. Drop a trailing metric/imperial unit suffix
+#      (m2/m3/sqm/cbm/sqft/cbft/lfm/rmt/lm + bracketed forms).
+#   4. Map any surviving synonym to its canonical key via
+#      ``_COL_SYNONYM``.
+#
+# Bare ambiguous single letters (``m``/``t``/``kg``) are still NOT
+# stripped — that would mis-merge unrelated columns like ``team``.
 
-    DDC / Revit / IFC exporters emit the same physical quantity under
-    many spellings: ``volume`` / ``Volume`` / ``Volume (m3)`` /
-    ``volume_m3`` / ``Volume [m³]``. Lower-case, strip any trailing
-    unit-in-brackets/parens, and drop separators so they all collapse to
-    one key (BUG-D-TKC-004 — the exact-key lookup silently produced 0.0
-    for every variant).
+# Trailing unit-suffix tokens that carry no semantic meaning of their
+# own (they only annotate the unit of the preceding quantity word).
+_UNIT_SUFFIXES: tuple[str, ...] = (
+    "m3", "m2", "cbm", "sqm", "sqmt", "cubm", "cbft", "sqft",
+    "lfm", "rmt", "lm", "rm", "cum", "sm",
+)
+
+# Canonical synonym map: normalised token → canonical column key.
+# Every value is one of the keys ``group_cad_*`` / the suggested
+# ``sum_columns`` understand: ``volume`` / ``area`` / ``length`` /
+# ``count`` / ``weight``.
+_COL_SYNONYM: dict[str, str] = {
+    "volume": "volume",
+    "vol": "volume",
+    "cubage": "volume",
+    "cubature": "volume",
+    "area": "area",
+    "surface": "area",
+    "surfacearea": "area",
+    "footprint": "area",
+    "length": "length",
+    "len": "length",
+    "perimeter": "length",
+    "running": "length",
+    "count": "count",
+    "qty": "count",
+    "quantity": "count",
+    "number": "count",
+    "nr": "count",
+    "weight": "weight",
+    "mass": "weight",
+}
+
+
+def _instance_count(raw: object) -> float:
+    """Resolve a per-element-row ``count`` cell to a physical instance count.
+
+    Each row produced by :func:`parse_cad_excel` represents exactly one
+    physical element.  The ``count`` column, when present, is a multiplier
+    for rows that legitimately stand for several identical instances
+    (e.g. an array of 4 fixtures collapsed onto one row).
+
+    BUG-D-TKC-017: a missing ``count`` column, an empty/blank cell, or an
+    explicit ``0`` / negative value must still count the single physical
+    instance the row represents (return ``1.0``).  Only a value strictly
+    greater than 1 is honoured as an aggregate multiplier; a value of
+    exactly 1 is the trivial single instance.
+    """
+    if raw is None:
+        return 1.0
+    if isinstance(raw, str) and not raw.strip():
+        return 1.0
+    n = _to_float(raw)
+    return n if n >= 1.0 else 1.0
+
+
+def _norm_col(name: str) -> str:
+    """Normalise a column name to a canonical quantity key.
+
+    Resolves the many DDC / Revit / IFC spellings of the same physical
+    quantity to a single key so ``sum_columns=['volume'|'area'|'length']``
+    works regardless of how the converter labelled the column.
+
+    Handles, among others::
+
+        volume / Volume / "Volume (m3)" / volume_m3 / "Volume [m³]"
+        NetVolume / GrossVolume / "Net Volume" / "Gross Area"
+        Qto_WallBaseQuantities.NetVolume / Qto_SlabBaseQuantities.GrossArea
+        "Volume cbm" / sqm / m³ / m² / lfm / rmt
+
+    Unknown columns fall through to a deterministic separator-stripped
+    lowercase token (back-compat: e.g. ``"Type Name"`` → ``typename``).
     """
     import re
 
@@ -664,14 +749,51 @@ def _norm_col(name: str) -> str:
     # Drop a trailing unit qualifier in brackets/parens: "volume (m3)",
     # "area [m2]", "weight {kg}".
     s = re.sub(r"[\s,]*[([{].*?[)\]}]\s*$", "", s)
-    # Collapse separators ("volume_m3" → "volumem3", "type name" → "typename")
-    s = re.sub(r"[\s_\-./]+", "", s)
-    # Strip ONLY an unambiguous digit-bearing metric suffix
-    # ("volumem3" → "volume", "aream2" → "area"). Bare letters like
-    # "m"/"t"/"kg" are NOT stripped — that would mis-merge unrelated
-    # columns (e.g. "team", "kgrid").
-    s = re.sub(r"(m2|m3)$", "", s) if len(s) > 4 else s
-    return s
+    # IFC ``Qto_<set>.<Quantity>`` dotted form — keep only the final
+    # quantity segment ("qto_wallbasequantities.netvolume" → "netvolume").
+    if "." in s:
+        s = s.rsplit(".", 1)[-1]
+    # Collapse separators ("volume_m3" → "volumem3", "type name" → "typename",
+    # "net volume" → "netvolume").
+    s = re.sub(r"[\s_\-/:]+", "", s)
+
+    # Strip a leading Net / Gross / Base quantity qualifier
+    # ("netvolume" → "volume", "grossarea" → "area",
+    # "basequantitiesvolume" → "volume").  Loop so "netbasequantities*"
+    # style stacked prefixes peel fully.
+    for _ in range(4):
+        m = re.match(
+            r"^(net|gross|base|total|sum|adjusted|basequantities)(.+)$", s
+        )
+        if not m or len(m.group(2)) < 2:
+            break
+        s = m.group(2)
+
+    # Strip a trailing unit suffix ("volumem3" → "volume",
+    # "aream2" → "area", "volumecbm" → "volume", "lengthlfm" → "length").
+    # Only strip when something meaningful remains in front so a bare
+    # unit token ("m3"/"sqm"/"cbm") is preserved for the synonym pass
+    # below (it maps to a canonical key by unit alone).
+    for suf in sorted(_UNIT_SUFFIXES, key=len, reverse=True):
+        if s.endswith(suf) and len(s) > len(suf) + 1:
+            s = s[: -len(suf)]
+            break
+
+    # Bare-unit columns: a converter sometimes labels the only volume
+    # column simply "m3" / "cbm" or the area column "sqm" / "m2".
+    _BARE_UNIT_CANON = {
+        "m3": "volume", "cbm": "volume", "cum": "volume", "cubm": "volume",
+        "cbft": "volume",
+        "m2": "area", "sqm": "area", "sqmt": "area", "sqft": "area",
+        "sm": "area",
+        "lfm": "length", "rmt": "length", "lm": "length", "rm": "length",
+    }
+    if s in _BARE_UNIT_CANON:
+        return _BARE_UNIT_CANON[s]
+
+    # Final canonical synonym mapping (exact token match only — we never
+    # map a substring so "team"/"kgrid" stay untouched).
+    return _COL_SYNONYM.get(s, s)
 
 
 def _resolve_column_value(el: dict, col: str) -> float:
@@ -719,7 +841,15 @@ def group_cad_elements(elements: list[dict]) -> dict:
         raw_cat = str(el.get("category", el.get("element type", "Other"))).strip()
         category = raw_cat if raw_cat and raw_cat != "None" else "Other"
         type_name = str(el.get("type name", el.get("family", el.get("type", "Unknown")))).strip() or "Unknown"
-        count = _to_float(el.get("count", 1))
+        # BUG-D-TKC-017 — each row from ``parse_cad_excel`` is ONE physical
+        # element.  The optional ``count`` column is a per-element multiplier
+        # (e.g. an array/group of 4 identical fixtures on one row).  A
+        # missing column, an empty cell, or an explicit ``0`` must still
+        # contribute the single physical instance the row represents — the
+        # old ``_to_float(el.get("count", 1))`` made a ``count=0`` row vanish
+        # so two real elements (one with count=0) displayed as count 1.
+        # A genuine aggregate multiplier (count > 1) is preserved as-is.
+        count = _instance_count(el.get("count"))
         volume = _to_float(el.get("volume", el.get("volume (m3)", 0)))
         area = _to_float(el.get("area", el.get("area (m2)", 0)))
         length = _to_float(el.get("length", 0))
@@ -746,7 +876,16 @@ def group_cad_elements(elements: list[dict]) -> dict:
         if material and not entry["material"]:
             entry["material"] = material
 
-    # Build structured output
+    # Build structured output.
+    #
+    # BUG-D-TKC-024 — displayed rows MUST reconcile.  Previously the item
+    # rows were rounded for display while the category and grand totals
+    # were summed from the UNROUNDED running sums, so e.g. 250 rebar rows
+    # each displaying 0.000 sat under a non-zero category total — an
+    # incoherent table.  Fix: round each item row FIRST, then sum the
+    # already-rounded item values into the category total, and sum the
+    # rounded category totals into the grand total.  The displayed
+    # numbers now add up exactly at every level.
     groups: list[dict] = []
     grand_count = 0.0
     grand_volume = 0.0
@@ -756,31 +895,37 @@ def group_cad_elements(elements: list[dict]) -> dict:
     for cat_name, types in cat_types.items():
         items = list(types.values())
 
-        cat_count = sum(it["count"] for it in items)
-        cat_volume = sum(it["volume_m3"] for it in items)
-        cat_area = sum(it["area_m2"] for it in items)
-        cat_length = sum(it["length_m"] for it in items)
-
-        # Round item values
+        # Round item values FIRST (display precision per dimension).
         for it in items:
             it["count"] = round(it["count"], 1)
             it["volume_m3"] = round(it["volume_m3"], 3)
             it["area_m2"] = round(it["area_m2"], 2)
             it["length_m"] = round(it["length_m"], 2)
 
+        # Category total = sum of the displayed (rounded) item rows, then
+        # rounded again only to clear binary-float dust (e.g.
+        # 0.1 + 0.2 → 0.30000000000000004).  The rows now sum exactly to
+        # this displayed category total.
+        cat_count = round(sum(it["count"] for it in items), 1)
+        cat_volume = round(sum(it["volume_m3"] for it in items), 3)
+        cat_area = round(sum(it["area_m2"] for it in items), 2)
+        cat_length = round(sum(it["length_m"] for it in items), 2)
+
         groups.append(
             {
                 "category": cat_name,
                 "items": items,
                 "totals": {
-                    "count": round(cat_count, 1),
-                    "volume_m3": round(cat_volume, 3),
-                    "area_m2": round(cat_area, 2),
-                    "length_m": round(cat_length, 2),
+                    "count": cat_count,
+                    "volume_m3": cat_volume,
+                    "area_m2": cat_area,
+                    "length_m": cat_length,
                 },
             }
         )
 
+        # Grand total = sum of the displayed (rounded) category totals, so
+        # the category rows reconcile exactly to the grand total too.
         grand_count += cat_count
         grand_volume += cat_volume
         grand_area += cat_area

@@ -144,7 +144,13 @@ class AssemblyCreate(BaseModel):
     category: str = ""
     classification: dict[str, Any] = Field(default_factory=dict)
     currency: str = Field(default="EUR", max_length=10)
-    bid_factor: float = Field(default=1.0)
+    # Bound bid_factor exactly like ComponentCreate.factor (ASM-002 /
+    # NEW-ASM-101): ``allow_inf_nan=False`` rejects the raw NaN /
+    # Infinity JSON literals Starlette's json.loads otherwise accepts,
+    # ``ge=0`` forbids a negative markup, ``le=_NUM_MAX`` keeps
+    # ``subtotal * bid_factor`` finite in float and Decimal so
+    # total_rate can never serialise as null / Infinity.
+    bid_factor: float = Field(default=1.0, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
     regional_factors: dict[str, Any] = Field(default_factory=dict)
     is_template: bool = True
     project_id: UUID | None = None
@@ -163,7 +169,12 @@ class AssemblyUpdate(BaseModel):
     category: str | None = None
     classification: dict[str, Any] | None = None
     currency: str | None = Field(default=None, max_length=10)
-    bid_factor: float | None = None
+    # Same bounds as AssemblyCreate.bid_factor (ASM-002 / NEW-ASM-101) —
+    # an UPDATE must not be a back door for a non-finite / negative
+    # markup that would poison the recalculated total_rate.
+    bid_factor: float | None = Field(
+        default=None, ge=0.0, le=_NUM_MAX, allow_inf_nan=False
+    )
     regional_factors: dict[str, Any] | None = None
     is_template: bool | None = None
     project_id: UUID | None = None

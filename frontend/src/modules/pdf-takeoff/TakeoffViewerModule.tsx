@@ -61,6 +61,7 @@ import { apiGet } from '../../shared/lib/api';
 import { useMeasurementPersistence } from './useMeasurementPersistence';
 import {
   type ScaleConfig,
+  type CalibrationUnit,
   COMMON_SCALES,
   pixelDistance,
   toRealDistance,
@@ -1460,21 +1461,29 @@ export default function TakeoffViewerModule({
     setScalePoints([]);
   }, []);
 
-  /** User confirmed the calibration dialog — persist the new scale. */
+  /** User confirmed the calibration dialog — persist the new scale.
+   *
+   *  `nextScale` is metric-canonical (label always `'m'`).  `entry` echoes
+   *  what the estimator actually typed (e.g. `10 ft`); we badge that unit
+   *  rather than a bare `'m'` so a feet/inches calibration is no longer
+   *  silently relabelled (D-TKC-016).  The metres value is also shown so
+   *  it's clear the conversion was honoured. */
   const handleCalibrationConfirm = useCallback(
-    (nextScale: ScaleConfig) => {
+    (nextScale: ScaleConfig, entry?: { realLength: number; unit: CalibrationUnit }) => {
       setScale(nextScale);
       setShowCalibrationDialog(false);
       setScalePoints([]);
       setIsCalibrated(true);
-      // Cache the derived "real length in meters" for the badge display.
-      // CalibrationDialog already converted to meters via deriveScale().
       const meters = calibrationPixels > 0 ? calibrationPixels / nextScale.pixelsPerUnit : 0;
-      setLastCalibration({ realLength: meters, unit: 'm' });
+      // Prefer the user's own entry/unit; fall back to derived metres.
+      const badge = entry ?? { realLength: meters, unit: 'm' as const };
+      setLastCalibration(badge);
+      const metricSuffix =
+        badge.unit === 'm' ? '' : ` (${meters.toFixed(2)} m)`;
       addToast({
         type: 'success',
         title: t('takeoff_viewer.calibrated', { defaultValue: 'Scale calibrated' }),
-        message: `${formatScaleRatio(nextScale)} · ${meters.toFixed(2)} m`,
+        message: `${formatScaleRatio(nextScale)} · ${badge.realLength} ${badge.unit}${metricSuffix}`,
       });
     },
     [addToast, t, calibrationPixels],
@@ -1522,13 +1531,27 @@ export default function TakeoffViewerModule({
         if (m.type === 'volume' && m.points.length >= 3 && m.depth != null) {
           const pixArea = polygonAreaPixels(m.points);
           const realArea = toRealArea(pixArea, scale);
-          const volume = realArea * m.depth;
+          // The polygon points are scale-independent (PDF user units), so
+          // ``realArea`` is freshly correct.  But ``m.depth`` is a stored
+          // real-world length captured against the PREVIOUS scale's unit.
+          // Multiplying the new-scale area by the old-scale depth produces
+          // a mixed-scale volume (D-TKC-020).  Re-project the depth through
+          // pixel space the same way the area is: old real \u2192 pixels via the
+          // previous ppu, pixels \u2192 new real via the current ppu.  When the
+          // previous scale was invalid (ppu <= 0) there is no meaningful
+          // factor, so keep the stored depth as-is rather than zeroing it.
+          const rescaledDepth =
+            prev.pixelsPerUnit > 0 && scale.pixelsPerUnit > 0
+              ? (m.depth * prev.pixelsPerUnit) / scale.pixelsPerUnit
+              : m.depth;
+          const volume = realArea * rescaledDepth;
           return {
             ...m,
             value: volume,
             area: realArea,
+            depth: rescaledDepth,
             unit: `${scale.unitLabel}\u00B3`,
-            label: `V = ${formatMeasurement(volume, scale.unitLabel + '\u00B3')} (A: ${formatMeasurement(realArea, scale.unitLabel + '\u00B2')} \u00D7 D: ${formatMeasurement(m.depth, scale.unitLabel)})`,
+            label: `V = ${formatMeasurement(volume, scale.unitLabel + '\u00B3')} (A: ${formatMeasurement(realArea, scale.unitLabel + '\u00B2')} \u00D7 D: ${formatMeasurement(rescaledDepth, scale.unitLabel)})`,
           };
         }
         return m;
@@ -2521,15 +2544,15 @@ export default function TakeoffViewerModule({
 
       {/* Landing (BIM-style) — when no PDF loaded */}
       {!pdfDoc && (
-        <div className="-mx-4 sm:-mx-7 -mt-6 -mb-6 bg-gradient-to-br from-slate-50 via-white to-blue-50/50 dark:from-gray-900 dark:via-gray-900 dark:to-blue-950/20">
-          <div className="max-w-7xl mx-auto px-6 pt-16 pb-10">
+        <div className="-mx-4 sm:-mx-7 -mt-6 -mb-6 min-h-full bg-gradient-to-br from-slate-50 via-white to-blue-50/50 dark:from-gray-900 dark:via-gray-900 dark:to-blue-950/20">
+          <div className="max-w-7xl mx-auto px-6 pt-8 pb-6">
 
             {/* Row 1: Upload card (left) + Hero text (right) */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-stretch mb-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-stretch mb-5">
 
               {/* LEFT — Upload card */}
               <div className="flex flex-col">
-                <div className="rounded-2xl bg-white dark:bg-gray-800/60 border border-border-light shadow-lg shadow-black/5 dark:shadow-black/20 p-6 flex flex-col h-full">
+                <div className="rounded-2xl bg-white dark:bg-gray-800/60 border border-border-light shadow-lg shadow-black/5 dark:shadow-black/20 p-4 flex flex-col h-full">
                   <label
                     aria-label={t('takeoff.landing_dropzone_aria', { defaultValue: 'Drop a PDF here or click to browse.' })}
                     onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); e.currentTarget.classList.add('ring-2', 'ring-oe-blue/40'); }}
@@ -2553,7 +2576,7 @@ export default function TakeoffViewerModule({
                         });
                       }
                     }}
-                    className="group/drop flex flex-col items-center justify-center gap-4 rounded-xl p-10 text-center cursor-pointer transition-all flex-1 border-2 border-dashed border-border-medium bg-gradient-to-br from-blue-50/60 via-white to-violet-50/40 dark:from-blue-950/20 dark:via-gray-800/40 dark:to-violet-950/20 hover:border-oe-blue/50 hover:shadow-md"
+                    className="group/drop flex flex-col items-center justify-center gap-3 rounded-xl p-6 text-center cursor-pointer transition-all flex-1 border-2 border-dashed border-border-medium bg-gradient-to-br from-blue-50/60 via-white to-violet-50/40 dark:from-blue-950/20 dark:via-gray-800/40 dark:to-violet-950/20 hover:border-oe-blue/50 hover:shadow-md"
                   >
                     <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-oe-blue/10 to-violet-500/10 flex items-center justify-center group-hover/drop:scale-110 transition-transform">
                       <FileUp size={26} className="text-oe-blue" />
@@ -2640,15 +2663,15 @@ export default function TakeoffViewerModule({
             </div>
 
             {/* Row 2: Feature cards */}
-            <div className="mb-8">
-              <h2 className="text-xs font-bold text-content-tertiary uppercase tracking-widest mb-3">
+            <div>
+              <h2 className="text-xs font-bold text-content-tertiary uppercase tracking-widest mb-2">
                 {t('takeoff.landing_what_you_get', { defaultValue: 'What you get' })}
               </h2>
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
                 {landingFeatures.map((f, i) => (
                   <div
                     key={i}
-                    className="flex items-start gap-3 rounded-xl p-4 bg-white dark:bg-gray-800/40 border border-border-light/60 hover:border-border-light hover:shadow-sm transition-all"
+                    className="flex items-start gap-3 rounded-xl p-3 bg-white dark:bg-gray-800/40 border border-border-light/60 hover:border-border-light hover:shadow-sm transition-all"
                   >
                     <div className={`w-8 h-8 rounded-lg ${f.color} border flex items-center justify-center shrink-0`}>
                       <f.icon size={15} className={f.ic} />
@@ -2828,14 +2851,18 @@ export default function TakeoffViewerModule({
                   title={t('takeoff_viewer.calibrated_tooltip', {
                     defaultValue: 'Calibrated · {{ratio}}{{atLen}} — click to recalibrate',
                     ratio: formatScaleRatio(scale),
-                    atLen: lastCalibration ? ` @ ${lastCalibration.realLength.toFixed(2)} m` : '',
+                    atLen: lastCalibration
+                      ? ` @ ${lastCalibration.realLength} ${lastCalibration.unit}`
+                      : '',
                   })}
                   data-testid="calibration-badge"
                 >
                   <Check size={11} className="text-purple-500 shrink-0" />
                   <span>{formatScaleRatio(scale)}</span>
                   {lastCalibration && (
-                    <span className="text-purple-500/80">· {lastCalibration.realLength.toFixed(1)}m</span>
+                    <span className="text-purple-500/80">
+                      · {lastCalibration.realLength} {lastCalibration.unit}
+                    </span>
                   )}
                 </button>
               )}
@@ -2906,11 +2933,19 @@ export default function TakeoffViewerModule({
               </label>
             </div>
 
-            {/* Canvas */}
+            {/* Canvas — the PDF render surface is a genuinely-needed internal
+                scroll region (drawings are far larger than any viewport).
+                The cap must match the height actually left over after the
+                page chrome the parent column does NOT subtract: header (52)
+                + main pt-6/pb-4 (40) + takeoff tabs bar (~56) + module
+                spacing + toolbar (~44) + bottom Documents filmstrip (~175).
+                The old `100vh - 280px` under-reserved by ~80px, so the
+                canvas + right sidebar pushed the workspace past the
+                fixed-height column and forced a second scrollbar. */}
             <div
               ref={containerRef}
               className="relative rounded-lg border border-border overflow-auto bg-gray-100 dark:bg-gray-900"
-              style={{ maxHeight: 'calc(100vh - 280px)', maxWidth: '100%' }}
+              style={{ maxHeight: 'calc(100vh - 360px)', maxWidth: '100%' }}
             >
               <canvas ref={canvasRef} className="block" />
               <canvas

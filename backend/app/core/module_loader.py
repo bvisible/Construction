@@ -243,6 +243,13 @@ class ModuleLoader:
         with contextlib.suppress(ModuleNotFoundError):
             importlib.import_module(f"{package_path}.validators")
 
+        # Load pipeline node runners — a module opts node types into the
+        # Pipeline Builder's Node Capability Registry by defining a
+        # ``pipeline_nodes.py`` that calls ``register_node(...)`` at import
+        # time (same autodiscovery contract as hooks/events/validators).
+        with contextlib.suppress(ModuleNotFoundError):
+            importlib.import_module(f"{package_path}.pipeline_nodes")
+
         # Call on_startup if defined
         startup = getattr(package, "on_startup", None)
         if callable(startup):

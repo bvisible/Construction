@@ -182,11 +182,11 @@ class ValidationReport:
         return ValidationStatus.PASSED
 
     @property
-    def score(self) -> float:
+    def score(self) -> float | None:
         """Quality score in ``0.0 - 1.0``, weighted by severity and honest
-        about blocking errors.
+        about blocking errors. ``None`` when the report is SKIPPED.
 
-        Two corrections vs. the naive per-result weighted ratio (E-VAL-007):
+        Three corrections vs. the naive per-result weighted ratio:
 
         * Engine-error rows are excluded entirely — an infrastructure failure
           must not move the quality number (E-VAL-018).
@@ -195,10 +195,13 @@ class ValidationReport:
           read as "99% quality". The cap shrinks with the error count but
           stays strictly above 0 so the score still discriminates between
           "one error" and "everything broken".
+        * A report with **no compliance results** (SKIPPED — nothing was
+          actually checked) has *no* quality signal, so the score is ``None``
+          rather than a misleading ``1.0`` / "100% quality" (NEW-VAL-004).
         """
         compliance_results = [r for r in self.results if not r.is_engine_error]
         if not compliance_results:
-            return 1.0
+            return None
         total_weight = 0.0
         passed_weight = 0.0
         for r in compliance_results:
@@ -460,9 +463,9 @@ class ValidationEngine:
         report.duration_ms = round((time.monotonic() - start) * 1000, 2)
 
         logger.info(
-            "Validation complete: %s (score=%.2f, errors=%d, warnings=%d, duration=%.1fms)",
+            "Validation complete: %s (score=%s, errors=%d, warnings=%d, duration=%.1fms)",
             report.status.value,
-            report.score,
+            "n/a" if report.score is None else f"{report.score:.2f}",
             len(report.errors),
             len(report.warnings),
             report.duration_ms,

@@ -30,6 +30,7 @@ import {
 } from '@/shared/ui';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { SectionIntro } from '@/features/validation';
 import { apiGet, getErrorMessage } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -226,6 +227,18 @@ export function QMSPage() {
           {tabCreateLabel(tab, t)}
         </Button>
       </div>
+
+      <SectionIntro
+        storageKey="qms"
+        title={t('qms.intro_title', {
+          defaultValue: 'One quality system, five linked registers',
+        })}
+      >
+        {t('qms.intro_body', {
+          defaultValue:
+            'QMS ties together the full ISO 9001 quality chain: ITP plans define hold/witness points → Inspections sign them off → failed checks raise NCRs → NCRs with cost impact escalate to a Variation and feed the Cost of Poor Quality (COPQ) rollup → Punch items track close-out → Audits cover the management system. Pick a project, then move through the tabs left-to-right.',
+        })}
+      </SectionIntro>
 
       <div className="border-b border-border-light">
         <nav className="flex gap-1 -mb-px overflow-x-auto">
@@ -953,7 +966,9 @@ function NCRDrawer({
               <input
                 value={responsible}
                 onChange={(e) => setResponsible(e.target.value)}
-                placeholder={t('qms.responsible_user', { defaultValue: 'Responsible user ID' })}
+                placeholder={t('qms.responsible_user', {
+                  defaultValue: 'Responsible (name or user ID — optional)',
+                })}
                 className={inputCls}
               />
               <Button

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Building2,
@@ -23,6 +24,7 @@ import { exportToCSV, downloadBlob } from '../_shared/excelExport';
 import { printBOQReport } from '../_shared/pdfBOQExport';
 import type { ExchangePosition, ImportParseResult } from '../_shared/templateTypes';
 import { KR_TEMPLATE, KR_TRADE_SECTIONS } from './krTemplate';
+import { SampleTemplateButton } from '../_shared/SampleTemplateButton';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -527,6 +529,11 @@ export default function KRExchangeModule() {
             />
           </div>
 
+          {/* Expected layout + ready-to-fill sample — shown before a
+              file is chosen so a country specialist knows the exact
+              column order this importer expects. */}
+          {!importFile && <SampleTemplateButton template={KR_TEMPLATE} />}
+
           {/* Poomsem Trade Sections reference */}
           {parsedPositions && parsedPositions.length > 0 && (
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-3">
@@ -653,6 +660,15 @@ export default function KRExchangeModule() {
                     <li key={`err-${idx}`}>&#x2022; {err}</li>
                   ))}
                 </ul>
+              )}
+              {importResult.errors.length === 0 && (
+                <Link
+                  data-testid="regional-open-boq"
+                  to={importTargetBoqId ? `/boq?boq=${importTargetBoqId}` : '/boq'}
+                  className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-oe-blue hover:underline"
+                >
+                  {t('kr.open_boq', { defaultValue: 'Open in BOQ editor to review & validate \u2192' })}
+                </Link>
               )}
             </div>
           )}

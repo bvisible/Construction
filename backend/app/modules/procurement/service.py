@@ -218,6 +218,28 @@ class ProcurementService:
         # Server-side total computation
         computed_total = _compute_po_total(data.amount_subtotal, data.tax_amount)
 
+        # Inherit the parent project's currency when the caller did not
+        # supply one — never hardcode EUR (task #217).
+        currency_code = data.currency_code
+        if not currency_code:
+            from sqlalchemy import select
+
+            from app.modules.projects.models import Project
+
+            # Best-effort, mirrors boq ``_resolve_project_currency``: a
+            # failed/unavailable lookup must never 500 a PO create — fall
+            # back to "" (honest unknown, never a wrong hardcoded EUR —
+            # task #217).
+            try:
+                proj_currency = (
+                    await self.session.execute(
+                        select(Project.currency).where(Project.id == data.project_id)
+                    )
+                ).scalar_one_or_none()
+            except Exception:  # noqa: BLE001 — lookup is non-critical
+                proj_currency = None
+            currency_code = proj_currency or ""
+
         explicit_po_number = data.po_number
         # Mirrors changeorders BUG-354: MAX(po_number)+1 is not atomic, so two
         # concurrent creates can compute the same suffix and one would 500 on the
@@ -236,7 +258,7 @@ class ProcurementService:
                 po_type=data.po_type,
                 issue_date=data.issue_date,
                 delivery_date=data.delivery_date,
-                currency_code=data.currency_code,
+                currency_code=currency_code,
                 amount_subtotal=data.amount_subtotal,
                 tax_amount=data.tax_amount,
                 amount_total=computed_total,
@@ -556,10 +578,11 @@ class ProcurementService:
             )
             await self.gr_item_repo.create(item)
 
+        gr_id = gr.id
         await _safe_publish(
             "procurement.gr.created",
             {
-                "gr_id": str(gr.id),
+                "gr_id": str(gr_id),
                 "po_id": str(gr.po_id),
                 "project_id": str(po.project_id),
                 "status": gr.status,
@@ -568,7 +591,14 @@ class ProcurementService:
         )
 
         logger.info("GR created for PO %s (date=%s)", data.po_id, data.receipt_date)
-        return gr
+        # The freshly-flushed ``gr`` has no ``items`` collection loaded —
+        # ``selectin`` only fires on a query, not on a pending instance. The
+        # router serialises ``GRResponse`` (which includes ``items``), so a
+        # lazy load would be attempted outside the async greenlet
+        # (MissingGreenlet 500). Re-fetch so the relationship is hydrated.
+        self.session.expunge(gr)
+        refreshed = await self.gr_repo.get(gr_id)
+        return refreshed if refreshed is not None else gr
 
     async def get_goods_receipt(self, gr_id: uuid.UUID) -> GoodsReceipt:
         """Get goods receipt by ID. Raises 404 if not found."""

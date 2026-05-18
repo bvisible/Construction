@@ -938,7 +938,14 @@ async def vector_v3_status(
             payload["exists"] = True
             try:
                 col = client.get_collection(payload["collection"])
-                pc = int(col.points_count or 0)
+                # Version-tolerant: ``points_count`` → ``vectors_count``
+                # (older qdrant-client) → live count().
+                pc_raw = getattr(col, "points_count", None)
+                if pc_raw is None:
+                    pc_raw = getattr(col, "vectors_count", None)
+                if pc_raw is None:
+                    pc_raw = client.count(payload["collection"]).count
+                pc = int(pc_raw or 0)
                 payload["points_count"] = pc
                 payload["status_band"] = "ready" if pc > 0 else "empty"
             except Exception:
@@ -1138,12 +1145,27 @@ async def qdrant_smoke_search(
             filters=filters,
             limit=limit,
         )
+    except (ImportError, ModuleNotFoundError) as exc:
+        # The optional [semantic] extra (qdrant_client / FlagEmbedding) is
+        # not installed. A lazy ``from qdrant_client...`` deep inside
+        # search() raised a bare ModuleNotFoundError — never echo the raw
+        # "No module named 'qdrant_client'" text to the client (NEW-B-105).
+        logger.info("CWICR Qdrant search unavailable (optional extra missing): %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Semantic search is not available on this deployment. "
+                "Install the optional extra: pip install openconstructionerp[semantic]"
+            ),
+        ) from exc
     except RuntimeError as exc:
         # Optional [semantic] extra missing or no Qdrant reachable.
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("CWICR Qdrant smoke search failed")
-        raise HTTPException(status_code=500, detail=f"qdrant search failed: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail="qdrant search failed (see server logs)"
+        ) from exc
 
     rate_codes = [h.rate_code for h in hits]
     full_rows = await lookup_full_rows(country=country, rate_codes=rate_codes)
@@ -1623,10 +1645,19 @@ async def restore_qdrant_snapshot(
 
     duration = round(time.monotonic() - start, 1)
 
-    # Get collection info after restore
+    # Get collection info after restore. ``CollectionInfo.vectors_count``
+    # was removed in newer qdrant-client — read ``points_count`` first and
+    # fall back resiliently so a client version bump can't crash this.
     try:
         col_info = client.get_collection(collection_name)
-        vectors_count = col_info.vectors_count
+        vectors_count = getattr(col_info, "points_count", None)
+        if vectors_count is None:
+            vectors_count = getattr(col_info, "vectors_count", None)
+        if vectors_count is None:
+            try:
+                vectors_count = client.count(collection_name).count
+            except Exception:
+                vectors_count = None
     except Exception:
         vectors_count = None
 
@@ -1994,11 +2025,23 @@ async def semantic_search(
     Finds cost items whose descriptions are semantically similar
     to the query, even if the exact words don't match.
     E.g. "concrete wall" finds "reinforced partition C30/37".
-    """
-    from app.core.vector import encode_texts, vector_search
 
-    query_vector = encode_texts([q])[0]
-    return vector_search(query_vector, region=region, limit=limit)
+    Degrades gracefully (NEW-B-105): when the optional ``[semantic]``
+    extra is not installed (no embedding model / no ``qdrant_client``)
+    the endpoint returns an empty result list with HTTP 200 instead of
+    leaking an ``ImportError`` / ``RuntimeError`` as a 500. The lexical
+    SQL search (``/costs/?q=``) remains the always-available path.
+    """
+    try:
+        from app.core.vector import encode_texts, vector_search
+
+        query_vector = encode_texts([q])[0]
+        return vector_search(query_vector, region=region, limit=limit)
+    except (ImportError, ModuleNotFoundError, RuntimeError) as exc:
+        # Optional semantic stack absent / no embedding model loaded.
+        # Never surface the raw import text to the client.
+        logger.info("Semantic search unavailable, returning empty result: %s", exc)
+        return []
 
 
 # ── Categories (distinct classification.collection values) ───────────────

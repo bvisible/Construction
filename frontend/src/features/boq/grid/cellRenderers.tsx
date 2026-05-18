@@ -20,12 +20,14 @@ import {
   Loader2,
   Info,
   Trash2,
+  Pencil,
   FileText,
   FileBox,
   CheckCircle2,
   ExternalLink,
   Check,
   AlertTriangle,
+  Link2,
 } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { useQuery, useQueries } from '@tanstack/react-query';
@@ -170,6 +172,29 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
 
   const [dragOver, setDragOver] = useState(false);
 
+  // Issue #135 — sections had no rename affordance after creation. The
+  // name is now double-click / pencil editable inline and persisted via
+  // the same onUpdatePosition path used for every other field.
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState(description);
+
+  const startRename = useCallback(() => {
+    setNameDraft(description);
+    setRenaming(true);
+  }, [description]);
+
+  const commitRename = useCallback(() => {
+    const next = nameDraft.trim();
+    setRenaming(false);
+    if (next && next !== description) {
+      ctx.onUpdatePosition?.(
+        data.id,
+        { description: next },
+        { description },
+      );
+    }
+  }, [nameDraft, description, ctx, data]);
+
   return (
     <div
       className={`flex items-center w-full h-full px-2 gap-2 select-none group/section transition-colors ${
@@ -225,9 +250,45 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
         {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
       </span>
 
-      <span className="text-xs font-bold text-content-primary uppercase tracking-wide truncate min-w-0">
-        {description}
-      </span>
+      {renaming ? (
+        <input
+          autoFocus
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') commitRename();
+            else if (e.key === 'Escape') {
+              setNameDraft(description);
+              setRenaming(false);
+            }
+          }}
+          onBlur={commitRename}
+          className="min-w-0 flex-1 text-xs font-bold text-content-primary uppercase
+                     tracking-wide bg-surface-primary border border-oe-blue rounded
+                     px-1.5 py-0.5 outline-none"
+          aria-label={t('boq.rename_section', { defaultValue: 'Rename section' })}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            startRename();
+          }}
+          title={t('boq.rename_section_hint', {
+            defaultValue: 'Double-click to rename',
+          })}
+          className="text-xs font-bold text-content-primary uppercase tracking-wide
+                     truncate min-w-0 text-left bg-transparent cursor-text"
+        >
+          {description || t('boq.untitled_section', {
+            defaultValue: 'Untitled section',
+          })}
+        </button>
+      )}
 
       <span className="shrink-0 inline-flex items-center h-4 px-1.5 rounded-full
                        bg-surface-tertiary text-[10px] font-medium text-content-tertiary
@@ -239,6 +300,25 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
       </span>
 
       <div className="flex-1" />
+
+      {!renaming && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            startRename();
+          }}
+          className="shrink-0 h-5 flex items-center gap-0.5 px-1.5 rounded
+                     text-[10px] font-medium
+                     text-content-tertiary hover:text-oe-blue
+                     bg-transparent hover:bg-oe-blue-subtle
+                     opacity-0 group-hover/section:opacity-100
+                     transition-all"
+          title={t('boq.rename_section', { defaultValue: 'Rename section' })}
+          aria-label={t('boq.rename_section', { defaultValue: 'Rename section' })}
+        >
+          <Pencil size={10} />
+        </button>
+      )}
 
       <button
         onClick={(e) => {
@@ -913,12 +993,50 @@ export function OrdinalCellRenderer(params: ICellRendererParams) {
   if (!data || data._isSection || data._isFooter) return <span>{value}</span>;
 
   const ctx = context as FullGridContext | undefined;
-  const t = ctx?.t ?? ((key: string, opts?: Record<string, string>) => (opts?.defaultValue as string) ?? key);
+  const t = ctx?.t ?? ((key: string, opts?: Record<string, string | number>) => (opts?.defaultValue as string) ?? key);
   const status = data.validation_status ?? 'pending';
   const dotColor = VALIDATION_DOT_STYLES[status] ?? VALIDATION_DOT_STYLES.pending;
 
+  // ── Issue #127: linked-position indicator ──────────────────────────
+  // A "master" is the definition of record for a shared reference_code; an
+  // "instance" follows the master's definition but keeps its own ordinal &
+  // quantity. Distinct styling + a tooltip showing the shared code and how
+  // many positions share it.
+  const linkRole = data.link_role as 'master' | 'instance' | null | undefined;
+  const refCode = (data.reference_code as string | null | undefined) ?? '';
+  const linkedCount =
+    typeof data.linked_instance_count === 'number'
+      ? data.linked_instance_count
+      : 0;
+  const linkTooltip =
+    linkRole === 'master'
+      ? t('boq.link_badge_master', {
+          defaultValue: 'Master of code {{code}} — {{count}} linked‌⁠‍',
+          code: refCode || (value as string),
+          count: linkedCount,
+        })
+      : t('boq.link_badge_instance', {
+          defaultValue:
+            'Linked instance of code {{code}} — edits to its definition will diverge it‌⁠‍',
+          code: refCode || (value as string),
+        });
+
   return (
     <div className="flex items-center justify-end gap-1 overflow-hidden w-full">
+      {(linkRole === 'master' || linkRole === 'instance') && (
+        <span
+          className={`inline-flex h-4 shrink-0 items-center gap-0.5 rounded px-1 text-[9px] font-semibold ${
+            linkRole === 'master'
+              ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+              : 'bg-oe-blue/10 text-oe-blue'
+          } cursor-help`}
+          title={linkTooltip}
+          aria-label={linkTooltip}
+        >
+          <Link2 size={9} />
+          {linkRole === 'master' && linkedCount > 0 ? linkedCount : null}
+        </span>
+      )}
       <span className="text-xs font-mono truncate min-w-0">{value}</span>
       <span
         className={`inline-block h-2.5 w-2.5 shrink-0 rounded-full ${dotColor} cursor-help`}

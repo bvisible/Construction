@@ -20,8 +20,6 @@ import {
   ShieldAlert,
   RotateCcw,
   Download,
-  ClipboardList,
-  Users,
   Box,
   GitBranch,
   TrendingUp,
@@ -35,6 +33,7 @@ import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { scheduleApi } from './api';
+import { PlanningCrossLinks } from './PlanningCrossLinks';
 import { fetchBIMModels } from '@/features/bim/api';
 import type {
   Schedule,
@@ -901,6 +900,7 @@ function GanttChart({
 
 function RiskAnalysisCard({ data }: { data: RiskAnalysisResponse }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
 
   const items = [
     {
@@ -960,6 +960,29 @@ function RiskAnalysisCard({ data }: { data: RiskAnalysisResponse }) {
           {t('schedule.mean_label', 'Mean (critical path)')}: {data.mean_days}d
         </p>
       )}
+      {/* Next step: turn the schedule-risk buffer into cost contingency
+          and a tracked risk entry. */}
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-border-light pt-3">
+        <span className="text-2xs text-content-tertiary">
+          {t('schedule.risk_next_step', { defaultValue: 'Carry this buffer forward:' })}
+        </span>
+        <button
+          type="button"
+          onClick={() => navigate('/risks')}
+          className="inline-flex items-center gap-1 rounded-full border border-border-light px-2.5 py-0.5 text-2xs font-medium text-content-secondary transition-colors hover:border-oe-blue/40 hover:text-oe-blue"
+        >
+          <ShieldAlert size={11} />
+          {t('schedule.open_risk_register', { defaultValue: 'Log in Risk Register' })}
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/5d')}
+          className="inline-flex items-center gap-1 rounded-full border border-border-light px-2.5 py-0.5 text-2xs font-medium text-content-secondary transition-colors hover:border-oe-blue/40 hover:text-oe-blue"
+        >
+          <TrendingUp size={11} />
+          {t('schedule.open_5d_contingency', { defaultValue: 'Cost contingency in 5D' })}
+        </button>
+      </div>
     </Card>
   );
 }
@@ -1393,30 +1416,46 @@ function ScheduleDetail({
           {/* Summary stats */}
           {ganttData && <SummaryStats summary={ganttData.summary} />}
 
-          {/* Overall project progress bar */}
-          {ganttData && ganttData.summary.total_activities > 0 && (
-            <div className="mt-4 rounded-xl border border-border-light bg-surface-primary p-4">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-content-primary">
-                  {t('schedule.overall_progress', { defaultValue: 'Overall Progress' })}
-                </span>
-                <span className="text-sm font-bold text-oe-blue tabular-nums">
-                  {Math.round((ganttData.summary.completed / Math.max(ganttData.summary.total_activities, 1)) * 100)}%
-                </span>
+          {/* Overall project progress bar — mean physical progress across
+              all non-summary activities (summary rows roll up their children
+              and would double-count). Falls back to the completed-count ratio
+              only when no activity reports progress. */}
+          {ganttData && ganttData.summary.total_activities > 0 && (() => {
+            const progressActivities = (ganttData.activities ?? []).filter(
+              (a) => a.activity_type !== 'summary',
+            );
+            const meanProgress =
+              progressActivities.length > 0
+                ? progressActivities.reduce((sum, a) => sum + (a.progress_pct ?? 0), 0) /
+                  progressActivities.length
+                : (ganttData.summary.completed /
+                    Math.max(ganttData.summary.total_activities, 1)) *
+                  100;
+            const pct = Math.round(meanProgress);
+            return (
+              <div className="mt-4 rounded-xl border border-border-light bg-surface-primary p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-content-primary">
+                    {t('schedule.overall_progress', { defaultValue: 'Overall Progress' })}
+                  </span>
+                  <span className="text-sm font-bold text-oe-blue tabular-nums">
+                    {pct}%
+                  </span>
+                </div>
+                <div className="h-3 w-full overflow-hidden rounded-full bg-surface-secondary">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-oe-blue to-blue-400 transition-all duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex items-center gap-4 text-xs text-content-tertiary">
+                  <span>{ganttData.summary.completed} {t('schedule.completed_label', { defaultValue: 'completed' })}</span>
+                  <span>{ganttData.summary.in_progress} {t('schedule.in_progress_label', { defaultValue: 'in progress' })}</span>
+                  <span>{ganttData.summary.delayed} {t('schedule.delayed_label', { defaultValue: 'delayed' })}</span>
+                </div>
               </div>
-              <div className="h-3 w-full overflow-hidden rounded-full bg-surface-secondary">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-oe-blue to-blue-400 transition-all duration-500"
-                  style={{ width: `${(ganttData.summary.completed / Math.max(ganttData.summary.total_activities, 1)) * 100}%` }}
-                />
-              </div>
-              <div className="mt-2 flex items-center gap-4 text-xs text-content-tertiary">
-                <span>{ganttData.summary.completed} {t('schedule.completed_label', { defaultValue: 'completed' })}</span>
-                <span>{ganttData.summary.in_progress} {t('schedule.in_progress_label', { defaultValue: 'in progress' })}</span>
-                <span>{ganttData.summary.delayed} {t('schedule.delayed_label', { defaultValue: 'delayed' })}</span>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Activity filter */}
           <div className="mt-4 flex items-center gap-2">
@@ -2061,20 +2100,11 @@ export function SchedulePage() {
         </p>
       </div>
 
-      {/* Cross-module links */}
-      <div className="flex flex-wrap gap-1.5 mb-4">
-        <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/tasks')}>
-          <ClipboardList size={13} className="me-1" />
-          {t('schedule.link_tasks', { defaultValue: 'Tasks' })}
-        </Button>
-        <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/meetings')}>
-          <Users size={13} className="me-1" />
-          {t('schedule.link_meetings', { defaultValue: 'Meetings' })}
-        </Button>
-      </div>
+      {/* Cross-module navigation — connects the planning value chain */}
+      <PlanningCrossLinks active="schedule" />
 
       {/* 4D explanation */}
-      <InfoHint className="mb-6" text={t('schedule.what_is_4d', { defaultValue: '4D scheduling links your BOQ positions to a project timeline. Create activities, set dependencies, and visualize progress on a Gantt chart. The critical path analysis highlights activities that directly affect the project end date. Activity types: Task = work item, Milestone = checkpoint with zero duration, Summary = grouping header.' })} />
+      <InfoHint className="mb-6" text={t('schedule.what_is_4d', { defaultValue: '4D scheduling links your BOQ positions to a project timeline. Create activities, set dependencies, and visualize progress on a Gantt chart. The critical path analysis highlights activities that directly affect the project end date. Activity types: Task = work item, Milestone = checkpoint with zero duration, Summary = grouping header. Once activities have progress, the 5D Cost Model derives SPI/CPI earned-value metrics, and schedule risk feeds the Risk Register.' })} />
 
       {isLoading ? (
         <SkeletonTable rows={3} columns={3} />

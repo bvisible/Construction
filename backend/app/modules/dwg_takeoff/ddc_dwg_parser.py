@@ -108,6 +108,164 @@ def _safe_float(val: Any) -> float | None:
         return None
 
 
+# AutoCAD ``$INSUNITS`` code → canonical unit string.  Mirrors the
+# reference table in dxf_processor.py (ezdxf path) so the DDC and ezdxf
+# pipelines agree on unit semantics and the downstream scale factor in
+# service.py is identical regardless of which parser produced the
+# drawing.  (Reference-only file dxf_processor.py:280-288 is NOT edited.)
+_INSUNITS_MAP: dict[int, str] = {
+    0: "unitless",
+    1: "inches",
+    2: "feet",
+    3: "miles",
+    4: "mm",
+    5: "cm",
+    6: "m",
+    7: "km",
+    8: "microinches",
+    9: "mils",
+    10: "yards",
+    11: "angstroms",
+    12: "nanometers",
+    13: "microns",
+    14: "dm",
+    15: "dam",
+    16: "hm",
+    17: "gigameters",
+    18: "astronomical_units",
+    19: "lightyears",
+    20: "parsecs",
+}
+
+# Free-text unit spellings the DDC DwgExporter may emit in a units column
+# instead of the numeric INSUNITS code (it depends on the converter
+# build).  Normalised → canonical.
+_UNIT_TEXT_MAP: dict[str, str] = {
+    "unitless": "unitless",
+    "none": "unitless",
+    "undefined": "unitless",
+    "inch": "inches",
+    "inches": "inches",
+    "in": "inches",
+    "foot": "feet",
+    "feet": "feet",
+    "ft": "feet",
+    "mile": "miles",
+    "miles": "miles",
+    "millimeter": "mm",
+    "millimeters": "mm",
+    "millimetre": "mm",
+    "mm": "mm",
+    "centimeter": "cm",
+    "centimeters": "cm",
+    "cm": "cm",
+    "meter": "m",
+    "meters": "m",
+    "metre": "m",
+    "m": "m",
+    "kilometer": "km",
+    "kilometers": "km",
+    "km": "km",
+    "decimeter": "dm",
+    "dm": "dm",
+    "yard": "yards",
+    "yards": "yards",
+}
+
+
+def _resolve_dwg_units(
+    all_rows: list[tuple],
+    get: Any,
+) -> str:
+    """Recover the drawing's source unit from the DDC DwgExporter export.
+
+    The DDC DwgExporter writes the AutoCAD database header alongside the
+    geometry records.  Depending on the converter build the drawing unit
+    surfaces either as a numeric ``INSUNITS`` code or as a free-text
+    unit name on the database / drawing-settings record (descriptor
+    ``<AcDbDatabase>`` or a header/preferences row).
+
+    Previously this was hardcoded to ``"unitless"``, which made
+    service.py apply a 1.0 scale factor — so a millimetre DWG routed
+    through DDC read 1000× too large (BUG-D-TKC-002b).  This scans the
+    export for any unit-bearing field and resolves it; only when nothing
+    usable is present does it fall back to ``"unitless"`` (the honest
+    "unknown — assume model units" answer, same as the ezdxf path's
+    ``$INSUNITS == 0`` default).
+
+    Args:
+        all_rows: All worksheet rows (row 0 is the header).
+        get: Row accessor bound to the header→index map.
+
+    Returns:
+        A canonical unit string (key of the service.py scale table):
+        one of ``unitless`` / ``inches`` / ``feet`` / ``miles`` / ``mm``
+        / ``cm`` / ``m`` / ``km`` / ``dm`` / ``yards`` / etc.
+    """
+    # Column names the DwgExporter has been observed to use for the
+    # drawing unit, in priority order.  Checked case-insensitively.
+    _UNIT_COLS = (
+        "INSUNITS",
+        "InsUnits",
+        "Insunits",
+        "$INSUNITS",
+        "Units",
+        "Unit",
+        "Drawing Units",
+        "DrawingUnits",
+        "Measurement",
+        "MEASUREMENT",
+    )
+    # Descriptor rows that carry the database / drawing-settings header.
+    _DB_DESCRIPTORS = {
+        "<AcDbDatabase>",
+        "<AcDbDatabaseSummaryInfo>",
+        "<DatabaseHeader>",
+        "<HeaderVariables>",
+        "<DrawingSettings>",
+    }
+
+    def _coerce(raw: object) -> str | None:
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s:
+            return None
+        # Numeric INSUNITS code ("4", "4.0", "INSUNITS 4").
+        m = re.search(r"-?\d+", s)
+        if m and _INSUNITS_MAP.get(int(m.group(0))) and not re.search(
+            r"[a-df-zA-DF-Z]", s.replace("INSUNITS", "").replace("insunits", "")
+        ):
+            mapped = _INSUNITS_MAP.get(int(m.group(0)))
+            if mapped:
+                return mapped
+        # Free-text unit name.
+        key = re.sub(r"[^a-z]", "", s.lower())
+        return _UNIT_TEXT_MAP.get(key)
+
+    # Pass A — prefer a value attached to an explicit database/header row.
+    for row in all_rows[1:]:
+        desc = str(get(row, "Description") or "")
+        if desc in _DB_DESCRIPTORS:
+            for col in _UNIT_COLS:
+                val = _coerce(get(row, col))
+                if val:
+                    return val
+
+    # Pass B — converter build that puts the unit on a plain column of
+    # any/every row (e.g. a per-export constant column).  Take the first
+    # row that resolves to a non-unitless value.
+    for row in all_rows[1:]:
+        for col in _UNIT_COLS:
+            val = _coerce(get(row, col))
+            if val and val != "unitless":
+                return val
+
+    # Nothing usable — honest fallback (model units, scale 1.0), the same
+    # default the ezdxf path uses when $INSUNITS is absent/0.
+    return "unitless"
+
+
 def parse_ddc_dwg_excel(excel_path: str | Path) -> dict[str, Any]:
     """Parse DDC DwgExporter Excel into layers + drawable entities.
 
@@ -116,7 +274,8 @@ def parse_ddc_dwg_excel(excel_path: str | Path) -> dict[str, Any]:
         "layers": [...],
         "entities": [...],
         "extents": {"min_x", "min_y", "max_x", "max_y"},
-        "units": "unitless",
+        "units": "<resolved from the DDC export — mm/cm/m/inches/...,"
+                 " or 'unitless' when the export carries no unit field>",
         "entity_count": N,
     }
     """
@@ -615,6 +774,12 @@ def parse_ddc_dwg_excel(excel_path: str | Path) -> dict[str, Any]:
         sorted_layouts.remove("*Model_Space")
         sorted_layouts.insert(0, "*Model_Space")
 
+    # BUG-D-TKC-002b — carry the real source unit from the DDC export
+    # instead of hardcoding "unitless" (which forced a 1.0 scale factor in
+    # service.py and made a millimetre DWG read 1000× too big).
+    units = _resolve_dwg_units(all_rows, get)
+    logger.info("DDC DWG source unit resolved: %s", units)
+
     return {
         "layers": layers,
         "entities": entities,
@@ -624,7 +789,7 @@ def parse_ddc_dwg_excel(excel_path: str | Path) -> dict[str, Any]:
             "max_x": float(max_x),
             "max_y": float(max_y),
         },
-        "units": "unitless",
+        "units": units,
         "entity_count": len(entities),
         "layouts": sorted_layouts,
     }

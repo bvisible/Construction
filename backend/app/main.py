@@ -481,8 +481,35 @@ def _persist_demo_credentials(creds: dict[str, str]) -> Path | None:
         return None
 
 
+def _resolve_sqlite_db_path() -> str | None:
+    """On-disk path of the SQLite DB, or ``None`` when not SQLite.
+
+    The showcase snapshot loader writes through a raw ``sqlite3``
+    connection, so it needs the exact file the SQLAlchemy engine
+    resolves to. Mirrors SQLAlchemy's rule that a relative SQLite path
+    is taken relative to the process CWD.
+    """
+    from pathlib import Path
+
+    url = (get_settings().database_sync_url or "").strip()
+    if not url.startswith("sqlite:") or "sqlite://" not in url:
+        return None
+    rest = url.split("sqlite://", 1)[1].split("?", 1)[0]
+    if not rest:
+        return None
+    # Drop the single netloc slash: ``sqlite:///rel`` -> ``rel`` (CWD),
+    # ``sqlite:////abs`` -> ``/abs`` (absolute).
+    cand = rest[1:] if rest.startswith("/") else rest
+    if not cand:
+        return None
+    p = Path(cand)
+    if not p.is_absolute():
+        p = Path.cwd() / cand
+    return str(p)
+
+
 async def _seed_demo_account() -> None:
-    """Create demo user + 5 demo projects if they don't exist yet.
+    """Create demo user + showcase projects if they don't exist yet.
 
     Idempotent — safe to call on every startup. Creates:
 
@@ -600,13 +627,70 @@ async def _seed_demo_account() -> None:
                 for email, pw in generated_creds.items():
                     logger.warning("  %s: %s", email, pw)
 
-            # 2. Install 5 demo projects if user has none
-            count = (
-                await session.execute(select(func.count()).select_from(Project).where(Project.owner_id == demo.id))
+            # 2. Capture the demo user ids while the session is open.
+            estimator_user = (
+                await session.execute(
+                    select(User).where(User.email == "estimator@openestimator.io")
+                )
+            ).scalar_one_or_none()
+            manager_user = (
+                await session.execute(
+                    select(User).where(User.email == "manager@openestimator.io")
+                )
+            ).scalar_one_or_none()
+            demo_user_id = str(demo.id)
+            estimator_user_id = str(estimator_user.id) if estimator_user else ""
+            manager_user_id = str(manager_user.id) if manager_user else ""
+
+            project_count = (
+                await session.execute(
+                    select(func.count()).select_from(Project).where(Project.owner_id == demo.id)
+                )
             ).scalar() or 0
 
-            if count == 0:
-                # Fresh-install seed: cap strictly at 5 (DEFAULT_DEMO_IDS).
+            # Persist the demo users now so the showcase snapshot loader
+            # (a separate sqlite3 connection) does not contend for a
+            # write lock with this async session.
+            await session.commit()
+
+        # ── 3. Project seed (outside the user session) ────────────────
+        # Preferred: bulk-restore the committed 7-project localized
+        # showcase snapshot so a new user immediately sees the whole
+        # platform working end-to-end in seven languages. Falls back to
+        # the classic 5 ORM demo projects when the snapshot is
+        # unavailable (SEED_SHOWCASE disabled, non-sqlite DB, or the
+        # artifact is missing).
+        if project_count == 0:
+            showcase_done = False
+            showcase_disabled = os.environ.get("SEED_SHOWCASE", "true").lower() in (
+                "false",
+                "0",
+                "no",
+            )
+            if not showcase_disabled:
+                db_path = _resolve_sqlite_db_path()
+                if db_path:
+                    import asyncio
+
+                    from app.scripts.seed_showcase_snapshot import (
+                        seed_showcase_from_snapshot,
+                    )
+
+                    result = await asyncio.to_thread(
+                        seed_showcase_from_snapshot,
+                        db_path,
+                        demo_user_id,
+                        estimator_user_id,
+                        manager_user_id,
+                    )
+                    logger.info("Showcase snapshot seed: %s", result)
+                    if result.get("status") in ("ok", "already") and result.get(
+                        "projects"
+                    ):
+                        showcase_done = True
+
+            if not showcase_done:
+                # Fresh-install fallback: cap strictly at 5 (DEFAULT_DEMO_IDS).
                 # Drift-prevention: if the constant ever exceeds five, we abort
                 # so a future PR can't silently re-introduce demo bloat.
                 from app.core.demo_projects import DEFAULT_DEMO_IDS, install_demo_project
@@ -618,20 +702,20 @@ async def _seed_demo_account() -> None:
                     )
                     return
 
-                for demo_id in DEFAULT_DEMO_IDS:
-                    try:
-                        result = await install_demo_project(session, demo_id)
-                        logger.info(
-                            "Demo project installed: %s (%s positions, %s %s)",
-                            demo_id,
-                            result.get("positions"),
-                            result.get("currency"),
-                            result.get("grand_total"),
-                        )
-                    except Exception:
-                        logger.warning("Failed to install demo %s (skipping)", demo_id)
-
-            await session.commit()
+                async with async_session_factory() as fb_session:
+                    for demo_id in DEFAULT_DEMO_IDS:
+                        try:
+                            result = await install_demo_project(fb_session, demo_id)
+                            logger.info(
+                                "Demo project installed: %s (%s positions, %s %s)",
+                                demo_id,
+                                result.get("positions"),
+                                result.get("currency"),
+                                result.get("grand_total"),
+                            )
+                        except Exception:
+                            logger.warning("Failed to install demo %s (skipping)", demo_id)
+                    await fb_session.commit()
     except Exception:
         logger.exception("Failed to seed demo account (non-fatal)")
 
@@ -1639,6 +1723,16 @@ def create_app() -> FastAPI:
 
             from app import modules as _modules_pkg
             from app.core import audit as _audit_core  # noqa: F401
+
+            # ``audit_log`` defines the ``oe_activity_log`` table used by the
+            # FSM ``log_activity()`` helper (submittals/RFI/etc. status
+            # transitions). It lives in app.core (not app.modules.*) so the
+            # dynamic module-models loop below never reaches it. Without this
+            # explicit import the table is absent on a fresh SQLite dev DB,
+            # so every status-changing action raised OperationalError, which
+            # poisoned the request session and cascaded into a 500 on the
+            # subsequent re-fetch. Register it before create_all.
+            from app.core import audit_log as _audit_log_core  # noqa: F401
             from app.core.sqlite_migrator import sqlite_auto_migrate
             from app.database import Base, engine
 

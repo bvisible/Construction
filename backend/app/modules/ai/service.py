@@ -29,7 +29,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
         _logger_ev.debug("Event publish skipped: %s", name)
 
 
-from app.modules.ai.ai_client import call_ai, extract_json, resolve_provider_and_key
+from app.modules.ai.ai_client import call_ai, extract_json, resolve_provider_key_model
 from app.modules.ai.models import AIEstimateJob, AISettings
 from app.modules.ai.prompts import (
     CAD_IMPORT_PROMPT,
@@ -159,9 +159,21 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
     every chat/estimate call fails with a decrypt error.
     """
     from app.core.crypto import decrypt_secret
+    from app.modules.ai.ai_client import DEFAULT_MODELS
 
     def _usable(value: Any) -> bool:
         return bool(decrypt_secret(value)) if value else False
+
+    meta = settings.metadata_ or {}
+    raw_overrides = meta.get("model_overrides") if isinstance(meta, dict) else None
+    model_overrides: dict[str, str] = {}
+    if isinstance(raw_overrides, dict):
+        # Only surface non-empty string overrides.
+        model_overrides = {
+            str(k): str(v).strip()
+            for k, v in raw_overrides.items()
+            if isinstance(v, str) and v.strip()
+        }
 
     return AISettingsResponse(
         id=settings.id,
@@ -184,6 +196,8 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
         yandex_api_key_set=_usable(getattr(settings, "yandex_api_key", None)),
         gigachat_api_key_set=_usable(getattr(settings, "gigachat_api_key", None)),
         preferred_model=settings.preferred_model,
+        model_overrides=model_overrides,
+        default_models=dict(DEFAULT_MODELS),
         metadata_=settings.metadata_ or {},
         created_at=settings.created_at,
         updated_at=settings.updated_at,
@@ -302,6 +316,31 @@ class AIService:
 
         from app.core.crypto import encrypt_secret
 
+        def _merge_overrides(
+            existing_meta: Any,
+            incoming: dict[str, str] | None,
+        ) -> dict[str, Any]:
+            """Merge model-id overrides into the metadata JSON blob.
+
+            A blank/whitespace value for a provider clears that override
+            (falls back to the built-in default). Returns the full new
+            metadata dict (other metadata keys are preserved).
+            """
+            meta: dict[str, Any] = dict(existing_meta) if isinstance(existing_meta, dict) else {}
+            current = meta.get("model_overrides")
+            overrides: dict[str, str] = dict(current) if isinstance(current, dict) else {}
+            for provider, model_id in (incoming or {}).items():
+                key = str(provider).strip()
+                if not key:
+                    continue
+                cleaned = str(model_id).strip() if isinstance(model_id, str) else ""
+                if cleaned:
+                    overrides[key] = cleaned
+                else:
+                    overrides.pop(key, None)  # blank clears the override
+            meta["model_overrides"] = overrides
+            return meta
+
         if settings is None:
             # Create with provided values (encrypt API keys at rest)
             create_kwargs: dict[str, Any] = {"user_id": uid}
@@ -310,6 +349,8 @@ class AIService:
                 if val is not None:
                     create_kwargs[key_field] = encrypt_secret(val)
             create_kwargs["preferred_model"] = data.preferred_model or "claude-sonnet"
+            if data.model_overrides is not None:
+                create_kwargs["metadata_"] = _merge_overrides({}, data.model_overrides)
             settings = AISettings(**create_kwargs)
             settings = await self.settings_repo.create(settings)
         else:
@@ -320,6 +361,8 @@ class AIService:
                     fields[key_field] = encrypt_secret(val)
             if data.preferred_model is not None:
                 fields["preferred_model"] = data.preferred_model
+            if data.model_overrides is not None:
+                fields["metadata_"] = _merge_overrides(settings.metadata_, data.model_overrides)
 
             if fields:
                 await self.settings_repo.update_fields(settings.id, **fields)
@@ -353,9 +396,9 @@ class AIService:
         uid = uuid.UUID(user_id)
         settings = await self.settings_repo.get_by_user_id(uid)
 
-        # Resolve which AI provider to use
+        # Resolve which AI provider / model to use
         try:
-            provider, api_key = resolve_provider_and_key(settings)
+            provider, api_key, model_override = resolve_provider_key_model(settings)
         except ValueError as exc:
             logger.warning("AI provider config error for user %s: %s", user_id, exc)
             raise HTTPException(
@@ -410,6 +453,7 @@ class AIService:
                 api_key=api_key,
                 system=SYSTEM_PROMPT,
                 prompt=prompt,
+                model=model_override,
             )
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -541,7 +585,7 @@ class AIService:
         settings = await self.settings_repo.get_by_user_id(uid)
 
         try:
-            provider, api_key = resolve_provider_and_key(settings)
+            provider, api_key, model_override = resolve_provider_key_model(settings)
         except ValueError as exc:
             logger.warning("AI provider config error for user %s: %s", user_id, exc)
             raise HTTPException(
@@ -590,6 +634,7 @@ class AIService:
                 prompt=prompt,
                 image_base64=image_b64,
                 image_media_type=media_type,
+                model=model_override,
             )
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -723,7 +768,7 @@ class AIService:
         settings = await self.settings_repo.get_by_user_id(uid)
 
         try:
-            provider, api_key = resolve_provider_and_key(settings)
+            provider, api_key, model_override = resolve_provider_key_model(settings)
         except ValueError as exc:
             logger.warning("AI provider config error for user %s: %s", user_id, exc)
             raise HTTPException(
@@ -866,6 +911,7 @@ class AIService:
                     api_key=api_key,
                     system=SYSTEM_PROMPT,
                     prompt=prompt,
+                    model=model_override,
                 )
             elif image_b64:
                 prompt = SMART_IMPORT_VISION_PROMPT.format(filename=filename)
@@ -876,6 +922,7 @@ class AIService:
                     prompt=prompt,
                     image_base64=image_b64,
                     image_media_type=image_mime or "image/jpeg",
+                    model=model_override,
                 )
             else:
                 prompt = SMART_IMPORT_PROMPT.format(filename=filename, text=extracted_text[:15000])
@@ -884,6 +931,7 @@ class AIService:
                     api_key=api_key,
                     system=SYSTEM_PROMPT,
                     prompt=prompt,
+                    model=model_override,
                 )
 
             duration_ms = int((time.monotonic() - start_time) * 1000)

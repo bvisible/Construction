@@ -137,6 +137,26 @@ def _file_mtime(path: str | None) -> datetime | None:
     return datetime.fromtimestamp(ts, tz=UTC)
 
 
+_EPOCH_UTC = datetime.fromtimestamp(0, tz=UTC)
+
+
+def _as_aware_utc(value: datetime | None) -> datetime:
+    """Coerce a possibly-naive / possibly-None datetime to an aware-UTC one.
+
+    Document ORM rows carry NAIVE ``created_at``/``updated_at`` (SQLite) while
+    the photo→document cross-link historically wrote an AWARE ISO timestamp.
+    Mixing the two in a sort key raises ``TypeError`` (offset-naive vs
+    offset-aware) → HTTP 500. Normalising every value to aware-UTC here makes
+    the sort key total-ordered regardless of how the row was ingested.
+    """
+    if value is None:
+        return _EPOCH_UTC
+    if value.tzinfo is None:
+        # Stored as naive UTC everywhere in this codebase — assume UTC.
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _relative_path(path: str | Path | None, project_id: str) -> str:
     """Best-effort breadcrumb path. Falls back to the absolute path when
     the file lives outside any known root."""
@@ -460,8 +480,11 @@ async def list_project_files(
     elif sort == "kind":
         rows.sort(key=lambda r: (r.kind, r.name.lower()))
     else:  # modified — most recent first; rows with no mtime sink to the bottom
+        # ``_as_aware_utc`` normalises naive (SQLite ORM) and aware (photo
+        # cross-link) timestamps to a single comparable type so a project
+        # with BOTH never raises TypeError → 500.
         rows.sort(
-            key=lambda r: r.modified_at or datetime.fromtimestamp(0, tz=UTC),
+            key=lambda r: _as_aware_utc(r.modified_at),
             reverse=True,
         )
 

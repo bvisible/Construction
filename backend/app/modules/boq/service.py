@@ -282,6 +282,8 @@ from app.modules.boq.schemas import (
     PositionCreate,
     PositionResponse,
     PositionUpdate,
+    ResourceCodeLookupResponse,
+    ResourceCodeMatch,
     SectionCreate,
     SectionResponse,
     TemplateInfo,
@@ -1122,6 +1124,55 @@ def _project_fx_map(project: object | None) -> dict[str, str]:
     return out
 
 
+def _position_currency(pos: Position) -> str:
+    """Resolve a position's home currency from its metadata.
+
+    Mirrors the grid path (``groupPositionsIntoSections`` in the frontend
+    ``api.ts``, the Issue #131 fix the user verified): the per-position
+    ``metadata.currency`` is authoritative. ``project_currency`` /
+    ``position_currency`` are accepted as legacy fallbacks so older
+    imported rows keep converting. Empty → "" (caller treats as base).
+    """
+    meta = pos.metadata_ if isinstance(pos.metadata_, dict) else {}
+    for key in ("currency", "position_currency", "project_currency"):
+        val = meta.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip().upper()
+    return ""
+
+
+def _position_total_in_base(
+    total: str | None,
+    currency_code: str | None,
+    fx_rates_map: dict[str, str] | None,
+    base_currency: str,
+) -> Decimal:
+    """Convert one position's stored ``total`` into the project BASE currency.
+
+    Issue #111 — sibling of #131, which fixed this exact defect in the grid
+    path (``groupPositionsIntoSections``). ``get_boq_structured`` powers the
+    CSV / Excel / PDF exports and was summing foreign-currency ``total``
+    strings straight into the base-currency Direct Cost / Grand Total.
+
+    Semantics match ``_resource_total_in_base``: a position priced in a
+    non-base currency contributes ``total * fx_rates_map[currency]`` (units
+    of base per 1 unit of foreign). Missing currency → treated as base.
+    Missing rate for a foreign currency → summed in its own units anyway
+    (never zeroed) so the rollup stays deterministic and a forgotten FX
+    rate degrades visibly rather than silently dropping money.
+    """
+    amount = _to_decimal(total)
+    base = (base_currency or "").strip().upper()
+    code = (currency_code or "").strip().upper()
+    if code and code != base and fx_rates_map:
+        fx = fx_rates_map.get(code)
+        if fx:
+            converted = _to_decimal(fx, default=Decimal("1"))
+            if converted > 0:
+                amount = amount * converted
+    return amount
+
+
 def _build_position_response(pos: Position) -> PositionResponse:
     """Build a PositionResponse from a Position ORM instance."""
     return PositionResponse(
@@ -1131,9 +1182,13 @@ def _build_position_response(pos: Position) -> PositionResponse:
         ordinal=pos.ordinal,
         description=pos.description,
         unit=pos.unit,
-        quantity=_str_to_float(pos.quantity),
-        unit_rate=_str_to_float(pos.unit_rate),
-        total=_str_to_float(pos.total),
+        # BUG-B-011: pass the exact stored 4 dp decimal strings straight
+        # through — PositionResponse now types these as Decimal and
+        # serialises a plain string, so large totals round-trip exactly
+        # instead of being truncated by a float coercion here.
+        quantity=pos.quantity,
+        unit_rate=pos.unit_rate,
+        total=pos.total,
         classification=pos.classification,
         source=pos.source,
         confidence=(_str_to_float(pos.confidence) if pos.confidence is not None else None),
@@ -1143,6 +1198,10 @@ def _build_position_response(pos: Position) -> PositionResponse:
         sort_order=pos.sort_order,
         created_at=pos.created_at,
         updated_at=pos.updated_at,
+        # Issue #127: surface the reuse-group fields read-only.
+        reference_code=getattr(pos, "reference_code", None),
+        link_role=getattr(pos, "link_role", None),
+        link_group_id=getattr(pos, "link_group_id", None),
     )
 
 
@@ -1286,6 +1345,7 @@ def _stamp_cost_item_compat(
     *,
     cost_item: Any,
     position_unit: str | None,
+    project_currency: str | None = None,
 ) -> bool:
     """Record the linked CostItem's unit/currency and flag a mismatch.
 
@@ -1317,15 +1377,22 @@ def _stamp_cost_item_compat(
             f"measured in '{pos_unit}' — verify the rate applies to the "
             f"position's quantity basis.",
         )
-    # Currency mismatch is only detectable in-module when the caller
-    # already carried a position/project currency in metadata. We never
-    # auto-convert (no FX in this module) — we only flag.
+    # Currency mismatch. We never auto-convert (no FX in this module) —
+    # we only flag. The position's home currency is resolved in priority
+    # order: an explicit per-position/metadata currency first, then the
+    # caller-supplied project currency (BUG-B-013 — neither PositionCreate
+    # nor PositionUpdate populate metadata currency, so without the
+    # project-currency fallback a EUR rate applied to a USD project was
+    # never flagged). ``project_currency`` is NOT persisted into metadata
+    # — it is only used for the comparison.
     pos_currency = ""
     for key in ("currency", "project_currency", "position_currency"):
         val = metadata.get(key)
         if isinstance(val, str) and val.strip():
             pos_currency = val.strip()
             break
+    if not pos_currency and isinstance(project_currency, str) and project_currency.strip():
+        pos_currency = project_currency.strip()
     if ci_currency and pos_currency and ci_currency.upper() != pos_currency.upper():
         warnings.append(
             f"Cost item rate is in {ci_currency} but this position is in "
@@ -1338,6 +1405,52 @@ def _stamp_cost_item_compat(
     # No mismatch — drop any stale warning marker from a prior bad link.
     metadata.pop("cost_apply_warnings", None)
     return False
+
+
+def _content_fingerprint(
+    description: str | None,
+    unit: str | None,
+    quantity: Any,
+    unit_rate: Any,
+) -> tuple[str, str, str, str]:
+    """Normalised (description, unit, qty, rate) key for duplicate detection.
+
+    BUG-B-014 / boq_quality: two positions that describe the same work at
+    the same unit, quantity and rate under different ordinals are almost
+    always a copy-paste mistake (double-counted scope). Description is
+    case-folded and whitespace-collapsed; unit is case-folded; numerics
+    are compared at the stored 4 dp precision so "100" and "100.0000"
+    collide. This is a *warning* signal only — never a hard block.
+    """
+    desc = " ".join((description or "").split()).casefold()
+    u = (unit or "").strip().casefold()
+    q = _quantize_money_str(quantity)
+    r = _quantize_money_str(unit_rate)
+    return (desc, u, q, r)
+
+
+_DUPLICATE_WARNING_PREFIX = "Duplicate content: "
+
+
+def _apply_duplicate_warning(metadata: dict[str, Any], dup_ordinal: str) -> None:
+    """Attach a non-blocking boq_quality duplicate warning to metadata.
+
+    Mirrors the ``cost_apply_warnings`` convention so the traffic-light
+    dashboard surfaces it. Idempotent — re-applying the same ordinal does
+    not stack duplicate strings.
+    """
+    msg = (
+        f"{_DUPLICATE_WARNING_PREFIX}description, unit, quantity and unit "
+        f"rate are identical to position '{dup_ordinal}' in this BOQ — "
+        f"verify this scope is not double-counted."
+    )
+    existing = metadata.get("boq_quality_warnings")
+    warnings: list[str] = list(existing) if isinstance(existing, list) else []
+    # Drop any previous duplicate marker (the matched ordinal may change)
+    # before re-adding so we never accumulate stale entries.
+    warnings = [w for w in warnings if not str(w).startswith(_DUPLICATE_WARNING_PREFIX)]
+    warnings.append(msg)
+    metadata["boq_quality_warnings"] = warnings
 
 
 def _calculate_markup_amounts(
@@ -1388,6 +1501,129 @@ def _calculate_markup_amounts(
         results.append((markup, amount))
 
     return results
+
+
+# ── Issue #127: BOQ code reuse / linked positions ────────────────────────
+#
+# A ``reference_code`` is the user-facing reusable code (Sección/Partida/
+# Recurso). It is DISTINCT from ``ordinal`` (the line number): ``ordinal``
+# stays unique within a BOQ (GAEB X83 RNoPart/ID identity +
+# ``boq_quality.no_duplicate_ordinals``) while the SAME ``reference_code``
+# may be reused across many positions in the project. Positions sharing one
+# master definition all carry the same ``link_group_id`` and have
+# ``link_role='instance'``; the definition-owner is ``link_role='master'``.
+
+# Definition fields a master propagates to every linked instance. NEVER
+# includes quantity / ordinal / sort_order / link_* — those are per-instance
+# (CLAUDE.md: AI-augmented, human-confirmed; quantities never propagate).
+_LINK_DEFINITION_FIELDS: tuple[str, ...] = (
+    "description",
+    "unit",
+    "unit_rate",
+    "classification",
+    "source",
+    "cad_element_ids",
+)
+# A copy of the master's metadata (resources / assembly sub-structure) is
+# propagated too, but quantity-derived / per-instance keys are stripped.
+# ``_link_src`` (Issue #132) records the id of the MASTER node each linked
+# instance node was cloned from — it is the per-node correspondence key that
+# lets a master CHILD edit reach the matching instance children (the group
+# id alone is too coarse: every node in a subtree shares it). It is
+# per-instance and must never be carried by a master→instance metadata copy.
+_LINK_INSTANCE_ONLY_META_KEYS: tuple[str, ...] = (
+    "bim_qty_source",
+    "pdf_measurement_source",
+    "dwg_annotation_source",
+    "_link_src",
+)
+# Fields whose direct edit on an INSTANCE means "diverge from the master"
+# → unlink + warn. Quantity / ordinal / sort_order / version / validation
+# are explicitly NOT here (a quantity edit must never unlink).
+_LINK_UNLINK_TRIGGER_FIELDS: tuple[str, ...] = (
+    "description",
+    "unit",
+    "unit_rate",
+    "classification",
+    "source",
+    "cad_element_ids",
+    "metadata_",
+)
+
+_AUTO_CODE_PREFIX = "R-"
+
+# ── Issue #133 (full): resource code dedup + master→instance propagation ──
+#
+# Resources are JSON leaves on ``Position.metadata.resources`` — there is
+# no resource row / link_role. The canonical (master) definition for a
+# resource ``code`` is the OLDEST position carrying that code (same rule
+# ``find_resource_by_code`` uses for the reuse prompt). When that master
+# resource's DEFINITION fields change, the change propagates to every
+# OTHER position whose resource carries the same code — EXCEPT a target
+# resource the user explicitly diverged (``_code_overridden`` marker).
+# Quantity is NEVER propagated (per-instance, mirrors #127). This extends
+# the existing reuse plumbing — it does not introduce a parallel model.
+_RESOURCE_DEFINITION_FIELDS: tuple[str, ...] = (
+    "name",
+    "description",
+    "type",
+    "unit",
+    "unit_rate",
+    "currency",
+)
+
+# ── Issue #136: multi-level section / partida hierarchy ──────────────────
+#
+# Historically a BOQ had exactly 3 fixed tiers: Section → Partida → Resource.
+# Real estimating practice nests far deeper — the issue reports up to ~8
+# tiers ("a veces se utilizan hasta 8 niveles"). We therefore allow
+# generous deep nesting of Sections-within-Sections and Partidas-within-
+# Partidas, capped by a SINGLE configurable constant so the limit is easy
+# to tune and cycles / runaway recursion are still impossible.
+#
+# ``MAX_NESTING_DEPTH`` is the maximum number of *position* tiers (1-based:
+# a top-level row is tier 1). Resources are JSON leaves on a position and
+# are NOT counted here. The cap is enforced on BOTH create (add_position /
+# bulk_add_positions / create_section) and the parent_id-move path of
+# update_position so a deep tree can never be assembled by either route.
+MAX_NESTING_DEPTH = 8
+
+
+def _generate_internal_reference_code() -> str:
+    """Generate a stable, collision-resistant internal reusable code.
+
+    Resources/positions created WITHOUT a code still need to be
+    referenceable (Issue #127), so we stamp ``R-XXXXXXXX`` derived from a
+    fresh uuid4 base32 slice. Project-level uniqueness is verified by the
+    caller (it retries on the astronomically unlikely collision).
+    """
+    import base64
+
+    raw = base64.b32encode(uuid.uuid4().bytes).decode("ascii").rstrip("=")
+    return f"{_AUTO_CODE_PREFIX}{raw[:8].upper()}"
+
+
+def _copy_definition_metadata(master_meta: dict[str, Any] | None) -> dict[str, Any]:
+    """Deep-ish copy a master's metadata for a linked instance.
+
+    Carries the reusable sub-structure (resources / assembly / variant
+    snapshots / cost_item_id / classification helpers) but strips the
+    per-instance link artefacts (BIM/PDF/DWG quantity-source markers)
+    which are quantity-bound and must never be shared.
+    """
+    if not isinstance(master_meta, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for k, v in master_meta.items():
+        if k in _LINK_INSTANCE_ONLY_META_KEYS:
+            continue
+        if isinstance(v, dict):
+            out[k] = dict(v)
+        elif isinstance(v, list):
+            out[k] = [dict(i) if isinstance(i, dict) else i for i in v]
+        else:
+            out[k] = v
+    return out
 
 
 class BOQService:
@@ -1513,6 +1749,286 @@ class BOQService:
                     )
                 frontier.append(child.id)
 
+    async def _parent_chain_depth(self, parent_id: uuid.UUID | None) -> int:
+        """Return the 1-based tier of the position identified by ``parent_id``.
+
+        Issue #136. Walks ``parent_id`` → root counting hops, INCLUDING the
+        node itself: a top-level position returns 1, its direct child's
+        parent returns 1 (so the child is tier 2), and so on. ``None``
+        returns 0 (a row with no parent is tier 1, computed by the caller).
+        A ``visited`` guard makes a pre-existing corrupt cycle terminate
+        instead of looping forever (defence-in-depth — ``_validate_parent_id``
+        already blocks cycle *creation*).
+        """
+        if parent_id is None:
+            return 0
+        depth = 0
+        visited: set[uuid.UUID] = set()
+        current: uuid.UUID | None = parent_id
+        while current is not None:
+            if current in visited:
+                logger.warning(
+                    "Depth guard: cycle detected walking ancestors of %s",
+                    parent_id,
+                )
+                break
+            visited.add(current)
+            node = await self.position_repo.get_by_id(current)
+            if node is None:
+                break
+            depth += 1
+            current = getattr(node, "parent_id", None)
+            if depth > MAX_NESTING_DEPTH + 4:
+                # Hard stop well past the cap — a chain this long is
+                # already over-deep; the caller's cap check will reject it.
+                break
+        return depth
+
+    async def _validate_nesting_depth(
+        self,
+        *,
+        new_parent_id: uuid.UUID | None,
+        moving_subtree_root: uuid.UUID | None = None,
+    ) -> None:
+        """Reject a placement that would exceed ``MAX_NESTING_DEPTH`` tiers.
+
+        Issue #136. ``new_parent_id`` is the candidate parent.
+        ``_parent_chain_depth`` returns the parent's OWN 1-based tier
+        (it counts the parent itself plus all of its ancestors), so the
+        created / moved node lands at tier ``parent_tier + 1``. When
+        ``moving_subtree_root`` is given (the update / move path) the
+        DEEPEST descendant of that subtree must also stay within the cap,
+        so the whole branch is depth-checked, not just its root.
+
+        Raises:
+            HTTPException 422: the placement would create tier
+                ``> MAX_NESTING_DEPTH``.
+        """
+        if new_parent_id is None:
+            base_tier = 1  # top-level row
+        else:
+            parent_tier = await self._parent_chain_depth(new_parent_id)
+            base_tier = parent_tier + 1
+
+        # On a move, account for the moved subtree's own internal depth so
+        # a deep branch can't be re-parented just below the cap and then
+        # silently overflow at its leaves.
+        extra = 0
+        if moving_subtree_root is not None:
+            extra = await self._subtree_height(moving_subtree_root)
+
+        deepest_tier = base_tier + extra
+        if deepest_tier > MAX_NESTING_DEPTH:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Maximum nesting depth of {MAX_NESTING_DEPTH} tiers "
+                    f"reached — cannot place this item {deepest_tier} "
+                    f"levels deep. Flatten the structure or use fewer "
+                    f"sub-levels."
+                ),
+            )
+
+    async def _subtree_height(self, root_id: uuid.UUID) -> int:
+        """Return the height of the subtree rooted at ``root_id``.
+
+        0 when ``root_id`` is a leaf, 1 when it has children but no
+        grandchildren, etc. Breadth-first with a ``visited`` guard so a
+        corrupt cycle terminates. Used by the move path so re-parenting a
+        deep branch is rejected if ANY leaf would exceed the cap.
+        """
+        height = 0
+        visited: set[uuid.UUID] = set()
+        frontier: list[tuple[uuid.UUID, int]] = [(root_id, 0)]
+        while frontier:
+            node_id, level = frontier.pop()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+            if level > height:
+                height = level
+            if level > MAX_NESTING_DEPTH + 4:
+                break
+            for child in await self.position_repo.list_children(node_id):
+                frontier.append((child.id, level + 1))
+        return height
+
+    # ── Issue #127: linked-position helpers ───────────────────────────────
+
+    async def _resolve_create_reference_code(
+        self,
+        project_id: uuid.UUID | None,
+        supplied: str | None,
+    ) -> str:
+        """Return the reference_code to stamp on a new position.
+
+        * A non-empty supplied code is used verbatim (collision with an
+          existing code is the *intended* reuse trigger — handled by the
+          caller, not rejected here).
+        * Empty / None → generate a stable internal ``R-XXXXXXXX`` code
+          that is unique within the project so the position is always
+          referenceable.
+        """
+        code = (supplied or "").strip()
+        if code:
+            return code[:64]
+        # Auto-generate; verify project-uniqueness with a tiny retry budget.
+        for _ in range(8):
+            candidate = _generate_internal_reference_code()
+            if project_id is None:
+                return candidate
+            if not await self.position_repo.reference_code_exists_in_project(
+                project_id, candidate
+            ):
+                return candidate
+        # Astronomically unlikely fallthrough — append more entropy.
+        return f"{_generate_internal_reference_code()}{uuid.uuid4().hex[:4].upper()}"[:64]
+
+    async def _next_free_ordinal(self, boq_id: uuid.UUID, base: str) -> str:
+        """Derive a fresh, BOQ-unique ordinal from ``base``.
+
+        Linked instances / duplicates must NOT collide on ``ordinal``
+        (GAEB X83 RNoPart/ID + ``boq_quality.no_duplicate_ordinals``
+        invariant). Tries ``base.1``, ``base.2`` … then falls back to a
+        uuid-suffixed form so this can never raise or loop forever.
+        """
+        for i in range(1, 1000):
+            candidate = f"{base}.{i}"
+            if not await self.position_repo.ordinal_exists(boq_id, candidate):
+                return candidate
+        fallback = f"{base}.{uuid.uuid4().hex[:6]}"
+        return fallback[:50]
+
+    async def _clone_subtree(
+        self,
+        source: Position,
+        *,
+        boq_id: uuid.UUID,
+        new_parent_id: uuid.UUID | None,
+        ordinal: str,
+        quantity: str | None,
+        link_group_id: uuid.UUID | None,
+        link_role: str | None,
+        reference_code: str | None,
+    ) -> Position:
+        """Deep-copy ``source`` and its descendant positions.
+
+        Shared by ``duplicate_position`` (one-time clone) and the
+        reuse-by-code linked-instance path. Each cloned node gets a
+        BOQ-unique ordinal so the ordinal-uniqueness invariant always
+        holds; the root takes the caller-supplied ``ordinal`` /
+        ``quantity`` / link fields, descendants keep the source's own
+        quantities and inherit the same link_group_id but
+        ``link_role='instance'`` (children of an instance are themselves
+        instances of their source children — quantities are still
+        per-instance and never back-propagate).
+
+        Returns the newly created ROOT position.
+
+        The caller MUST pass a live (non-expired) ``source`` — the async
+        engine cannot lazy-refresh expired ORM attributes on access
+        (``MissingGreenlet``). The reuse path re-fetches the master after
+        promoting it; ``duplicate_position`` fetches the source fresh.
+        """
+        max_order = await self.position_repo.get_max_sort_order(boq_id)
+
+        # Issue #132: when this clone joins a link group, stamp the master
+        # node it mirrors so a later master-CHILD edit can find exactly the
+        # matching instance children (group id alone can't — every node in
+        # the subtree shares it). Standalone copies (no group) get no marker.
+        _root_meta = _copy_definition_metadata(source.metadata_)
+        if link_group_id is not None:
+            _root_meta["_link_src"] = str(source.id)
+
+        root = Position(
+            boq_id=boq_id,
+            parent_id=new_parent_id,
+            ordinal=ordinal,
+            description=source.description,
+            unit=source.unit,
+            quantity=(
+                _quantize_money_str(quantity)
+                if quantity is not None
+                else source.quantity
+            ),
+            unit_rate=source.unit_rate,
+            total=_compute_total(
+                quantity if quantity is not None else source.quantity,
+                source.unit_rate,
+            ),
+            classification=dict(source.classification) if source.classification else {},
+            source=source.source,
+            confidence=source.confidence,
+            cad_element_ids=list(source.cad_element_ids) if source.cad_element_ids else [],
+            validation_status="pending",
+            metadata_=_root_meta,
+            sort_order=max_order + 1,
+            reference_code=reference_code,
+            link_group_id=link_group_id,
+            link_role=link_role,
+        )
+        root = await self.position_repo.create(root)
+
+        # Recursively clone descendants (breadth-first, parent before child
+        # so FK is always satisfiable).
+        queue: list[tuple[Position, uuid.UUID]] = [(source, root.id)]
+        while queue:
+            src_node, new_parent = queue.pop()
+            children = await self.position_repo.list_children(src_node.id)
+            for child in children:
+                max_order += 1
+                child_ordinal = await self._next_free_ordinal(boq_id, child.ordinal)
+                # Issue #132: each cloned child records ITS OWN master child
+                # as the correspondence key (not the root's) so master-child
+                # edits fan out to the matching instance children only.
+                _child_meta = _copy_definition_metadata(child.metadata_)
+                if link_group_id is not None:
+                    _child_meta["_link_src"] = str(child.id)
+                cloned_child = Position(
+                    boq_id=boq_id,
+                    parent_id=new_parent,
+                    ordinal=child_ordinal,
+                    description=child.description,
+                    unit=child.unit,
+                    quantity=child.quantity,
+                    unit_rate=child.unit_rate,
+                    total=child.total,
+                    classification=(
+                        dict(child.classification) if child.classification else {}
+                    ),
+                    source=child.source,
+                    confidence=child.confidence,
+                    cad_element_ids=(
+                        list(child.cad_element_ids) if child.cad_element_ids else []
+                    ),
+                    validation_status="pending",
+                    metadata_=_child_meta,
+                    sort_order=max_order,
+                    # Children inherit the group when the root is linked so
+                    # the whole sub-structure stays addressable; they keep
+                    # their own (auto / source) reference code.
+                    reference_code=(
+                        child.reference_code
+                        if child.reference_code
+                        else await self._resolve_create_reference_code(
+                            await self.position_repo.project_id_for_boq(boq_id),
+                            None,
+                        )
+                    ),
+                    link_group_id=link_group_id,
+                    link_role=("instance" if link_group_id is not None else None),
+                )
+                cloned_child = await self.position_repo.create(cloned_child)
+                queue.append((child, cloned_child.id))
+
+        return root
+
+    async def _recompute_position_total(self, position: Position) -> None:
+        """Recompute one position's ``total`` from its stored qty × rate."""
+        new_total = _compute_total(position.quantity, position.unit_rate)
+        if new_total != position.total:
+            await self.position_repo.update_fields(position.id, total=new_total)
+
     # ── BOQ operations ────────────────────────────────────────────────────
 
     async def create_boq(self, data: BOQCreate) -> BOQ:
@@ -1546,41 +2062,14 @@ class BOQService:
         )
         boq = await self.boq_repo.create(boq)
 
-        # Auto-apply default markups only when the project's classification
-        # standard and region point to the same market. A project with
-        # ``classification_standard=masterformat`` (US) must never inherit
-        # German BGK/AGK/Wagnis/Gewinn/MwSt labels, even if the region field
-        # was left at its legacy "DACH" default. Mixed or unknown
-        # combinations fall through to the generic DEFAULT template so the
-        # defaults stay market-neutral per the global-copy policy.
-        try:
-            from app.modules.projects.models import Project
-
-            proj = await self.session.execute(
-                select(Project.region, Project.classification_standard).where(
-                    Project.id == data.project_id,
-                )
-            )
-            row = proj.first()
-            region = (row[0] if row else None) or ""
-            standard = (row[1] if row else None) or ""
-            aligned = {
-                ("din276", "DACH"): "DACH",
-                ("gaeb", "DACH"): "DACH",
-                ("nrm", "UK"): "UK",
-                ("masterformat", "US"): "US",
-            }
-            template_key = aligned.get((standard.lower(), region), "DEFAULT")
-            await self.apply_default_markups(boq.id, template_key)
-            logger.info(
-                "Auto-applied %s markups to new BOQ %s (standard=%s region=%s)",
-                template_key,
-                boq.id,
-                standard,
-                region,
-            )
-        except Exception:
-            logger.warning("Could not auto-apply markups for BOQ %s", boq.id, exc_info=True)
+        # BUG-B-009 (user decision: opt-out): a freshly created BOQ now
+        # starts with ZERO markups. Auto-stamping regional BGK/AGK/Wagnis/
+        # Gewinn/MwSt (or any other) defaults silently inflated every
+        # estimate's grand total before the estimator had reviewed a single
+        # line — a violation of CLAUDE.md principle #7 (AI-augmented,
+        # human-confirmed) and the global-copy policy. The explicit path is
+        # ``POST /boqs/{boq_id}/markups/apply-defaults`` which still calls
+        # ``apply_default_markups`` on demand.
 
         await _safe_publish(
             "boq.boq.created",
@@ -1608,6 +2097,112 @@ class BOQService:
                 detail="BOQ not found",
             )
         return boq
+
+    async def _resolve_project_currency(self, boq_id: uuid.UUID) -> str:
+        """Resolve the project currency for a BOQ (BUG-B-013).
+
+        ``_stamp_cost_item_compat`` can only flag a EUR-rate-into-USD
+        application when it knows the position's home currency. Neither
+        ``PositionCreate`` nor ``PositionUpdate`` carry one, so without
+        resolving it here a foreign-currency cost-database rate was
+        applied silently. We join BOQ → Project to obtain the
+        authoritative currency. Best-effort: any failure returns an empty
+        string (no currency assumption — never stamp a wrong "EUR").
+        """
+        try:
+            from app.modules.projects.models import Project
+
+            row = (
+                await self.session.execute(
+                    select(Project.currency)
+                    .join(BOQ, BOQ.project_id == Project.id)
+                    .where(BOQ.id == boq_id),
+                )
+            ).first()
+        except Exception:  # noqa: BLE001 — never break a write on this lookup
+            logger.debug("Project currency lookup failed for BOQ %s", boq_id, exc_info=True)
+            return ""
+        if not row or not row[0]:
+            return ""
+        return str(row[0]).strip()[:3].upper()
+
+    async def _resolve_project_fx(
+        self,
+        boq_id: uuid.UUID,
+    ) -> tuple[str, dict[str, str]]:
+        """Resolve ``(base_currency, {code: rate})`` for a BOQ's project.
+
+        Issue #111 — the structured/export rollup needs the project's FX
+        table, not just its base currency, to convert foreign-currency
+        position totals before summing. Best-effort: any failure returns
+        ``("", {})`` so the export never breaks and degrades to raw sums
+        (the pre-#111 behaviour) rather than a 500.
+        """
+        try:
+            from app.modules.projects.models import Project
+
+            row = (
+                await self.session.execute(
+                    select(Project.currency, Project.fx_rates)
+                    .join(BOQ, BOQ.project_id == Project.id)
+                    .where(BOQ.id == boq_id),
+                )
+            ).first()
+        except Exception:  # noqa: BLE001 — never break an export on this lookup
+            logger.debug("Project FX lookup failed for BOQ %s", boq_id, exc_info=True)
+            return "", {}
+        if not row:
+            return "", {}
+        base = str(row[0]).strip()[:3].upper() if row[0] else ""
+        raw = row[1] if isinstance(row[1], list) else []
+        fx_map: dict[str, str] = {}
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            code = str(entry.get("code") or "").strip().upper()
+            rate = str(entry.get("rate") or "").strip()
+            if code and rate:
+                fx_map[code] = rate
+        return base, fx_map
+
+    async def _find_content_duplicate(
+        self,
+        boq_id: uuid.UUID,
+        *,
+        description: str | None,
+        unit: str | None,
+        quantity: Any,
+        unit_rate: Any,
+        exclude_id: uuid.UUID | None = None,
+    ) -> str | None:
+        """Return the ordinal of an existing position with identical content.
+
+        BUG-B-014: ``boq_quality`` advertises duplicate detection but only
+        ordinal collisions were checked. Two positions with the same
+        description+unit+quantity+unit_rate under different ordinals are a
+        likely double-count. We scan all positions in the BOQ (rollups
+        already use ``list_all_for_boq`` so this is consistent) and return
+        the first colliding ordinal, or ``None``. Never raises — duplicate
+        detection is advisory and must not break a write.
+        """
+        try:
+            target = _content_fingerprint(description, unit, quantity, unit_rate)
+            for pos in await self.position_repo.list_all_for_boq(boq_id):
+                if exclude_id is not None and pos.id == exclude_id:
+                    continue
+                if (
+                    _content_fingerprint(
+                        pos.description,
+                        pos.unit,
+                        pos.quantity,
+                        pos.unit_rate,
+                    )
+                    == target
+                ):
+                    return pos.ordinal
+        except Exception:  # noqa: BLE001 — advisory only, never break the write
+            logger.debug("Duplicate-content scan failed for BOQ %s", boq_id, exc_info=True)
+        return None
 
     async def list_boqs_for_project(
         self,
@@ -1690,6 +2285,30 @@ class BOQService:
         """
         await self._ensure_not_locked(data.boq_id)
 
+        # ── Issue #127: reuse-by-code (linked instance) ──────────────────
+        # If a reusable code was supplied AND a master/owner of that code
+        # already exists ANYWHERE in the project, do NOT dead-end with
+        # "código ya existe": create a REUSED instance carrying the
+        # master's definition + sub-structure. The instance gets its OWN
+        # auto-assigned BOQ-unique ordinal and its own per-instance
+        # quantity, so the ordinal-uniqueness invariant (GAEB X83 +
+        # boq_quality.no_duplicate_ordinals) is never violated.
+        supplied_code = (getattr(data, "reference_code", None) or "").strip()
+        link_mode = getattr(data, "link_mode", None)
+        project_id = await self.position_repo.project_id_for_boq(data.boq_id)
+        if supplied_code and link_mode != "standalone":
+            master = await self.position_repo.find_master_by_reference_code(
+                project_id, supplied_code
+            ) if project_id is not None else None
+            if master is not None and str(master.boq_id) and master.id is not None:
+                return await self._create_reused_position(
+                    data=data,
+                    master=master,
+                    project_id=project_id,
+                    reference_code=supplied_code,
+                    as_copy=(link_mode == "copy"),
+                )
+
         # Check ordinal uniqueness within the BOQ
         if await self.position_repo.ordinal_exists(data.boq_id, data.ordinal):
             raise HTTPException(
@@ -1704,6 +2323,8 @@ class BOQService:
             position_id=None,
             new_parent_id=data.parent_id,
         )
+        # Issue #136: enforce the configurable deep-nesting cap.
+        await self._validate_nesting_depth(new_parent_id=data.parent_id)
 
         # Issue #79: validate and stamp ``metadata.cost_item_id`` so a position
         # created with ``source='cwicr'`` (or any source) can carry a typed
@@ -1734,6 +2355,7 @@ class BOQService:
                 merged_metadata,
                 cost_item=cost_item,
                 position_unit=data.unit,
+                project_currency=await self._resolve_project_currency(data.boq_id),
             )
         else:
             _cost_compat_warned = False
@@ -1757,6 +2379,26 @@ class BOQService:
         total = _compute_total(data.quantity, data.unit_rate)
         max_order = await self.position_repo.get_max_sort_order(data.boq_id)
 
+        # BUG-B-014: non-blocking boq_quality duplicate-content check.
+        _dup_ordinal = await self._find_content_duplicate(
+            data.boq_id,
+            description=data.description,
+            unit=data.unit,
+            quantity=data.quantity,
+            unit_rate=data.unit_rate,
+        )
+        if _dup_ordinal is not None:
+            _apply_duplicate_warning(merged_metadata, _dup_ordinal)
+
+        # Issue #127: every position carries a reusable ``reference_code``.
+        # Supplied code used verbatim (no collision here — either none, or
+        # link_mode='standalone' which intentionally re-uses the literal
+        # code without linking); otherwise stamp a stable internal code so
+        # the position is always referenceable.
+        resolved_reference_code = await self._resolve_create_reference_code(
+            project_id, supplied_code or None
+        )
+
         position = Position(
             boq_id=data.boq_id,
             parent_id=data.parent_id,
@@ -1772,10 +2414,19 @@ class BOQService:
             confidence=str(data.confidence) if data.confidence is not None else None,
             cad_element_ids=data.cad_element_ids,
             metadata_=merged_metadata,
-            # BUG-B-013: surface a cost-item unit/currency mismatch on the
-            # validation traffic-light instead of accepting it silently.
-            validation_status="warnings" if _cost_compat_warned else "pending",
+            # BUG-B-013 (cost-item unit/currency) + BUG-B-014 (duplicate
+            # content) both surface on the validation traffic-light.
+            validation_status=(
+                "warnings"
+                if (_cost_compat_warned or _dup_ordinal is not None)
+                else "pending"
+            ),
             sort_order=max_order + 1,
+            reference_code=resolved_reference_code,
+            # Standalone: no link group yet. The first reuse promotes this
+            # row to 'master' and assigns a group (see _create_reused_position).
+            link_group_id=None,
+            link_role=None,
         )
         position = await self.position_repo.create(position)
 
@@ -1803,6 +2454,127 @@ class BOQService:
 
         logger.info("Position added: %s to BOQ %s", data.ordinal, data.boq_id)
         return position
+
+    async def _create_reused_position(
+        self,
+        *,
+        data: PositionCreate,
+        master: Position,
+        project_id: uuid.UUID | None,
+        reference_code: str,
+        as_copy: bool,
+    ) -> Position:
+        """Create a reused position from an existing code's master.
+
+        Issue #127. Deep-copies the master's definition + child subtree
+        (via the shared ``_clone_subtree`` helper), assigns a fresh
+        BOQ-unique ordinal (NEVER reuses the master's — the
+        ordinal-uniqueness invariant holds) and the client-supplied
+        quantity (default 0). When ``as_copy`` is False (the default 'link'
+        path) the new position joins the master's link group as an
+        ``instance``; the master is promoted to ``master`` and assigned a
+        group id if it was still standalone. ``as_copy=True`` is a one-time
+        clone with link fields left NULL (no future propagation).
+        """
+        target_boq = data.boq_id
+
+        # ``PositionRepository.update_fields`` ends with
+        # ``session.expire_all()`` — that expires EVERY ORM instance in the
+        # unit of work, including ``master``. The async engine cannot
+        # lazy-refresh on attribute access (``MissingGreenlet``), so read
+        # everything we need from ``master`` NOW, before the first promote,
+        # and re-fetch a live copy afterwards for the deep-copy.
+        master_id = master.id
+        master_ordinal = master.ordinal
+        master_link_group_id = master.link_group_id
+        master_link_role = master.link_role
+
+        # Resolve / create the link group (only for the linked path).
+        link_group_id: uuid.UUID | None = None
+        link_role: str | None = None
+        if not as_copy:
+            if master_link_group_id is not None:
+                link_group_id = master_link_group_id
+                # Master may currently be a bare 'master' (group existed) —
+                # nothing to do. If it lost its role, restore it.
+                if master_link_role != "master":
+                    await self.position_repo.update_fields(
+                        master_id, link_role="master"
+                    )
+            else:
+                # Promote the standalone owner to master + open a group.
+                link_group_id = uuid.uuid4()
+                await self.position_repo.update_fields(
+                    master_id,
+                    link_group_id=link_group_id,
+                    link_role="master",
+                    # Ensure the master carries the shared code (it should
+                    # already, but a standalone owner found by code is
+                    # authoritative).
+                    reference_code=reference_code,
+                )
+            link_role = "instance"
+
+        # Fresh unique ordinal derived from the client-supplied ordinal
+        # (fallback to the master's). NEVER the master's own ordinal.
+        base_ordinal = (data.ordinal or master_ordinal or "REUSE").strip() or "REUSE"
+        if await self.position_repo.ordinal_exists(target_boq, base_ordinal):
+            new_ordinal = await self._next_free_ordinal(target_boq, base_ordinal)
+        else:
+            new_ordinal = base_ordinal
+
+        # Per-instance quantity (client-supplied, default 0). Quantities
+        # are NEVER inherited from the master.
+        qty = data.quantity if data.quantity is not None else 0
+
+        # Re-fetch a LIVE master (the promote above expired it) so the
+        # deep-copy reads real definition values, not expired attributes.
+        live_master = await self.position_repo.get_by_id(master_id)
+        new_position = await self._clone_subtree(
+            live_master if live_master is not None else master,
+            boq_id=target_boq,
+            new_parent_id=data.parent_id,
+            ordinal=new_ordinal,
+            quantity=str(qty),
+            link_group_id=link_group_id,
+            link_role=link_role,
+            reference_code=reference_code,
+        )
+
+        await _safe_publish(
+            "boq.position.created",
+            {
+                "position_id": str(new_position.id),
+                "boq_id": str(target_boq),
+                "ordinal": new_ordinal,
+                "reference_code": reference_code,
+                "reused_from": str(master_id),
+                "linked": not as_copy,
+            },
+            source_module="oe_boq",
+        )
+        await _safe_audit(
+            self.session,
+            action="reuse_code" if not as_copy else "copy_code",
+            entity_type="position",
+            entity_id=str(new_position.id),
+            details={
+                "boq_id": str(target_boq),
+                "ordinal": new_ordinal,
+                "reference_code": reference_code,
+                "master_id": str(master_id),
+                "linked": not as_copy,
+            },
+        )
+        logger.info(
+            "Position %s code '%s' from master %s → %s (BOQ %s)",
+            "linked" if not as_copy else "copied",
+            reference_code,
+            master_id,
+            new_position.id,
+            target_boq,
+        )
+        return new_position
 
     async def bulk_add_positions(
         self,
@@ -1876,12 +2648,17 @@ class BOQService:
 
         cost_repo: CostItemRepository | None = None
         new_positions: list[Position] = []
+        # BUG-B-013: resolve the project currency once for the whole batch
+        # so a foreign-currency cost-database rate is flagged on every line.
+        _bulk_project_currency = await self._resolve_project_currency(boq_id)
         for offset, data in enumerate(items, start=1):
             await self._validate_parent_id(
                 boq_id=boq_id,
                 position_id=None,
                 new_parent_id=data.parent_id,
             )
+            # Issue #136: deep-nesting cap also guards the bulk path.
+            await self._validate_nesting_depth(new_parent_id=data.parent_id)
 
             merged_metadata: dict[str, Any] = (
                 dict(data.metadata) if isinstance(data.metadata, dict) else {}
@@ -1903,6 +2680,7 @@ class BOQService:
                     merged_metadata,
                     cost_item=cost_item,
                     position_unit=data.unit,
+                    project_currency=_bulk_project_currency,
                 )
             else:
                 _bulk_cost_warned = False
@@ -1967,12 +2745,13 @@ class BOQService:
         """Create a section header row in a BOQ.
 
         A section is stored as a Position with unit="section", quantity=0,
-        unit_rate=0, and parent_id=None.  This distinguishes it from regular
-        items.
+        unit_rate=0.  This distinguishes it from regular items. Issue #136:
+        a section may nest under another section via ``data.parent_id``,
+        bounded by ``MAX_NESTING_DEPTH``.
 
         Args:
             boq_id: Target BOQ identifier.
-            data: Section creation payload (ordinal, description).
+            data: Section creation payload (ordinal, description, parent_id).
 
         Returns:
             The newly created section (Position).
@@ -1980,6 +2759,8 @@ class BOQService:
         Raises:
             HTTPException 404 if the target BOQ doesn't exist.
             HTTPException 409 if the BOQ is locked.
+            HTTPException 422 if ``parent_id`` is invalid or the placement
+                would exceed ``MAX_NESTING_DEPTH`` (Issue #136).
         """
         await self._ensure_not_locked(boq_id)
 
@@ -1990,11 +2771,20 @@ class BOQService:
                 detail=f"Section with ordinal '{data.ordinal}' already exists in this BOQ",
             )
 
+        # Issue #136: validate the (optional) parent + enforce the cap.
+        parent_id = getattr(data, "parent_id", None)
+        await self._validate_parent_id(
+            boq_id=boq_id,
+            position_id=None,
+            new_parent_id=parent_id,
+        )
+        await self._validate_nesting_depth(new_parent_id=parent_id)
+
         max_order = await self.position_repo.get_max_sort_order(boq_id)
 
         section = Position(
             boq_id=boq_id,
-            parent_id=None,
+            parent_id=parent_id,
             ordinal=data.ordinal,
             description=data.description,
             unit="section",
@@ -2059,7 +2849,29 @@ class BOQService:
             )
         await self._ensure_not_locked(position.boq_id)
 
+        # ── Issue #127: capture pre-update link state ────────────────────
+        # Needed AFTER the write to decide master-propagation vs
+        # instance-unlink. A snapshot of which definition fields the
+        # client touched drives both branches.
+        _link_role_before = getattr(position, "link_role", None)
+        _link_group_before = getattr(position, "link_group_id", None)
+        _ref_code_before = getattr(position, "reference_code", None)
+
         fields = data.model_dump(exclude_unset=True)
+
+        # ``link_mode`` is a create-time decision only — never persisted on
+        # update (PositionUpdate documents it as ignored). Drop it before it
+        # reaches the column writer.
+        fields.pop("link_mode", None)
+        # Which DEFINITION fields did the client explicitly set? (used for
+        # propagate-from-master / unlink-instance). Snapshot the *requested*
+        # keys now, before the metadata/cost-item merge logic mutates
+        # ``fields`` and adds derived keys (total/version/validation_status).
+        _requested_def_fields: set[str] = {
+            k for k in fields if k in _LINK_UNLINK_TRIGGER_FIELDS
+        }
+        if "metadata" in fields:
+            _requested_def_fields.add("metadata_")
 
         # ── Issue #79: cost_item_id linkage ─────────────────────────────
         # The client doesn't see ``metadata.cost_item_id`` directly — they
@@ -2106,6 +2918,7 @@ class BOQService:
                 base_meta,
                 cost_item=cost_item,
                 position_unit=_new_unit,
+                project_currency=await self._resolve_project_currency(position.boq_id),
             ) and "validation_status" not in fields:
                 fields["validation_status"] = "warnings"
             fields["metadata"] = base_meta
@@ -2136,6 +2949,21 @@ class BOQService:
             except AttributeError:
                 _audit_before[key] = None
 
+        # ── Issue #133: snapshot resources BEFORE the write so a master
+        # resource definition edit can be diffed + propagated afterwards.
+        _res_before: list[dict[str, Any]] | None = None
+        if "metadata" in fields:
+            _existing_meta = (
+                position.metadata_
+                if isinstance(position.metadata_, dict)
+                else {}
+            )
+            _rb = _existing_meta.get("resources")
+            if isinstance(_rb, list):
+                _res_before = [
+                    dict(r) if isinstance(r, dict) else {} for r in _rb
+                ]
+
         # If ordinal is being changed, check uniqueness within the BOQ
         if "ordinal" in fields and fields["ordinal"] != position.ordinal:
             if await self.position_repo.ordinal_exists(position.boq_id, fields["ordinal"], exclude_id=position_id):
@@ -2152,6 +2980,12 @@ class BOQService:
                 boq_id=position.boq_id,
                 position_id=position_id,
                 new_parent_id=fields["parent_id"],
+            )
+            # Issue #136: re-parenting must keep the WHOLE moved subtree
+            # within the configurable depth cap, not just its root.
+            await self._validate_nesting_depth(
+                new_parent_id=fields["parent_id"],
+                moving_subtree_root=position_id,
             )
 
         # Convert float values to strings for storage and quantise to 4dp
@@ -2342,6 +3176,129 @@ class BOQService:
                 position_currency=currency if isinstance(currency, str) else None,
             )
 
+        # BUG-B-014: re-evaluate the boq_quality duplicate-content signal
+        # whenever the patch touches description / unit / quantity /
+        # unit_rate. We compare the post-merge effective values against
+        # the other positions in the same BOQ (excluding this row). The
+        # warning is non-blocking — it only flags the traffic-light.
+        if any(k in fields for k in ("description", "unit", "quantity", "unit_rate")):
+            eff_desc = fields.get("description", position.description)
+            eff_unit = fields.get("unit", position.unit)
+            eff_qty = fields.get("quantity", position.quantity)
+            eff_rate = fields.get("unit_rate", position.unit_rate)
+            dup_ordinal = await self._find_content_duplicate(
+                position.boq_id,
+                description=eff_desc,
+                unit=eff_unit,
+                quantity=eff_qty,
+                unit_rate=eff_rate,
+                exclude_id=position_id,
+            )
+            # Resolve the metadata dict that will actually be persisted so
+            # the warning isn't lost: prefer an in-flight metadata patch,
+            # else carry the existing stored metadata forward.
+            if "metadata_" in fields and isinstance(fields["metadata_"], dict):
+                _dup_meta = fields["metadata_"]
+            else:
+                _existing = (
+                    position.metadata_ if isinstance(position.metadata_, dict) else {}
+                )
+                _dup_meta = dict(_existing)
+            _had_marker = any(
+                str(w).startswith(_DUPLICATE_WARNING_PREFIX)
+                for w in (
+                    _dup_meta.get("boq_quality_warnings")
+                    if isinstance(_dup_meta.get("boq_quality_warnings"), list)
+                    else []
+                )
+            )
+            if dup_ordinal is not None:
+                _apply_duplicate_warning(_dup_meta, dup_ordinal)
+                fields["metadata_"] = _dup_meta
+                if "validation_status" not in fields:
+                    fields["validation_status"] = "warnings"
+            elif _had_marker:
+                # The edit resolved a former duplicate — clear the stale
+                # marker so the traffic-light stops flagging it.
+                _remaining = [
+                    w
+                    for w in _dup_meta.get("boq_quality_warnings", [])
+                    if not str(w).startswith(_DUPLICATE_WARNING_PREFIX)
+                ]
+                if _remaining:
+                    _dup_meta["boq_quality_warnings"] = _remaining
+                else:
+                    _dup_meta.pop("boq_quality_warnings", None)
+                fields["metadata_"] = _dup_meta
+
+        # ── Issue #127: instance definition edit → unlink + warn ─────────
+        # If THIS position is a linked instance and the caller directly
+        # edited a DEFINITION field (description / unit / unit_rate /
+        # classification / source / cad_element_ids / metadata sub-
+        # structure), it must NOT back-propagate to the master. Instead it
+        # diverges: clear its link fields and attach a clear warning
+        # (mirrors the customer's "si no quisiera cambiarlo, alertar").
+        # A pure quantity / ordinal / sort_order edit NEVER unlinks.
+        _did_unlink_instance = False
+        _unlink_siblings_remaining = 0
+        if _link_role_before == "instance" and _link_group_before is not None:
+            _changed_def = False
+            for _df in _requested_def_fields:
+                if _df == "metadata_":
+                    _new_meta = fields.get("metadata_")
+                    _old_meta = (
+                        position.metadata_
+                        if isinstance(position.metadata_, dict)
+                        else {}
+                    )
+                    if isinstance(_new_meta, dict) and _new_meta != _old_meta:
+                        _changed_def = True
+                else:
+                    if _df in fields and fields[_df] != getattr(position, _df, None):
+                        _changed_def = True
+            if _changed_def:
+                # Count the OTHER positions still sharing the code so the
+                # warning is actionable.
+                try:
+                    _grp = await self.position_repo.list_link_group(
+                        _link_group_before
+                    )
+                    _unlink_siblings_remaining = max(
+                        0, len([p for p in _grp if p.id != position_id]) - 0
+                    )
+                except Exception:  # noqa: BLE001 — advisory count only
+                    _unlink_siblings_remaining = 0
+                fields["link_group_id"] = None
+                fields["link_role"] = None
+                # Keep the code so the position stays referenceable, but it
+                # no longer follows the master.
+                _warn_meta: dict[str, Any]
+                if "metadata_" in fields and isinstance(fields["metadata_"], dict):
+                    _warn_meta = fields["metadata_"]
+                else:
+                    _existing_wm = (
+                        position.metadata_
+                        if isinstance(position.metadata_, dict)
+                        else {}
+                    )
+                    _warn_meta = dict(_existing_wm)
+                _code_label = _ref_code_before or "(internal)"
+                _msg = (
+                    f"Editing this position's definition unlinked it from "
+                    f"code '{_code_label}'; {_unlink_siblings_remaining} "
+                    f"other position(s) still share '{_code_label}'."
+                )
+                _w = _warn_meta.get("boq_quality_warnings")
+                _wl: list[str] = list(_w) if isinstance(_w, list) else []
+                _wl = [x for x in _wl if "unlinked it from code" not in str(x)]
+                _wl.append(_msg)
+                _warn_meta["boq_quality_warnings"] = _wl
+                _warn_meta["link_unlinked_from"] = _code_label
+                fields["metadata_"] = _warn_meta
+                if "validation_status" not in fields:
+                    fields["validation_status"] = "warnings"
+                _did_unlink_instance = True
+
         if fields:
             # BUG-CONCURRENCY01: bump the version counter atomically with the
             # rest of the field set so any concurrent reader observing the
@@ -2373,6 +3330,408 @@ class BOQService:
                         f"({type(exc).__name__})"
                     ),
                 ) from exc
+
+        # ── Issue #127: master definition edit → propagate to instances ──
+        # If THIS position is a master and a DEFINITION field actually
+        # changed, propagate ONLY those definition fields to every linked
+        # instance in the group across the WHOLE project, in this same
+        # transaction. NEVER propagate quantity / ordinal / sort_order /
+        # link fields — those stay per-instance (CLAUDE.md: quantities
+        # never propagate). Each affected position + its BOQ totals are
+        # recomputed, the position-changed event fires per instance, and
+        # ONE audit entry records the fan-out.
+        _propagated_count = 0
+        if (
+            _link_role_before == "master"
+            and _link_group_before is not None
+            and not _did_unlink_instance
+            and fields
+        ):
+            # Resolve the definition fields whose persisted value changed.
+            _changed_def_payload: dict[str, Any] = {}
+            for _df in _LINK_DEFINITION_FIELDS:
+                if _df not in _requested_def_fields:
+                    continue
+                _new = getattr(position, _df, None)
+                _changed_def_payload[_df] = _new
+            # Metadata sub-structure (resources / assembly) propagates too.
+            _propagate_meta = (
+                "metadata_" in _requested_def_fields
+                and isinstance(position.metadata_, dict)
+            )
+            if _changed_def_payload or _propagate_meta:
+                try:
+                    # ``repo.update_fields`` ends in ``session.expire_all()``,
+                    # which expires EVERY ORM instance — the master
+                    # ``position`` AND every row in ``group``. The async
+                    # engine can't lazy-refresh on attribute access
+                    # (``MissingGreenlet``), so snapshot the master's
+                    # metadata once here and each instance's fields at the
+                    # top of its iteration, then only touch locals after the
+                    # per-instance write.
+                    _master_meta_snapshot = (
+                        position.metadata_
+                        if isinstance(position.metadata_, dict)
+                        else {}
+                    )
+                    group = await self.position_repo.list_link_group(
+                        _link_group_before
+                    )
+                    # Snapshot EVERY group member into plain values BEFORE
+                    # the first per-instance write. ``update_fields`` ends in
+                    # ``session.expire_all()``, so reading another (not-yet-
+                    # processed) group member's ORM attributes on a LATER
+                    # loop iteration would lazy-load on the async engine →
+                    # MissingGreenlet. The original per-iteration snapshot
+                    # only happened to be safe when the group had ≤1
+                    # propagation target; #132 subtree groups have several.
+                    _grp_snap: list[dict[str, Any]] = [
+                        {
+                            "id": g.id,
+                            "role": g.link_role,
+                            "boq_id": g.boq_id,
+                            "ordinal": g.ordinal,
+                            "quantity": g.quantity,
+                            "unit_rate": g.unit_rate,
+                            "version": int(g.version or 0),
+                            "meta": (
+                                dict(g.metadata_)
+                                if isinstance(g.metadata_, dict)
+                                else {}
+                            ),
+                        }
+                        for g in group
+                    ]
+                    # Issue #132: groups created with the per-node
+                    # correspondence key (``_link_src``) propagate a ROOT
+                    # edit ONLY to instance ROOTS (those whose ``_link_src``
+                    # points back at this master root) — never blanket-
+                    # overwriting instance CHILDREN with the root's
+                    # definition. Legacy groups predating #132 carry no
+                    # ``_link_src`` anywhere; they keep the original
+                    # group-flat behaviour so existing links never regress.
+                    _group_has_src = any(
+                        "_link_src" in s["meta"] for s in _grp_snap
+                    )
+                    affected_boqs: set[uuid.UUID] = set()
+                    for _snap in _grp_snap:
+                        _inst_id = _snap["id"]
+                        _inst_role = _snap["role"]
+                        _inst_boq_id = _snap["boq_id"]
+                        _inst_ordinal = _snap["ordinal"]
+                        _inst_quantity = _snap["quantity"]
+                        _inst_unit_rate = _snap["unit_rate"]
+                        _inst_version = _snap["version"]
+                        _inst_meta = _snap["meta"]
+                        if _inst_id == position_id:
+                            continue
+                        if _inst_role != "instance":
+                            continue
+                        # Correspondence guard (Issue #132): on #132-era
+                        # groups a ROOT edit only reaches the instance
+                        # ROOTS that mirror THIS master root. Instance
+                        # children (``_link_src`` = their own master child)
+                        # are handled by the master-child pass below.
+                        if _group_has_src and str(
+                            _inst_meta.get("_link_src")
+                        ) != str(position_id):
+                            continue
+                        inst_fields: dict[str, Any] = {}
+                        for k, v in _changed_def_payload.items():
+                            if k == "classification":
+                                inst_fields[k] = (
+                                    dict(v) if isinstance(v, dict) else v
+                                )
+                            elif k == "cad_element_ids":
+                                inst_fields[k] = (
+                                    list(v) if isinstance(v, list) else v
+                                )
+                            else:
+                                inst_fields[k] = v
+                        if _propagate_meta:
+                            # Carry the master's reusable sub-structure but
+                            # preserve each instance's own per-instance
+                            # quantity-bound markers (BIM/PDF/DWG sources).
+                            inst_meta = _copy_definition_metadata(
+                                _master_meta_snapshot
+                            )
+                            for _k in _LINK_INSTANCE_ONLY_META_KEYS:
+                                if _k in _inst_meta:
+                                    inst_meta[_k] = _inst_meta[_k]
+                            inst_fields["metadata_"] = inst_meta
+                        # Recompute the instance total against ITS OWN
+                        # quantity and the (possibly new) unit_rate.
+                        _eff_rate = inst_fields.get("unit_rate", _inst_unit_rate)
+                        inst_fields["total"] = _compute_total(
+                            _inst_quantity, _eff_rate
+                        )
+                        inst_fields["version"] = _inst_version + 1
+                        await self.position_repo.update_fields(
+                            _inst_id, **inst_fields
+                        )
+                        affected_boqs.add(_inst_boq_id)
+                        _propagated_count += 1
+                        await _safe_publish(
+                            "boq.position.updated",
+                            {
+                                "position_id": str(_inst_id),
+                                "boq_id": str(_inst_boq_id),
+                                "ordinal": _inst_ordinal,
+                                "changes": {"propagated_from": str(position_id)},
+                                "kind": "linked_master_propagation",
+                            },
+                            source_module="oe_boq",
+                        )
+                    await self.session.flush()
+                    # The per-instance update_fields() calls each ran
+                    # session.expire_all(); re-hydrate the master so the
+                    # activity-log here and the audit-diff / event / response
+                    # reads below operate on live attributes, not expired
+                    # ones (async engine can't lazy-refresh → MissingGreenlet).
+                    if _propagated_count:
+                        await self.session.refresh(position)
+                    if _propagated_count and actor_id is not None:
+                        try:
+                            _proj_id: uuid.UUID | None = None
+                            try:
+                                _b = await self.get_boq(position.boq_id)
+                                _proj_id = _b.project_id
+                            except Exception:  # noqa: BLE001
+                                _proj_id = None
+                            await self.log_activity(
+                                user_id=actor_id,
+                                action="position.linked_propagation",
+                                target_type="position",
+                                description=(
+                                    f"Propagated master definition of "
+                                    f"'{_ref_code_before}' to "
+                                    f"{_propagated_count} linked instance(s)"
+                                ),
+                                project_id=_proj_id,
+                                boq_id=position.boq_id,
+                                target_id=position.id,
+                                changes={
+                                    "fields": sorted(_changed_def_payload),
+                                    "metadata_propagated": _propagate_meta,
+                                    "instance_count": _propagated_count,
+                                },
+                                metadata_={
+                                    "reference_code": _ref_code_before,
+                                    "link_group_id": str(_link_group_before),
+                                },
+                            )
+                        except Exception:  # noqa: BLE001 — best-effort
+                            logger.debug(
+                                "Activity-log for linked propagation failed",
+                                exc_info=True,
+                            )
+                except Exception:  # noqa: BLE001 — never break the master PATCH
+                    logger.exception(
+                        "Linked-position propagation failed for master %s "
+                        "(group=%s)",
+                        position_id,
+                        _link_group_before,
+                    )
+
+        # ── Issue #132: master CHILD edit → propagate to instance children ─
+        # The block above only fires when the edited row is the master
+        # ROOT (``link_role='master'``). A master's CHILDREN carry no
+        # link_role (they are originals, not instances), so editing one
+        # used to propagate to nothing — the customer's "reuse a whole
+        # partida, fix a sub-line on the master, instances stay stale"
+        # bug. Here: if the edited row is a non-link node whose subtree
+        # ROOT is a master, fan the changed DEFINITION fields out to the
+        # instance nodes that were cloned from THIS exact node
+        # (``metadata._link_src == position_id``). Quantities / ordinals
+        # never propagate (CLAUDE.md). Instance-side direct edits still
+        # diverge+unlink via the block far above — unchanged.
+        if (
+            _link_role_before is None
+            and not _did_unlink_instance
+            and fields
+            and _requested_def_fields
+        ):
+            try:
+                # Snapshot the edited node's post-write definition BEFORE any
+                # per-instance update_fields() (each ends in expire_all();
+                # the async engine cannot lazy-refresh → MissingGreenlet).
+                _mc_changed: dict[str, Any] = {}
+                for _df in _LINK_DEFINITION_FIELDS:
+                    if _df in _requested_def_fields:
+                        _mc_changed[_df] = getattr(position, _df, None)
+                _mc_prop_meta = (
+                    "metadata_" in _requested_def_fields
+                    and isinstance(position.metadata_, dict)
+                )
+                _mc_meta_snapshot = (
+                    position.metadata_
+                    if isinstance(position.metadata_, dict)
+                    else {}
+                )
+                if _mc_changed or _mc_prop_meta:
+                    # Walk parent chain to the subtree root (depth-capped —
+                    # a cycle would otherwise loop forever).
+                    _walk_id = getattr(position, "parent_id", None)
+                    _root_node: Position | None = None
+                    _hops = 0
+                    while _walk_id is not None and _hops < 256:
+                        _node = await self.position_repo.get_by_id(_walk_id)
+                        if _node is None:
+                            break
+                        _root_node = _node
+                        _walk_id = getattr(_node, "parent_id", None)
+                        _hops += 1
+                    if (
+                        _root_node is not None
+                        and _root_node.link_role == "master"
+                        and _root_node.link_group_id is not None
+                        and _root_node.id != position_id
+                    ):
+                        # Snapshot the master root's link identity NOW —
+                        # per-instance update_fields() runs expire_all()
+                        # and the async engine can't lazy-refresh these
+                        # later for the activity-log (MissingGreenlet).
+                        _mc_root_group_id = _root_node.link_group_id
+                        _mc_root_code = _root_node.reference_code
+                        _mc_group = await self.position_repo.list_link_group(
+                            _mc_root_group_id
+                        )
+                        # Pre-snapshot the whole group before any write —
+                        # update_fields() → expire_all() would otherwise make
+                        # a later iteration's ORM read lazy-load on the async
+                        # engine (MissingGreenlet) once >1 child matches.
+                        _mc_snap: list[dict[str, Any]] = [
+                            {
+                                "id": _c.id,
+                                "role": _c.link_role,
+                                "boq_id": _c.boq_id,
+                                "ordinal": _c.ordinal,
+                                "quantity": _c.quantity,
+                                "unit_rate": _c.unit_rate,
+                                "version": int(_c.version or 0),
+                                "meta": (
+                                    dict(_c.metadata_)
+                                    if isinstance(_c.metadata_, dict)
+                                    else {}
+                                ),
+                            }
+                            for _c in _mc_group
+                        ]
+                        _mc_affected: set[uuid.UUID] = set()
+                        for _cs in _mc_snap:
+                            _ci_id = _cs["id"]
+                            _ci_role = _cs["role"]
+                            _ci_boq_id = _cs["boq_id"]
+                            _ci_ordinal = _cs["ordinal"]
+                            _ci_quantity = _cs["quantity"]
+                            _ci_unit_rate = _cs["unit_rate"]
+                            _ci_version = _cs["version"]
+                            _ci_meta = _cs["meta"]
+                            if _ci_id == position_id:
+                                continue
+                            if _ci_role != "instance":
+                                continue
+                            # Per-node correspondence: only the instance
+                            # children cloned from THIS master child.
+                            if str(_ci_meta.get("_link_src")) != str(
+                                position_id
+                            ):
+                                continue
+                            _ci_fields: dict[str, Any] = {}
+                            for k, v in _mc_changed.items():
+                                if k == "classification":
+                                    _ci_fields[k] = (
+                                        dict(v) if isinstance(v, dict) else v
+                                    )
+                                elif k == "cad_element_ids":
+                                    _ci_fields[k] = (
+                                        list(v) if isinstance(v, list) else v
+                                    )
+                                else:
+                                    _ci_fields[k] = v
+                            if _mc_prop_meta:
+                                _ci_new_meta = _copy_definition_metadata(
+                                    _mc_meta_snapshot
+                                )
+                                # Preserve the instance child's own
+                                # per-instance keys — crucially ``_link_src``
+                                # so the correspondence survives the copy.
+                                for _k in _LINK_INSTANCE_ONLY_META_KEYS:
+                                    if _k in _ci_meta:
+                                        _ci_new_meta[_k] = _ci_meta[_k]
+                                _ci_fields["metadata_"] = _ci_new_meta
+                            _ci_rate = _ci_fields.get(
+                                "unit_rate", _ci_unit_rate
+                            )
+                            _ci_fields["total"] = _compute_total(
+                                _ci_quantity, _ci_rate
+                            )
+                            _ci_fields["version"] = _ci_version + 1
+                            await self.position_repo.update_fields(
+                                _ci_id, **_ci_fields
+                            )
+                            _mc_affected.add(_ci_boq_id)
+                            _propagated_count += 1
+                            await _safe_publish(
+                                "boq.position.updated",
+                                {
+                                    "position_id": str(_ci_id),
+                                    "boq_id": str(_ci_boq_id),
+                                    "ordinal": _ci_ordinal,
+                                    "changes": {
+                                        "propagated_from": str(position_id)
+                                    },
+                                    "kind": "linked_master_child_propagation",
+                                },
+                                source_module="oe_boq",
+                            )
+                        await self.session.flush()
+                        if _mc_affected:
+                            await self.session.refresh(position)
+                        if _mc_affected and actor_id is not None:
+                            try:
+                                _mc_proj: uuid.UUID | None = None
+                                try:
+                                    _mb = await self.get_boq(position.boq_id)
+                                    _mc_proj = _mb.project_id
+                                except Exception:  # noqa: BLE001
+                                    _mc_proj = None
+                                await self.log_activity(
+                                    user_id=actor_id,
+                                    action="position.linked_propagation",
+                                    target_type="position",
+                                    description=(
+                                        f"Propagated master sub-line "
+                                        f"'{position.ordinal}' to "
+                                        f"{len(_mc_affected)} linked "
+                                        f"instance child(ren)"
+                                    ),
+                                    project_id=_mc_proj,
+                                    boq_id=position.boq_id,
+                                    target_id=position.id,
+                                    changes={
+                                        "fields": sorted(_mc_changed),
+                                        "metadata_propagated": _mc_prop_meta,
+                                        "kind": "master_child",
+                                    },
+                                    metadata_={
+                                        "reference_code": _mc_root_code,
+                                        "link_group_id": str(
+                                            _mc_root_group_id
+                                        ),
+                                    },
+                                )
+                            except Exception:  # noqa: BLE001 — best-effort
+                                logger.debug(
+                                    "Activity-log for master-child "
+                                    "propagation failed",
+                                    exc_info=True,
+                                )
+            except Exception:  # noqa: BLE001 — never break the child PATCH
+                logger.exception(
+                    "Master-child linked propagation failed for %s",
+                    position_id,
+                )
 
         # ── BUG-AUDIT01: build the field-level diff payload ──────────────
         # ``_audit_before`` snapshotted attributes BEFORE the UPDATE; we
@@ -2438,6 +3797,69 @@ class BOQService:
                 )
             except Exception:  # noqa: BLE001 — best-effort, never break PATCH
                 logger.debug("Activity-log write for position.updated failed", exc_info=True)
+
+        # ── Issue #133: master resource definition edit → propagate ──────
+        # If the patch changed a coded resource the editor owns the master
+        # definition for, fan the changed DEFINITION fields out to every
+        # other position's resource sharing that code (never the quantity,
+        # never a user-diverged instance). Mirrors the #127 contract.
+        _resource_propagated = 0
+        if (
+            # ``metadata`` is renamed to ``metadata_`` earlier in this
+            # method (the column writer expects the mapped attribute name),
+            # so accept either spelling here.
+            ("metadata" in fields or "metadata_" in fields)
+            and not _did_unlink_instance
+            and isinstance(position.metadata_, dict)
+        ):
+            _res_after_raw = position.metadata_.get("resources")
+            if isinstance(_res_after_raw, list):
+                # Snapshot the after-state into a plain list NOW — the
+                # propagation helper runs per-instance ``update_fields``
+                # (expire_all) and the async engine cannot lazy-refresh
+                # ``position.metadata_`` afterwards (MissingGreenlet).
+                _res_after = [
+                    dict(r) if isinstance(r, dict) else r
+                    for r in _res_after_raw
+                ]
+                _res_delta = self._resource_def_changed(
+                    _res_before, _res_after
+                )
+                if _res_delta:
+                    _resource_propagated = (
+                        await self._propagate_resource_definitions(
+                            editor_position=position,
+                            changed_by_code=_res_delta,
+                            actor_id=actor_id,
+                        )
+                    )
+                    # Per-instance writes above expired ``position``;
+                    # re-hydrate it so the response serialisation
+                    # (``_position_to_response_with_links``) reads live
+                    # attributes, not lazy-loads → MissingGreenlet.
+                    if _resource_propagated:
+                        try:
+                            await self.session.refresh(position)
+                        except Exception:  # noqa: BLE001 — best-effort
+                            logger.debug(
+                                "Refresh after resource propagation failed",
+                                exc_info=True,
+                            )
+
+        # ── Issue #127/#133: surface the link outcome on the response ────
+        # Stashed on a NON-mapped attribute so the request-session commit
+        # in ``get_session`` never persists it (mutating the mapped
+        # ``metadata_`` column here would flush the transient key into the
+        # DB). The router merges it into the response metadata.
+        if _propagated_count or _did_unlink_instance or _resource_propagated:
+            try:
+                position._link_propagation_info = {  # type: ignore[attr-defined]
+                    "propagated_to": _propagated_count,
+                    "unlinked": _did_unlink_instance,
+                    "resource_propagated_to": _resource_propagated,
+                }
+            except Exception:  # noqa: BLE001 — purely cosmetic
+                pass
 
         return position
 
@@ -2747,12 +4169,65 @@ class BOQService:
             for child_id_str in reversed(deleted_position_ids[1:]):
                 await self.position_repo.delete(uuid.UUID(child_id_str))
 
+        # ── Issue #127: deleting a master must not orphan its instances ──
+        # Promote the oldest remaining instance to master; if it was the
+        # last group member, dissolve the group (no dangling
+        # link_group_id). Captured before the delete so the group query
+        # still sees the soon-to-be-deleted row's group.
+        _del_link_role = getattr(position, "link_role", None)
+        _del_link_group = getattr(position, "link_group_id", None)
+        # Capture the master's boq_id while ``position`` is still live — the
+        # promotion below calls repo.update_fields() which runs
+        # session.expire_all(); the async engine can't lazy-refresh expired
+        # attributes (MissingGreenlet).
+        _del_position_boq_id = position.boq_id
+        _deleted_ids_set = set(deleted_position_ids)
+        if _del_link_role == "master" and _del_link_group is not None:
+            try:
+                group = await self.position_repo.list_link_group(_del_link_group)
+                # Survivors = group members not in the delete set (cascade
+                # may have removed instances too).
+                survivors = [
+                    p for p in group if str(p.id) not in _deleted_ids_set
+                ]
+                if survivors:
+                    # list_link_group is ordered oldest-first → promote head.
+                    # Capture the id before the first update_fields()
+                    # expires every ORM instance (incl. ``new_master``).
+                    _promote_id = survivors[0].id
+                    await self.position_repo.update_fields(
+                        _promote_id, link_role="master"
+                    )
+                    if len(survivors) == 1:
+                        # Only one left — collapse to a standalone owner so
+                        # we don't keep a one-member group around.
+                        await self.position_repo.update_fields(
+                            _promote_id,
+                            link_role=None,
+                            link_group_id=None,
+                        )
+                    logger.info(
+                        "Promoted position %s to master of group %s "
+                        "(old master %s deleted)",
+                        _promote_id,
+                        _del_link_group,
+                        position_id,
+                    )
+            except Exception:  # noqa: BLE001 — never block the delete
+                logger.exception(
+                    "Master-promotion failed for group %s on delete of %s",
+                    _del_link_group,
+                    position_id,
+                )
+
         await self.position_repo.delete(position_id)
 
         # Clean up Activity references to deleted positions so the schedule
         # module doesn't retain dead IDs in Activity.boq_position_ids JSON arrays.
         if deleted_position_ids:
-            await self._scrub_activity_position_refs(position.boq_id, deleted_position_ids)
+            await self._scrub_activity_position_refs(
+                _del_position_boq_id, deleted_position_ids
+            )
 
         for pid_str in deleted_position_ids:
             await _safe_publish(
@@ -3298,26 +4773,33 @@ class BOQService:
                 detail="Position not found",
             )
 
-        max_order = await self.position_repo.get_max_sort_order(source.boq_id)
-
-        new_position = Position(
-            boq_id=source.boq_id,
-            parent_id=source.parent_id,
-            ordinal=f"{source.ordinal}.1",
-            description=source.description,
-            unit=source.unit,
-            quantity=source.quantity,
-            unit_rate=source.unit_rate,
-            total=source.total,
-            classification=dict(source.classification) if source.classification else {},
-            source=source.source,
-            confidence=source.confidence,
-            cad_element_ids=list(source.cad_element_ids) if source.cad_element_ids else [],
-            validation_status="pending",
-            metadata_=dict(source.metadata_) if source.metadata_ else {},
-            sort_order=max_order + 1,
+        # Issue #127: a duplicate is a one-time clone — UNLINKED, with its
+        # own fresh internal reference_code (no future propagation). It now
+        # also deep-copies the source's child subtree via the shared
+        # helper, and every cloned node gets a BOQ-unique ordinal so the
+        # ordinal-uniqueness invariant (GAEB X83 + boq_quality) holds even
+        # when the legacy ``<ordinal>.1`` collides.
+        _base_ordinal = f"{source.ordinal}.1"
+        if await self.position_repo.ordinal_exists(source.boq_id, _base_ordinal):
+            _dup_ordinal = await self._next_free_ordinal(
+                source.boq_id, source.ordinal
+            )
+        else:
+            _dup_ordinal = _base_ordinal
+        _project_id = await self.position_repo.project_id_for_boq(source.boq_id)
+        _fresh_code = await self._resolve_create_reference_code(
+            _project_id, None
         )
-        new_position = await self.position_repo.create(new_position)
+        new_position = await self._clone_subtree(
+            source,
+            boq_id=source.boq_id,
+            new_parent_id=source.parent_id,
+            ordinal=_dup_ordinal,
+            quantity=source.quantity,
+            link_group_id=None,
+            link_role=None,
+            reference_code=_fresh_code,
+        )
 
         await _safe_publish(
             "boq.position.duplicated",
@@ -3336,6 +4818,515 @@ class BOQService:
             source.boq_id,
         )
         return new_position
+
+    # ── Issue #127: explicit link management ──────────────────────────────
+
+    async def unlink_position(
+        self,
+        position_id: uuid.UUID,
+        *,
+        actor_id: uuid.UUID | None = None,
+    ) -> Position:
+        """Detach a position from its reuse group without changing values.
+
+        The position keeps its current definition + ``reference_code``
+        (still referenceable) but stops following the master. If the
+        position WAS the master, the oldest remaining instance is promoted
+        (or the group dissolved when it was the last member) so no
+        instance is ever orphaned.
+
+        Raises:
+            HTTPException 404: Position not found.
+            HTTPException 409: BOQ is locked.
+            HTTPException 422: Position is not part of a link group.
+        """
+        position = await self.position_repo.get_by_id(position_id)
+        if position is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Position not found",
+            )
+        await self._ensure_not_locked(position.boq_id)
+
+        group_id = getattr(position, "link_group_id", None)
+        role = getattr(position, "link_role", None)
+        if group_id is None or role is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Position is not part of a linked-code group.",
+            )
+
+        # ``PositionRepository.update_fields`` ends with
+        # ``session.expire_all()``, which expires EVERY ORM instance in this
+        # unit of work — including ``position``. On the async engine a later
+        # attribute read on the expired instance triggers an implicit lazy
+        # refresh → MissingGreenlet → HTTP 500. Capture everything we need
+        # BEFORE the first expiring write, then re-fetch a live instance
+        # afterwards. (Same footgun already fixed in
+        # _create_reused_position / update_position / delete_position; the
+        # master-promotion path below is the one that 500'd on unlink.)
+        _pos_version = int(getattr(position, "version", 0) or 0)
+        _pos_boq_id = position.boq_id
+        _pos_ordinal = position.ordinal
+        _pos_ref_code = getattr(position, "reference_code", None)
+
+        # If this is the master, promote a survivor first so instances
+        # don't dangle.
+        if role == "master":
+            try:
+                group = await self.position_repo.list_link_group(group_id)
+                survivors = [p for p in group if p.id != position_id]
+                if survivors:
+                    new_master = survivors[0]
+                    if len(survivors) == 1:
+                        await self.position_repo.update_fields(
+                            new_master.id, link_role=None, link_group_id=None
+                        )
+                    else:
+                        await self.position_repo.update_fields(
+                            new_master.id, link_role="master"
+                        )
+            except Exception:  # noqa: BLE001 — never block the unlink
+                logger.exception(
+                    "Survivor-promotion failed unlinking master %s",
+                    position_id,
+                )
+
+        await self.position_repo.update_fields(
+            position_id,
+            link_group_id=None,
+            link_role=None,
+            version=_pos_version + 1,
+        )
+        await self.session.flush()
+        # ``position`` is expired/stale after the writes above — re-fetch a
+        # live instance so the return value + router serialization
+        # (``_position_to_response``) don't lazy-load on a dead instance.
+        live_position = await self.position_repo.get_by_id(position_id)
+        if live_position is not None:
+            position = live_position
+
+        await _safe_publish(
+            "boq.position.updated",
+            {
+                "position_id": str(position_id),
+                "boq_id": str(_pos_boq_id),
+                "ordinal": _pos_ordinal,
+                "changes": {"unlinked": True},
+                "kind": "linked_position_unlinked",
+            },
+            source_module="oe_boq",
+        )
+        if actor_id is not None:
+            try:
+                _proj_id: uuid.UUID | None = None
+                try:
+                    _b = await self.get_boq(_pos_boq_id)
+                    _proj_id = _b.project_id
+                except Exception:  # noqa: BLE001
+                    _proj_id = None
+                await self.log_activity(
+                    user_id=actor_id,
+                    action="position.unlinked",
+                    target_type="position",
+                    description=(
+                        f"Unlinked position {_pos_ordinal} from code "
+                        f"'{_pos_ref_code}'"
+                    ),
+                    project_id=_proj_id,
+                    boq_id=_pos_boq_id,
+                    target_id=position_id,
+                    metadata_={"link_group_id": str(group_id)},
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                logger.debug("Activity-log for unlink failed", exc_info=True)
+
+        return position
+
+    async def list_links(self, position_id: uuid.UUID) -> "PositionLinksResponse":
+        """Return the reuse group for a position's ``reference_code``.
+
+        Lists every position that shares the code across the WHOLE project
+        (not just one BOQ), identifies the master, and reports counts. A
+        standalone position (code used once) returns ``linked=False`` with
+        itself as the only member.
+
+        Raises:
+            HTTPException 404: Position not found.
+        """
+        from app.modules.boq.schemas import (
+            LinkedPositionInfo,
+            PositionLinksResponse,
+        )
+
+        position = await self.position_repo.get_by_id(position_id)
+        if position is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Position not found",
+            )
+
+        ref_code = getattr(position, "reference_code", None)
+        group_id = getattr(position, "link_group_id", None)
+
+        members_src: list[Position]
+        master_id: uuid.UUID | None = None
+        if group_id is not None:
+            members_src = await self.position_repo.list_link_group(group_id)
+            for m in members_src:
+                if getattr(m, "link_role", None) == "master":
+                    master_id = m.id
+                    break
+        else:
+            # Standalone: the code may still be reused elsewhere in the
+            # project under different (e.g. copy) rows — surface every row
+            # in the project carrying the same code so the UI can show
+            # "this code is used N times".
+            project_id = await self.position_repo.project_id_for_boq(
+                position.boq_id
+            )
+            if ref_code and project_id is not None:
+                master = await self.position_repo.find_master_by_reference_code(
+                    project_id, ref_code
+                )
+                if master is not None and master.link_group_id is not None:
+                    members_src = await self.position_repo.list_link_group(
+                        master.link_group_id
+                    )
+                    group_id = master.link_group_id
+                    for m in members_src:
+                        if getattr(m, "link_role", None) == "master":
+                            master_id = m.id
+                            break
+                else:
+                    members_src = [position]
+            else:
+                members_src = [position]
+
+        def _info(p: Position) -> LinkedPositionInfo:
+            return LinkedPositionInfo(
+                id=p.id,
+                boq_id=p.boq_id,
+                ordinal=p.ordinal,
+                description=p.description,
+                quantity=Decimal(str(_str_to_float(p.quantity))),
+                total=Decimal(str(_str_to_float(p.total))),
+                link_role=getattr(p, "link_role", None),
+                is_master=(p.id == master_id),
+            )
+
+        members = [_info(p) for p in members_src]
+        instance_count = sum(
+            1 for p in members_src if getattr(p, "link_role", None) == "instance"
+        )
+        return PositionLinksResponse(
+            reference_code=ref_code,
+            link_group_id=group_id,
+            linked=len(members_src) > 1,
+            master_id=master_id,
+            total_count=len(members_src),
+            instance_count=instance_count,
+            members=members,
+        )
+
+    async def find_resource_by_code(
+        self,
+        project_id: uuid.UUID,
+        code: str,
+    ) -> ResourceCodeLookupResponse:
+        """Find the first existing resource in a project that uses ``code``.
+
+        Issue #133. Resource codes live in
+        ``Position.metadata.resources[].code`` (JSON — no SQL column), so
+        we scan every position of the project oldest-first and return the
+        first match's reusable *definition* (name / type / unit /
+        unit_rate / currency) plus where it was found. The quantity is
+        deliberately excluded — it is always per-instance (same contract
+        as #127 position reuse). Returns ``found=False`` when the code is
+        unused anywhere in the project.
+        """
+        norm = (code or "").strip()
+        if not norm:
+            return ResourceCodeLookupResponse(found=False, code="")
+        norm_cf = norm.casefold()
+
+        positions = await self.position_repo.list_for_project(project_id)
+        for pos in positions:
+            meta = pos.metadata_ if isinstance(pos.metadata_, dict) else None
+            if not meta:
+                continue
+            resources = meta.get("resources")
+            if not isinstance(resources, list):
+                continue
+            for r in resources:
+                if not isinstance(r, dict):
+                    continue
+                r_code = str(r.get("code") or "").strip()
+                if not r_code or r_code.casefold() != norm_cf:
+                    continue
+                return ResourceCodeLookupResponse(
+                    found=True,
+                    code=r_code,
+                    match=ResourceCodeMatch(
+                        code=r_code,
+                        name=str(r.get("name") or r.get("description") or ""),
+                        type=str(r.get("type") or ""),
+                        unit=str(r.get("unit") or ""),
+                        unit_rate=_str_to_float(r.get("unit_rate")),
+                        currency=str(r.get("currency") or ""),
+                        position_id=str(pos.id),
+                        position_ordinal=str(pos.ordinal or ""),
+                        position_description=str(pos.description or ""),
+                    ),
+                )
+        return ResourceCodeLookupResponse(found=False, code=norm)
+
+    @staticmethod
+    def _resource_def_changed(
+        before: list[dict[str, Any]] | None,
+        after: list[dict[str, Any]] | None,
+    ) -> dict[str, dict[str, Any]]:
+        """Return ``{code: {field: new_value}}`` for resources whose
+        DEFINITION fields changed between two ``metadata.resources`` lists.
+
+        Issue #133. Only coded resources participate (a blank code is
+        un-shareable). Quantity / total are intentionally excluded — they
+        are per-instance and must never propagate. Matched positionally
+        first (the common in-place edit), then by code so a re-order does
+        not produce spurious diffs.
+        """
+        if not isinstance(after, list):
+            return {}
+        before_by_code: dict[str, dict[str, Any]] = {}
+        for r in before or []:
+            if isinstance(r, dict):
+                c = str(r.get("code") or "").strip()
+                if c:
+                    before_by_code.setdefault(c, r)
+        changed: dict[str, dict[str, Any]] = {}
+        for idx, r in enumerate(after):
+            if not isinstance(r, dict):
+                continue
+            code = str(r.get("code") or "").strip()
+            if not code:
+                continue
+            prev: dict[str, Any] | None = None
+            if (
+                isinstance(before, list)
+                and idx < len(before)
+                and isinstance(before[idx], dict)
+                and str(before[idx].get("code") or "").strip() == code
+            ):
+                prev = before[idx]
+            else:
+                prev = before_by_code.get(code)
+            delta: dict[str, Any] = {}
+            for f in _RESOURCE_DEFINITION_FIELDS:
+                new_v = r.get(f)
+                old_v = prev.get(f) if isinstance(prev, dict) else None
+                if new_v != old_v:
+                    delta[f] = new_v
+            if delta:
+                changed[code] = delta
+        return changed
+
+    async def _propagate_resource_definitions(
+        self,
+        *,
+        editor_position: Position,
+        changed_by_code: dict[str, dict[str, Any]],
+        actor_id: uuid.UUID | None,
+    ) -> int:
+        """Issue #133 — fan a master resource's definition edit out to the
+        linked resource instances across the project.
+
+        ``editor_position`` is the just-saved position. For each changed
+        resource ``code`` it only propagates when ``editor_position`` holds
+        the MASTER definition (the OLDEST position carrying that code —
+        same canonical rule as ``find_resource_by_code``). Other positions'
+        resources with the same code receive the changed DEFINITION fields
+        and have their ``total`` recomputed against THEIR OWN quantity
+        (never the master's). A target resource the user explicitly
+        diverged (``_code_overridden`` truthy) is left untouched and not
+        re-linked silently (CLAUDE.md: AI-augmented, human-confirmed).
+
+        Returns the number of resource instances updated. Best-effort —
+        never raises (a propagation hiccup must not fail the user's PATCH).
+        """
+        if not changed_by_code:
+            return 0
+        try:
+            project_id = await self.position_repo.project_id_for_boq(
+                editor_position.boq_id
+            )
+            if project_id is None:
+                return 0
+            # Capture editor identity NOW — per-instance ``update_fields``
+            # calls below run ``expire_all()`` and the async engine cannot
+            # lazy-refresh ``editor_position`` afterwards (MissingGreenlet).
+            editor_id = editor_position.id
+            editor_boq_id = editor_position.boq_id
+            # Oldest-first — the FIRST carrier of a code is its master.
+            positions = await self.position_repo.list_for_project(project_id)
+
+            # ── Snapshot EVERY position into plain values BEFORE any write.
+            # ``position_repo.update_fields`` ends in ``session.expire_all()``
+            # which expires every ORM instance in this unit of work; a later
+            # attribute read on a not-yet-processed row would lazy-load on
+            # the async engine → MissingGreenlet. (Same footgun + fix the
+            # #127 propagation uses — see ``_grp_snap``.)
+            snap: list[dict[str, Any]] = [
+                {
+                    "id": p.id,
+                    "boq_id": p.boq_id,
+                    "ordinal": p.ordinal,
+                    "quantity": p.quantity,
+                    "version": int(p.version or 0),
+                    "meta": (
+                        dict(p.metadata_)
+                        if isinstance(p.metadata_, dict)
+                        else {}
+                    ),
+                }
+                for p in positions
+            ]
+
+            def _has_code(meta: dict[str, Any], code: str) -> bool:
+                res = meta.get("resources")
+                if not isinstance(res, list):
+                    return False
+                return any(
+                    isinstance(rr, dict)
+                    and str(rr.get("code") or "").strip().casefold()
+                    == code.casefold()
+                    for rr in res
+                )
+
+            # Resolve which of the changed codes this editor actually owns
+            # (it must be the OLDEST carrier — first in the snapshot order).
+            owned_codes: set[str] = set()
+            for code in changed_by_code:
+                for s in snap:
+                    if _has_code(s["meta"], code):
+                        if s["id"] == editor_id:
+                            owned_codes.add(code)
+                        break  # first carrier decides ownership
+            if not owned_codes:
+                return 0
+            owned_cf = {c.casefold() for c in owned_codes}
+
+            updated = 0
+            affected_boqs: set[uuid.UUID] = set()
+            for s in snap:
+                if s["id"] == editor_id:
+                    continue
+                meta = s["meta"]
+                if not isinstance(meta, dict):
+                    continue
+                res_raw = meta.get("resources")
+                if not isinstance(res_raw, list):
+                    continue
+                new_res: list[Any] = [
+                    dict(r) if isinstance(r, dict) else r for r in res_raw
+                ]
+                touched = False
+                for r in new_res:
+                    if not isinstance(r, dict):
+                        continue
+                    rc = str(r.get("code") or "").strip()
+                    if not rc or rc.casefold() not in owned_cf:
+                        continue
+                    # Honour an explicit user divergence — never silently
+                    # overwrite an instance the user customised.
+                    if r.get("_code_overridden"):
+                        continue
+                    delta = None
+                    for c, d in changed_by_code.items():
+                        if c.casefold() == rc.casefold():
+                            delta = d
+                            break
+                    if not delta:
+                        continue
+                    for f, v in delta.items():
+                        r[f] = v
+                    # Recompute THIS resource's total against ITS OWN qty.
+                    r_qty = _str_to_float(r.get("quantity"))
+                    r_rate = _str_to_float(r.get("unit_rate"))
+                    r["total"] = round(r_qty * r_rate, 2)
+                    touched = True
+                if not touched:
+                    continue
+                new_meta = dict(meta)
+                new_meta["resources"] = new_res
+                # Recompute the position's derived unit_rate from resources
+                # (mirrors the frontend handleUpdateResourceFields rollup).
+                roll = 0.0
+                for r in new_res:
+                    if isinstance(r, dict):
+                        roll += _str_to_float(r.get("total")) or (
+                            _str_to_float(r.get("quantity"))
+                            * _str_to_float(r.get("unit_rate"))
+                        )
+                derived_rate = _quantize_money_str(round(roll, 4))
+                new_total = _compute_total(s["quantity"], derived_rate)
+                await self.position_repo.update_fields(
+                    s["id"],
+                    metadata_=new_meta,
+                    unit_rate=derived_rate,
+                    total=new_total,
+                    version=s["version"] + 1,
+                )
+                affected_boqs.add(s["boq_id"])
+                updated += 1
+                await _safe_publish(
+                    "boq.position.updated",
+                    {
+                        "position_id": str(s["id"]),
+                        "boq_id": str(s["boq_id"]),
+                        "ordinal": s["ordinal"],
+                        "changes": {
+                            "resource_code_propagation": sorted(owned_codes)
+                        },
+                        "kind": "linked_resource_propagation",
+                    },
+                    source_module="oe_boq",
+                )
+
+            if updated:
+                await self.session.flush()
+                if actor_id is not None:
+                    try:
+                        await self.log_activity(
+                            user_id=actor_id,
+                            action="resource.linked_propagation",
+                            target_type="position",
+                            description=(
+                                f"Propagated resource definition "
+                                f"({', '.join(sorted(owned_codes))}) to "
+                                f"{updated} linked instance(s)"
+                            ),
+                            project_id=project_id,
+                            boq_id=editor_boq_id,
+                            target_id=editor_id,
+                            changes={
+                                "codes": sorted(owned_codes),
+                                "instance_count": updated,
+                            },
+                        )
+                    except Exception:  # noqa: BLE001 — best-effort
+                        logger.debug(
+                            "Activity-log for resource propagation failed",
+                            exc_info=True,
+                        )
+            return updated
+        except Exception:  # noqa: BLE001 — never break the user's PATCH
+            # ``editor_position`` may be expired here (a per-instance
+            # ``update_fields`` ran ``expire_all()``); avoid touching it.
+            logger.exception(
+                "Resource-definition propagation failed (editor %s)",
+                locals().get("editor_id", "?"),
+            )
+            return 0
 
     # ── Composite reads ───────────────────────────────────────────────────
 
@@ -3417,6 +5408,18 @@ class BOQService:
         boq = await self.get_boq(boq_id)
         all_positions = await self.position_repo.list_all_for_boq(boq_id)
 
+        # Issue #111 — resolve the project FX table once so foreign-currency
+        # position totals convert into the base currency before they roll up
+        # into section subtotals / Direct Cost / Grand Total. Without this the
+        # export path (CSV/Excel/PDF all read get_boq_structured) summed
+        # foreign totals as base — the exact defect #131 fixed in the grid.
+        _fx_base, _fx_map = await self._resolve_project_fx(boq_id)
+
+        def _leaf_total_base(pos: Position) -> Decimal:
+            return _position_total_in_base(
+                pos.total, _position_currency(pos), _fx_map, _fx_base
+            )
+
         # Separate sections from items
         section_map: dict[uuid.UUID, Position] = {}
         children_map: dict[uuid.UUID, list[Position]] = {}
@@ -3462,7 +5465,7 @@ class BOQService:
             s = Decimal("0")
             for child in children_map.get(sid, []):
                 if not _is_section(child):
-                    s += Decimal(str(_str_to_float(child.total)))
+                    s += _leaf_total_base(child)
             own_leaf_subtotal[sid] = s
 
         # Rolled subtotal = own leaves + every descendant section's leaves.
@@ -3511,7 +5514,7 @@ class BOQService:
         for pos in remaining_ungrouped:
             if not _is_section(pos):
                 ungrouped_responses.append(_build_position_response(pos))
-                direct_cost += Decimal(str(_str_to_float(pos.total)))
+                direct_cost += _leaf_total_base(pos)
 
         # Calculate markups
         markups_orm = await self.markup_repo.list_for_boq(boq_id)
@@ -3560,6 +5563,19 @@ class BOQService:
             net_total=_round_currency(net_total),
             grand_total=_round_currency(net_total),
         )
+
+    async def get_export_fx(
+        self,
+        boq_id: uuid.UUID,
+    ) -> tuple[str, dict[str, str]]:
+        """Public accessor for a BOQ project's ``(base_currency, fx_map)``.
+
+        Issue #111 — the CSV / Excel exporters embed these frozen rates as
+        an audit appendix so a downloaded BOQ records exactly which FX
+        rates produced its base-currency totals (a later rate edit can't
+        retroactively change a delivered tender).
+        """
+        return await self._resolve_project_fx(boq_id)
 
     # ── Cost breakdown ─────────────────────────────────────────────────
 
@@ -4722,7 +6738,12 @@ class BOQService:
             if median <= 0:
                 continue
 
-            current_rate = pos.unit_rate
+            # BUG-B-011: ``pos.unit_rate`` is now an exact Decimal. This
+            # anomaly heuristic mixes it with float market percentiles, so
+            # cast to float locally — heuristic comparison does not need
+            # sub-cent exactness (the exact value is preserved in storage
+            # and in the JSON response).
+            current_rate = float(pos.unit_rate)
             market_range = {"p25": p25, "median": median, "p75": p75}
 
             severity: str | None = None

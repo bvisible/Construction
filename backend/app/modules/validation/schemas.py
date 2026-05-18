@@ -83,7 +83,7 @@ class RunValidationResponse(BaseModel):
 
     report_id: UUID
     status: str
-    score: float
+    score: float | None = None
     total_rules: int
     passed_count: int
     warning_count: int

@@ -12,10 +12,11 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { useToastStore } from '@/stores/useToastStore';
 import { apiGet, apiPost } from '@/shared/lib/api';
 import { isModuleLoaded, _resetModuleProbeCache } from '@/shared/lib/moduleProbe';
 import { ScoreRing } from './ScoreRing';
@@ -33,6 +34,10 @@ import {
   PowerOff,
   Power,
   Settings2,
+  Info,
+  X,
+  FileText,
+  ShieldCheck,
 } from 'lucide-react';
 
 /** Dynamic state object from backend — each domain key (boq, validation, etc.)
@@ -110,6 +115,8 @@ const GRADE_COLORS: Record<string, string> = {
 
 export function ProjectIntelligencePage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const addToast = useToastStore((s) => s.addToast);
   const [searchParams] = useSearchParams();
   const projectId = useProjectContextStore((s) => s.activeProjectId);
   const userRole = useAuthStore((s) => s.userRole);
@@ -130,6 +137,22 @@ export function ProjectIntelligencePage() {
   const [expandedGap, setExpandedGap] = useState<string | null>(null);
   const [showAllGaps, setShowAllGaps] = useState(false);
   const [selectedDomain, setSelectedDomain] = useState<string | null>('boq');
+  const [introDismissed, setIntroDismissed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('oe_pi_intro_dismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const dismissIntro = useCallback(() => {
+    setIntroDismissed(true);
+    try {
+      localStorage.setItem('oe_pi_intro_dismissed', '1');
+    } catch {
+      /* ignore storage errors */
+    }
+  }, []);
 
   // Anomaly + line-item data used to enrich the Critical Gaps card with $ impact.
   const [anomalies, setAnomalies] = useState<AnomalyRow[]>([]);
@@ -235,15 +258,40 @@ export function ProjectIntelligencePage() {
           `/v1/project_intelligence/actions/${actionId}/?project_id=${activeProjectId}`,
         );
         if (result.redirect_url) {
-          window.location.href = result.redirect_url;
+          // Prefer SPA navigation for in-app paths so the dashboard state
+          // (and the rest of the app shell) is not blown away by a full
+          // page reload. Only fall back to a hard redirect for absolute
+          // URLs (external links).
+          if (result.redirect_url.startsWith('/')) {
+            navigate(result.redirect_url);
+          } else {
+            window.location.href = result.redirect_url;
+          }
         } else {
+          if (result.message) {
+            addToast({
+              type: result.status === 'error' ? 'error' : 'success',
+              title: t('project_intelligence.action_done', {
+                defaultValue: 'Action complete',
+              }),
+              message: result.message,
+            });
+          }
           fetchData(true);
         }
-      } catch {
-        // Silently handle
+      } catch (err: unknown) {
+        // Previously swallowed — a failed fix-it action looked like the
+        // button did nothing. Surface it so the user can react.
+        addToast({
+          type: 'error',
+          title: t('project_intelligence.action_failed', {
+            defaultValue: 'Could not complete the action',
+          }),
+          message: err instanceof Error ? err.message : '',
+        });
       }
     },
-    [activeProjectId, fetchData],
+    [activeProjectId, fetchData, navigate, addToast, t],
   );
 
   if (!activeProjectId) {
@@ -263,6 +311,26 @@ export function ProjectIntelligencePage() {
               'Select a project from the header to see its cost variance, anomalies, and bid analytics.‌⁠‍',
           })}
         </p>
+        <div className="flex items-center justify-center gap-3 pt-1">
+          <Link
+            to="/projects"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium bg-oe-blue text-white rounded-lg shadow-sm hover:bg-oe-blue-dark transition-colors"
+          >
+            <FileText size={14} />
+            {t('project_intelligence.v191_open_projects', {
+              defaultValue: 'Open Projects',
+            })}
+          </Link>
+          <Link
+            to="/ai-estimate"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium border border-border-light rounded-lg hover:bg-surface-secondary transition-colors text-content-secondary"
+          >
+            <BrainCircuit size={14} />
+            {t('project_intelligence.v191_try_estimate', {
+              defaultValue: 'Try AI Estimate',
+            })}
+          </Link>
+        </div>
       </div>
     );
   }
@@ -503,6 +571,57 @@ export function ProjectIntelligencePage() {
           </div>
         </div>
       </div>
+
+      {/* Intro / orientation — explains what this dashboard is and how the
+          readiness score ties back to BOQ, costs and validation. Dismissible
+          and remembered, so it does not nag returning users. */}
+      {!introDismissed && (
+        <div className="mt-4 rounded-xl border border-oe-blue/15 bg-oe-blue-subtle/20 p-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-oe-blue/10">
+              <Info size={15} className="text-oe-blue" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-content-primary mb-1">
+                {t('project_intelligence.intro_title', {
+                  defaultValue: 'What this dashboard tells you',
+                })}
+              </p>
+              <p className="text-xs text-content-secondary leading-relaxed">
+                {t('project_intelligence.intro_body', {
+                  defaultValue:
+                    'It reads your live BOQ, cost model, schedule and risk register and grades how ready this estimate is to go out (BOQ 40%, Cost Model 30%, Validation 20%, Risk 10%). Critical Gaps are the fastest ways to raise that grade — each one links straight to the screen that fixes it. The advisor at the bottom answers project-specific questions.',
+                })}
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Link
+                  to="/boq"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-2.5 py-1 text-2xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+                >
+                  <FileText size={12} />
+                  {t('project_intelligence.intro_link_boq', { defaultValue: 'BOQ editor' })}
+                </Link>
+                <Link
+                  to="/validation"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-2.5 py-1 text-2xs font-medium text-content-secondary hover:border-oe-blue/40 hover:text-oe-blue transition-colors"
+                >
+                  <ShieldCheck size={12} />
+                  {t('project_intelligence.intro_link_validation', {
+                    defaultValue: 'Validation',
+                  })}
+                </Link>
+              </div>
+            </div>
+            <button
+              onClick={dismissIntro}
+              className="shrink-0 p-1 rounded-md text-content-quaternary hover:text-content-secondary hover:bg-surface-secondary transition-colors"
+              aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Section 1 — KPI hero */}
       <div className="py-4">

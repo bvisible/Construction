@@ -205,5 +205,11 @@
       "fail": "Unit '{unit}' in position {ordinal} not standard",
       "suggestion": "Use standard metric units: m, m2, m3, kg, t, 式, etc."
     }
+  },
+  "pipeline": {
+    "side_effecting_requires_gate": {
+      "fail": "Side-effecting node(s) without a gate: {nodes}",
+      "suggestion": "Add a Validation gate or Human-approval gate on every path from a trigger/AI node to each write node before publishing."
+    }
   }
 }

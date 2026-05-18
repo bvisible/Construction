@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -30,7 +31,8 @@ import {
 } from '@/shared/ui/WideModal';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { getErrorMessage } from '@/shared/lib/api';
+import { PipelineBanner } from './PipelineBanner';
+import { getErrorMessage, apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import {
   listVendors,
@@ -62,6 +64,18 @@ const VENDOR_VARIANT: Record<VendorStatus, 'neutral' | 'blue' | 'success' | 'war
 
 const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
+
+interface ProjectStub {
+  id: string;
+  name: string;
+  currency?: string;
+}
+
+function listProjectsLite(): Promise<ProjectStub[]> {
+  return apiGet<ProjectStub[]>('/v1/projects/?limit=200').catch(
+    () => [] as ProjectStub[],
+  );
+}
 
 export function SupplierCatalogsPage() {
   const { t } = useTranslation();
@@ -158,6 +172,33 @@ export function SupplierCatalogsPage() {
           {createLabel(tab, t)}
         </Button>
       </div>
+
+      <PipelineBanner
+        intro={t('supplier_catalogs.pipeline_intro', {
+          defaultValue:
+            'The buying chain: register vendors and their priced catalogs, raise a requisition, convert it to a purchase order, then three-way match the invoice on receipt. Catalog prices feed the cost database.',
+        })}
+        steps={[
+          {
+            label: t('supplier_catalogs.step_costs', {
+              defaultValue: 'Cost Database',
+            }),
+            to: '/costs',
+          },
+          {
+            label: t('supplier_catalogs.step_catalog', {
+              defaultValue: 'Supplier Catalogs',
+            }),
+            current: true,
+          },
+          {
+            label: t('supplier_catalogs.step_procurement', {
+              defaultValue: 'Procurement',
+            }),
+            to: '/procurement',
+          },
+        ]}
+      />
 
       <div className="border-b border-border-light">
         <nav className="flex gap-1 -mb-px overflow-x-auto">
@@ -444,32 +485,63 @@ function CatalogTable({
   );
 }
 
+function ProcurementHandoff() {
+  const { t } = useTranslation();
+  return (
+    <Link
+      to="/procurement"
+      className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-border-light px-3 py-1.5 text-xs font-medium text-content-secondary hover:text-oe-blue hover:border-oe-blue transition-colors"
+    >
+      {t('supplier_catalogs.open_procurement', {
+        defaultValue: 'Track requisitions & POs in Procurement',
+      })}
+    </Link>
+  );
+}
+
 function PREmptyOrTable({ onAction }: { onAction: () => void }) {
   const { t } = useTranslation();
   return (
-    <EmptyState
-      icon={<ClipboardList size={22} />}
-      title={t('supplier_catalogs.prs_empty', { defaultValue: 'No requisitions visible' })}
-      description={t('supplier_catalogs.prs_empty_desc', {
-        defaultValue:
-          'Create a PR with line items and an approval chain. Once approved, it converts to a PO.',
-      })}
-      action={{ label: t('supplier_catalogs.new_pr', { defaultValue: 'New Requisition' }), onClick: onAction }}
-    />
+    <div className="flex flex-col items-center">
+      <EmptyState
+        icon={<ClipboardList size={22} />}
+        title={t('supplier_catalogs.prs_empty', {
+          defaultValue: 'Create a requisition',
+        })}
+        description={t('supplier_catalogs.prs_empty_desc', {
+          defaultValue:
+            'Raise a PR with line items here; its full lifecycle (approval → conversion to PO → receipt) is tracked in the Procurement module.',
+        })}
+        action={{
+          label: t('supplier_catalogs.new_pr', { defaultValue: 'New Requisition' }),
+          onClick: onAction,
+        }}
+      />
+      <ProcurementHandoff />
+    </div>
   );
 }
 
 function POEmptyOrTable({ onAction }: { onAction: () => void }) {
   const { t } = useTranslation();
   return (
-    <EmptyState
-      icon={<ShoppingCart size={22} />}
-      title={t('supplier_catalogs.pos_empty', { defaultValue: 'No purchase orders visible' })}
-      description={t('supplier_catalogs.pos_empty_desc', {
-        defaultValue: 'POs flow through draft → sent → acknowledged → received → closed.',
-      })}
-      action={{ label: t('supplier_catalogs.new_po', { defaultValue: 'New PO' }), onClick: onAction }}
-    />
+    <div className="flex flex-col items-center">
+      <EmptyState
+        icon={<ShoppingCart size={22} />}
+        title={t('supplier_catalogs.pos_empty', {
+          defaultValue: 'Create a purchase order',
+        })}
+        description={t('supplier_catalogs.pos_empty_desc', {
+          defaultValue:
+            'Issue a PO to a vendor here; the draft → sent → acknowledged → received → closed flow is managed in the Procurement module.',
+        })}
+        action={{
+          label: t('supplier_catalogs.new_po', { defaultValue: 'New PO' }),
+          onClick: onAction,
+        }}
+      />
+      <ProcurementHandoff />
+    </div>
   );
 }
 
@@ -713,6 +785,16 @@ function CreateModal({
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const [busy, setBusy] = useState(false);
+
+  // Real project picker for PR/PO instead of a raw UUID textbox — far less
+  // error-prone and matches every other project-scoped page.
+  const projectsQ = useQuery({
+    queryKey: ['sc', 'projects-lite'],
+    queryFn: listProjectsLite,
+    enabled: kind === 'prs' || kind === 'pos',
+    staleTime: 60_000,
+  });
+  const projectOptions = projectsQ.data ?? [];
 
   const [vendorForm, setVendorForm] = useState({
     code: '',
@@ -984,16 +1066,24 @@ function CreateModal({
             columns={3}
           >
             <WideModalField
-              label={t('supplier_catalogs.project_id', { defaultValue: 'Project ID' })}
+              label={t('supplier_catalogs.project', { defaultValue: 'Project' })}
               required
               span={3}
             >
-              <input
+              <select
                 value={prForm.project_id}
                 onChange={(e) => setPrForm({ ...prForm, project_id: e.target.value })}
                 className={inputCls}
-                placeholder="00000000-0000-0000-0000-000000000000"
-              />
+              >
+                <option value="">
+                  — {t('common.select', { defaultValue: 'Select' })} —
+                </option>
+                {projectOptions.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
             </WideModalField>
             <WideModalField
               label={t('common.currency', { defaultValue: 'Currency' })}
@@ -1078,14 +1168,23 @@ function CreateModal({
               </select>
             </WideModalField>
             <WideModalField
-              label={t('supplier_catalogs.project_id', { defaultValue: 'Project ID' })}
+              label={t('supplier_catalogs.project', { defaultValue: 'Project' })}
               required
             >
-              <input
+              <select
                 value={poForm.project_id}
                 onChange={(e) => setPoForm({ ...poForm, project_id: e.target.value })}
                 className={inputCls}
-              />
+              >
+                <option value="">
+                  — {t('common.select', { defaultValue: 'Select' })} —
+                </option>
+                {projectOptions.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
             </WideModalField>
             <WideModalField
               label={t('common.currency', { defaultValue: 'Currency' })}

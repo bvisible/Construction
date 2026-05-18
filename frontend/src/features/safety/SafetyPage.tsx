@@ -13,8 +13,6 @@ import {
   Loader2,
   Plus,
   X,
-  ClipboardCheck,
-  ListChecks,
   Heart,
   AlertTriangle,
   Home,
@@ -33,6 +31,7 @@ import {
   SkeletonTable,
 } from '@/shared/ui';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { SectionIntro } from '@/features/validation';
 import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -383,8 +382,12 @@ function QualityDashboardSummary({ projectId }: { projectId: string }) {
     ? inspections.filter((i) => i.status === 'scheduled' || i.status === 'in_progress').length
     : 0;
 
+  // NCR statuses are: identified | under_review | corrective_action |
+  // verification | closed | void. "Open" = anything not yet closed/void
+  // (the earlier `=== 'open'` check matched no real status, so freshly
+  // identified NCRs were silently undercounted on the safety dashboard).
   const openNCRs = ncrs
-    ? ncrs.filter((n) => n.status === 'open' || n.status === 'under_review' || n.status === 'corrective_action').length
+    ? ncrs.filter((n) => n.status !== 'closed' && n.status !== 'void').length
     : 0;
 
   const openDefects = punchSummary
@@ -511,17 +514,31 @@ export function SafetyPage() {
         </p>
       </div>
 
-      {/* Cross-module links */}
-      <div className="flex flex-wrap gap-1.5 mb-4">
-        <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/inspections')}>
-          <ClipboardCheck size={13} className="me-1" />
-          {t('safety.link_inspections', { defaultValue: 'Inspections' })}
-        </Button>
-        <Button variant="ghost" size="sm" className="text-xs" onClick={() => navigate('/punchlist')}>
-          <ListChecks size={13} className="me-1" />
-          {t('safety.link_punchlist', { defaultValue: 'Punch List' })}
-        </Button>
-      </div>
+      <SectionIntro
+        storageKey="safety"
+        title={t('safety.intro_title', {
+          defaultValue: 'Incidents vs. observations',
+        })}
+        links={[
+          {
+            label: t('safety.link_inspections', { defaultValue: 'Inspections' }),
+            onClick: () => navigate('/inspections'),
+          },
+          {
+            label: t('safety.link_punchlist', { defaultValue: 'Punch List' }),
+            onClick: () => navigate('/punchlist'),
+          },
+          {
+            label: t('safety.intro_link_hse', { defaultValue: 'HSE Advanced' }),
+            onClick: () => navigate('/hse-advanced'),
+          },
+        ]}
+      >
+        {t('safety.intro_body', {
+          defaultValue:
+            'Log Incidents for things that happened (injury, near-miss, property damage, fire, environmental) — they feed the “days without incident” compliance metric. Log Observations for hazards spotted before harm; their Severity × Likelihood risk score can prompt a follow-up inspection. For formal 5-Whys investigations, permits-to-work and CAPA tracking, use HSE Advanced.',
+        })}
+      </SectionIntro>
 
       {/* Quality Ecosystem Summary */}
       {projectId && <QualityDashboardSummary projectId={projectId} />}

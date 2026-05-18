@@ -1375,6 +1375,11 @@ class VariationsService:
         await self.daywork_repo.update_fields(
             data.sheet_id, subtotal_amount=subtotal, total_amount=total,
         )
+        # ``update_fields`` calls ``session.expire_all()`` which also
+        # expires the just-created ``row``. Re-load it so the caller can
+        # serialize it without triggering a lazy load outside the async
+        # greenlet (which raises MissingGreenlet -> 500).
+        await self.session.refresh(row)
         return row
 
     async def update_daywork_line(
@@ -1403,6 +1408,10 @@ class VariationsService:
         await self.daywork_repo.update_fields(
             row.sheet_id, subtotal_amount=subtotal, total_amount=total,
         )
+        # The sheet ``update_fields`` above ran ``session.expire_all()``,
+        # re-expiring ``row``; reload before returning so the response
+        # serializer doesn't hit a lazy load outside the greenlet.
+        await self.session.refresh(row)
         return row
 
     async def delete_daywork_line(self, line_id: uuid.UUID) -> None:

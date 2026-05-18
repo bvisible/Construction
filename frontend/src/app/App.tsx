@@ -15,7 +15,17 @@ const EmbeddedLayout =
 import { DashboardPage } from '@/features/dashboard';
 import { LoginPage, LoginPageNext, RegisterPage, ForgotPasswordPage } from '@/features/auth';
 import { ProjectsPage, CreateProjectPage, ProjectDetailPage, ProjectSettingsPage } from '@/features/projects';
-import { BOQListPage, CreateBOQPage, TemplatesPage } from '@/features/boq';
+// Import the lightweight BOQ pages from their source modules directly,
+// NOT via the `@/features/boq` barrel.  The barrel re-exports
+// `BOQEditorPage`, which statically pulls `BOQGrid` → `ag-grid-react` +
+// `ag-grid-community` (~900 KB).  An eager barrel import evaluates the
+// whole barrel graph, so ag-grid landed in the initial `index` chunk and
+// defeated the `lazy(() => import('@/features/boq/BOQEditorPage'))` below
+// (V320-PERF-01).  Deep-importing the light pages severs that eager edge
+// so ag-grid stays in the lazy BOQ-editor chunk.
+import { BOQListPage } from '@/features/boq/BOQListPage';
+import { CreateBOQPage } from '@/features/boq/CreateBOQPage';
+import { TemplatesPage } from '@/features/boq/TemplatesPage';
 import { syncCustomUnitsFromServer } from '@/features/boq/boqHelpers';
 import { CostsPage, ImportDatabasePage } from '@/features/costs';
 import { OnboardingWizard } from '@/features/onboarding';

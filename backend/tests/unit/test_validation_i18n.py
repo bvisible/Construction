@@ -142,15 +142,16 @@ class TestTranslateFallback:
             for rec in caplog.records
         ), f"expected fallback WARNING, got {[r.message for r in caplog.records]}"
 
-    def test_missing_key_falls_back_to_raw_key_with_warning(
+    def test_missing_key_falls_back_to_humanised_with_warning(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         reload_bundle()
         caplog.clear()
         with caplog.at_level(logging.WARNING, logger="app.core.validation.messages"):
             msg = translate("nonexistent.rule.fail", locale="en", foo="bar")
-        assert msg.startswith("nonexistent.rule.fail")
-        # The raw-key fallback still embeds params so debuggers can trace them
+        # The user must never see a raw dotted key — render a humanised
+        # fallback instead. Params stay embedded so debuggers can trace them.
+        assert "nonexistent.rule.fail" not in msg
         assert "foo=bar" in msg
         assert any(
             "not found" in rec.message.lower() and "nonexistent.rule.fail" in rec.message

@@ -2769,6 +2769,131 @@ class MeasurementConsistency(ValidationRule):
         ]
 
 
+# ── Pipeline Builder graph-validity rule ────────────────────────────────────
+
+
+class PipelineSideEffectGated(ValidationRule):
+    """Structural "AI proposes, human confirms" gate (design §3.5).
+
+    Fails the graph (ERROR — blocks publish) if any ``side_effecting``
+    node can be reached from a trigger/AI node *without* passing through a
+    ``gate.validation`` or ``gate.human_approval`` on that path. A failing
+    graph stays ``is_published=false`` and cannot be triggered.
+
+    The ``data`` shape is ``{"graph": {"nodes":[...], "edges":[...]}}``.
+    ``side_effecting`` is read from the Node Capability Registry so the
+    rule never drifts from what a node actually does.
+    """
+
+    rule_id = "pipeline.side_effecting_requires_gate"
+    name = "Side-effecting node requires a gate"
+    standard = "pipeline"
+    severity = Severity.ERROR
+    category = RuleCategory.STRUCTURE
+    description = (
+        "Every side-effecting (write) node must have a validation or "
+        "human-approval gate on every path from a trigger/AI node to it."
+    )
+
+    _GATE_TYPES = frozenset({"gate.validation", "gate.human_approval"})
+    _TRIGGER_PREFIXES = ("trigger.", "ai.")
+
+    async def validate(self, context: ValidationContext) -> list[RuleResult]:
+        locale = _get_locale(context)
+        data = context.data if isinstance(context.data, dict) else {}
+        graph = data.get("graph") if isinstance(data, dict) else None
+        if not isinstance(graph, dict):
+            return []
+        nodes = graph.get("nodes") or []
+        edges = graph.get("edges") or []
+        if not nodes:
+            return []
+
+        from app.core.pipeline.registry import node_registry
+
+        node_type: dict[str, str] = {
+            str(n.get("id")): str(n.get("type") or "") for n in nodes
+        }
+        in_edges: dict[str, list[str]] = {nid: [] for nid in node_type}
+        for e in edges:
+            src = str(e.get("source") or "")
+            dst = str(e.get("target") or "")
+            if src in node_type and dst in node_type:
+                in_edges.setdefault(dst, []).append(src)
+
+        def is_side_effecting(nid: str) -> bool:
+            spec = node_registry.get(node_type.get(nid, ""))
+            return bool(spec and spec.side_effecting)
+
+        def is_gate(nid: str) -> bool:
+            return node_type.get(nid, "") in self._GATE_TYPES
+
+        def is_origin(nid: str) -> bool:
+            t = node_type.get(nid, "")
+            return t.startswith(self._TRIGGER_PREFIXES) or not in_edges.get(nid)
+
+        # For every side-effecting node, walk every path backwards to an
+        # origin. If ANY such path has no gate, the graph fails. We do a
+        # DFS over reversed edges, treating a gate as a "satisfied" wall.
+        violations: list[str] = []
+        for target, ttype in node_type.items():
+            if not is_side_effecting(target):
+                continue
+
+            stack: list[tuple[str, bool]] = [(target, False)]
+            seen: set[tuple[str, bool]] = set()
+            ungated_path = False
+            while stack:
+                cur, gated = stack.pop()
+                if (cur, gated) in seen:
+                    continue
+                seen.add((cur, gated))
+                # A gate anywhere upstream of `target` (not the target
+                # itself) satisfies that branch.
+                cur_gated = gated or (cur != target and is_gate(cur))
+                preds = in_edges.get(cur, [])
+                if is_origin(cur) or not preds:
+                    if not cur_gated:
+                        ungated_path = True
+                        break
+                    continue
+                for p in preds:
+                    stack.append((p, cur_gated))
+            if ungated_path:
+                violations.append(f"{target} ({ttype})")
+
+        if violations:
+            return [
+                RuleResult(
+                    rule_id=self.rule_id,
+                    rule_name=self.name,
+                    severity=self.severity,
+                    category=self.category,
+                    passed=False,
+                    message=translate(
+                        "pipeline.side_effecting_requires_gate.fail",
+                        locale=locale,
+                        nodes=", ".join(sorted(violations)),
+                    ),
+                    details={"ungated_nodes": sorted(violations)},
+                    suggestion=translate(
+                        "pipeline.side_effecting_requires_gate.suggestion",
+                        locale=locale,
+                    ),
+                )
+            ]
+        return [
+            RuleResult(
+                rule_id=self.rule_id,
+                rule_name=self.name,
+                severity=self.severity,
+                category=self.category,
+                passed=True,
+                message=_ok(locale),
+            )
+        ]
+
+
 # ── Registration ────────────────────────────────────────────────────────────
 
 
@@ -2834,6 +2959,8 @@ def register_builtin_rules() -> None:
         # Sekisan (Japan)
         (SekisanCodeRequired(), None),
         (SekisanMetricUnits(), None),
+        # Pipeline Builder — structural graph-validity gate
+        (PipelineSideEffectGated(), None),
     ]
 
     for rule, sets in rules:

@@ -32,9 +32,10 @@ import {
 } from '@/shared/ui/WideModal';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { PipelineBanner } from './PipelineBanner';
 import { useToastStore } from '@/stores/useToastStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
-import { getErrorMessage } from '@/shared/lib/api';
+import { getErrorMessage, apiGet } from '@/shared/lib/api';
 import {
   listDevelopments,
   createDevelopment,
@@ -104,6 +105,17 @@ const WARRANTY_VARIANT: Record<WarrantyStatus, 'neutral' | 'blue' | 'success' | 
 
 const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
+
+interface ProjectStub {
+  id: string;
+  name: string;
+}
+
+function listProjectsLite(): Promise<ProjectStub[]> {
+  return apiGet<ProjectStub[]>('/v1/projects/?limit=200').catch(
+    () => [] as ProjectStub[],
+  );
+}
 // labelCls is still used by a couple of small inline modals (e.g.
 // BuyerContract date-pair) that were not migrated to WideModal because
 // they're tiny confirmation panels rather than full forms.
@@ -246,6 +258,28 @@ export function PropertyDevPage() {
                   : t('common.create', { defaultValue: 'Create' })}
         </Button>
       </div>
+
+      <PipelineBanner
+        intro={t('propdev.pipeline_intro', {
+          defaultValue:
+            'Residential sales pipeline: lay out a development of plots and house types, take buyers from lead → reservation → contract → handover, then service warranty claims. Contract values feed Finance.',
+        })}
+        steps={[
+          {
+            label: t('propdev.step_dev', { defaultValue: 'Development' }),
+            current: true,
+          },
+          { label: t('propdev.step_buyers', { defaultValue: 'Buyers' }) },
+          {
+            label: t('propdev.step_contracts', { defaultValue: 'Contracts' }),
+            to: '/contracts',
+          },
+          {
+            label: t('propdev.step_finance', { defaultValue: 'Finance' }),
+            to: '/finance',
+          },
+        ]}
+      />
 
       {/* Tabs */}
       <div className="border-b border-border-light">
@@ -1414,6 +1448,14 @@ function CreateModal({
   const prefCurrency = usePreferencesStore((s) => s.currency);
   const [busy, setBusy] = useState(false);
 
+  const projectsQ = useQuery({
+    queryKey: ['propdev', 'projects-lite'],
+    queryFn: listProjectsLite,
+    enabled: kind === 'developments',
+    staleTime: 60_000,
+  });
+  const projectOptions = projectsQ.data ?? [];
+
   const [devForm, setDevForm] = useState({
     project_id: '',
     code: '',
@@ -1548,16 +1590,24 @@ function CreateModal({
       {kind === 'developments' && (
         <WideModalSection columns={2}>
           <WideModalField
-            label={t('propdev.project_id', { defaultValue: 'Project ID (UUID)' })}
+            label={t('propdev.project', { defaultValue: 'Project' })}
             required
             span={2}
           >
-            <input
+            <select
               value={devForm.project_id}
               onChange={(e) => setDevForm({ ...devForm, project_id: e.target.value })}
               className={inputCls}
-              placeholder="00000000-0000-0000-0000-000000000000"
-            />
+            >
+              <option value="">
+                — {t('common.select', { defaultValue: 'Select' })} —
+              </option>
+              {projectOptions.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
           </WideModalField>
           <WideModalField
             label={t('propdev.code', { defaultValue: 'Code' })}

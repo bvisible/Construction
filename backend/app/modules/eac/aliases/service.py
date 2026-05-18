@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.eac.aliases.schemas import (
@@ -49,6 +50,25 @@ class AliasInUseError(Exception):
         self.usages = usages
 
 
+class AliasConflictError(Exception):
+    """‌⁠‍Raised when an alias with the same ``(scope, scope_id, name)`` exists.
+
+    The ``uq_eac_parameter_alias_scope_name`` unique constraint guards
+    against duplicate canonical names within a scope. Without this typed
+    error the raw ``IntegrityError`` would surface as an opaque 500; the
+    API layer maps this to a clean 409 Conflict instead.
+    """
+
+    def __init__(self, scope: str, scope_id: uuid.UUID | None, name: str) -> None:
+        super().__init__(
+            f"An alias named {name!r} already exists in scope "
+            f"{scope!r} (scope_id={scope_id}).",
+        )
+        self.scope = scope
+        self.scope_id = scope_id
+        self.name = name
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 
@@ -79,7 +99,21 @@ async def create_alias(
     *,
     tenant_id: uuid.UUID | None,
 ) -> EacParameterAlias:
-    """Create an alias and its synonyms in one transaction-flushed step."""
+    """Create an alias and its synonyms in one transaction-flushed step.
+
+    Raises :class:`AliasConflictError` when an alias with the same
+    ``(scope, scope_id, name)`` already exists — the
+    ``uq_eac_parameter_alias_scope_name`` unique constraint would
+    otherwise surface as an opaque 500.
+    """
+    dup_stmt = select(EacParameterAlias.id).where(
+        EacParameterAlias.scope == payload.scope,
+        EacParameterAlias.scope_id == payload.scope_id,
+        EacParameterAlias.name == payload.name,
+    )
+    if (await session.execute(dup_stmt)).first() is not None:
+        raise AliasConflictError(payload.scope, payload.scope_id, payload.name)
+
     alias = EacParameterAlias(
         scope=payload.scope,
         scope_id=payload.scope_id,
@@ -92,7 +126,16 @@ async def create_alias(
         tenant_id=tenant_id,
     )
     session.add(alias)
-    await session.flush()
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        # Race-safe backstop: a concurrent insert may have slipped between
+        # the pre-check and this flush. Roll back the half-added row so the
+        # session is reusable, then surface the same typed conflict.
+        await session.rollback()
+        raise AliasConflictError(
+            payload.scope, payload.scope_id, payload.name
+        ) from exc
 
     for syn_payload in payload.synonyms:
         syn = _build_synonym(syn_payload, alias_id=alias.id)
@@ -321,6 +364,7 @@ async def take_snapshot(
 
 
 __all__ = [
+    "AliasConflictError",
     "AliasInUseError",
     "create_alias",
     "delete_alias",

@@ -884,16 +884,24 @@ class EquipmentService:
         )
         await self.workorder_repo.create(wo)
 
+        # Capture PKs BEFORE update_fields() — its trailing expire_all()
+        # detaches every attribute on ``damage`` and ``wo``. ``wo`` is never
+        # refreshed afterwards, so a later ``wo.id`` access would trigger an
+        # illegal *synchronous* lazy-load on the async session and 500 the
+        # request. IDs are stable post-flush, so snapshot them here.
+        damage_id = damage.id
+        work_order_id = wo.id
+
         # Link back damage → WO
-        await self.damage_repo.update_fields(damage.id, work_order_id=wo.id)
+        await self.damage_repo.update_fields(damage_id, work_order_id=work_order_id)
         await self.session.refresh(damage)
 
         event_bus.publish_detached(
             "equipment.damage_reported",
             {
                 "equipment_id": str(data.equipment_id),
-                "damage_report_id": str(damage.id),
-                "work_order_id": str(wo.id),
+                "damage_report_id": str(damage_id),
+                "work_order_id": str(work_order_id),
                 "severity": data.severity,
                 "reported_by": data.reported_by,
             },

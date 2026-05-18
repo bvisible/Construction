@@ -315,24 +315,32 @@ class PortalService:
                 detail="Portal account is not active",
             )
 
+        # Snapshot scalars BEFORE any repo write. Every repo's
+        # ``update_fields`` ends with ``session.expire_all()``, which detaches
+        # *all* attributes on every loaded ORM instance — including ``user``
+        # and ``link``. Touching ``user.status`` / ``user.id`` after that
+        # point triggers an illegal *synchronous* lazy-load on the async
+        # session (MissingGreenlet → 500). The PKs/status are stable, so
+        # capture them here and operate on the locals afterwards.
+        link_id = link.id
+        user_id = user.id
+        user_status = user.status
+
         # Mark link consumed.
-        await self.magic_repo.update_fields(link.id, consumed_at=now)
+        await self.magic_repo.update_fields(link_id, consumed_at=now)
 
         # Activate first-login users.
-        if user.status == "invited":
+        if user_status == "invited":
             await self.user_repo.update_fields(
-                user.id, status="active", last_login_at=now,
+                user_id, status="active", last_login_at=now,
             )
-            user.status = "active"
-            user.last_login_at = now
         else:
-            await self.user_repo.update_fields(user.id, last_login_at=now)
-            user.last_login_at = now
+            await self.user_repo.update_fields(user_id, last_login_at=now)
 
         # Open session.
         plain_session = generate_token()
         sess = PortalSession(
-            portal_user_id=user.id,
+            portal_user_id=user_id,
             session_token_hash=hash_token(plain_session),
             ip_address=ip_address,
             user_agent=user_agent,
@@ -341,17 +349,26 @@ class PortalService:
             expires_at=now + SESSION_TTL,
         )
         sess = await self.session_repo.create(sess)
+        # Snapshot the freshly-flushed session fields before the next
+        # expire_all() (refresh below) can detach them.
+        session_id = sess.id
+        session_expires_at = sess.expires_at
+
+        # Re-load ``user`` as a live, fully-populated instance — the router
+        # serialises it via ``PortalUserResponse.model_validate(user)`` and
+        # the expire_all() chain above left every attribute detached.
+        await self.session.refresh(user)
 
         event_bus.publish_detached(
             "portal.user.session_started",
             {
-                "portal_user_id": str(user.id),
-                "session_id": str(sess.id),
+                "portal_user_id": str(user_id),
+                "session_id": str(session_id),
                 "ip_address": ip_address,
             },
             source_module="portal",
         )
-        return user, sess, plain_session, sess.expires_at
+        return user, sess, plain_session, session_expires_at
 
     async def verify_session(self, session_token: str) -> PortalUser | None:
         """Validate a session token. Returns the owning user or ``None``.
@@ -377,7 +394,17 @@ class PortalService:
         if user is None or user.status in ("suspended", "expired"):
             return None
 
+        # session_repo.update_fields() ends with session.expire_all(), which
+        # detaches *every* attribute on the already-loaded ``user``. The
+        # returned object is consumed by the portal-session dependency and its
+        # route handlers (``user.id``, ``PortalUserResponse.model_validate``);
+        # touching an expired attribute later triggers an illegal synchronous
+        # lazy-load on the async session (MissingGreenlet → 500). Snapshot the
+        # PK across the expiring write, then re-load ``user`` as a live,
+        # fully-populated instance.
+        user_id = user.id
         await self.session_repo.update_fields(sess.id, last_seen_at=now)
+        user = await self.user_repo.get_by_id(user_id)
         return user
 
     async def revoke_session(self, session_token: str) -> bool:

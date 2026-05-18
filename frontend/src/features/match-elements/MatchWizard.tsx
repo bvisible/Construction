@@ -43,6 +43,7 @@ import {
   Sofa,
   Sparkles,
   SquareStack,
+  Target,
   TreePine,
   Wrench,
 } from 'lucide-react';
@@ -121,7 +122,7 @@ function Stepper({
     1: t('match_wizard.pill_stage', 'Stage'),
     2: t('match_wizard.pill_catalogue', 'Catalogue'),
     3: t('match_wizard.pill_source', 'Source'),
-    4: t('match_wizard.pill_run', 'Run'),
+    4: t('match_wizard.pill_run', 'Run & review'),
   };
   return (
     // Bigger circles + always-visible labels + thicker connector lines.
@@ -1069,12 +1070,12 @@ function ReviewStep({
           {t('match_wizard.step4_eyebrow', 'Step 4')}
         </p>
         <h2 className="text-2xl font-semibold tracking-tight text-content-primary mb-1.5">
-          {t('match_wizard.step4_title', "Looks good — let's match")}
+          {t('match_wizard.step4_title', 'Run the match — then refine it')}
         </h2>
         <p className="text-sm text-content-secondary leading-relaxed max-w-xl">
           {t(
             'match_wizard.step4_help',
-            'We’ll create the session and run a vector match. You can re-run with lexical / resources from the results page after.',
+            'This creates the session and runs the first match. You then continue in the same flow: the visible 7-stage pipeline (Convert → Load → Schema → Filter → Group → Match → Rollup) opens so you can tune each step and re-run until the priced BoQ fits this project.',
           )}
         </p>
       </header>
@@ -1220,8 +1221,36 @@ export function MatchWizard({
         className="pointer-events-none absolute inset-x-0 top-0 h-64 bg-gradient-to-b from-indigo-50/60 via-transparent to-transparent dark:from-indigo-950/20 -z-10 rounded-3xl"
       />
 
-      {/* Stepper sits inset on a narrow column so it stays visually
-          centred even when the content card itself spans the page. */}
+      {/* Goal banner — the single source of "why am I here". States the
+          end goal (an accurate, project-adaptive priced BoQ) and frames
+          the steps as a progressive refinement, so the stepper below
+          reads as one continuous journey rather than a standalone form.
+          This replaced the old second entry card + duplicate hero
+          breadcrumb — there is now exactly one stepper on the page. */}
+      <div className="max-w-3xl mx-auto mb-1">
+        <div className="rounded-2xl border border-indigo-200/60 dark:border-indigo-800/50 bg-gradient-to-br from-indigo-50/70 via-white to-sky-50/50 dark:from-indigo-950/30 dark:via-surface-primary dark:to-sky-950/20 px-5 py-3.5 flex items-start gap-3 shadow-sm">
+          <span className="shrink-0 w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-sky-500 text-white inline-flex items-center justify-center shadow-sm">
+            <Target className="w-4 h-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-bold text-content-primary leading-tight">
+              {t(
+                'match_wizard.goal_title',
+                'From your model to a priced Bill of Quantities',
+              )}
+            </h2>
+            <p className="text-xs text-content-secondary mt-0.5 leading-relaxed">
+              {t(
+                'match_wizard.goal_blurb',
+                'Four quick steps set up the match. You then review and tune the 7-stage pipeline — each pass sharpens the costing until the estimate fits this specific project.',
+              )}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* The single stepper. Inset on a narrow column so it stays
+          visually centred even when the content card spans the page. */}
       <div className="max-w-3xl mx-auto">
         <Stepper current={step} onJump={(n) => n <= step && setStep(n)} />
       </div>

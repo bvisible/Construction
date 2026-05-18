@@ -117,11 +117,13 @@ from app.modules.boq.schemas import (
     MarkupUpdate,
     PositionCO2Detail,
     PositionCreate,
+    PositionLinksResponse,
     PositionResponse,
     PositionUpdate,
     PrerequisiteItem,
     PricingAnomaly,
     RateMatch,
+    ResourceCodeLookupResponse,
     ResourcePositionRef,
     ResourceSummaryItem,
     ResourceSummaryResponse,
@@ -139,7 +141,7 @@ from app.modules.boq.schemas import (
     SustainabilityResponse,
     TemplateInfo,
 )
-from app.modules.boq.service import BOQService
+from app.modules.boq.service import MAX_NESTING_DEPTH, BOQService
 from app.modules.costs.repository import CostItemRepository
 
 router = APIRouter()
@@ -290,9 +292,12 @@ def _position_to_response(position: object) -> PositionResponse:
         ordinal=position.ordinal,  # type: ignore[attr-defined]
         description=position.description,  # type: ignore[attr-defined]
         unit=position.unit,  # type: ignore[attr-defined]
-        quantity=float(position.quantity),  # type: ignore[attr-defined]
-        unit_rate=float(position.unit_rate),  # type: ignore[attr-defined]
-        total=float(position.total),  # type: ignore[attr-defined]
+        # BUG-B-011: forward the exact stored decimal string; the schema
+        # now keeps it as Decimal and serialises a plain string, so a
+        # 999,999,999.99 × 999,999.99 total no longer loses its tail.
+        quantity=position.quantity,  # type: ignore[attr-defined]
+        unit_rate=position.unit_rate,  # type: ignore[attr-defined]
+        total=position.total,  # type: ignore[attr-defined]
         classification=position.classification,  # type: ignore[attr-defined]
         source=position.source,  # type: ignore[attr-defined]
         confidence=_coerce_confidence(position.confidence),  # type: ignore[attr-defined]
@@ -306,7 +311,41 @@ def _position_to_response(position: object) -> PositionResponse:
         # BUG-CONCURRENCY01: surface the row's optimistic-concurrency
         # token so clients can echo it on the next PATCH.
         version=int(getattr(position, "version", 0) or 0),  # type: ignore[attr-defined]
+        # Issue #127: reuse-group fields (read-only). ``linked_instance_count``
+        # needs a project-wide query so it is left None here and populated
+        # explicitly by the links endpoint / propagation paths.
+        reference_code=getattr(position, "reference_code", None),  # type: ignore[attr-defined]
+        link_role=getattr(position, "link_role", None),  # type: ignore[attr-defined]
+        link_group_id=getattr(position, "link_group_id", None),  # type: ignore[attr-defined]
     )
+
+
+async def _position_to_response_with_links(
+    service: BOQService,
+    position: object,
+) -> PositionResponse:
+    """Issue #127: like ``_position_to_response`` but, for a master,
+    populate ``linked_instance_count`` via a single project-wide query.
+
+    Used only by the single-position endpoints (GET / PATCH / add /
+    unlink) — the grid/list endpoints stay on the cheap sync builder so
+    they don't pay a per-row link query.
+    """
+    resp = _position_to_response(position)
+    if getattr(position, "link_role", None) == "master":
+        try:
+            links = await service.list_links(position.id)  # type: ignore[attr-defined]
+            resp.linked_instance_count = links.instance_count
+        except Exception:  # noqa: BLE001 — count is advisory, never break
+            _log.debug("linked_instance_count enrichment failed", exc_info=True)
+    # Issue #127: merge the transient propagation/unlink outcome (set by
+    # the service on a NON-mapped attribute so it never hits the DB).
+    info = getattr(position, "_link_propagation_info", None)
+    if isinstance(info, dict):
+        merged = dict(resp.metadata) if isinstance(resp.metadata, dict) else {}
+        merged["link_propagation"] = info
+        resp.metadata = merged
+    return resp
 
 
 def _markup_to_response(markup: object) -> MarkupResponse:
@@ -1060,6 +1099,31 @@ async def get_project_activity(
     return await service.get_activity_for_project(project_id, offset=offset, limit=limit)
 
 
+@router.get(
+    "/projects/{project_id}/resource-by-code/",
+    response_model=ResourceCodeLookupResponse,
+    summary="Look up an existing resource by its code (project-wide)",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+)
+async def lookup_resource_by_code(
+    project_id: uuid.UUID,
+    code: str,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: BOQService = Depends(_get_service),
+) -> ResourceCodeLookupResponse:
+    """Issue #133 — find the first existing resource using ``code``.
+
+    Drives the "this code is already in use — insert the existing
+    resource, or create a new one with another code?" prompt in the BOQ
+    editor's manual resource form. Returns ``found=False`` when the code
+    is unused anywhere in the project.
+    """
+    await _verify_project_owner_for_boq(session, project_id, user_id, payload)
+    return await service.find_resource_by_code(project_id, code)
+
+
 @router.patch(
     "/boqs/{boq_id}",
     response_model=BOQResponse,
@@ -1480,7 +1544,9 @@ async def add_position(
         boq_id=boq_id,
         target_id=position.id,
     )
-    return _position_to_response(position)
+    # Issue #127: a reuse may have promoted an existing row to master —
+    # surface linked_instance_count on the new instance's response.
+    return await _position_to_response_with_links(service, position)
 
 
 @router.post(
@@ -1620,7 +1686,7 @@ async def get_position(
     if existing is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
-    return _position_to_response(existing)
+    return await _position_to_response_with_links(service, existing)
 
 
 @router.patch(
@@ -1655,7 +1721,9 @@ async def update_position(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         ) from exc
-    return _position_to_response(position)
+    # Issue #127: master propagation count / unlink flag is on the
+    # position metadata; enrich linked_instance_count for masters.
+    return await _position_to_response_with_links(service, position)
 
 
 class _ResourceVariantRepickBody(BaseModel):
@@ -1712,6 +1780,63 @@ async def repick_resource_variant(
         actor_id=user_id,
     )
     return _position_to_response(position)
+
+
+# ── Issue #127: linked-position (code reuse) endpoints ────────────────────────
+
+
+@router.get(
+    "/positions/{position_id}/links/",
+    response_model=PositionLinksResponse,
+    summary="List linked positions sharing this code",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+)
+async def list_position_links(
+    position_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: BOQService = Depends(_get_service),
+) -> PositionLinksResponse:
+    """List every position that reuses this position's ``reference_code``.
+
+    Issue #127. Returns the reuse group across the WHOLE project: which
+    member is the master, per-instance ordinals + quantities + totals, and
+    counts. A standalone position (code used once) returns ``linked=False``.
+    """
+    existing = await service.position_repo.get_by_id(position_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+    await _verify_boq_owner(session, existing.boq_id, user_id, payload)
+    return await service.list_links(position_id)
+
+
+@router.post(
+    "/positions/{position_id}/unlink/",
+    response_model=PositionResponse,
+    summary="Unlink a position from its reuse group",
+    dependencies=[Depends(RequirePermission("boq.update"))],
+)
+async def unlink_position(
+    position_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: BOQService = Depends(_get_service),
+) -> PositionResponse:
+    """Detach a position from its reference-code reuse group.
+
+    Issue #127. Values are unchanged (the position keeps its definition
+    and ``reference_code``); it just stops following the master. Unlinking
+    a master promotes the oldest remaining instance (or dissolves the
+    group) so no instance is orphaned.
+    """
+    existing = await service.position_repo.get_by_id(position_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+    await _verify_boq_owner(session, existing.boq_id, user_id, payload)
+    position = await service.unlink_position(position_id, actor_id=user_id)
+    return await _position_to_response_with_links(service, position)
 
 
 @router.delete(
@@ -1780,6 +1905,25 @@ async def reorder_positions(
         boq_id=boq_id,
     )
     return {"ok": True}
+
+
+# ── BOQ limits (Issue #136) ───────────────────────────────────────────────────
+
+
+@router.get(
+    "/limits/",
+    summary="BOQ structural limits (max nesting depth, etc.)",
+    dependencies=[Depends(RequirePermission("boq.read"))],
+)
+async def get_boq_limits() -> dict[str, int]:
+    """Return server-enforced BOQ structural limits.
+
+    Issue #136 — the editor reads ``max_nesting_depth`` so it can disable
+    "add child" / "add sub-section" once the configurable cap is reached
+    and show a tooltip, keeping the UI in lock-step with the backend
+    validation (single source of truth: ``service.MAX_NESTING_DEPTH``).
+    """
+    return {"max_nesting_depth": MAX_NESTING_DEPTH}
 
 
 # ── Section CRUD ──────────────────────────────────────────────────────────────
@@ -2133,9 +2277,14 @@ async def validate_boq(
             "ordinal": pos.ordinal,
             "description": pos.description,
             "unit": pos.unit,
-            "quantity": pos.quantity,
-            "unit_rate": pos.unit_rate,
-            "total": pos.total,
+            # BUG-B-011: PositionResponse exposes these as exact Decimal
+            # now. The validation engine's built-in rules were written
+            # against the historical float contract — keep feeding it
+            # floats here so rule numeric comparisons are unchanged (the
+            # exact value still round-trips in the API response).
+            "quantity": float(pos.quantity),
+            "unit_rate": float(pos.unit_rate),
+            "total": float(pos.total),
             "classification": pos.classification,
             "source": getattr(pos, "source", None),
             "type": _row_type(pos),
@@ -2420,6 +2569,19 @@ async def export_boq_csv(
 
     # Use structured data to include markups in the grand total
     structured = await service.get_boq_structured(boq_id)
+    # Issue #111 — freeze the project FX table into the exported artifact so
+    # the base-currency totals are auditable and a later rate edit cannot
+    # retroactively rewrite a delivered BOQ.
+    base_ccy, fx_map = await service.get_export_fx(boq_id)
+
+    def _row_currency(pos: Any) -> str:
+        meta = getattr(pos, "metadata", None) or getattr(pos, "metadata_", None) or {}
+        if isinstance(meta, dict):
+            for key in ("currency", "position_currency", "project_currency"):
+                val = meta.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip().upper()
+        return base_ccy or ""
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -2433,6 +2595,7 @@ async def export_boq_csv(
             "Quantity",
             "Unit Rate",
             "Total",
+            "Currency",
             "Classification",
             "Classification JSON",
             "Source",
@@ -2458,6 +2621,7 @@ async def export_boq_csv(
             _fmt_number(getattr(pos, "quantity", 0.0)),
             _fmt_number(getattr(pos, "unit_rate", 0.0)),
             _fmt_number(getattr(pos, "total", 0.0)),
+            neutralise_formula(_row_currency(pos)),
             neutralise_formula(_get_classification_code(classification)),
             neutralise_formula(
                 _json.dumps(classification, ensure_ascii=False) if classification else ""
@@ -2491,6 +2655,7 @@ async def export_boq_csv(
                 "",
                 "",
                 "",
+                "",
             ]
         )
         for pos in section.positions:
@@ -2500,15 +2665,17 @@ async def export_boq_csv(
     for pos in structured.positions:
         writer.writerow(_pos_row(pos))
 
-    # Direct cost subtotal
-    writer.writerow(
-        [
+    # Aggregate rows are stated in the project BASE currency (foreign-priced
+    # positions were converted via the frozen FX table below — Issue #111).
+    def _total_row(label: str, amount: Any) -> list[str]:
+        return [
             "",
-            "Direct Cost",
+            label,
             "",
             "",
             "",
-            _fmt_number(structured.direct_cost),
+            _fmt_number(amount),
+            base_ccy or "",
             "",
             "",
             "",
@@ -2517,18 +2684,36 @@ async def export_boq_csv(
             "",
             "",
         ]
-    )
+
+    # Direct cost subtotal
+    writer.writerow(_total_row("Direct Cost", structured.direct_cost))
 
     # Markup rows — markup.name is user-controlled.
     for markup in structured.markups:
         writer.writerow(
+            _total_row(neutralise_formula(f"  {markup.name}"), markup.amount)
+        )
+
+    # Grand total row (includes markups)
+    writer.writerow(_total_row("Grand Total", structured.grand_total))
+
+    # FX-rate appendix (Issue #111) — the exact rates that produced the
+    # base-currency totals above, frozen at export time. ``rate`` is units
+    # of base per 1 unit of the listed foreign currency.
+    if fx_map:
+        writer.writerow([""] * 14)
+        writer.writerow(
+            ["", "FX Rates (frozen at export)", "", "", "", "", "", "", "", "", "", "", "", ""]
+        )
+        writer.writerow(
             [
                 "",
-                neutralise_formula(f"  {markup.name}"),
+                "Base currency",
                 "",
                 "",
                 "",
-                _fmt_number(markup.amount),
+                "",
+                neutralise_formula(base_ccy or ""),
                 "",
                 "",
                 "",
@@ -2538,25 +2723,25 @@ async def export_boq_csv(
                 "",
             ]
         )
-
-    # Grand total row (includes markups)
-    writer.writerow(
-        [
-            "",
-            "Grand Total",
-            "",
-            "",
-            "",
-            _fmt_number(structured.grand_total),
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "",
-        ]
-    )
+        for _code, _rate in sorted(fx_map.items()):
+            writer.writerow(
+                [
+                    "",
+                    neutralise_formula(f"1 {_code} ="),
+                    "",
+                    "",
+                    "",
+                    neutralise_formula(str(_rate)),
+                    neutralise_formula(base_ccy or ""),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                ]
+            )
 
     content = output.getvalue()
     output.close()
@@ -2605,6 +2790,20 @@ async def export_boq_excel(
     boq_data = await service.get_boq_with_positions(boq_id)
     boq_obj = await service.get_boq(boq_id)
     structured_data = await service.get_boq_structured(boq_id)
+    # Issue #111 — structured_data totals are FX-converted into the project
+    # base currency; boq_data.grand_total is a raw position sum (wrong for
+    # mixed-currency BOQs). Source the aggregate cells from structured_data
+    # and freeze the FX table used to produce them.
+    base_ccy, fx_map = await service.get_export_fx(boq_id)
+
+    def _xl_row_currency(p: Any) -> str:
+        meta = getattr(p, "metadata", None) or getattr(p, "metadata_", None) or {}
+        if isinstance(meta, dict):
+            for key in ("currency", "position_currency", "project_currency"):
+                val = meta.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip().upper()
+        return base_ccy or ""
 
     # ── Custom column definitions from BOQ metadata ──────────────────────
     boq_meta = boq_obj.metadata_ if isinstance(boq_obj.metadata_, dict) else {}
@@ -2626,6 +2825,7 @@ async def export_boq_excel(
         "Quantity",
         "Unit Rate",
         "Total",
+        "Currency",
         "Classification",
         "Classification JSON",
         "Source",
@@ -2755,39 +2955,44 @@ async def export_boq_excel(
         ws.cell(
             row=current_row,
             column=7,
-            value=neutralise_formula(_get_classification_code(classification_)),
+            value=neutralise_formula(_xl_row_currency(pos)),
         )
         ws.cell(
             row=current_row,
             column=8,
+            value=neutralise_formula(_get_classification_code(classification_)),
+        )
+        ws.cell(
+            row=current_row,
+            column=9,
             value=neutralise_formula(
                 _json.dumps(classification_, ensure_ascii=False) if classification_ else ""
             ),
         )
         ws.cell(
             row=current_row,
-            column=9,
+            column=10,
             value=neutralise_formula(getattr(pos, "source", "") or ""),
         )
         conf = getattr(pos, "confidence", None)
-        ws.cell(row=current_row, column=10, value=float(conf) if conf is not None else None)
+        ws.cell(row=current_row, column=11, value=float(conf) if conf is not None else None)
         ws.cell(
             row=current_row,
-            column=11,
+            column=12,
             value=neutralise_formula(
                 getattr(pos, "wbs_code", "") or getattr(pos, "wbs_id", "") or ""
             ),
         )
         ws.cell(
             row=current_row,
-            column=12,
+            column=13,
             value=neutralise_formula(
                 ",".join(str(x) for x in cad_ids) if isinstance(cad_ids, list) else ""
             ),
         )
         ws.cell(
             row=current_row,
-            column=13,
+            column=14,
             value=neutralise_formula(
                 _json.dumps(pos_meta_raw, ensure_ascii=False) if pos_meta_raw else ""
             ),
@@ -2833,18 +3038,69 @@ async def export_boq_excel(
     total_label.font = grand_total_font
     total_label.border = top_border
 
-    grand_total_cell = ws.cell(row=total_row, column=6, value=boq_data.grand_total)
+    # Issue #111: grand total is the FX-converted base-currency figure from
+    # structured_data (boq_data.grand_total is a raw position sum that is
+    # wrong for mixed-currency BOQs).
+    grand_total_cell = ws.cell(
+        row=total_row, column=6, value=structured_data.grand_total
+    )
     grand_total_cell.font = grand_total_font
     grand_total_cell.number_format = number_format
     grand_total_cell.alignment = right_align
     grand_total_cell.border = top_border
+    ccy_cell = ws.cell(row=total_row, column=7, value=neutralise_formula(base_ccy or ""))
+    ccy_cell.font = grand_total_font
+    ccy_cell.border = top_border
+
+    # ── FX-rate appendix (Issue #111) ────────────────────────────────────
+    # Freeze the exact rates that produced the base-currency totals above so
+    # a downloaded BOQ stays auditable after a later project rate edit.
+    last_row = total_row
+    if fx_map:
+        appendix_row = total_row + 2
+        hdr = ws.cell(
+            row=appendix_row, column=1, value="FX Rates (frozen at export)"
+        )
+        hdr.font = bold_font
+        ws.cell(row=appendix_row + 1, column=1, value="Base currency")
+        ws.cell(
+            row=appendix_row + 1,
+            column=2,
+            value=neutralise_formula(base_ccy or ""),
+        )
+        from decimal import Decimal as _DecFx
+        from decimal import InvalidOperation as _InvOpFx
+
+        def _rate_value(raw: str) -> _DecFx | str:
+            try:
+                d = _DecFx(str(raw).strip())
+            except (_InvOpFx, ValueError, TypeError):
+                return neutralise_formula(str(raw))
+            return d if d.is_finite() else neutralise_formula(str(raw))
+
+        rate_row = appendix_row + 2
+        for _code, _rate in sorted(fx_map.items()):
+            ws.cell(
+                row=rate_row,
+                column=1,
+                value=neutralise_formula(f"1 {_code}"),
+            )
+            rc = ws.cell(row=rate_row, column=2, value=_rate_value(_rate))
+            rc.number_format = number_format
+            ws.cell(
+                row=rate_row,
+                column=3,
+                value=neutralise_formula(base_ccy or ""),
+            )
+            rate_row += 1
+        last_row = rate_row
 
     # ── Auto-width columns ────────────────────────────────────────────────
     for col_idx in range(1, len(headers) + 1):
         max_length = len(str(headers[col_idx - 1]))
         for row in ws.iter_rows(
             min_row=2,
-            max_row=total_row,
+            max_row=last_row,
             min_col=col_idx,
             max_col=col_idx,
         ):
@@ -3091,6 +3347,63 @@ async def export_boq_gaeb(
             return "0.00"
         return str(d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
+    def _to_dec(value: Any) -> "Decimal | None":  # noqa: F821
+        """Best-effort Decimal coercion; ``None`` when not finite/parseable."""
+        from decimal import Decimal, InvalidOperation
+
+        if value is None or value == "":
+            return None
+        try:
+            d = value if isinstance(value, Decimal) else Decimal(str(value).strip())
+        except (InvalidOperation, ValueError):
+            return None
+        return d if d.is_finite() else None
+
+    def _gaeb_line_prices(qty: Any, unit_rate: Any, total: Any) -> tuple[str, str]:
+        """Return GAEB-consistent ``(UP, IT)`` strings for one Item.
+
+        BUG-B-002 / NEW-B-102: GAEB DA 3.3 requires the line invariant
+        ``GP = Menge × EP`` to hold at the *exported* precision — a
+        consumer that recomputes ``Qty × UP`` must land exactly on the
+        declared ``IT``. Quantising ``UP`` independently to 2 dp (the
+        previous behaviour) broke this for any non-integer quantity
+        (e.g. 1234.567 × 285.56 ≠ stored 4 dp total).
+
+        Strategy: derive ``UP`` from the stored 4 dp line total at 4 dp
+        (``UP = IT / Qty`` — GAEB DA permits >2 dp Einheitspreis, 4 dp is
+        standard-safe), then recompute ``IT = round(Qty × UP, 2)`` so the
+        two elements are mutually consistent. When ``Qty`` is zero/absent
+        we fall back to the stored unit_rate (no division possible) and a
+        2 dp total. The grand-total ``TotPr`` is emitted separately from
+        ``boq_data.grand_total`` and is unaffected, so the GAEB document's
+        grand total still equals the CSV/Excel grand total.
+        """
+        from decimal import ROUND_HALF_UP, Decimal
+
+        q = _to_dec(qty)
+        it_stored = _to_dec(total)
+        ur = _to_dec(unit_rate)
+
+        q4 = Decimal("0.0001")
+        c2 = Decimal("0.01")
+
+        if q is not None and q != 0 and it_stored is not None:
+            up = (it_stored / q).quantize(q4, rounding=ROUND_HALF_UP)
+            it = (q * up).quantize(c2, rounding=ROUND_HALF_UP)
+            return (str(up), str(it))
+
+        # No usable quantity → cannot enforce the multiplicative invariant;
+        # emit the stored unit rate (4 dp) and stored total (2 dp) as-is.
+        up_fallback = (
+            str(ur.quantize(q4, rounding=ROUND_HALF_UP)) if ur is not None else "0.00"
+        )
+        it_fallback = (
+            str(it_stored.quantize(c2, rounding=ROUND_HALF_UP))
+            if it_stored is not None
+            else "0.00"
+        )
+        return (up_fallback, it_fallback)
+
     def _fmt_qty(value: Any) -> str:
         """Format a quantity for GAEB XML — preserves full precision.
 
@@ -3209,8 +3522,9 @@ async def export_boq_gaeb(
             detail_txt = ET.SubElement(complete_text, "DetailTxt")
             ET.SubElement(detail_txt, "Text").text = pos.description
 
-            ET.SubElement(item, "UP").text = _fmt_price(pos.unit_rate)
-            ET.SubElement(item, "IT").text = _fmt_price(pos.total)
+            _up, _it = _gaeb_line_prices(pos.quantity, pos.unit_rate, pos.total)
+            ET.SubElement(item, "UP").text = _up
+            ET.SubElement(item, "IT").text = _it
 
     # ── Ungrouped positions → directly in root BoQBody (ENH-097) ──────────
     # GAEB 3.3 permits an ``Itemlist`` directly beneath the root ``BoQBody``
@@ -3235,8 +3549,9 @@ async def export_boq_gaeb(
             detail_txt = ET.SubElement(complete_text, "DetailTxt")
             ET.SubElement(detail_txt, "Text").text = pos.description
 
-            ET.SubElement(item, "UP").text = _fmt_price(pos.unit_rate)
-            ET.SubElement(item, "IT").text = _fmt_price(pos.total)
+            _up, _it = _gaeb_line_prices(pos.quantity, pos.unit_rate, pos.total)
+            ET.SubElement(item, "UP").text = _up
+            ET.SubElement(item, "IT").text = _it
 
     # ── Trailing BoQInfo with grand total ─────────────────────────────────
     boq_info_total = ET.SubElement(boq_el, "BoQInfo")
@@ -5543,7 +5858,11 @@ async def get_sensitivity(
     # Filter to non-section positions (positions that have a unit)
     items = [p for p in boq_data.positions if p.unit and p.unit.strip() != ""]
 
-    base_total = sum(p.total for p in items)
+    # BUG-B-011: PositionResponse.total is now an exact Decimal. This
+    # sensitivity model multiplies by a float factor, so work in float
+    # locally (the exact value is preserved in storage / JSON response —
+    # a ±10% sensitivity band does not need sub-cent exactness).
+    base_total = float(sum(p.total for p in items))
 
     if base_total == 0 or len(items) == 0:
         return SensitivityResponse(
@@ -5556,7 +5875,7 @@ async def get_sensitivity(
 
     sensitivity_items: list[SensitivityItem] = []
     for pos in items:
-        pos_total = pos.total
+        pos_total = float(pos.total)
         share_pct = round(pos_total / base_total * 100, 2)
         impact = round(pos_total * factor, 2)
         sensitivity_items.append(
@@ -5677,7 +5996,11 @@ async def get_cost_risk(
 
     # Filter to non-section positions (positions that have a unit)
     items = [p for p in boq_data.positions if p.unit and p.unit.strip() != ""]
-    base_total = sum(p.total for p in items)
+    # BUG-B-011: PositionResponse.total is now an exact Decimal; this
+    # Monte-Carlo model runs in float (the exact value is preserved in
+    # storage / JSON response — a stochastic risk band does not need
+    # sub-cent exactness).
+    base_total = float(sum(p.total for p in items))
 
     if base_total == 0 or len(items) == 0:
         return CostRiskResponse(
@@ -5697,7 +6020,7 @@ async def get_cost_risk(
     # Pre-compute per-position bounds
     position_bounds: list[tuple[float, float, float, str, str]] = []
     for pos in items:
-        t = pos.total
+        t = float(pos.total)
         position_bounds.append((t * opt_factor, t, t * pess_factor, pos.ordinal, pos.description))
 
     # Run Monte Carlo simulation

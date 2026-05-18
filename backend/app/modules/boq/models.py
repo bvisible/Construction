@@ -120,6 +120,26 @@ class Position(Base):
     wbs_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     cost_code_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
+    # ── Issue #127: reusable code & linked-position groups ───────────────
+    # ``reference_code`` is the USER-FACING reusable code
+    # (Sección/Partida/Recurso, e.g. "0040"). It is DELIBERATELY distinct
+    # from ``ordinal`` (the line number): ``ordinal`` stays unique within a
+    # BOQ (GAEB X83 RNoPart/ID identity + boq_quality.no_duplicate_ordinals),
+    # while the SAME ``reference_code`` may be reused across many positions.
+    # Every position carries one (auto-generated "R-XXXXXXXX" when the
+    # client supplies none) so it is always referenceable.
+    reference_code: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    # Positions that SHARE one master definition all carry the same
+    # ``link_group_id``. NULL = standalone (not yet part of a group).
+    link_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), nullable=True, index=True
+    )
+    # 'master' = owns the canonical definition; 'instance' = a linked reuse
+    # that mirrors the master's definition; NULL = standalone.
+    link_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
         "metadata",
         JSON,

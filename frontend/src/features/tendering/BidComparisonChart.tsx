@@ -30,26 +30,38 @@ const MIN_CHART_HEIGHT = 300;
 const TICK_COUNT = 5;
 
 function formatCompact(amount: number, currency: string): string {
+  // currency may be "" — appending it then renders a clean number with no
+  // symbol rather than a wrong one (task #217). Trim so we don't leave a
+  // trailing space.
+  const suffix = currency ? ` ${currency}` : '';
   if (amount >= 1_000_000) {
-    return `${(amount / 1_000_000).toFixed(1)}M ${currency}`;
+    return `${(amount / 1_000_000).toFixed(1)}M${suffix}`;
   }
   if (amount >= 1_000) {
-    return `${(amount / 1_000).toFixed(0)}K ${currency}`;
+    return `${(amount / 1_000).toFixed(0)}K${suffix}`;
   }
-  return `${amount.toFixed(0)} ${currency}`;
+  return `${amount.toFixed(0)}${suffix}`;
 }
 
 function formatFull(amount: number, currency: string): string {
-  const safe = /^[A-Z]{3}$/.test(currency) ? currency : 'EUR';
+  const code = (currency || '').trim().toUpperCase();
+  // NEVER hard-fallback to EUR (task #217): render a symbol-less number
+  // when the currency is unknown.
+  if (!/^[A-Z]{3}$/.test(code)) {
+    return new Intl.NumberFormat(getIntlLocale(), {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(amount);
+  }
   try {
     return new Intl.NumberFormat(getIntlLocale(), {
       style: 'currency',
-      currency: safe,
+      currency: code,
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(amount);
   } catch {
-    return `${amount.toFixed(0)} ${safe}`;
+    return `${amount.toFixed(0)} ${code}`;
   }
 }
 

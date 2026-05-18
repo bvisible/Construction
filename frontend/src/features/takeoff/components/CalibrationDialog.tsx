@@ -22,11 +22,30 @@ import {
   type ScaleConfig,
 } from '../../../modules/pdf-takeoff/data/scale-helpers';
 
+/** What the user actually typed, for honest badge display.
+ *
+ *  The derived {@link ScaleConfig} is intentionally **metric-canonical**
+ *  (`pixelsPerUnit` is always px-per-metre, `unitLabel` is always `'m'`),
+ *  because every downstream consumer — preset scales, `ratioFromScale`,
+ *  the recalc effect — assumes metres (see scale-helpers `deriveScale`).
+ *  An estimator who calibrated in feet would otherwise see a bare `'m'`
+ *  with no hint their feet were honoured (D-TKC-016).  We surface the
+ *  raw entry so the calibration badge can show `10 ft → 3.05 m`. */
+export interface CalibrationEntry {
+  /** The number the user typed. */
+  realLength: number;
+  /** The unit the user picked in the dialog. */
+  unit: CalibrationUnit;
+}
+
 export interface CalibrationDialogProps {
   /** Measured pixel distance between the two picked points. */
   pixelDistance: number;
-  /** Called when the user confirms a valid calibration. */
-  onConfirm: (scale: ScaleConfig) => void;
+  /** Called when the user confirms a valid calibration.  The second
+   *  argument echoes the user's raw entry (value + chosen unit) so the
+   *  caller can label the calibration in the unit the estimator actually
+   *  used, even though `scale` itself stays metric-canonical. */
+  onConfirm: (scale: ScaleConfig, entry: CalibrationEntry) => void;
   /** Called when the user cancels (Esc, backdrop click, Cancel button). */
   onCancel: () => void;
   /** Optional initial real-length value (defaults to 1). */
@@ -64,7 +83,11 @@ export function CalibrationDialog({
   const handleConfirm = () => {
     if (!isValid) return;
     const meters = toMeters(parsed, unit);
-    onConfirm(deriveScale(pixelDistance, meters));
+    // `scale` stays metric-canonical (deriveScale always labels in metres
+    // — every downstream consumer assumes that).  We additionally hand the
+    // caller the raw entry so the calibration badge can honour the unit
+    // the estimator actually typed (D-TKC-016).
+    onConfirm(deriveScale(pixelDistance, meters), { realLength: parsed, unit });
   };
 
   return (
@@ -136,6 +159,20 @@ export function CalibrationDialog({
             ))}
           </select>
         </div>
+        {isValid && unit !== 'm' && (
+          <p
+            className="text-[10px] text-purple-500/90 mb-2 tabular-nums"
+            data-testid="calibration-metric-note"
+          >
+            {t('takeoff_viewer.calibrate_metric_note', {
+              defaultValue:
+                '{{value}} {{unit}} = {{meters}} m — measurements display in metres (metric-canonical).',
+              value: parsed,
+              unit,
+              meters: toMeters(parsed, unit).toFixed(3),
+            })}
+          </p>
+        )}
         <p className="text-[10px] text-content-tertiary mb-3">
           {t('takeoff_viewer.calibrate_hint', {
             defaultValue:
