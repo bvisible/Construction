@@ -17,12 +17,56 @@ interface ThemeState {
 
 const STORAGE_KEY = 'oe_theme';
 
+// //// NEOFFICE PATCH — Follow Frappe theme when embedded
+// WHY: When the SPA runs inside the Neoconstruction Frappe shell
+//      (window.__FRAPPE_INTEGRATION__ === true) the user expects the
+//      same dark/light setting as the rest of their Frappe desk —
+//      they pick it once in Frappe's appearance settings and it
+//      should apply everywhere. The upstream store followed the OS
+//      preference, which created inconsistent UX (dark Frappe + light
+//      SPA on a light-mode mac, etc.).
+// HOW : Frappe stores the active theme in two localStorage keys on the
+//      same domain that hosts the SPA:
+//        appearance     "light" | "dark" | "automatic"
+//        theme_active   "light" | "dark"
+//      We read `theme_active` (already-resolved) and fall back to
+//      `appearance` if missing. We also listen to the `storage` event
+//      so changing the Frappe theme in another tab flips the SPA live.
+// REVIEW: drop when upstream OCE adds a generic "embed theme bridge"
+//         hook we can implement without patching this store.
+
+function isFrappeEmbedded(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (window as { __FRAPPE_INTEGRATION__?: boolean }).__FRAPPE_INTEGRATION__ === true;
+}
+
+function readFrappeTheme(): 'light' | 'dark' | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const active = window.localStorage.getItem('theme_active');
+    if (active === 'dark' || active === 'light') return active;
+    const appearance = window.localStorage.getItem('appearance');
+    if (appearance === 'dark' || appearance === 'light') return appearance;
+    if (appearance === 'automatic' || appearance === '"automatic"') {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+  } catch {
+    // localStorage access can throw in some sandboxed contexts.
+  }
+  return null;
+}
+
 function getSystemPreference(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light';
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
+  // //// NEOFFICE PATCH — Frappe theme wins over our store when embedded
+  if (isFrappeEmbedded()) {
+    const frappe = readFrappeTheme();
+    if (frappe) return frappe;
+  }
   if (mode === 'system') return getSystemPreference();
   return mode;
 }
@@ -88,5 +132,30 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
       }
     };
     mql.addEventListener('change', handler);
+
+    // //// NEOFFICE PATCH — Live-sync with Frappe theme changes (embedded)
+    // WHY: Frappe writes `theme_active` / `appearance` to the same-origin
+    //      localStorage when the user flips the appearance in Frappe.
+    //      The `storage` event fires in OTHER tabs, but not in the tab
+    //      that triggered the change — so a same-tab flip via the Frappe
+    //      navbar wouldn't trigger us. We listen to both `storage` and a
+    //      coarse 1 s polling fallback (Frappe doesn't broadcast a custom
+    //      event for theme changes we can hook into). Polling stops if
+    //      the value didn't change — cheap.
+    if (isFrappeEmbedded()) {
+      let lastSeen: 'light' | 'dark' | null = readFrappeTheme();
+      const syncFromFrappe = () => {
+        const fresh = readFrappeTheme();
+        if (!fresh || fresh === lastSeen) return;
+        lastSeen = fresh;
+        applyTheme(fresh);
+        // Also remember the choice in oe_theme so a reload picks it up
+        // before the embed flag is re-set (avoids a brief flash).
+        try { localStorage.setItem(STORAGE_KEY, fresh); } catch { /* noop */ }
+        set({ theme: fresh, resolved: fresh });
+      };
+      window.addEventListener('storage', syncFromFrappe);
+      window.setInterval(syncFromFrappe, 1000);
+    }
   },
 }));
