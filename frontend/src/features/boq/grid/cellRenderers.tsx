@@ -1943,21 +1943,26 @@ const BimLinkPopover = forwardRef<
       </div>
 
       {/* Footer — navigate to BIM viewer */}
+      {/* //// NEOFFICE PATCH — Use react-router navigate (respects BrowserRouter
+       * basename) instead of window.location.href / absolute href, which would
+       * bypass the /neoconstruction basename when embedded in Frappe and 404. */}
       <div className="px-4 py-2 border-t border-border-light dark:border-border-dark bg-surface-secondary/20">
-        <a
-          href={`/bim?model=${encodeURIComponent(modelId)}&highlight=${encodeURIComponent(elementIds.join(','))}`}
+        <button
+          type="button"
           className="flex items-center justify-center gap-2 w-full h-8 rounded-lg
                      bg-oe-blue/10 hover:bg-oe-blue/20 text-oe-blue text-xs font-medium
                      transition-colors"
-          onClick={(e) => {
-            e.preventDefault();
+          onClick={() => {
             onClose();
-            window.location.href = `/bim?model=${encodeURIComponent(modelId)}&highlight=${encodeURIComponent(elementIds.join(','))}`;
+            popoverNavigate({
+              pathname: '/bim',
+              search: `?model=${encodeURIComponent(modelId)}&highlight=${encodeURIComponent(elementIds.join(','))}`,
+            });
           }}
         >
           <Boxes size={14} />
           {t('boq.open_in_bim_viewer', { defaultValue: 'Open in BIM Viewer' })}
-        </a>
+        </button>
       </div>
     </div>
   );

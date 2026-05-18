@@ -1,5 +1,8 @@
 import { useMemo, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+// //// NEOFFICE PATCH — Link respects the BrowserRouter basename
+// (/neoconstruction when embedded), unlike a plain <a href>.
+import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Search, X, Link2, Hash, ExternalLink, Loader2 } from 'lucide-react';
 import type { BIMElementData } from '@/shared/ui/BIMViewer';
@@ -276,8 +279,8 @@ export default function BIMLinkedBOQPanel({
                         </span>
                       )}
                       {(derivedBoqId || pos.boq_id) && (
-                        <a
-                          href={`/boq/${pos.boq_id || derivedBoqId}?highlight=${pos.boq_position_id}`}
+                        <Link
+                          to={`/boq/${pos.boq_id || derivedBoqId}?highlight=${pos.boq_position_id}`}
                           onClick={(e) => e.stopPropagation()}
                           className="text-[9px] text-oe-blue hover:text-oe-blue/80 flex items-center gap-0.5"
                           title={t('bim.linked_boq_open_in_boq', { defaultValue: 'Open in BOQ' })}
@@ -285,7 +288,7 @@ export default function BIMLinkedBOQPanel({
                         >
                           <ExternalLink size={8} />
                           BOQ
-                        </a>
+                        </Link>
                       )}
                     </div>
                   </div>

@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   CalendarDays,
@@ -1824,6 +1824,9 @@ const MeetingRow = React.memo(function MeetingRow({
 export function MeetingsPage() {
   const { t } = useTranslation();
   const { projectId: routeProjectId } = useParams<{ projectId: string }>();
+  // //// NEOFFICE PATCH — useNavigate respects the BrowserRouter basename
+  // (/neoconstruction when embedded), unlike window.location.href = '/tasks'.
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
@@ -1971,7 +1974,8 @@ export function MeetingsPage() {
             ? {
                 label: t('meetings.view_tasks', { defaultValue: 'View Tasks' }),
                 onClick: () => {
-                  window.location.href = '/tasks';
+                  // //// NEOFFICE PATCH — navigate() respects basename, window.location.href doesn't.
+                  navigate('/tasks');
                 },
               }
             : undefined,

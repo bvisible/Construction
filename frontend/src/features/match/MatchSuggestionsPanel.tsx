@@ -26,6 +26,9 @@ import {
   type KeyboardEvent,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+// //// NEOFFICE PATCH — Use react-router Link so internal nav respects the
+// BrowserRouter basename (/neoconstruction when Frappe-embedded).
+import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import {
   Sparkles,
@@ -355,15 +358,15 @@ export function MatchSuggestionsPanel({
               defaultValue:
                 'Translation cascade fell back to monolingual matching.‌⁠‍',
             })}{' '}
-            <a
-              href={`/projects/${projectId}/settings#translation`}
+            <Link
+              to={`/projects/${projectId}/settings#translation`}
               className="font-medium text-oe-blue hover:underline"
               data-testid="match-fallback-hint-link"
             >
               {t('match.fallback_hint_link', {
                 defaultValue: 'Download dictionary →‌⁠‍',
               })}
-            </a>
+            </Link>
           </span>
         </div>
       )}
@@ -603,14 +606,14 @@ function EmptyState({
                 'Click Refresh to find candidates, or run a vector reindex if results stay empty.',
             })}
       </p>
-      <a
-        href={`/projects/${projectId}/settings#match`}
+      <Link
+        to={`/projects/${projectId}/settings#match`}
         className="mt-3 text-xs text-oe-blue hover:underline"
       >
         {t('match.open_settings', {
           defaultValue: 'Open match settings',
         })}
-      </a>
+      </Link>
     </div>
   );
 }

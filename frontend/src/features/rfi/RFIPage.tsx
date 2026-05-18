@@ -1598,7 +1598,9 @@ export function RFIPage() {
           action: {
             label: t('rfi.view_change_orders', { defaultValue: 'View Change Orders' }),
             onClick: () => {
-              window.location.href = '/changeorders';
+              // //// NEOFFICE PATCH — navigate() respects BrowserRouter basename
+              // (/neoconstruction when embedded), unlike window.location.href.
+              navigate('/changeorders');
             },
           },
         },
