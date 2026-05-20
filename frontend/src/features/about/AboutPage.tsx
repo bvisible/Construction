@@ -5,7 +5,7 @@
 import { Trans, useTranslation } from 'react-i18next';
 import {
   Mail, Shield, BookOpen, Users, Award,
-  Code2, Building2, Briefcase, Globe, ExternalLink,
+  Briefcase, Globe, ExternalLink,
   Linkedin, Youtube, Star, Coffee, Rocket, ArrowRight, Handshake,
   Github, MessageCircle,
 } from 'lucide-react';
