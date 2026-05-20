@@ -54,9 +54,12 @@ class ChangeOrder(Base):
     # BUG-351: rejection populates its own fields — previously ``approved_by``
     # was reused on reject, which made UIs show the rejector as the approver.
     rejected_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
-    submitted_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    approved_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    rejected_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # //// NEOFFICE PATCH — String(20) overflows on PostgreSQL: these hold
+    # full ISO-8601 timestamps with microseconds + offset (32 chars). Fine
+    # on SQLite (length not enforced), fatal on PG. Widened to String(40).
+    submitted_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    approved_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    rejected_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # Phase 2e: signed money column (scope changes can be negative on credits).
     cost_impact: Mapped[Decimal] = mapped_column(
         MoneyType(), nullable=False, default=Decimal("0")
@@ -73,7 +76,8 @@ class ChangeOrder(Base):
     # Variation fields (Phase 16 enhancement)
     variation_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cost_basis: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    contractor_submission_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # //// NEOFFICE PATCH — widened from String(20): ISO-8601 timestamp overflows on PG.
+    contractor_submission_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     contractor_amount: Mapped[Decimal | None] = mapped_column(MoneyType(), nullable=True)
     engineer_amount: Mapped[Decimal | None] = mapped_column(MoneyType(), nullable=True)
     approved_amount: Mapped[Decimal | None] = mapped_column(MoneyType(), nullable=True)
