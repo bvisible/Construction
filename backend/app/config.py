@@ -155,6 +155,16 @@ class Settings(BaseSettings):
     s3_bucket: str = "openestimate"
     s3_region: str = "us-east-1"
 
+    # //// NEOFFICE PATCH — Activity bridge (Neoconstruction -> Frappe)
+    # WHY: the app/modules/neoffice/bridge subpackage posts mirrored Work
+    # Orders / Schedule Activities to the Frappe `neoffice_activity` app. It
+    # needs the target instance URL and the shared secret. Empty strings keep
+    # upstream installs inert (the bridge no-ops when left unconfigured).
+    # REVIEW: permanent — Neoservice-specific integration.
+    activity_bridge_url: str = ""
+    activity_bridge_token: str = ""
+    # //// END NEOFFICE PATCH
+
     # ── Auth ─────────────────────────────────────────────────────────────
     jwt_secret: str = "openestimate-local-dev-key"
     jwt_algorithm: str = "HS256"
