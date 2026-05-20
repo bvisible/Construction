@@ -288,7 +288,8 @@ def _make_header_footer(
         # Left side: brand
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.HexColor("#999999"))
-        canvas.drawString(MARGIN_LEFT, 10 * mm, f"OpenConstructionERP  |  Generated: {generated_date}")
+        # //// NEOFFICE PATCH — Public-facing brand
+        canvas.drawString(MARGIN_LEFT, 10 * mm, f"Neoconstruction  |  Généré : {generated_date}")
         # Right side: page number
         if getattr(doc, "page_count", 0) > 0:
             page_text = f"Page {doc.page} of {doc.page_count}"
@@ -333,8 +334,8 @@ def _build_cover_page(
     # Top spacing
     elements.append(Spacer(1, 30 * mm))
 
-    # Brand
-    elements.append(Paragraph("OpenConstructionERP", styles["brand"]))
+    # //// NEOFFICE PATCH — Public-facing brand
+    elements.append(Paragraph("Neoconstruction", styles["brand"]))
     elements.append(Spacer(1, 10 * mm))
 
     # Decorative line
@@ -840,12 +841,14 @@ def generate_boq_pdf(
         rightMargin=MARGIN_RIGHT,
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
-        title=f"Cost Estimate - {boq_data.name}",
-        author="OpenConstructionERP",
-        subject="Bill of Quantities · DDC-CWICR-OE",
-        creator="OpenConstructionERP · DataDrivenConstruction",
-        producer="OpenConstructionERP / reportlab · datadrivenconstruction.io",
-        keywords="DDC-CWICR-OE-2026,OpenConstructionERP,BOQ,DataDrivenConstruction",
+        # //// NEOFFICE PATCH — public brand on metadata; AGPL attribution
+        # kept in the keywords so we stay compliant with upstream license.
+        title=f"Devis quantitatif - {boq_data.name}",
+        author="Neoconstruction",
+        subject="Devis quantitatif",
+        creator="Neoconstruction · Neoffice",
+        producer="Neoconstruction · neoffice.ch",
+        keywords="Neoconstruction,Neoffice,BOQ,based on OpenConstructionERP by DataDrivenConstruction",
     )
     doc.addPageTemplates([cover_template, table_template])
 
@@ -877,12 +880,13 @@ def generate_boq_pdf(
         rightMargin=MARGIN_RIGHT,
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
-        title=f"Cost Estimate - {boq_data.name}",
-        author="OpenConstructionERP",
-        subject="Bill of Quantities · DDC-CWICR-OE",
-        creator="OpenConstructionERP · DataDrivenConstruction",
-        producer="OpenConstructionERP / reportlab · datadrivenconstruction.io",
-        keywords="DDC-CWICR-OE-2026,OpenConstructionERP,BOQ,DataDrivenConstruction",
+        # //// NEOFFICE PATCH — public brand (mirrors the other ChunkPdf above)
+        title=f"Devis quantitatif - {boq_data.name}",
+        author="Neoconstruction",
+        subject="Devis quantitatif",
+        creator="Neoconstruction · Neoffice",
+        producer="Neoconstruction · neoffice.ch",
+        keywords="Neoconstruction,Neoffice,BOQ,based on OpenConstructionERP by DataDrivenConstruction",
     )
     doc2.page_count = total_pages
     doc2.addPageTemplates([cover_template, table_template])

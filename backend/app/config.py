@@ -118,7 +118,8 @@ class Settings(BaseSettings):
     )
 
     # ── App ──────────────────────────────────────────────────────────────
-    app_name: str = "OpenConstructionERP"
+    # //// NEOFFICE PATCH — Public-facing product name.
+    app_name: str = "Neoconstruction"
     app_version: str = Field(default_factory=_detect_version)
     app_env: Literal["development", "staging", "production"] = "development"
     app_debug: bool = True
