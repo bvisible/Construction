@@ -1951,10 +1951,290 @@ _PARIS = DemoTemplate(
 
 
 # ---------------------------------------------------------------------------
+# //// NEOFFICE PATCH — Template 6: Villa familiale à Lausanne (Suisse romande)
+#
+# Projet vitrine pour les démos clients Suisse romande. Mobilise au maximum
+# le Swiss Pack Neoffice : classification CFC (SIA 506 500), normes SIA 118,
+# TVA Suisse 8.1 %, devise CHF, locale FR, entreprises romandes, prix
+# unitaires réalistes Lausanne 2026. Budget direct ~1.0 M CHF, TTC ~1.27 M.
+# ---------------------------------------------------------------------------
+
+_VILLA_LAUSANNE = DemoTemplate(
+    demo_id="villa-lausanne",
+    project_name="Villa familiale — Chemin du Bois-Mermet, Lausanne",
+    project_description=(
+        "Construction d'une villa individuelle contemporaine sur 3 niveaux "
+        "(sous-sol semi-enterré + rez + étage), 220 m² de surface habitable "
+        "sur parcelle de 850 m². Structure mixte béton/maçonnerie, charpente "
+        "bois, toiture à 2 pans avec tuiles. Pompe à chaleur géothermique, "
+        "ventilation double flux, triple vitrage. Conforme normes SIA 118 / "
+        "SIA 380/1 (énergie). Budget cible 1,3 M CHF TTC."
+    ),
+    region="Switzerland",
+    classification_standard="cfc",
+    currency="CHF",
+    locale="fr",
+    address={
+        "street": "Chemin du Bois-Mermet 14",
+        "city": "Lausanne",
+        "postcode": "1004",
+        "country": "Suisse",
+        "lat": 46.5306,
+        "lng": 6.6258,
+    },
+    validation_rule_sets=["boq_quality"],
+    boq_name="Devis quantitatif — Villa Bois-Mermet (Lausanne)",
+    boq_description=(
+        "Devis détaillé selon classification CFC (SIA 506 500). Prix unitaires "
+        "indicatifs Lausanne 2026, hors options et hors terrain."
+    ),
+    boq_metadata={
+        "standard": "CFC — SIA 506 500",
+        "phase": "Avant-projet / Devis général",
+        "base_date": "2026-Q2",
+        "price_level": "Suisse romande 2026",
+        "sia_norm": "SIA 118 (Conditions générales)",
+    },
+    sections=[
+        # ── CFC 1 — Travaux préparatoires ─────────────────────────────
+        (
+            "1",
+            "CFC 1 — Travaux préparatoires",
+            {"cfc": "1"},
+            [
+                ("1.1", "Étude géotechnique et sondages de sol", "forf", 1, 4500.00, {"cfc": "111"}),
+                ("1.2", "Abattage et dessouchage d'arbres existants", "pce", 6, 850.00, {"cfc": "112"}),
+                ("1.3", "Adaptation des conduites (eau / EU / EP)", "ml", 25, 320.00, {"cfc": "131"}),
+                ("1.4", "Mise en place chantier (clôture, accès, baraquements)", "forf", 1, 8500.00, {"cfc": "115"}),
+            ],
+        ),
+        # ── CFC 20 — Excavation ────────────────────────────────────────
+        (
+            "20",
+            "CFC 20 — Excavation",
+            {"cfc": "20"},
+            [
+                ("20.1", "Décapage terre végétale et mise en dépôt", "m3", 180, 35.00, {"cfc": "201"}),
+                ("20.2", "Excavation en terrain ordinaire", "m3", 480, 95.00, {"cfc": "201"}),
+                ("20.3", "Évacuation des matériaux à la décharge", "m3", 380, 65.00, {"cfc": "202"}),
+                ("20.4", "Remblayage et compactage", "m3", 220, 55.00, {"cfc": "203"}),
+            ],
+        ),
+        # ── CFC 21 — Gros œuvre 1 ──────────────────────────────────────
+        (
+            "21",
+            "CFC 21 — Gros œuvre 1 (maçonnerie, béton armé)",
+            {"cfc": "21"},
+            [
+                ("21.1", "Béton de propreté C12/15", "m3", 12, 420.00, {"cfc": "211.1"}),
+                ("21.2", "Béton armé fondations C25/30 (radier, semelles)", "m3", 75, 950.00, {"cfc": "211.4"}),
+                ("21.3", "Béton armé murs sous-sol C25/30", "m3", 58, 1050.00, {"cfc": "211.5"}),
+                ("21.4", "Dalle pleine béton armé (RDC + étage)", "m2", 280, 285.00, {"cfc": "211.6"}),
+                ("21.5", "Maçonnerie brique TC 175 mm — murs porteurs", "m2", 240, 295.00, {"cfc": "213"}),
+                ("21.6", "Maçonnerie brique TC 120 mm — cloisons", "m2", 180, 215.00, {"cfc": "213"}),
+                ("21.7", "Charpente bois traditionnelle (résineux)", "m2", 220, 365.00, {"cfc": "214"}),
+                ("21.8", "Étanchéité enterrée bitumineuse 2 couches", "m2", 165, 95.00, {"cfc": "212"}),
+            ],
+        ),
+        # ── CFC 22 — Gros œuvre 2 ──────────────────────────────────────
+        (
+            "22",
+            "CFC 22 — Gros œuvre 2 (façade, toiture, fermetures)",
+            {"cfc": "22"},
+            [
+                ("22.1", "Isolation périphérique laine de roche 200 mm", "m2", 360, 115.00, {"cfc": "221.6"}),
+                ("22.2", "Enduit minéral 2 couches sur ITE", "m2", 360, 145.00, {"cfc": "228.1"}),
+                ("22.3", "Couverture tuiles plates terre cuite", "m2", 235, 235.00, {"cfc": "224"}),
+                ("22.4", "Ferblanterie zinc-titane (chéneaux, descentes)", "ml", 48, 185.00, {"cfc": "225"}),
+                ("22.5", "Fenêtres bois-métal triple vitrage Ug 0.6", "m2", 38, 1180.00, {"cfc": "221.5"}),
+                ("22.6", "Porte d'entrée bois massif chêne", "pce", 1, 6800.00, {"cfc": "227.1"}),
+                ("22.7", "Volets battants bois", "m2", 24, 580.00, {"cfc": "226"}),
+            ],
+        ),
+        # ── CFC 23 — Installations électriques ─────────────────────────
+        (
+            "23",
+            "CFC 23 — Installations électriques",
+            {"cfc": "23"},
+            [
+                ("23.1", "Tableau électrique principal + protections", "forf", 1, 5800.00, {"cfc": "231"}),
+                ("23.2", "Installation force et lumière (filaire + prises)", "m2", 220, 145.00, {"cfc": "232"}),
+                ("23.3", "Domotique KNX (volets, éclairage, scénarios)", "forf", 1, 14500.00, {"cfc": "233"}),
+                ("23.4", "Tableau communication (RJ45, fibre, TV)", "forf", 1, 3200.00, {"cfc": "236"}),
+            ],
+        ),
+        # ── CFC 24 — Chauffage, ventilation, climatisation ─────────────
+        (
+            "24",
+            "CFC 24 — Chauffage, ventilation, climatisation",
+            {"cfc": "24"},
+            [
+                ("24.1", "Pompe à chaleur géothermique 12 kW (sondes 2x110 m)", "forf", 1, 38500.00, {"cfc": "242.5"}),
+                ("24.2", "Plancher chauffant basse température (RDC + étage)", "m2", 200, 145.00, {"cfc": "244.1"}),
+                ("24.3", "Ventilation double flux récupération chaleur 90 %", "forf", 1, 22500.00, {"cfc": "246"}),
+                ("24.4", "Cheminée moderne foyer fermé avec récupération", "pce", 1, 9800.00, {"cfc": "247"}),
+            ],
+        ),
+        # ── CFC 25 — Installations sanitaires ──────────────────────────
+        (
+            "25",
+            "CFC 25 — Installations sanitaires",
+            {"cfc": "25"},
+            [
+                ("25.1", "Réseau d'alimentation eau froide / eau chaude PE-X", "m2", 220, 95.00, {"cfc": "251"}),
+                ("25.2", "Évacuation eaux usées PVC + ventilation primaire", "m2", 220, 75.00, {"cfc": "252"}),
+                ("25.3", "Appareils sanitaires moyen-haut de gamme (3 SDB + WC)", "forf", 1, 18500.00, {"cfc": "253"}),
+                ("25.4", "Production ECS (boiler 300 L couplé PAC)", "pce", 1, 4200.00, {"cfc": "254"}),
+            ],
+        ),
+        # ── CFC 27 — Aménagements intérieurs 1 ─────────────────────────
+        (
+            "27",
+            "CFC 27 — Aménagements intérieurs 1 (plâtrerie, portes, sols durs)",
+            {"cfc": "27"},
+            [
+                ("27.1", "Cloisons placoplâtre BA13 sur ossature métal", "m2", 95, 95.00, {"cfc": "271.1"}),
+                ("27.2", "Faux-plafonds placoplâtre isolés", "m2", 220, 75.00, {"cfc": "271.3"}),
+                ("27.3", "Portes intérieures à âme alvéolaire, finition laquée", "pce", 11, 850.00, {"cfc": "273.1"}),
+                ("27.4", "Escalier intérieur en chêne massif (étage)", "pce", 1, 12500.00, {"cfc": "274"}),
+                ("27.5", "Carrelage grès cérame 60x60 (entrée, cuisine, SDB)", "m2", 95, 195.00, {"cfc": "281.1"}),
+            ],
+        ),
+        # ── CFC 28 — Aménagements intérieurs 2 ─────────────────────────
+        (
+            "28",
+            "CFC 28 — Aménagements intérieurs 2 (peinture, parquet, cuisine)",
+            {"cfc": "28"},
+            [
+                ("28.1", "Parquet contrecollé chêne 14 mm vernis", "m2", 125, 225.00, {"cfc": "281.2"}),
+                ("28.2", "Peinture murs et plafonds (préparation + 2 couches)", "m2", 620, 38.00, {"cfc": "285"}),
+                ("28.3", "Cuisine équipée gamme moyenne-haute (façades laquées, plan quartz)", "forf", 1, 42000.00, {"cfc": "287"}),
+                ("28.4", "Armoires encastrées chambres et entrée", "forf", 1, 18500.00, {"cfc": "288"}),
+                ("28.5", "Garde-corps fer forgé + main courante chêne", "ml", 18, 480.00, {"cfc": "274"}),
+            ],
+        ),
+        # ── CFC 29 — Honoraires ────────────────────────────────────────
+        (
+            "29",
+            "CFC 29 — Honoraires architecte et ingénieurs",
+            {"cfc": "29"},
+            [
+                ("29.1", "Honoraires architecte (SIA 102, phases 31-53)", "forf", 1, 78000.00, {"cfc": "291"}),
+                ("29.2", "Honoraires ingénieur civil (SIA 103)", "forf", 1, 14500.00, {"cfc": "292"}),
+                ("29.3", "Honoraires ingénieur CVS (SIA 108)", "forf", 1, 8500.00, {"cfc": "293"}),
+                ("29.4", "Honoraires géomètre (implantation + relevés)", "forf", 1, 3800.00, {"cfc": "296"}),
+            ],
+        ),
+        # ── CFC 4 — Aménagements extérieurs ────────────────────────────
+        (
+            "4",
+            "CFC 4 — Aménagements extérieurs",
+            {"cfc": "4"},
+            [
+                ("4.1", "Accès carrossable en pavés béton perméables", "m2", 85, 165.00, {"cfc": "411"}),
+                ("4.2", "Terrasses béton avec dalles pierre naturelle", "m2", 45, 245.00, {"cfc": "421"}),
+                ("4.3", "Engazonnement et plantations (haies, arbustes)", "m2", 480, 35.00, {"cfc": "421"}),
+                ("4.4", "Clôture périphérique grillagée + portail motorisé", "ml", 95, 185.00, {"cfc": "421"}),
+                ("4.5", "Arrosage automatique (réseau enterré)", "forf", 1, 4500.00, {"cfc": "421"}),
+            ],
+        ),
+        # ── CFC 5 — Frais secondaires ─────────────────────────────────
+        (
+            "5",
+            "CFC 5 — Frais secondaires",
+            {"cfc": "5"},
+            [
+                ("5.1", "Émoluments et permis de construire (Lausanne)", "forf", 1, 5800.00, {"cfc": "521"}),
+                ("5.2", "Taxes de raccordement (eau, EU, électricité)", "forf", 1, 12500.00, {"cfc": "522"}),
+                ("5.3", "Assurance construction (CAR + RC maître d'ouvrage)", "forf", 1, 4200.00, {"cfc": "531"}),
+                ("5.4", "Frais de notaire (acte + inscription RF)", "forf", 1, 6800.00, {"cfc": "583"}),
+            ],
+        ),
+    ],
+    markups=[
+        ("Frais généraux entreprise", 8.0, "overhead", "direct_cost"),
+        ("Bénéfice et risques entrepreneur", 6.0, "profit", "direct_cost"),
+        ("Imprévus / réserve maître d'ouvrage", 5.0, "contingency", "cumulative"),
+        ("TVA Suisse 8.1 %", 8.1, "tax", "cumulative"),
+    ],
+    total_months=14,
+    tender_name="Lot principal — Gros œuvre",
+    tender_companies=[
+        ("Implenia Suisse SA", "soumissions.romandie@implenia.com", 1.00),
+        ("Losinger Marazzi SA", "appels-offres.lausanne@losinger-marazzi.ch", 1.03),
+        ("HRS Real Estate SA", "construction.vd@hrs.ch", 0.98),
+    ],
+    tender_packages=[
+        (
+            "Lot 1 — Gros œuvre (CFC 20-22)",
+            "Excavation, fondations, maçonnerie, charpente, façade, toiture",
+            "evaluating",
+            [
+                ("Implenia Suisse SA", "soumissions.romandie@implenia.com", 1.00),
+                ("Losinger Marazzi SA", "appels-offres.lausanne@losinger-marazzi.ch", 1.03),
+                ("Bernard Nicod Construction SA", "construction@bernard-nicod.ch", 0.97),
+                ("HRS Real Estate SA", "construction.vd@hrs.ch", 0.98),
+            ],
+        ),
+        (
+            "Lot 2 — Techniques du bâtiment (CFC 23-25)",
+            "Électricité, chauffage / PAC géothermique, ventilation double flux, sanitaires",
+            "evaluating",
+            [
+                ("Alpiq InTec Romandie SA", "soumissions.vd@alpiq.com", 1.02),
+                ("Romelec SA", "devis@romelec.ch", 1.00),
+                ("Climanorm SA Lausanne", "info@climanorm.ch", 0.99),
+            ],
+        ),
+        (
+            "Lot 3 — Second œuvre et finitions (CFC 27-28)",
+            "Plâtrerie, portes, sols, peinture, cuisine, armoires encastrées",
+            "draft",
+            [
+                ("Renggli AG Suisse romande", "lausanne@renggli.swiss", 1.01),
+                ("Karrer SA", "soumissions@karrer.ch", 0.96),
+                ("Atelier MIDarchitecture Sàrl", "construction@midarch.ch", 1.04),
+            ],
+        ),
+    ],
+    schedule_activities=[
+        ("Étude de projet et soumission permis", "2026-04-01", "2026-06-30"),
+        ("Obtention du permis de construire", "2026-07-01", "2026-09-15"),
+        ("Travaux préparatoires (clôture, sondages)", "2026-09-16", "2026-09-30"),
+        ("Excavation et terrassement", "2026-10-01", "2026-10-31"),
+        ("Fondations et radier", "2026-11-01", "2026-11-30"),
+        ("Gros œuvre 1 — maçonnerie et béton armé", "2026-12-01", "2027-02-28"),
+        ("Charpente et couverture", "2027-03-01", "2027-04-15"),
+        ("Façade, isolation et fenêtres", "2027-04-01", "2027-05-31"),
+        ("Installations techniques (CVC + sanitaires + élec)", "2027-05-01", "2027-07-31"),
+        ("Plâtrerie et chapes", "2027-07-01", "2027-08-31"),
+        ("Sols, peinture, portes, cuisine", "2027-08-15", "2027-10-31"),
+        ("Aménagements extérieurs", "2027-09-15", "2027-11-15"),
+        ("Réception et levée de réserves", "2027-11-16", "2027-12-15"),
+    ],
+    project_metadata={
+        "client": "M. et Mme Dupraz — privés",
+        "architect": "Atelier MIDarchitecture Sàrl, Lausanne",
+        "ingenieur_civil": "Ingénieurs Conseils SA, Pully",
+        "surface_habitable_m2": 220,
+        "surface_parcelle_m2": 850,
+        "niveaux": "Sous-sol + RDC + étage",
+        "label_energie": "Minergie-P",
+        "norme_principale": "SIA 118",
+    },
+    budget_boq_name="Budget directeur — Villa Bois-Mermet",
+    planned_budget=1_300_000.0,
+    actual_spend_ratio=0.18,
+    spi_override=1.00,
+    cpi_override=1.02,
+)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
-DEMO_TEMPLATES: dict[str, DemoTemplate] = {t.demo_id: t for t in [_BERLIN, _LONDON, _US_MEDICAL, _DUBAI, _PARIS]}
+DEMO_TEMPLATES: dict[str, DemoTemplate] = {t.demo_id: t for t in [_BERLIN, _LONDON, _US_MEDICAL, _DUBAI, _PARIS, _VILLA_LAUSANNE]}
 
 # Fresh-install seed: four demo projects covering the broadest spread of
 # archetypes (residential, industrial, healthcare/intl, education/fit-out)
@@ -2028,6 +2308,21 @@ DEMO_CATALOG: list[dict] = [
         "type": "Education",
         "sections": 8,
         "positions": 100,
+    },
+    # //// NEOFFICE PATCH \u2014 Swiss showcase project (Villa Bois-Mermet, Lausanne).
+    {
+        "demo_id": "villa-lausanne",
+        "name": "Villa familiale \u2014 Lausanne",
+        "description": (
+            "Villa individuelle 220 m\u00b2, classification CFC (SIA 506 500), "
+            "PAC g\u00e9othermique + ventilation double flux, 14-month schedule"
+        ),
+        "country": "CH",
+        "currency": "CHF",
+        "budget": "CHF 1.3M",
+        "type": "Residential",
+        "sections": 12,
+        "positions": 58,
     },
 ]
 
