@@ -1193,6 +1193,15 @@ def _default_local_base_dir() -> Path:
     return Path(__file__).resolve().parents[3] / "data"
 
 
+# //// NEOFFICE PATCH — Honour `storage_local_root` (env: `OE_STORAGE_LOCAL_ROOT`)
+# so the local backend can target an arbitrary mount point. Falls back to the
+# upstream `<repo>/data` default when the setting is empty.
+def _resolved_local_base_dir(settings: Settings) -> Path:
+    root = (getattr(settings, "storage_local_root", "") or "").strip()
+    return Path(root).expanduser() if root else _default_local_base_dir()
+# //// END NEOFFICE PATCH
+
+
 def build_storage_backend(settings: Settings) -> StorageBackend:
     """Build a backend from ``settings`` without consulting any cache.
 
@@ -1201,7 +1210,7 @@ def build_storage_backend(settings: Settings) -> StorageBackend:
     backend_name = (getattr(settings, "storage_backend", "local") or "local").lower()
 
     if backend_name == "local":
-        return LocalStorageBackend(_default_local_base_dir())
+        return LocalStorageBackend(_resolved_local_base_dir(settings))
 
     if backend_name == "s3":
         return S3StorageBackend(

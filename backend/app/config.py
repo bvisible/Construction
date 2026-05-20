@@ -143,6 +143,12 @@ class Settings(BaseSettings):
     # bucket instead of the local filesystem.  The S3 credentials below
     # are only consulted when ``storage_backend="s3"``.
     storage_backend: Literal["local", "s3"] = "local"
+    # //// NEOFFICE PATCH — Expose the local storage root so Neoconstruction
+    # can colocate OCE blobs with Frappe's `private/files/` (single backup
+    # surface + visibility via Frappe Drive). Empty string preserves the
+    # legacy fallback `<repo>/data/` so upstream installs keep working.
+    storage_local_root: str = ""
+    # //// END NEOFFICE PATCH
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = ""
     s3_secret_key: str = ""
