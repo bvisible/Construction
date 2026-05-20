@@ -26,7 +26,11 @@ from app.modules.bim_hub.schemas import BIMModelCreate, BIMModelResponse
 from app.modules.bim_hub.service import BIMHubService
 from app.modules.neoffice.roomplan_glb_builder import build_glb_bytes
 from app.modules.neoffice.roomplan_importer import parse_roomplan_scan
-from app.modules.neoffice.schemas import RoomPlanImportRequest, ScheduleProgressBridgeRequest
+from app.modules.neoffice.schemas import (
+    FieldReportFromActivitiesRequest,
+    RoomPlanImportRequest,
+    ScheduleProgressBridgeRequest,
+)
 from app.modules.schedule.models import WorkOrder
 from app.modules.schedule.service_4d import ScheduleProgressService
 
@@ -203,3 +207,57 @@ async def record_bridge_progress(
         "Activity bridge progress recorded: task=%s entry=%s", task_id, entry.id
     )
     return {"success": True, "entry_id": str(entry.id), "task_id": str(task_id)}
+
+
+@router.post(
+    "/bridge/fieldreports/from-activities/",
+    dependencies=[Depends(_verify_activity_bridge_token)],
+)
+async def upsert_fieldreport_from_activities(
+    request: FieldReportFromActivitiesRequest,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Upsert a daily FieldReport draft from consolidated Frappe Activities.
+
+    A draft report for (project, report_date) is updated in place; a missing
+    one is created. A report already submitted or approved is left untouched
+    so a signed daily report is never overwritten by a late sync.
+    """
+    from app.modules.fieldreports.schemas import FieldReportCreate
+    from app.modules.fieldreports.service import FieldReportService
+
+    service = FieldReportService(session)
+    existing = await service.get_by_date(
+        request.neoconstruction_project_id, request.report_date
+    )
+    workforce = [entry.model_dump() for entry in request.workforce]
+
+    if existing is not None:
+        if existing.status != "draft":
+            return {
+                "success": True,
+                "skipped": "report is not in draft status",
+                "report_id": str(existing.id),
+            }
+        existing.work_performed = request.work_performed
+        existing.workforce = workforce
+        existing.equipment_on_site = list(request.equipment_on_site)
+        existing.materials_used = list(request.materials_used)
+        await session.commit()
+        logger.info("Activity bridge FieldReport updated: %s", existing.id)
+        return {"success": True, "created": False, "report_id": str(existing.id)}
+
+    report = await service.create_report(
+        FieldReportCreate(
+            project_id=request.neoconstruction_project_id,
+            report_date=request.report_date,
+            report_type="daily",
+            work_performed=request.work_performed,
+            workforce=workforce,
+            equipment_on_site=list(request.equipment_on_site),
+            materials_used=list(request.materials_used),
+        )
+    )
+    await session.commit()
+    logger.info("Activity bridge FieldReport created: %s", report.id)
+    return {"success": True, "created": True, "report_id": str(report.id)}

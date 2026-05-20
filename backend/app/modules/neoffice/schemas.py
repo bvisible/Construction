@@ -5,6 +5,7 @@ Pydantic schemas for the Neoffice extensions module — RoomPlan import/export.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -69,3 +70,26 @@ class ScheduleProgressBridgeRequest(BaseModel):
     geolocation: dict[str, Any] | None = Field(default=None)
     actual_start_date: str | None = Field(default=None, description="ISO date YYYY-MM-DD")
     actual_finish_date: str | None = Field(default=None, description="ISO date YYYY-MM-DD")
+
+
+class FieldReportWorkforceEntry(BaseModel):
+    """One workforce line of a consolidated daily report."""
+
+    trade: str = Field(..., max_length=100)
+    count: int = Field(default=1, ge=0)
+    hours: float = Field(default=0.0, ge=0.0)
+
+
+class FieldReportFromActivitiesRequest(BaseModel):
+    """Body for POST /api/v1/neoffice/bridge/fieldreports/from-activities/.
+
+    A daily consolidation of Frappe Activities for one Neoconstruction
+    project. Upserts a draft FieldReport keyed on (project, report_date).
+    """
+
+    neoconstruction_project_id: UUID
+    report_date: date
+    work_performed: str = Field(default="", max_length=10000)
+    workforce: list[FieldReportWorkforceEntry] = Field(default_factory=list)
+    equipment_on_site: list[str] = Field(default_factory=list)
+    materials_used: list[str] = Field(default_factory=list)
