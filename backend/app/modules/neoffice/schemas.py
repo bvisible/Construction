@@ -48,3 +48,24 @@ class RoomPlanImportResponse(BaseModel):
     element_count: int
     storey_count: int
     bounding_box: dict[str, list[float]] | None = None
+
+
+class ScheduleProgressBridgeRequest(BaseModel):
+    """Body for POST /api/v1/neoffice/bridge/progress/ from the Frappe bridge.
+
+    The mirrored Activity on the Frappe side reports execution progress back
+    to Neoconstruction. A Work Order source is resolved to its parent
+    Schedule Activity (whose id is the ScheduleProgressEntry task_id).
+    """
+
+    neoconstruction_source_type: str = Field(
+        ..., description='"Work Order" or "Schedule Activity"'
+    )
+    neoconstruction_source_id: UUID = Field(
+        ..., description="Upstream object UUID (Work Order or Schedule Activity)"
+    )
+    progress_percent: float = Field(..., ge=0.0, le=100.0)
+    notes: str | None = Field(default=None, max_length=4000)
+    geolocation: dict[str, Any] | None = Field(default=None)
+    actual_start_date: str | None = Field(default=None, description="ISO date YYYY-MM-DD")
+    actual_finish_date: str | None = Field(default=None, description="ISO date YYYY-MM-DD")

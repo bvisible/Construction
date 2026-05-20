@@ -11,11 +11,13 @@ Planned (Phase 2):
     POST /bim/export-ifc/        — Generate an .ifc IFC4 model from a scan
 """
 
+import hmac
 import logging
+import os
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from app.dependencies import SessionDep, get_current_user_id
 from app.modules.bim_hub import file_storage as bim_file_storage
@@ -24,9 +26,14 @@ from app.modules.bim_hub.schemas import BIMModelCreate, BIMModelResponse
 from app.modules.bim_hub.service import BIMHubService
 from app.modules.neoffice.roomplan_glb_builder import build_glb_bytes
 from app.modules.neoffice.roomplan_importer import parse_roomplan_scan
-from app.modules.neoffice.schemas import RoomPlanImportRequest
+from app.modules.neoffice.schemas import RoomPlanImportRequest, ScheduleProgressBridgeRequest
+from app.modules.schedule.models import WorkOrder
+from app.modules.schedule.service_4d import ScheduleProgressService
 
-router = APIRouter(dependencies=[Depends(get_current_user_id)])
+# Each route carries its own auth: the roomplan import keeps the user-JWT
+# dependency in its signature, the bridge route uses a shared-token header.
+# So the router itself declares no global dependency.
+router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
@@ -135,3 +142,64 @@ def _build_model_metadata(request: RoomPlanImportRequest) -> dict[str, Any]:
     if raw_version is not None:
         meta["roomplan_version"] = str(raw_version)[:40]
     return meta
+
+
+def _verify_activity_bridge_token(
+    x_activity_bridge_token: str = Header(default="", alias="X-Activity-Bridge-Token"),
+) -> None:
+    """Authenticate a request from the Frappe Activity bridge by shared token.
+
+    The token is read from the ACTIVITY_BRIDGE_TOKEN environment variable --
+    the same secret the outbound bridge client uses. Raises 401 on mismatch.
+    """
+    expected = os.environ.get("ACTIVITY_BRIDGE_TOKEN", "")
+    if not expected or not hmac.compare_digest(x_activity_bridge_token, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing Activity bridge token",
+        )
+
+
+@router.post("/bridge/progress/", dependencies=[Depends(_verify_activity_bridge_token)])
+async def record_bridge_progress(
+    request: ScheduleProgressBridgeRequest,
+    session: SessionDep,
+) -> dict[str, Any]:
+    """Record a schedule progress entry pushed by the Frappe Activity bridge.
+
+    The mirrored Activity on the Frappe side reports execution progress
+    (timer, status). A Work Order source is resolved to its parent Schedule
+    Activity, whose id is the ScheduleProgressEntry task_id.
+    """
+    if request.neoconstruction_source_type == "Work Order":
+        work_order = await session.get(WorkOrder, request.neoconstruction_source_id)
+        if work_order is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Work order not found"
+            )
+        task_id = work_order.activity_id
+    else:
+        task_id = request.neoconstruction_source_id
+
+    service = ScheduleProgressService(session)
+    try:
+        entry = await service.record(
+            task_id=task_id,
+            progress_percent=request.progress_percent,
+            notes=request.notes,
+            device="mobile",
+            geolocation=request.geolocation,
+            actual_start_date=request.actual_start_date,
+            actual_finish_date=request.actual_finish_date,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        )
+    await session.commit()
+    logger.info(
+        "Activity bridge progress recorded: task=%s entry=%s", task_id, entry.id
+    )
+    return {"success": True, "entry_id": str(entry.id), "task_id": str(task_id)}
