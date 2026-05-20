@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from app.modules.neoffice.bridge import frappe_client, mappers
 from app.modules.schedule.models import Activity, Schedule, WorkOrder
 
@@ -156,3 +158,36 @@ async def test_push_activity_skips_when_unconfigured(monkeypatch):
 
     ok = await frappe_client.push_activity({"neoconstruction_source_id": "wo-x"})
     assert ok is False
+
+
+# ── inbound progress endpoint auth ───────────────────────────────────────
+
+
+class TestBridgeTokenAuth:
+    """Tests for the shared-token guard of the inbound progress endpoint (J4a)."""
+
+    def test_valid_token_accepted(self, monkeypatch):
+        from app.modules.neoffice.router import _verify_activity_bridge_token
+
+        monkeypatch.setenv("ACTIVITY_BRIDGE_TOKEN", "secret-xyz")
+        # A matching token must not raise.
+        _verify_activity_bridge_token(x_activity_bridge_token="secret-xyz")
+
+    def test_invalid_token_rejected(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from app.modules.neoffice.router import _verify_activity_bridge_token
+
+        monkeypatch.setenv("ACTIVITY_BRIDGE_TOKEN", "secret-xyz")
+        with pytest.raises(HTTPException) as exc_info:
+            _verify_activity_bridge_token(x_activity_bridge_token="wrong-token")
+        assert exc_info.value.status_code == 401
+
+    def test_missing_token_config_rejected(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from app.modules.neoffice.router import _verify_activity_bridge_token
+
+        monkeypatch.delenv("ACTIVITY_BRIDGE_TOKEN", raising=False)
+        with pytest.raises(HTTPException):
+            _verify_activity_bridge_token(x_activity_bridge_token="anything")
