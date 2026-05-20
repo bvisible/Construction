@@ -120,3 +120,22 @@ export function useFolderPermissionCounts(
   }
   return counts;
 }
+
+interface ProjectLite {
+  id: string;
+  name: string;
+}
+
+/**
+ * Lightweight id→name lookup over all projects. Shares the React Query
+ * cache key (``['projects']``) used by BIMPage so opening a file in a
+ * project other than the active one can still label the global project
+ * context correctly (avoids a blank project name after the jump).
+ */
+export function useProjectsLite() {
+  return useQuery({
+    queryKey: ['projects'],
+    queryFn: () => apiGet<ProjectLite[]>('/v1/projects/'),
+    staleTime: 5 * 60_000,
+  });
+}

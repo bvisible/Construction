@@ -20,6 +20,7 @@ import {
   type WizardPreset,
   type ProfileSpec,
 } from './api';
+import { useTelemetry } from '@/shared/lib/telemetry';
 
 // ── Regions (grouped by continent) ────────────────────────────────────────
 
@@ -335,13 +336,27 @@ type CreateMode = 'choose' | 'wizard' | 'classic';
 interface CreateProjectModalProps {
   open: boolean;
   onClose: () => void;
+  /**
+   * Slice 4 — edit mode. When set, the modal re-opens the SAME wizard
+   * for an existing project: name/region/standard/currency/locale and
+   * the current profile are prefilled, no project is created, and
+   * submit calls `applyProfile` on this id. The component is NOT
+   * forked — this is a mode prop, the steps/UX are identical.
+   */
+  editProjectId?: string;
 }
 
-export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
+export function CreateProjectModal({
+  open,
+  onClose,
+  editProjectId,
+}: CreateProjectModalProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  const { track } = useTelemetry();
+  const isEdit = !!editProjectId;
 
   // Which create flow we're in. Always starts on the chooser so the
   // user is offered the wizard vs. the old single-window form.
@@ -463,8 +478,14 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
       setBudgetEstimate('');
       setPlannedStart('');
       setPlannedEnd('');
+      // Force the edit-mode prefill to re-run on (re)open; the prefill
+      // effect then overrides the defaults above once data arrives.
+      setPrefilledFor(null);
+      // Create flow opens the wizard funnel here; edit flow emits
+      // `setup_rerun` from the prefill effect instead.
+      if (!isEdit) track('wizard_started', { mode: 'create' });
     }
-  }, [open]);
+  }, [open, isEdit, track]);
 
   const { data: existingProjects = [] } = useQuery<Project[]>({
     queryKey: ['projects'],
@@ -484,11 +505,60 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
     staleTime: 30 * 60_000,
   });
 
+  // ── Edit mode (Slice 4) — load the existing project + its profile so
+  // every step prefills. Component is shared, not forked. ───────────────
+  const { data: editProject } = useQuery<Project>({
+    queryKey: ['project', editProjectId],
+    queryFn: () => projectsApi.get(editProjectId!),
+    enabled: open && isEdit,
+    staleTime: 60_000,
+  });
+  const { data: editProfile } = useQuery({
+    queryKey: ['project-profile', editProjectId],
+    queryFn: () => projectsApi.getProfile(editProjectId!),
+    enabled: open && isEdit,
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  // Prefill the wizard from the loaded project + profile. Runs once the
+  // data arrives (and again if the user reopens for a different id).
+  const [prefilledFor, setPrefilledFor] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !isEdit || !editProject) return;
+    if (prefilledFor === editProject.id) return;
+    setForm({
+      name: editProject.name,
+      description: editProject.description ?? '',
+      region: editProject.region ?? '',
+      classification_standard: editProject.classification_standard ?? '',
+      currency: editProject.currency ?? '',
+      locale: editProject.locale ?? 'en',
+    });
+    if (editProfile) {
+      setPreset(editProfile.profile.preset || 'custom');
+      setActivity(editProfile.profile.activity ?? []);
+      setPhases(editProfile.profile.phases ?? []);
+      setRole(editProfile.profile.role || 'general_contractor');
+      setSize(editProfile.profile.size || 'medium');
+      setFocusMode(editProfile.profile.focus_mode_enabled);
+    }
+    // Skip the chooser — jump straight into the guided wizard with
+    // every visited step navigable for step-back editing.
+    setMode('wizard');
+    setStep(1);
+    setMaxStep(STEP_COUNT);
+    setPrefilledFor(editProject.id);
+    track('setup_rerun', { project_id: editProject.id });
+  }, [open, isEdit, editProject, editProfile, prefilledFor, track]);
+
   const trimmedName = form.name.trim();
   const duplicateExists =
     trimmedName.length > 0 &&
     existingProjects.some(
-      (p) => p.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+      (p) =>
+        p.id !== editProjectId &&
+        p.name.trim().toLowerCase() === trimmedName.toLowerCase(),
     );
 
   useEffect(() => {
@@ -502,6 +572,7 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
     // the user may have made on the next step.
     if (id === preset) return;
     setPreset(id);
+    track('preset_selected', { preset: id, edit: isEdit });
     const d = PRESET_DEFAULTS[id];
     if (d) {
       setActivity(d.activity);
@@ -634,6 +705,22 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
         planned_end_date: plannedEnd.trim() || null,
       };
 
+      // Edit mode (Slice 4): the project already exists — patch its
+      // core fields, then re-apply the profile via the SAME endpoint
+      // (POST /{id}/profile) the create flow uses. No project is made.
+      if (isEdit && editProjectId) {
+        await projectsApi.update(editProjectId, {
+          name: data.name,
+          description: data.description,
+          region: data.region,
+          classification_standard: data.classification_standard,
+          currency: data.currency,
+          locale: data.locale,
+        });
+        await projectsApi.applyProfile(editProjectId, buildSpec());
+        return { id: editProjectId } as Project;
+      }
+
       const project = await projectsApi.create(data);
       // Best-effort profile apply — a failure here must not lose the
       // already-created project; we surface a soft warning instead.
@@ -643,7 +730,7 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
         addToast({
           type: 'warning',
           title: t('project_wizard.profile_apply_failed', {
-            defaultValue: 'Project created, but the module setup could not be applied — you can re-run it from Project Settings.',
+            defaultValue: 'Project created, but the module setup could not be applied — you can re-run it from Project Settings.‌⁠‍',
           }),
         });
       }
@@ -651,13 +738,31 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
     },
     onSuccess: (project) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] });
-      addToast({ type: 'success', title: t('toasts.project_created', { defaultValue: 'Project created successfully' }) });
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+      queryClient.invalidateQueries({
+        queryKey: ['project-profile', project.id],
+      });
+      track('setup_completed', {
+        project_id: project.id,
+        preset,
+        edit: isEdit,
+      });
+      addToast({
+        type: 'success',
+        title: isEdit
+          ? t('project_wizard.setup_updated', {
+              defaultValue: 'Project setup updated‌⁠‍',
+            })
+          : t('toasts.project_created', {
+              defaultValue: 'Project created successfully‌⁠‍',
+            }),
+      });
       // Navigate away — no focus return here (we're leaving the page).
       onClose();
       navigate(`/projects/${project.id}`);
     },
     onError: (error: Error) => {
-      addToast({ type: 'error', title: t('toasts.project_create_failed', { defaultValue: 'Failed to create project' }), message: error.message });
+      addToast({ type: 'error', title: t('toasts.project_create_failed', { defaultValue: 'Failed to create project‌⁠‍' }), message: error.message });
     },
   });
 
@@ -677,7 +782,16 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
     list: string[],
     val: string,
     setter: (v: string[]) => void,
-  ) => setter(list.includes(val) ? list.filter((x) => x !== val) : [...list, val]);
+    kind?: 'activity' | 'phase',
+  ) => {
+    const present = list.includes(val);
+    setter(present ? list.filter((x) => x !== val) : [...list, val]);
+    if (kind) {
+      // Scope chips change the resolved module set — closest
+      // user-meaningful "module toggled" signal in this wizard.
+      track('module_toggled', { kind, value: val, on: !present });
+    }
+  };
 
   if (!open) return null;
 
@@ -708,7 +822,7 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
   const submitBlockReason = (() => {
     if (!trimmedName)
       return t('project_wizard.need_name', {
-        defaultValue: 'Enter a project name (step 1).',
+        defaultValue: 'Enter a project name (step 1).‌⁠‍',
       });
     if (!effectiveRegion)
       return t('project_wizard.need_region', {
@@ -812,7 +926,11 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
             </div>
             <div>
               <h2 id="cpw-title" className="text-lg font-semibold text-content-primary">
-                {t('projects.new_project', { defaultValue: 'New Project' })}
+                {isEdit
+                  ? t('project_wizard.edit_setup_title', {
+                      defaultValue: 'Edit project setup',
+                    })
+                  : t('projects.new_project', { defaultValue: 'New Project' })}
               </h2>
               <p className="text-xs text-content-tertiary">
                 {mode === 'choose'
@@ -1656,7 +1774,7 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
                     <Chip
                       key={a}
                       active={activity.includes(a)}
-                      onClick={() => toggleIn(activity, a, setActivity)}
+                      onClick={() => toggleIn(activity, a, setActivity, 'activity')}
                       label={t(`project_wizard.activity_opt.${a}`, { defaultValue: humanize(a) })}
                     />
                   ))}
@@ -1671,7 +1789,7 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
                     <Chip
                       key={ph}
                       active={phases.includes(ph)}
-                      onClick={() => toggleIn(phases, ph, setPhases)}
+                      onClick={() => toggleIn(phases, ph, setPhases, 'phase')}
                       label={t(`project_wizard.phase_opt.${ph}`, { defaultValue: cap(ph) })}
                     />
                   ))}
@@ -1822,14 +1940,18 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
                 : mode === 'classic'
                   ? () => setMode('choose')
                   : step === 1
-                    ? () => setMode('choose')
+                    // Edit mode has no chooser to fall back to — step-1
+                    // Back closes the re-wizard instead.
+                    ? (isEdit ? requestClose : () => setMode('choose'))
                     : back
             }
             disabled={mutation.isPending}
           >
             {mode === 'choose'
               ? t('common.cancel')
-              : <span className="flex items-center gap-1"><ChevronLeft size={15} />{t('common.back', { defaultValue: 'Back' })}</span>}
+              : (step === 1 && isEdit)
+                ? t('common.cancel')
+                : <span className="flex items-center gap-1"><ChevronLeft size={15} />{t('common.back', { defaultValue: 'Back' })}</span>}
           </Button>
           {mode === 'choose' ? null : mode === 'classic' || isLast ? (
             <div className="flex items-center gap-3 min-w-0">
@@ -1860,7 +1982,11 @@ export function CreateProjectModal({ open, onClose }: CreateProjectModalProps) {
                 disabled={!canSubmit || mutation.isPending}
                 title={!canSubmit ? (submitBlockReason ?? undefined) : undefined}
               >
-                {t('common.create')}
+                {isEdit
+                  ? t('project_wizard.save_setup', {
+                      defaultValue: 'Save setup',
+                    })
+                  : t('common.create')}
               </Button>
             </div>
           ) : (

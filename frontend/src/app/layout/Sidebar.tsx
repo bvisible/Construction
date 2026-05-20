@@ -68,6 +68,7 @@ import {
   Leaf,
   BarChart3,
   LineChart,
+  Radar,
   type LucideIcon,
 } from 'lucide-react';
 import { useModuleStore } from '@/stores/useModuleStore';
@@ -85,6 +86,10 @@ import {
   SIDEBAR_WIDTH_ICON,
 } from '@/stores/useSidebarCollapseStore';
 import { RequestCustomModuleDialog } from '@/features/modules/RequestCustomModuleDialog';
+import {
+  useActiveProjectProfile,
+  buildModuleGate,
+} from '@/features/projects/useProjectProfile';
 
 
 interface NavItem {
@@ -131,7 +136,7 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'boq.title', to: '/boq', icon: Table2, tourId: 'boq' },
       { labelKey: 'costs.title', to: '/costs', icon: Database, tourId: 'costs' },
-      { labelKey: 'nav.match_elements', to: '/match-elements', icon: Link2, badge: 'NEW' },
+      { labelKey: 'nav.match_elements', to: '/match-elements', icon: Link2, badge: 'BETA' },
       { labelKey: 'nav.assemblies', to: '/assemblies', icon: Layers },
       { labelKey: 'catalog.title', to: '/catalog', icon: Boxes },
       { labelKey: 'nav.quantity_rules', to: '/bim/rules', icon: ClipboardCheck, badge: 'BETA' },
@@ -146,6 +151,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.dwg_takeoff', to: '/dwg-takeoff', icon: PencilRuler },
       { labelKey: 'nav.cad_bim_explorer', to: '/data-explorer', icon: TableProperties },
       { labelKey: 'nav.bim_viewer', to: '/bim', icon: Box },
+      { labelKey: 'nav.clash_detection', to: '/clash', icon: Radar, badge: 'BETA' },
       { labelKey: 'nav.bim_rules', to: '/bim/rules?mode=requirements', icon: SlidersHorizontal, badge: 'BETA' },
     ],
   },
@@ -252,7 +258,7 @@ const navGroups: NavGroup[] = [
     defaultOpen: false,
     hideInSimple: true,
     items: [
-      { labelKey: 'nav.assets', to: '/assets', icon: Package, badge: 'NEW' },
+      { labelKey: 'nav.assets', to: '/assets', icon: Package, badge: 'BETA' },
       { labelKey: 'cde.title', to: '/cde', icon: Database },
       { labelKey: 'nav.photos', to: '/photos', icon: Camera },
       { labelKey: 'nav.markups', to: '/markups', icon: PenTool },
@@ -591,6 +597,23 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   // string down to every `SidebarItem` so only one row lights up.
   const activeRoute = pickActiveRoute(location, Object.keys(ALL_NAV_ITEMS));
 
+  // ── Project focus (in-place) ────────────────────────────────────────
+  // When the active project has a setup profile with focus mode ON, the
+  // sidebar keeps its ORIGINAL menu and ORIGINAL order — no separate
+  // "project route" section is hoisted to the top. Instead, in place:
+  //   • modules the project needs  → fully visible + a sequence number
+  //   • modules it does not need   → smaller and de-emphasized (grey)
+  //   • routes outside the profile → rendered normally (global nav
+  //     never breaks).
+  // No active project / no profile / focus mode OFF → `gate.active` is
+  // false and every row renders exactly as the flat default.
+  const { profile: activeProfile } = useActiveProjectProfile();
+  const gate = buildModuleGate(activeProfile);
+  // Running 1..N sequence assigned to project-needed rows as they
+  // render top-to-bottom. Resets every render (component body re-runs),
+  // so the numbers always read in visual order regardless of grouping.
+  let routeSeq = 0;
+
   return (
     <aside
       data-tour="sidebar"
@@ -663,8 +686,6 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             <X size={16} />
           </button>
         )}
-        {/* Soft hairline separator instead of a hard 1px border. */}
-        <div className="absolute bottom-0 left-4 right-4 h-px bg-gradient-to-r from-transparent via-border to-transparent" />
       </div>
 
       {/* Floating collapse/expand tab — pill-shaped, half-protruding
@@ -733,7 +754,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           users who don't know the ⌘K shortcut, while still surfacing
           it for those who do. When iconified, collapses to a single
           icon button — the ⌘K shortcut still works regardless. */}
-      <div className={clsx('pt-3 pb-1', iconified ? 'px-2 flex justify-center' : 'px-3')}>
+      <div className={clsx('pt-1 pb-1', iconified ? 'px-2 flex justify-center' : 'px-3')}>
         <button
           type="button"
           onClick={() => openSearch()}
@@ -804,6 +825,11 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             )}
           </div>
         )}
+        {/* Project focus is applied IN PLACE inside the original groups
+            below — there is NO separate "project route" section and no
+            reordering. Each row is only annotated: needed → sequence
+            number; not needed → smaller + greyed; unconstrained → as
+            default. Focus OFF / no profile → every row is default. */}
         {navGroups.map((group) => {
           // Hide entire group in simple mode if flagged
           if (group.hideInSimple && !isAdvanced) return null;
@@ -822,7 +848,9 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
               advancedOnly: mi.advancedOnly,
             }));
 
-          // Filter items by module enabled and advanced mode
+          // Filter by module-enabled + advanced mode ONLY. The menu
+          // keeps its original shape and order; project focus never
+          // removes or reorders rows — it only annotates them below.
           const allItems = [...group.items, ...dynamicItems];
           const visibleItems = allItems.filter(
             (item) =>
@@ -844,24 +872,38 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
               iconified={iconified}
             >
               <ul className="space-y-0.5">
-                {visibleItems.map((item, i) => (
-                  <li
-                    key={item.to}
-                    className="oe-stagger"
-                    style={{ animationDelay: `${i * 18}ms` }}
-                  >
-                    <SidebarItem
-                      item={item}
-                      label={t(item.labelKey)}
-                      onClick={onClose}
-                      badge={badgeMap[item.to]}
-                      isPinned={pinned.includes(item.to)}
-                      onTogglePin={togglePin}
-                      activeRoute={activeRoute}
-                      iconified={iconified}
-                    />
-                  </li>
-                ))}
+                {visibleItems.map((item, i) => {
+                  // In-place project-focus annotation (no reorder):
+                  //   g === null      → route not profile-constrained →
+                  //                      render exactly as the default.
+                  //   g.enabled       → project needs it → sequence #.
+                  //   g.enabled false → not needed → smaller + greyed.
+                  const g =
+                    gate.active && !iconified ? gate.byRoute(item.to) : null;
+                  const notNeeded = g != null && !g.enabled;
+                  const needed = g != null && g.enabled;
+                  const seq = needed ? (routeSeq += 1) : null;
+                  return (
+                    <li
+                      key={item.to}
+                      className={clsx('oe-stagger', notNeeded && 'opacity-45')}
+                      style={{ animationDelay: `${i * 18}ms` }}
+                    >
+                      <SidebarItem
+                        item={item}
+                        label={t(item.labelKey)}
+                        onClick={onClose}
+                        badge={badgeMap[item.to]}
+                        seq={seq}
+                        compact={notNeeded}
+                        isPinned={pinned.includes(item.to)}
+                        onTogglePin={togglePin}
+                        activeRoute={activeRoute}
+                        iconified={iconified}
+                      />
+                    </li>
+                  );
+                })}
               </ul>
             </NavGroupSection>
           );
@@ -1136,6 +1178,7 @@ function SidebarItem({
   label,
   onClick,
   badge: numericBadge,
+  seq,
   isPinned,
   onTogglePin,
   activeRoute,
@@ -1146,6 +1189,7 @@ function SidebarItem({
   label: string;
   onClick?: () => void;
   badge?: number;
+  seq?: number | null;
   isPinned?: boolean;
   onTogglePin?: (route: string) => void;
   activeRoute?: string | null;
@@ -1233,6 +1277,22 @@ function SidebarItem({
           );
         }}
       >
+        {/* Project-focus sequence number — only set for rows the active
+            project needs (focus mode on). A small leading chip so the
+            menu reads as a numbered route while keeping its order. */}
+        {seq != null && (
+          <span
+            className={clsx(
+              'shrink-0 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums transition-colors',
+              isActive
+                ? 'bg-oe-blue text-white'
+                : 'bg-oe-blue-subtle text-oe-blue',
+            )}
+            aria-hidden
+          >
+            {seq}
+          </span>
+        )}
         <Icon size={compact ? 14 : 16} strokeWidth={isActive ? 2 : 1.75} className="shrink-0" />
         {/* Hover-tooltip via title falls back to the full label even when
             CSS truncates with an ellipsis. The visible width is now

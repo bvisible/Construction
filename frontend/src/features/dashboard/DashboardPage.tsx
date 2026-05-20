@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -37,6 +37,7 @@ import {
   Lightbulb,
   CircleDashed,
   Activity,
+  LayoutGrid,
 } from 'lucide-react';
 import { Card, CardHeader, CardContent, Button, Badge, Skeleton, ActivityFeed as CrossModuleActivityFeed, EmptyState } from '@/shared/ui';
 import BIMCoverageCard from './BIMCoverageCard';
@@ -44,6 +45,46 @@ import { CompactProjectCard } from './components/CompactProjectCard';
 import { DashboardProjectsMap } from './components/DashboardProjectsMap';
 import { ShowAllProjectsCard } from './components/ShowAllProjectsCard';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
+import { DashboardLayoutManager } from './DashboardLayoutManager';
+import { DASHBOARD_WIDGET_IDS } from './widgetRegistry';
+import { useDashboardLayoutStore, reconcileOrder } from '@/stores/useDashboardLayoutStore';
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+
+/**
+ * Run `task` for every item with at most `limit` requests in flight, then
+ * flatten the results. Per-item rejections are swallowed (a project with no
+ * BOQs/schedules 404s and must not abort the whole batch — same semantics as
+ * the old per-iteration try/catch). Replaces the previous strictly-serial
+ * `for (… of …) { await … }` fan-out so the dashboard issues N requests in
+ * ~⌈N/limit⌉ waves instead of N back-to-back round-trips. Result order is
+ * completion-order, which is fine: every consumer either aggregates or sorts
+ * by timestamp.
+ */
+async function fanOutPooled<T, R>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<R[]>,
+): Promise<R[]> {
+  const out: R[] = [];
+  let cursor = 0;
+  const runWorker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const item = items[cursor++]!;
+      try {
+        out.push(...(await task(item)));
+      } catch {
+        /* skip — item has no rows for this resource */
+      }
+    }
+  };
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    runWorker,
+  );
+  await Promise.all(workers);
+  return out;
+}
 
 /* ── Types ────────────────────────────────────────────────────────────── */
 
@@ -1669,6 +1710,14 @@ export function DashboardPage() {
   const navigate = useNavigate();
 
   const [showAllActivity, setShowAllActivity] = useState(false);
+  const [customizing, setCustomizing] = useState(false);
+
+  const widgetOrder = useDashboardLayoutStore((s) => s.order);
+  const widgetHidden = useDashboardLayoutStore((s) => s.hidden);
+  const resolvedWidgets = useMemo(
+    () => reconcileOrder(widgetOrder, DASHBOARD_WIDGET_IDS),
+    [widgetOrder],
+  );
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
@@ -1726,20 +1775,10 @@ export function DashboardPage() {
   // Fetch all BOQs across projects for KPI ribbon + analytics
   const { data: allBoqs } = useQuery({
     queryKey: ['dashboard-all-boqs', projects?.map((p) => p.id).join(',')],
-    queryFn: async () => {
-      const results: BOQWithTotal[] = [];
-      for (const project of projects ?? []) {
-        try {
-          const boqs = await apiGet<BOQWithTotal[]>(
-            `/v1/boq/boqs/?project_id=${project.id}`,
-          );
-          results.push(...boqs);
-        } catch {
-          // Skip projects with no BOQs
-        }
-      }
-      return results;
-    },
+    queryFn: () =>
+      fanOutPooled(projects ?? [], 8, (project) =>
+        apiGet<BOQWithTotal[]>(`/v1/boq/boqs/?project_id=${project.id}`),
+      ),
     enabled: Boolean(projects && projects.length > 0),
     retry: false,
   });
@@ -1747,20 +1786,12 @@ export function DashboardPage() {
   // Fetch schedules across projects for KPI ribbon
   const { data: allSchedules } = useQuery({
     queryKey: ['dashboard-all-schedules', projects?.map((p) => p.id).join(',')],
-    queryFn: async () => {
-      const results: ScheduleSummary[] = [];
-      for (const project of projects ?? []) {
-        try {
-          const schedules = await apiGet<ScheduleSummary[]>(
-            `/v1/schedule/schedules/?project_id=${project.id}`,
-          );
-          results.push(...schedules);
-        } catch {
-          // Skip
-        }
-      }
-      return results;
-    },
+    queryFn: () =>
+      fanOutPooled(projects ?? [], 8, (project) =>
+        apiGet<ScheduleSummary[]>(
+          `/v1/schedule/schedules/?project_id=${project.id}`,
+        ),
+      ),
     enabled: Boolean(projects && projects.length > 0),
     retry: false,
   });
@@ -1802,6 +1833,167 @@ export function DashboardPage() {
       updatedAt: (picked as unknown as { updated_at?: string }).updated_at,
     };
   }, [allBoqs, projects]);
+
+  // ── Widget node map — keyed by registry id. The dashboard renders these
+  //    in the user's saved order (`resolvedWidgets`), skipping hidden ones.
+  //    Conditional widgets resolve to `null` (and contribute nothing) just
+  //    as they did when they were inline. */
+  const widgetNodes: Record<string, ReactNode> = {
+    continue_work: lastBoq ? (
+      <button
+        type="button"
+        onClick={() => navigate(`/boq/${lastBoq.id}`)}
+        className="group flex w-full items-center gap-3 rounded-lg border border-border-light bg-surface-primary px-4 py-3 text-left transition-all duration-normal ease-oe hover:border-oe-blue/40 hover:bg-oe-blue-subtle/20 hover:shadow-sm animate-card-in focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
+        style={{ animationDelay: '60ms' }}
+        title={t('dashboard.continue_work', { defaultValue: 'Continue your work' })}
+      >
+        <span className="relative flex h-2 w-2 shrink-0">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-oe-blue/40 opacity-75" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-oe-blue" />
+        </span>
+        <span className="text-2xs uppercase tracking-wider font-semibold text-oe-blue shrink-0">
+          {t('dashboard.continue_work', { defaultValue: 'Resume' })}
+        </span>
+        <span className="text-sm font-semibold text-content-primary truncate min-w-0">
+          {lastBoq.name}
+        </span>
+        {lastBoq.projectName && (
+          <>
+            <span aria-hidden className="text-content-quaternary shrink-0">·</span>
+            <span className="text-xs text-content-tertiary truncate min-w-0 hidden sm:inline">
+              {lastBoq.projectName}
+            </span>
+          </>
+        )}
+        <span className="ml-auto flex items-center gap-3 shrink-0">
+          {lastBoq.positionCount > 0 && (
+            <span className="text-xs text-content-secondary tabular-nums hidden md:inline">
+              <strong className="text-content-primary">{lastBoq.positionCount}</strong>{' '}
+              {t('boq.positions', { defaultValue: 'positions' })}
+            </span>
+          )}
+          {lastBoq.grandTotal > 0 && (
+            <span className="text-xs font-semibold text-content-primary tabular-nums">
+              {lastBoq.currency} {lastBoq.grandTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+            </span>
+          )}
+          <ArrowRight size={16} className="text-content-tertiary group-hover:text-oe-blue group-hover:translate-x-0.5 transition-all" />
+        </span>
+      </button>
+    ) : null,
+
+    today: <TodaySnapshot cards={projectCards} />,
+
+    kpi: <KpiRibbon boqs={allBoqs} schedules={allSchedules} projects={projects} />,
+
+    projects: (
+      <>
+        <ProjectMetricCards cards={projectCards} loading={cardsLoading} />
+        {(!projectCards || projectCards.length === 0) && (
+          <div className="animate-card-in" style={{ animationDelay: '150ms' }}>
+            <Card padding="none">
+              <div className="p-6 pb-0">
+                <CardHeader
+                  title={t('dashboard.recent_projects')}
+                  action={
+                    <Button variant="ghost" size="sm" icon={<ArrowRight size={14} />} iconPosition="right" onClick={() => navigate('/projects')}>
+                      {t('projects.title')}
+                    </Button>
+                  }
+                />
+              </div>
+              <CardContent className="!mt-0">
+                <ProjectsList projects={projects} />
+              </CardContent>
+            </Card>
+          </div>
+        )}
+      </>
+    ),
+
+    portfolio:
+      projects && projects.length > 1 ? (
+        <PortfolioOverview projects={projects} />
+      ) : null,
+
+    map:
+      projects && projects.length > 0 ? (
+        <div className="animate-card-in" style={{ animationDelay: '220ms' }}>
+          <DashboardProjectsMap
+            projects={projects.slice(0, 30).map((p) => ({
+              id: p.id,
+              name: p.name,
+              region: p.region,
+              lat: p.address?.lat ?? null,
+              lng: p.address?.lng ?? null,
+              address: p.address?.street ?? null,
+              city: p.address?.city ?? null,
+              country: p.address?.country ?? null,
+            }))}
+          />
+        </div>
+      ) : null,
+
+    bim_coverage: <BIMCoverageCard />,
+
+    quick_upload: <QuickUploadCard />,
+
+    onboarding: (
+      <OnboardingSteps projects={projects} regionStats={regionStats} boqs={allBoqs} vectorCount={vectorCount} />
+    ),
+
+    next_steps: (
+      <NextSteps
+        projects={projects}
+        boqs={allBoqs}
+        schedules={allSchedules}
+        allContacts={contactsCount}
+      />
+    ),
+
+    analytics:
+      projects && projects.length > 0 ? (
+        <div className="animate-card-in" style={{ animationDelay: '180ms' }}>
+          <div className="mb-4 flex items-center gap-2">
+            <BarChart3 size={18} className="text-content-tertiary" strokeWidth={1.75} />
+            <h2 className="text-lg font-semibold text-content-primary">
+              {t('dashboard.analytics', { defaultValue: 'Analytics' })}
+            </h2>
+          </div>
+          <AnalyticsSection projects={projects} />
+        </div>
+      ) : null,
+
+    activity: (
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {projects && projects.length > 0 && (
+          <div className="lg:col-span-2 animate-card-in" style={{ animationDelay: '200ms' }}>
+            <Card className="h-full">
+              <CardHeader
+                title={t('dashboard.activity', { defaultValue: 'Recent Activity' })}
+                action={
+                  <Button variant="ghost" size="sm" icon={<ArrowRight size={14} />} iconPosition="right" onClick={() => setShowAllActivity((prev) => !prev)}>
+                    {showAllActivity ? t('common.show_less', { defaultValue: 'Show less' }) : t('common.show_more', { defaultValue: 'Show more' })}
+                  </Button>
+                }
+              />
+              <CardContent>
+                <CrossModuleActivityFeed limit={showAllActivity ? 25 : 6} />
+              </CardContent>
+            </Card>
+          </div>
+        )}
+        <div className={`${projects && projects.length > 0 ? 'lg:col-start-3' : ''} animate-card-in`} style={{ animationDelay: '220ms' }}>
+          <Card className="h-full">
+            <CardHeader title={t('dashboard.system_status')} />
+            <CardContent>
+              <SystemStatus />
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    ),
+  };
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -1872,6 +2064,20 @@ export function DashboardPage() {
               ? t('dashboard.quick_resume', { defaultValue: 'Resume last estimate' })
               : t('dashboard.quick_start', { defaultValue: 'Quick Start' })}
           </Button>
+          <Button
+            variant={customizing ? 'primary' : 'ghost'}
+            size="md"
+            icon={<LayoutGrid size={15} />}
+            onClick={() => setCustomizing((v) => !v)}
+            aria-pressed={customizing}
+            title={t('dashboard.layout.customize_hint', {
+              defaultValue: 'Reorder, show or hide dashboard sections',
+            })}
+          >
+            {customizing
+              ? t('dashboard.layout.done', { defaultValue: 'Done' })
+              : t('dashboard.layout.customize', { defaultValue: 'Customize' })}
+          </Button>
         </div>
       </div>
 
@@ -1917,163 +2123,30 @@ export function DashboardPage() {
         <SystemStatusSummary projects={projects} boqs={allBoqs} />
       </div>
 
-      {/* ─── 3. Continue Your Work — slim strip ────────────────────────
-          Was a 124px gradient banner with a 48px chip + h2. Now a single
-          line (~52px) — name + project · positions · total · arrow. The
-          heavy gradient + border-2 removed per audit 2026-05-11. */}
-      {lastBoq && (
-        <button
-          type="button"
-          onClick={() => navigate(`/boq/${lastBoq.id}`)}
-          className="group flex w-full items-center gap-3 rounded-lg border border-border-light bg-surface-primary px-4 py-3 text-left transition-all duration-normal ease-oe hover:border-oe-blue/40 hover:bg-oe-blue-subtle/20 hover:shadow-sm animate-card-in focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
-          style={{ animationDelay: '60ms' }}
-          title={t('dashboard.continue_work', { defaultValue: 'Continue your work' })}
-        >
-          <span className="relative flex h-2 w-2 shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-oe-blue/40 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-oe-blue" />
-          </span>
-          <span className="text-2xs uppercase tracking-wider font-semibold text-oe-blue shrink-0">
-            {t('dashboard.continue_work', { defaultValue: 'Resume' })}
-          </span>
-          <span className="text-sm font-semibold text-content-primary truncate min-w-0">
-            {lastBoq.name}
-          </span>
-          {lastBoq.projectName && (
-            <>
-              <span aria-hidden className="text-content-quaternary shrink-0">·</span>
-              <span className="text-xs text-content-tertiary truncate min-w-0 hidden sm:inline">
-                {lastBoq.projectName}
-              </span>
-            </>
-          )}
-          <span className="ml-auto flex items-center gap-3 shrink-0">
-            {lastBoq.positionCount > 0 && (
-              <span className="text-xs text-content-secondary tabular-nums hidden md:inline">
-                <strong className="text-content-primary">{lastBoq.positionCount}</strong>{' '}
-                {t('boq.positions', { defaultValue: 'positions' })}
-              </span>
-            )}
-            {lastBoq.grandTotal > 0 && (
-              <span className="text-xs font-semibold text-content-primary tabular-nums">
-                {lastBoq.currency} {lastBoq.grandTotal.toLocaleString(undefined, { maximumFractionDigits: 0 })}
-              </span>
-            )}
-            <ArrowRight size={16} className="text-content-tertiary group-hover:text-oe-blue group-hover:translate-x-0.5 transition-all" />
-          </span>
-        </button>
-      )}
-
-      {/* ─── 3b. Today Snapshot — aggregated alerts across projects ──── */}
-      <TodaySnapshot cards={projectCards} />
-
-      {/* ─── 4. KPI Ribbon ───────────────────────────────────────────── */}
-      <KpiRibbon boqs={allBoqs} schedules={allSchedules} projects={projects} />
-
-      {/* ─── 4. Project Cards (primary content) ──────────────────────── */}
-      <ProjectMetricCards cards={projectCards} loading={cardsLoading} />
-
-      {/* Fallback project list when no metric cards available */}
-      {(!projectCards || projectCards.length === 0) && (
-        <div className="animate-card-in" style={{ animationDelay: '150ms' }}>
-          <Card padding="none">
-            <div className="p-6 pb-0">
-              <CardHeader
-                title={t('dashboard.recent_projects')}
-                action={
-                  <Button variant="ghost" size="sm" icon={<ArrowRight size={14} />} iconPosition="right" onClick={() => navigate('/projects')}>
-                    {t('projects.title')}
-                  </Button>
-                }
-              />
-            </div>
-            <CardContent className="!mt-0">
-              <ProjectsList projects={projects} />
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* ─── 5. Portfolio Overview (multi-project users) ─────────────── */}
-      {projects && projects.length > 1 && (
-        <PortfolioOverview projects={projects} />
-      )}
-
-      {/* ─── 5b. Project locations map (compact, lazy MapLibre) ──────── */}
-      {projects && projects.length > 0 && (
-        <div className="animate-card-in" style={{ animationDelay: '220ms' }}>
-          <DashboardProjectsMap
-            projects={projects.slice(0, 30).map((p) => ({
-              id: p.id,
-              name: p.name,
-              region: p.region,
-              lat: p.address?.lat ?? null,
-              lng: p.address?.lng ?? null,
-              address: p.address?.street ?? null,
-              city: p.address?.city ?? null,
-              country: p.address?.country ?? null,
-            }))}
+      {/* ─── Customize panel (collapsible) — same manager as Settings ─── */}
+      {customizing && (
+        <Card className="animate-card-in border-oe-blue/30">
+          <CardHeader
+            title={t('dashboard.layout.title', { defaultValue: 'Customize dashboard' })}
+            subtitle={t('dashboard.layout.subtitle', {
+              defaultValue:
+                'Reorder, show or hide the sections below. Your layout is saved to this browser.',
+            })}
           />
-        </div>
+          <CardContent>
+            <DashboardLayoutManager onClose={() => setCustomizing(false)} />
+          </CardContent>
+        </Card>
       )}
 
-      {/* ─── 6. BIM Coverage ─────────────────────────────────────────── */}
-      <BIMCoverageCard />
-
-      {/* ─── 6b. Quick Upload ─────────────────────────────────────────── */}
-      <QuickUploadCard />
-
-      {/* ─── 7. Getting Started (onboarding — hidden once all done) ─── */}
-      <OnboardingSteps projects={projects} regionStats={regionStats} boqs={allBoqs} vectorCount={vectorCount} />
-
-      {/* ─── 8. Context-aware suggestions ────────────────────────────── */}
-      <NextSteps
-        projects={projects}
-        boqs={allBoqs}
-        schedules={allSchedules}
-        allContacts={contactsCount}
-      />
-
-      {/* ─── 9. Analytics + Activity + System Status ─────────────────── */}
-      {projects && projects.length > 0 && (
-        <div className="animate-card-in" style={{ animationDelay: '180ms' }}>
-          <div className="mb-4 flex items-center gap-2">
-            <BarChart3 size={18} className="text-content-tertiary" strokeWidth={1.75} />
-            <h2 className="text-lg font-semibold text-content-primary">
-              {t('dashboard.analytics', { defaultValue: 'Analytics' })}
-            </h2>
-          </div>
-          <AnalyticsSection projects={projects} />
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {projects && projects.length > 0 && (
-          <div className="lg:col-span-2 animate-card-in" style={{ animationDelay: '200ms' }}>
-            <Card className="h-full">
-              <CardHeader
-                title={t('dashboard.activity', { defaultValue: 'Recent Activity' })}
-                action={
-                  <Button variant="ghost" size="sm" icon={<ArrowRight size={14} />} iconPosition="right" onClick={() => setShowAllActivity((prev) => !prev)}>
-                    {showAllActivity ? t('common.show_less', { defaultValue: 'Show less' }) : t('common.show_more', { defaultValue: 'Show more' })}
-                  </Button>
-                }
-              />
-              <CardContent>
-                <CrossModuleActivityFeed limit={showAllActivity ? 25 : 6} />
-              </CardContent>
-            </Card>
-          </div>
-        )}
-        <div className={`${projects && projects.length > 0 ? 'lg:col-start-3' : ''} animate-card-in`} style={{ animationDelay: '220ms' }}>
-          <Card className="h-full">
-            <CardHeader title={t('dashboard.system_status')} />
-            <CardContent>
-              <SystemStatus />
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+      {/* ─── Widgets — rendered in the user's saved order, hidden ones
+          skipped. Conditional widgets resolve to null and contribute
+          nothing (same behaviour as when they were inline). ──────────── */}
+      {resolvedWidgets.map((id) => {
+        if (widgetHidden.includes(id)) return null;
+        const node = widgetNodes[id];
+        return node ? <Fragment key={id}>{node}</Fragment> : null;
+      })}
     </div>
   );
 }
@@ -2172,20 +2245,10 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
     // Query dedupes when keys match, so the analytics section gets the same
     // ``allBoqs`` data without firing a second 1×N round of GETs.
     queryKey: ['dashboard-all-boqs', projects.map((p) => p.id).join(',')],
-    queryFn: async () => {
-      const results: BOQWithTotal[] = [];
-      for (const project of projects) {
-        try {
-          const boqs = await apiGet<BOQWithTotal[]>(
-            `/v1/boq/boqs/?project_id=${project.id}`,
-          );
-          results.push(...boqs);
-        } catch {
-          // Skip projects with no BOQs
-        }
-      }
-      return results;
-    },
+    queryFn: () =>
+      fanOutPooled(projects, 8, (project) =>
+        apiGet<BOQWithTotal[]>(`/v1/boq/boqs/?project_id=${project.id}`),
+      ),
     enabled: projects.length > 0,
     retry: false,
   });

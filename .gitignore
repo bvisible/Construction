@@ -85,6 +85,8 @@ translation_keys.txt
 data/bim/
 data/exports/
 data/cwicr/cache/
+data/approvals/
+data/transmittals/
 frontend/debug-bim/
 
 # Claude Code / MCP — keep instruction files (.claude/*.md) but

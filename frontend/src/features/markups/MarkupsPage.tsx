@@ -1,11 +1,13 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
   PenTool,
   Search,
   Download,
+  GitCompare,
   ChevronDown,
   ChevronRight,
   Trash2,
@@ -860,6 +862,7 @@ function MarkupTableRow({
 
 export function MarkupsPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
@@ -1108,6 +1111,26 @@ export function MarkupsPage() {
                 </option>
               ))}
             </select>
+          )}
+
+          {/* Compare revisions — opens the PDF overlay / visual-diff view */}
+          {projectId && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                const params = new URLSearchParams();
+                if (filterDocumentId) params.set('docA', filterDocumentId);
+                navigate(`/markups/compare${params.toString() ? `?${params.toString()}` : ''}`);
+              }}
+              className="shrink-0 whitespace-nowrap"
+              title={t('markups.compare_revisions', { defaultValue: 'Compare revisions' })}
+            >
+              <GitCompare size={14} />
+              <span className="hidden lg:inline ml-1">
+                {t('markups.compare_revisions', { defaultValue: 'Compare' })}
+              </span>
+            </Button>
           )}
 
           {/* Open inline PDF annotator — icon-only on small screens */}

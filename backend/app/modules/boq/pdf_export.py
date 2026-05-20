@@ -624,7 +624,10 @@ def _build_boq_table(
             )
             row_styles.append((row_idx, "item"))
             row_idx += 1
-            ungrouped_total += pos.total
+            # ``pos.total`` is a SQLAlchemy Numeric (Decimal); the
+            # accumulator is a float — mixing the two raises TypeError and
+            # crashed PDF export for any BOQ with ungrouped positions.
+            ungrouped_total += float(pos.total or 0)
 
         table_data.append(
             [

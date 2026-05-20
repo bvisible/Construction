@@ -2993,6 +2993,167 @@ async def cad_data_save(
     }
 
 
+class CadDataFromBimModelRequest(BaseModel):
+    """Request body for ``POST /cad-data/from-bim-model``."""
+
+    model_id: str = Field(..., description="BIMModel id to build a CAD session from")
+
+
+def _flatten_bim_element_for_cad(el: Any) -> dict[str, Any]:
+    """Flatten a ``BIMElement`` ORM row into the lowercase CAD-session shape.
+
+    The CAD Data Explorer consumes a flat ``list[dict]`` with lowercase
+    keys (``category``, ``type name``, ``storey``, ``volume`` ...). BIM
+    elements store the same data across typed columns + ``properties`` /
+    ``quantities`` JSON blobs, so we merge them into one flat row. JSON
+    keys are lowercased and never override a typed column already set.
+    """
+    row: dict[str, Any] = {
+        "category": el.element_type or "",
+        "type name": el.name or "",
+        "storey": el.storey or "",
+        "discipline": el.discipline or "",
+        "stable id": el.stable_id or "",
+    }
+    for blob in (el.properties or {}, el.quantities or {}):
+        if not isinstance(blob, dict):
+            continue
+        for k, v in blob.items():
+            key = str(k).strip().lower()
+            if not key or v is None:
+                continue
+            row.setdefault(key, v)
+    return row
+
+
+@router.post(
+    "/cad-data/from-bim-model/",
+    dependencies=[Depends(RequirePermission("takeoff.read"))],
+)
+async def cad_data_from_bim_model(
+    body: CadDataFromBimModelRequest,
+    db_session: SessionDep = None,  # type: ignore[assignment]
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Build (or reuse) a CAD Data Explorer session from an existing BIM model.
+
+    The file-manager "CAD-BIM BI Explorer" action lands here: a BIM model
+    has element rows but no CAD-extraction session, and there is no
+    upload to perform. We flatten the model's ``BIMElement`` rows into the
+    session shape the explorer consumes and return a ``session_id`` the
+    page redirects to. Access is gated through the model's project so a
+    caller cannot read another tenant's elements.
+    """
+    try:
+        from app.modules.bim_hub.models import BIMElement, BIMModel
+    except ImportError as exc:  # pragma: no cover - module always present
+        raise HTTPException(
+            status_code=503,
+            detail="BIM module is not installed.",
+        ) from exc
+
+    try:
+        model_uuid = _uuid.UUID(body.model_id)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid model_id (must be a UUID)",
+        ) from exc
+
+    model = (
+        await db_session.execute(
+            select(BIMModel).where(BIMModel.id == model_uuid),
+        )
+    ).scalar_one_or_none()
+    if model is None:
+        raise HTTPException(status_code=404, detail="BIM model not found.")
+
+    # Tenant gate — the caller must have access to the model's project.
+    await verify_project_access(
+        model.project_id, str(user_id) if user_id else "", db_session,
+    )
+
+    project_id = str(model.project_id)
+
+    # Reuse an existing session already bound to this model so repeated
+    # clicks don't pile up duplicate sessions.
+    existing = (
+        await db_session.execute(
+            select(CadExtractionSession)
+            .where(
+                CadExtractionSession.project_id == project_id,
+                CadExtractionSession.filename == f"bim:{model.id}",
+                CadExtractionSession.expires_at > datetime.now(UTC),
+            )
+            .order_by(CadExtractionSession.created_at.desc()),
+        )
+    ).scalars().first()
+    if existing is not None:
+        return {
+            "session_id": existing.session_id,
+            "filename": existing.filename,
+            "total_elements": existing.element_count,
+            "reused": True,
+        }
+
+    elements_rows = (
+        await db_session.execute(
+            select(BIMElement).where(BIMElement.model_id == model_uuid),
+        )
+    ).scalars().all()
+    elements = [_flatten_bim_element_for_cad(e) for e in elements_rows]
+    if not elements:
+        raise HTTPException(
+            status_code=409,
+            detail="This BIM model has no extracted elements to analyse yet.",
+        )
+
+    fmt = (model.model_format or "bim").lower()
+    display_name = f"{model.name} — Analysis"
+
+    _cleanup_memory_sessions()
+    session_id = str(_uuid.uuid4())
+    _cad_sessions[session_id] = {
+        "elements": elements,
+        "filename": f"bim:{model.id}",
+        "format": fmt,
+        "created": _time.time(),
+        "columns_metadata": {},
+        "user_id": user_id or "",
+        "project_id": project_id,
+    }
+
+    if db_session is not None:
+        await _cleanup_db_sessions(db_session)
+        # Persist & immediately bind to the model's project so it shows
+        # under that project's saved sessions and survives a reload.
+        db_row = CadExtractionSession(
+            session_id=session_id,
+            user_id=user_id or "",
+            project_id=project_id,
+            display_name=display_name,
+            filename=f"bim:{model.id}",
+            file_format=fmt,
+            element_count=len(elements),
+            extraction_time=0,
+            elements_data=elements,
+            columns_metadata={},
+            expires_at=datetime.now(UTC) + timedelta(seconds=_CAD_SESSION_TTL),
+            created_by=user_id or "",
+        )
+        db_session.add(db_row)
+        await db_session.commit()
+
+    return {
+        "session_id": session_id,
+        "filename": f"bim:{model.id}",
+        "display_name": display_name,
+        "total_elements": len(elements),
+        "project_id": project_id,
+        "reused": False,
+    }
+
+
 @router.get(
     "/cad-data/sessions/",
     dependencies=[Depends(RequirePermission("takeoff.read"))],
@@ -3644,7 +3805,7 @@ async def analyze_document(
     import time
     import uuid as _uuid
 
-    from app.modules.ai.ai_client import call_ai, extract_json, resolve_provider_and_key
+    from app.modules.ai.ai_client import call_ai, extract_json, resolve_provider_key_model
     from app.modules.ai.prompts import (
         SMART_IMPORT_PROMPT,
         SYSTEM_PROMPT,
@@ -3676,7 +3837,7 @@ async def analyze_document(
     settings = await settings_repo.get_by_user_id(_uuid.UUID(user_id))
 
     try:
-        provider, api_key = resolve_provider_and_key(settings)
+        provider, api_key, model_override = resolve_provider_key_model(settings)
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -3700,6 +3861,7 @@ async def analyze_document(
             api_key=api_key,
             system=SYSTEM_PROMPT,
             prompt=prompt,
+            model=model_override,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

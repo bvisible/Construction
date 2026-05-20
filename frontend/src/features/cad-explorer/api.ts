@@ -189,3 +189,27 @@ export async function listSessions(projectId?: string, savedOnly = false): Promi
 export async function deleteSession(sessionId: string): Promise<void> {
   return apiDelete(`/v1/takeoff/cad-data/sessions/${sessionId}`);
 }
+
+export interface FromBimModelResponse {
+  session_id: string;
+  filename: string;
+  display_name?: string;
+  total_elements: number;
+  project_id?: string;
+  reused: boolean;
+}
+
+/**
+ * Materialise a CAD-data session from an existing BIM model's elements.
+ *
+ * A seeded / converted BIM model has element rows but no CAD-extraction
+ * session, so the file-manager "CAD-BIM BI Explorer" action has nothing
+ * to open. This flattens the model's elements server-side and returns a
+ * `session_id` the page redirects to (idempotent — repeated calls reuse
+ * the existing session for the same model).
+ */
+export async function sessionFromBimModel(modelId: string): Promise<FromBimModelResponse> {
+  return apiPost<FromBimModelResponse>('/v1/takeoff/cad-data/from-bim-model/', {
+    model_id: modelId,
+  });
+}

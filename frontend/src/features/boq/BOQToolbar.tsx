@@ -193,7 +193,7 @@ export function BOQToolbar({
   // Bug 7: stick BELOW the app header (52px / --oe-header-height) — using top-0 collides
   // with the sticky header (z-30), pushing the toolbar out of view when scrolling.
   return (
-    <div className="sticky top-[52px] z-20 bg-surface-primary flex flex-nowrap items-center gap-x-1.5 px-1 py-2 border-b border-border-light mb-3">
+    <div className="sticky top-[52px] z-20 bg-surface-primary flex flex-wrap items-center gap-x-1.5 gap-y-2 px-1 py-2 border-b border-border-light mb-3">
       {/* ── Row-group: Quality + Undo/Redo ─────────────────────────────── */}
       <div className="flex items-center gap-1.5">
         {hasPositions && qualityScoreRing}
@@ -398,7 +398,9 @@ export function BOQToolbar({
           when `summary` is provided and the BOQ has at least one row. */}
       {summary && hasPositions && (
         <div
-          className="ml-auto flex items-center gap-2 sm:gap-3 text-2xs text-content-tertiary tabular-nums"
+          className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap
+                     rounded-lg border border-border-light bg-surface-secondary/60
+                     px-2.5 py-1 tabular-nums"
           title={
             t('boq.toolbar_summary_aria', {
               defaultValue: '{{sections}} sections · {{positions}} positions',
@@ -407,31 +409,31 @@ export function BOQToolbar({
             })
           }
         >
-          {/* Errors / warnings only — surface unconditionally because they're
-              actionable signals. Sections/positions count moved to the
-              container's tooltip so the toolbar stays in a single row on
-              standard laptops; the BOQ Statistics modal carries the full
-              breakdown if the user wants it surfaced. */}
+          {/* Errors / warnings as compact tinted chips — actionable signals
+              that stay readable and never wrap mid-phrase. The full
+              sections/positions breakdown lives in the container tooltip and
+              the BOQ Statistics modal. */}
           {summary.errorCount > 0 && (
-            <span className="text-red-600 dark:text-red-400 font-medium">
+            <span className="inline-flex items-center whitespace-nowrap rounded-full
+                             bg-red-50 px-2 py-0.5 text-2xs font-semibold
+                             text-red-600 dark:bg-red-500/15 dark:text-red-400">
               {summary.errorCount} {t('boq.errors', { defaultValue: 'errors' })}
             </span>
           )}
           {summary.warningCount > 0 && (
-            <>
-              {summary.errorCount > 0 && <span className="text-border-light">·</span>}
-              <span className="text-amber-600 dark:text-amber-400 font-medium">
-                {summary.warningCount} {t('boq.warnings', { defaultValue: 'warnings' })}
-              </span>
-            </>
+            <span className="inline-flex items-center whitespace-nowrap rounded-full
+                             bg-amber-50 px-2 py-0.5 text-2xs font-semibold
+                             text-amber-600 dark:bg-amber-500/15 dark:text-amber-400">
+              {summary.warningCount} {t('boq.warnings', { defaultValue: 'warnings' })}
+            </span>
           )}
 
           {/* Display-in selector — opt-in, hidden when no FX rates configured. */}
           {summary.fxRates.length > 0 && (
             <>
-              <span className="w-px h-4 bg-border-light hidden sm:block" />
+              <span className="w-px h-4 bg-border-light" />
               <span className="inline-flex items-center gap-1 normal-case">
-                <span className="hidden lg:inline text-content-tertiary">
+                <span className="hidden lg:inline text-2xs text-content-tertiary">
                   {t('boq.display_in', { defaultValue: 'Display in' })}:
                 </span>
                 <select
@@ -457,15 +459,18 @@ export function BOQToolbar({
             </>
           )}
 
-          {/* Grand Total — bold, anchored at the very end. The tooltip
-              spells out the FX rate so the converted figure is auditable.
-              When display ≠ base the entire BOQ (per-position totals,
-              section subtotals, footer rows, this grand total) renders in
-              the chosen currency in lock-step. Edits stay locked to the
-              base currency: switch back to "Base" to change a unit_rate. */}
-          <span className="w-px h-4 bg-border-light hidden sm:block" />
+          {/* Grand Total — the headline figure, clearly separated and never
+              wrapped. The tooltip spells out the FX rate so the converted
+              figure is auditable. When display ≠ base the entire BOQ renders
+              in the chosen currency in lock-step; edits stay locked to base
+              (switch back to "Base" to change a unit_rate). */}
+          {(summary.errorCount > 0 ||
+            summary.warningCount > 0 ||
+            summary.fxRates.length > 0) && (
+            <span className="w-px h-5 bg-border-light" />
+          )}
           <span
-            className="font-semibold text-content-primary text-xs"
+            className="flex items-baseline gap-1.5 whitespace-nowrap"
             title={
               summary.displayRate != null && summary.displayCurrency
                 ? t('boq.grand_total_conversion_tooltip_v2', {
@@ -481,11 +486,16 @@ export function BOQToolbar({
                 : undefined
             }
           >
-            {t('boq.grand_total', { defaultValue: 'Grand Total' })}: {summary.displaySymbol}{' '}
-            {summary.grossTotalDisplay.toLocaleString(undefined, {
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
-            })}
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('boq.grand_total', { defaultValue: 'Grand Total' })}
+            </span>
+            <span className="text-sm font-bold text-content-primary">
+              {summary.displaySymbol}{' '}
+              {summary.grossTotalDisplay.toLocaleString(undefined, {
+                minimumFractionDigits: 2,
+                maximumFractionDigits: 2,
+              })}
+            </span>
           </span>
         </div>
       )}
@@ -573,7 +583,7 @@ function QualityAiMenu(props: QualityAiMenuProps) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         title={t('boq.quality_ai_menu_tip', { defaultValue: 'All quality & AI tools' })}
-        className={`flex items-center gap-1.5 px-2.5 h-7 rounded-lg border text-2xs font-semibold uppercase tracking-wider transition-colors ${
+        className={`flex shrink-0 items-center gap-1.5 px-2.5 h-7 whitespace-nowrap rounded-lg border text-2xs font-semibold uppercase tracking-wider transition-colors ${
           open
             ? 'bg-violet-100 dark:bg-violet-900/40 border-violet-300 dark:border-violet-700 text-violet-700 dark:text-violet-200'
             : 'bg-gradient-to-r from-violet-50 to-blue-50 dark:from-violet-950/30 dark:to-blue-950/30 border-violet-200/50 dark:border-violet-800/30 text-violet-700 dark:text-violet-300 hover:from-violet-100 hover:to-blue-100 dark:hover:from-violet-900/40'
@@ -586,7 +596,7 @@ function QualityAiMenu(props: QualityAiMenuProps) {
         ) : (
           <Sparkles size={13} className="text-violet-500" />
         )}
-        <span className="hidden lg:inline">{t('boq.quality_ai_menu', { defaultValue: 'Quality & AI' })}</span>
+        <span className="hidden lg:inline whitespace-nowrap">{t('boq.quality_ai_menu', { defaultValue: 'Quality & AI' })}</span>
         {lastValidationScore != null && !isValidating && (
           <span className={`text-2xs font-bold tabular-nums ${lastValidationScore >= 80 ? 'text-emerald-600' : lastValidationScore >= 50 ? 'text-amber-600' : 'text-red-600'}`}>
             {lastValidationScore}%

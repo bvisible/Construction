@@ -135,6 +135,102 @@ export interface DamageReport {
   work_order_id?: string | null;
 }
 
+export interface EquipmentType {
+  id: string;
+  code: string;
+  name: string;
+  category: string;
+  default_service_interval_hours?: number | string | null;
+  default_service_interval_km?: number | string | null;
+  default_inspection_interval_days?: number | null;
+  description?: string | null;
+}
+
+export interface CreateEquipmentTypePayload {
+  code: string;
+  name: string;
+  category?: string;
+  default_service_interval_hours?: number;
+  default_service_interval_km?: number;
+  default_inspection_interval_days?: number;
+  description?: string;
+}
+
+export type UpdateEquipmentTypePayload = Partial<Omit<CreateEquipmentTypePayload, 'code'>>;
+
+export interface CreateWorkOrderPayload {
+  equipment_id: string;
+  schedule_id?: string | null;
+  scheduled_for?: string | null;
+  status?: WorkOrderStatus;
+  technician_id?: string | null;
+  work_summary?: string | null;
+  cost?: number;
+  currency?: string;
+}
+
+export interface UpdateWorkOrderPayload {
+  scheduled_for?: string | null;
+  completed_at?: string | null;
+  status?: WorkOrderStatus;
+  technician_id?: string | null;
+  work_summary?: string | null;
+  cost?: number;
+  currency?: string;
+}
+
+export interface CreateInspectionPayload {
+  equipment_id: string;
+  inspection_type: InspectionType;
+  inspected_at: string;
+  valid_until: string;
+  inspector_name?: string | null;
+  result?: InspectionResult;
+  notes?: string | null;
+  certificate_url?: string | null;
+}
+
+export interface UpdateInspectionPayload {
+  inspection_type?: InspectionType;
+  inspected_at?: string;
+  valid_until?: string;
+  inspector_name?: string | null;
+  result?: InspectionResult;
+  notes?: string | null;
+  certificate_url?: string | null;
+}
+
+export interface CreateDamageReportPayload {
+  equipment_id: string;
+  reported_at: string;
+  reported_by?: string | null;
+  severity?: DamageSeverity;
+  description?: string;
+  photos?: string[];
+  repair_cost_estimate?: number;
+  currency?: string;
+}
+
+export interface UpdateDamageReportPayload {
+  severity?: DamageSeverity;
+  description?: string;
+  photos?: string[];
+  repair_cost_estimate?: number;
+  currency?: string;
+  status?: DamageStatus;
+}
+
+export interface TelemetryReadingPayload {
+  recorded_at: string;
+  fuel_level?: number;
+  hour_meter?: number;
+  odometer_km?: number;
+  lat?: number;
+  lng?: number;
+  engine_status?: string;
+  raw_payload?: Record<string, unknown>;
+}
+
 export interface EquipmentDashboard {
   equipment_id: string;
   code: string;
@@ -190,6 +286,29 @@ export function getEquipmentDashboard(id: string): Promise<EquipmentDashboard> {
   return apiGet<EquipmentDashboard>(`/v1/equipment/equipment/${id}/dashboard`);
 }
 
+/* ── Equipment Types ──────────────────────────────────────────────────── */
+
+export function listTypes(): Promise<EquipmentType[]> {
+  return apiGet<EquipmentType[]>('/v1/equipment/types/');
+}
+
+export function createType(
+  data: CreateEquipmentTypePayload,
+): Promise<EquipmentType> {
+  return apiPost<EquipmentType>('/v1/equipment/types/', data);
+}
+
+export function updateType(
+  id: string,
+  data: UpdateEquipmentTypePayload,
+): Promise<EquipmentType> {
+  return apiPatch<EquipmentType>(`/v1/equipment/types/${id}`, data);
+}
+
+export function deleteType(id: string): Promise<void> {
+  return apiDelete(`/v1/equipment/types/${id}`);
+}
+
 /* ── Telemetry ────────────────────────────────────────────────────────── */
 
 export function listTelemetry(
@@ -201,6 +320,16 @@ export function listTelemetry(
   const q = qs.toString();
   return apiGet<TelemetryReading[]>(
     `/v1/equipment/equipment/${equipmentId}/telemetry${q ? `?${q}` : ''}`,
+  );
+}
+
+export function recordTelemetry(
+  equipmentId: string,
+  data: TelemetryReadingPayload,
+): Promise<TelemetryReading> {
+  return apiPost<TelemetryReading>(
+    `/v1/equipment/equipment/${equipmentId}/telemetry`,
+    data,
   );
 }
 
@@ -223,6 +352,40 @@ export function listMaintenanceWorkOrders(params?: {
   );
 }
 
+export function createWorkOrder(
+  data: CreateWorkOrderPayload,
+): Promise<MaintenanceWorkOrder> {
+  return apiPost<MaintenanceWorkOrder>(
+    '/v1/equipment/maintenance-work-orders/',
+    data,
+  );
+}
+
+export function updateWorkOrder(
+  id: string,
+  data: UpdateWorkOrderPayload,
+): Promise<MaintenanceWorkOrder> {
+  return apiPatch<MaintenanceWorkOrder>(
+    `/v1/equipment/maintenance-work-orders/${id}`,
+    data,
+  );
+}
+
+export function deleteWorkOrder(id: string): Promise<void> {
+  return apiDelete(`/v1/equipment/maintenance-work-orders/${id}`);
+}
+
+export function completeWorkOrder(
+  id: string,
+  completedAt?: string,
+): Promise<MaintenanceWorkOrder> {
+  const qs = completedAt ? `?completed_at=${encodeURIComponent(completedAt)}` : '';
+  return apiPost<MaintenanceWorkOrder>(
+    `/v1/equipment/maintenance-work-orders/${id}/complete${qs}`,
+    {},
+  );
+}
+
 /* ── Inspections ─────────────────────────────────────────────────────── */
 
 export function listInspections(equipmentId?: string): Promise<Inspection[]> {
@@ -230,6 +393,23 @@ export function listInspections(equipmentId?: string): Promise<Inspection[]> {
   if (equipmentId) qs.set('equipment_id', equipmentId);
   const q = qs.toString();
   return apiGet<Inspection[]>(`/v1/equipment/inspections/${q ? `?${q}` : ''}`);
+}
+
+export function createInspection(
+  data: CreateInspectionPayload,
+): Promise<Inspection> {
+  return apiPost<Inspection>('/v1/equipment/inspections/', data);
+}
+
+export function updateInspection(
+  id: string,
+  data: UpdateInspectionPayload,
+): Promise<Inspection> {
+  return apiPatch<Inspection>(`/v1/equipment/inspections/${id}`, data);
+}
+
+export function deleteInspection(id: string): Promise<void> {
+  return apiDelete(`/v1/equipment/inspections/${id}`);
 }
 
 /* ── Damage reports ─────────────────────────────────────────────────── */
@@ -249,4 +429,21 @@ export function listDamageReports(params?: {
   return apiGet<DamageReport[]>(
     `/v1/equipment/damage-reports/${q ? `?${q}` : ''}`,
   );
+}
+
+export function createDamageReport(
+  data: CreateDamageReportPayload,
+): Promise<DamageReport> {
+  return apiPost<DamageReport>('/v1/equipment/damage-reports/', data);
+}
+
+export function updateDamageReport(
+  id: string,
+  data: UpdateDamageReportPayload,
+): Promise<DamageReport> {
+  return apiPatch<DamageReport>(`/v1/equipment/damage-reports/${id}`, data);
+}
+
+export function deleteDamageReport(id: string): Promise<void> {
+  return apiDelete(`/v1/equipment/damage-reports/${id}`);
 }

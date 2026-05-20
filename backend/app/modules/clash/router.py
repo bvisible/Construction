@@ -1,0 +1,562 @@
+# DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
+"""‌⁠‍Clash detection API routes — mounted by the loader at ``/api/v1/clash``.
+
+Endpoints
+    GET    /projects/{project_id}/models                 → models picker
+    GET    /projects/{project_id}/runs/                   → list runs
+    POST   /projects/{project_id}/runs/                   → create + execute
+    GET    /projects/{project_id}/runs/{run_id}           → run + matrix
+    DELETE /projects/{project_id}/runs/{run_id}
+    GET    /projects/{project_id}/runs/{run_id}/results   → paginated results
+    PATCH  /projects/{project_id}/runs/{run_id}/results/{result_id}
+    GET    /projects/{project_id}/runs/{run_id}/compare   → run-to-run diff
+    GET    /projects/{project_id}/runs/{run_id}/export-csv → results as CSV
+    POST   /projects/{project_id}/runs/{run_id}/export-bcf
+
+Auth mirrors the ``bcf`` module exactly: a coarse ``RequirePermission``
+gate plus a per-project owner/admin IDOR check so a viewer of one
+project can never read another project's clashes.
+"""
+
+from __future__ import annotations
+
+import csv
+import io
+import logging
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi import File as FileParam
+from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.dependencies import CurrentUserId, RequirePermission, SessionDep
+from app.modules.clash.schemas import (
+    CLASH_GROUP_BY,
+    CLASH_PROPERTY_GROUP_PREFIX,
+    CLASH_SEVERITIES,
+    ClashBCFExportRequest,
+    ClashBCFExportResponse,
+    ClashBCFImportResponse,
+    ClashCategoriesResponse,
+    ClashCategoryItem,
+    ClashCompareResponse,
+    ClashPropertyFacet,
+    ClashResultPage,
+    ClashResultResponse,
+    ClashResultUpdate,
+    ClashRunCreate,
+    ClashRunListItem,
+    ClashRunResponse,
+    ClashWatchResponse,
+)
+from app.modules.clash.service import ClashService
+
+_MAX_EXPORT_ROWS = 25_000
+# Upper bound on the BCF import payload. 25 MiB mirrors the BCF
+# module's own gate — a coordination round-trip is comments + metadata,
+# not megabytes of mesh data.
+_MAX_BCF_UPLOAD_BYTES = 25 * 1024 * 1024
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["Clash Detection"])
+
+
+def _get_service(session: SessionDep) -> ClashService:
+    return ClashService(session)
+
+
+async def _require_project_access(
+    session: AsyncSession, project_id: uuid.UUID, user_id: str
+) -> None:
+    """‌⁠‍Verify the caller owns (or is admin on) ``project_id`` (IDOR guard)."""
+    from app.modules.projects.repository import ProjectRepository
+    from app.modules.users.repository import UserRepository
+
+    project = await ProjectRepository(session).get_by_id(project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
+        )
+    try:
+        user = await UserRepository(session).get_by_id(uuid.UUID(str(user_id)))
+        if user is not None and getattr(user, "role", "") == "admin":
+            return
+    except Exception:  # noqa: BLE001 — best-effort admin check
+        logger.exception("Admin-role lookup failed during clash access check")
+    if str(getattr(project, "owner_id", "")) != str(user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied: you do not own this project",
+        )
+
+
+@router.get(
+    "/projects/{project_id}/models",
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_models(
+    project_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> list[dict]:
+    """‌⁠‍Lightweight BIM-model list for the run-config picker."""
+    await _require_project_access(session, project_id, user_id)
+    models = await service.repo.models_for_project(project_id)
+    return [
+        {
+            "id": str(m.id),
+            "name": getattr(m, "name", None) or getattr(m, "filename", "Model"),
+            "element_count": int(getattr(m, "element_count", 0) or 0),
+            "status": getattr(m, "status", None),
+        }
+        for m in models
+    ]
+
+
+@router.get(
+    "/projects/{project_id}/categories",
+    response_model=ClashCategoriesResponse,
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_categories(
+    project_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+    model_ids: list[uuid.UUID] = Query(default_factory=list),
+    group_by: str = Query(default="type"),
+) -> ClashCategoriesResponse:
+    """Distinct grouping facets for the Set A / Set B pickers.
+
+    ``group_by`` selects the parameter the Set A/B lists are faceted by:
+    one of the built-ins ``discipline | type | category | ifc_entity``
+    *or* the open-ended ``property:<key>`` form (the literal
+    ``property:`` prefix + a raw element-property key — Starlette has
+    already URL-decoded it by the time it reaches here). All facets are
+    sourced from every clashable element's ``element_type`` /
+    ``discipline`` column and its source-native ``properties``. Scoped
+    to the project (IDOR-guarded); ``model_ids`` are intersected with
+    the project's own models so a caller can never enumerate another
+    project's element taxonomy. ``element_types`` / ``disciplines`` are
+    kept for backward compatibility; ``available_group_by`` lists only
+    the built-in parameters that have data; ``available_properties``
+    enumerates the open-ended property keys the UI may group by (always
+    populated, regardless of ``group_by``). An unknown built-in or a
+    ``property:`` with an empty key falls back to the ``type`` default
+    (matching the existing tolerant param-normalisation style).
+    """
+    await _require_project_access(session, project_id, user_id)
+    if group_by.startswith(CLASH_PROPERTY_GROUP_PREFIX):
+        # ``property:`` with an empty/blank key is meaningless — degrade
+        # to the safe default rather than 422 (same forgiving contract
+        # the unknown-built-in branch already uses).
+        if not group_by[len(CLASH_PROPERTY_GROUP_PREFIX):].strip():
+            group_by = "type"
+    elif group_by not in CLASH_GROUP_BY:
+        group_by = "type"
+    project_models = {
+        m.id for m in await service.repo.models_for_project(project_id)
+    }
+    wanted = [m for m in model_ids if m in project_models] or list(
+        project_models
+    )
+    etypes, discs = await service.repo.categories_for_models(wanted)
+    (
+        groups,
+        available,
+        available_props,
+    ) = await service.repo.grouping_facets_for_models(wanted, group_by)
+    # Stable, predictable order for the UI selector.
+    ordered_avail = [g for g in CLASH_GROUP_BY if g in available]
+    return ClashCategoriesResponse(
+        group_by=group_by,
+        groups=[ClashCategoryItem(value=v, count=n) for v, n in groups],
+        available_group_by=ordered_avail,
+        available_properties=[
+            ClashPropertyFacet(key=k, count=n) for k, n in available_props
+        ],
+        element_types=[
+            ClashCategoryItem(value=v, count=n) for v, n in etypes
+        ],
+        disciplines=[
+            ClashCategoryItem(value=v, count=n) for v, n in discs
+        ],
+    )
+
+
+@router.get(
+    "/projects/{project_id}/runs/",
+    response_model=list[ClashRunListItem],
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_runs(
+    project_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> list[ClashRunListItem]:
+    await _require_project_access(session, project_id, user_id)
+    runs = await service.list_runs(project_id)
+    return [ClashRunListItem.model_validate(r) for r in runs]
+
+
+@router.post(
+    "/projects/{project_id}/runs/",
+    response_model=ClashRunResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("clash.create"))],
+)
+async def create_run(
+    project_id: uuid.UUID,
+    data: ClashRunCreate,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashRunResponse:
+    await _require_project_access(session, project_id, user_id)
+    run = await service.create_run(project_id, data, user_id)
+    return ClashRunResponse.model_validate(run)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}",
+    response_model=ClashRunResponse,
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def get_run(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashRunResponse:
+    await _require_project_access(session, project_id, user_id)
+    run = await service.get_run(project_id, run_id)
+    return ClashRunResponse.model_validate(run)
+
+
+@router.delete(
+    "/projects/{project_id}/runs/{run_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(RequirePermission("clash.delete"))],
+)
+async def delete_run(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> None:
+    await _require_project_access(session, project_id, user_id)
+    await service.delete_run(project_id, run_id)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/results",
+    response_model=ClashResultPage,
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_results(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+    status_filter: str | None = Query(default=None, alias="status"),
+    clash_type: str | None = Query(default=None),
+    discipline: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+    order_by: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> ClashResultPage:
+    await _require_project_access(session, project_id, user_id)
+    await service.get_run(project_id, run_id)  # 404 if run not in project
+    if severity is not None and severity not in CLASH_SEVERITIES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid clash severity '{severity}'",
+        )
+    rows, total = await service.list_results(
+        run_id,
+        status=status_filter,
+        clash_type=clash_type,
+        discipline=discipline,
+        severity=severity,
+        order_by=order_by,
+        offset=offset,
+        limit=limit,
+    )
+    return ClashResultPage(
+        items=[ClashResultResponse.model_validate(r) for r in rows],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.patch(
+    "/projects/{project_id}/runs/{run_id}/results/{result_id}",
+    response_model=ClashResultResponse,
+    dependencies=[Depends(RequirePermission("clash.update"))],
+)
+async def update_result(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    result_id: uuid.UUID,
+    data: ClashResultUpdate,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashResultResponse:
+    await _require_project_access(session, project_id, user_id)
+    add_comment: dict | None = None
+    if data.add_comment is not None:
+        author = (data.add_comment.author or "").strip()
+        if not author:
+            author = await service.resolve_author(user_id)
+        add_comment = {
+            "text": data.add_comment.text,
+            "author": author,
+            "author_id": data.add_comment.author_id or str(user_id),
+            "reply_to": data.add_comment.reply_to or None,
+        }
+    result = await service.update_result(
+        project_id,
+        run_id,
+        result_id,
+        new_status=data.status,
+        assigned_to=data.assigned_to,
+        due_date=data.due_date,
+        severity=data.severity,
+        add_comment=add_comment,
+        actor=str(user_id),
+    )
+    return ClashResultResponse.model_validate(result)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/compare",
+    response_model=ClashCompareResponse,
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def compare_runs(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    base_run_id: uuid.UUID = Query(...),
+    service: ClashService = Depends(_get_service),
+) -> ClashCompareResponse:
+    """Diff this run against ``base_run_id`` by clash signature.
+
+    Partitions every clash into ``new`` (only here), ``resolved`` (only
+    in the base run) and ``persistent`` (in both). Both runs are
+    404-guarded against the project so the comparison can never leak
+    another project's clashes.
+    """
+    await _require_project_access(session, project_id, user_id)
+    diff = await service.compare_runs(project_id, run_id, base_run_id)
+    return ClashCompareResponse.model_validate(diff)
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/export-csv",
+    dependencies=[Depends(RequirePermission("clash.export"))],
+)
+async def export_csv(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+    status_filter: str | None = Query(default=None, alias="status"),
+    clash_type: str | None = Query(default=None),
+    severity: str | None = Query(default=None),
+) -> StreamingResponse:
+    """Stream the run's results as CSV (respects status/type/severity).
+
+    Reuses the same repository query the results list uses so the export
+    is always consistent with what the UI shows.
+    """
+    await _require_project_access(session, project_id, user_id)
+    run = await service.get_run(project_id, run_id)
+    if severity is not None and severity not in CLASH_SEVERITIES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid clash severity '{severity}'",
+        )
+    rows, _ = await service.list_results(
+        run_id,
+        status=status_filter,
+        clash_type=clash_type,
+        severity=severity,
+        order_by="severity",
+        offset=0,
+        limit=_MAX_EXPORT_ROWS,
+    )
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "#",
+            "Element A",
+            "Discipline A",
+            "Element B",
+            "Discipline B",
+            "Type",
+            "Severity",
+            "Penetration (m)",
+            "Distance (m)",
+            "Status",
+            "Assigned To",
+            "Due Date",
+        ]
+    )
+    for i, r in enumerate(rows, start=1):
+        writer.writerow(
+            [
+                i,
+                r.a_name,
+                r.a_discipline,
+                r.b_name,
+                r.b_discipline,
+                r.clash_type,
+                getattr(r, "severity", "medium") or "medium",
+                r.penetration_m,
+                r.distance_m,
+                r.status,
+                r.assigned_to or "",
+                getattr(r, "due_date", None) or "",
+            ]
+        )
+    csv_text = buf.getvalue()
+
+    safe_name = "".join(
+        c if c.isalnum() or c in (" ", "-", "_") else "_"
+        for c in (run.name or "clash")
+    ).strip() or "clash"
+    filename = f"clash_{safe_name}.csv"
+    return StreamingResponse(
+        iter([csv_text]),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
+
+
+@router.post(
+    "/projects/{project_id}/runs/{run_id}/export-bcf",
+    response_model=ClashBCFExportResponse,
+    dependencies=[Depends(RequirePermission("clash.export"))],
+)
+async def export_bcf(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    data: ClashBCFExportRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashBCFExportResponse:
+    await _require_project_access(session, project_id, user_id)
+    exported, skipped = await service.export_bcf(
+        project_id, run_id, data, author=user_id, user_id=user_id
+    )
+    return ClashBCFExportResponse(exported=exported, skipped=skipped)
+
+
+@router.post(
+    "/projects/{project_id}/runs/{run_id}/import-bcf",
+    response_model=ClashBCFImportResponse,
+    dependencies=[Depends(RequirePermission("clash.import_bcf"))],
+)
+async def import_bcf(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    file: UploadFile = FileParam(
+        ..., description="A .bcfzip archive (BCF 2.1 or 3.0)"
+    ),
+    service: ClashService = Depends(_get_service),
+) -> ClashBCFImportResponse:
+    """Round-trip a BCF archive back into clash triage.
+
+    Each topic's signature (recovered from the description the matching
+    export embedded) is looked up against the run's clashes; matched
+    rows have their status / assignee / due-date / comments / BCF guid
+    patched. Topics with no match are logged + counted. Mirrors the
+    BCF module's own ``POST /import`` shape so the UX stays familiar.
+    """
+    await _require_project_access(session, project_id, user_id)
+    try:
+        payload = await file.read()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Failed to read the uploaded archive.",
+        ) from exc
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded archive is empty.",
+        )
+    if len(payload) > _MAX_BCF_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="BCF archive exceeds 25 MiB upload cap.",
+        )
+    matched, unmatched, errors = await service.import_bcf(
+        project_id, run_id, payload, actor=str(user_id)
+    )
+    return ClashBCFImportResponse(
+        matched=matched, unmatched=unmatched, errors=errors
+    )
+
+
+@router.post(
+    "/projects/{project_id}/runs/{run_id}/results/{result_id}/watch",
+    response_model=ClashWatchResponse,
+    dependencies=[Depends(RequirePermission("clash.update"))],
+)
+async def watch_result(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    result_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashWatchResponse:
+    """Subscribe the calling user to this clash (idempotent)."""
+    await _require_project_access(session, project_id, user_id)
+    watchers, watching = await service.set_watch(
+        project_id, run_id, result_id, str(user_id), watching=True
+    )
+    return ClashWatchResponse(watchers=watchers, watching=watching)
+
+
+@router.delete(
+    "/projects/{project_id}/runs/{run_id}/results/{result_id}/watch",
+    response_model=ClashWatchResponse,
+    dependencies=[Depends(RequirePermission("clash.update"))],
+)
+async def unwatch_result(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    result_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashWatchResponse:
+    """Unsubscribe the calling user from this clash (idempotent)."""
+    await _require_project_access(session, project_id, user_id)
+    watchers, watching = await service.set_watch(
+        project_id, run_id, result_id, str(user_id), watching=False
+    )
+    return ClashWatchResponse(watchers=watchers, watching=watching)

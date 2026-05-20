@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""Qdrant-backed ranker — replacement for the legacy LanceDB ranker.
+"""‌⁠‍Qdrant-backed ranker — replacement for the legacy LanceDB ranker.
 
 Pipeline (no LLM by default, BGE-M3 multilingual covers cross-lang):
 
@@ -87,7 +87,7 @@ _BOOSTS = (
 
 
 def _active_encoder_id() -> str | None:
-    """Resolve the active encoder model id for confidence-band calibration.
+    """‌⁠‍Resolve the active encoder model id for confidence-band calibration.
 
     The encoder id keys ``data/match/encoder_profiles.json`` so a
     deployment that swapped to e5-small or the Sonnet rerank tier gets
@@ -127,7 +127,7 @@ def _dynamic_confidence_band(
     hard_filters_matched: int = 0,
     classification_confidence: str | None = None,
 ) -> ConfidenceBand:
-    """Confidence band keyed off per-encoder profile thresholds.
+    """‌⁠‍Confidence band keyed off per-encoder profile thresholds.
 
     Wraps :func:`confidence_band_for` so existing hard-filter / classification
     bonus logic stays in one place. When the encoder profile resolves
@@ -956,7 +956,11 @@ async def rank(
         cost_usd += float(translation_used.cost_usd or 0.0)
 
     # ── Build structured v3 SearchPlan ───────────────────────────────
-    plan = build_search_plan(translated_envelope)
+    # ``catalog_id`` lets the planner suppress hard filters the bound
+    # CWICR collection doesn't actually carry (e.g. ``ifc_class`` on the
+    # DDC v3 snapshots) instead of pinning a field that would zero out
+    # the result set at every relax tier.
+    plan = build_search_plan(translated_envelope, catalog_id=catalog_id)
     if not plan.dense_query:
         return MatchResponse(
             request=req,

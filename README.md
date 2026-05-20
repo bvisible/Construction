@@ -564,6 +564,26 @@ Three demo accounts are created automatically on first start. The default passwo
 
 ## Architecture
 
+### How the platform turns raw CAD/BIM into structured ERP data
+
+<img src="docs/screenshots/architecture-pipeline.jpg" alt="OpenConstructionERP — Digitalization of Processes: Pipelines for Automatic Data Creation" width="100%" />
+
+OpenConstructionERP is built around **seven cooperating pipelines** that turn closed CAD/BIM files (RVT, IFC, DWG, DGN, PLN, TSK) into structured, queryable ERP data — without locking you into a proprietary stack. Every module in the platform plugs into one or more of these stages:
+
+1. **Mining** — collect existing project data (CAD/BIM models, CDE drops, COBie deliverables) into a semi-structured pool. Handled by `cad`, `documents`, `bim_hub`, `file_search` modules + the **DDC cad2data** converters (RVT/IFC/DWG/DGN/PLN → canonical JSON).
+2. **QTO Check & Quantity Take-off rules** — apply rule sets per discipline / family / type to extract quantities deterministically. Handled by `takeoff`, `requirements`, `validation`, and the rule editor in `match-elements`.
+3. **BlackBox (company standard)** — codify your firm's classifications, formulas, unit factors and assembly recipes as a single canonical rule book (COBie / CFIHOS / SQL / Excel / Access). Handled by `costs`, `assemblies`, `catalog`, `cost_intelligence`.
+4. **New project modeling** — apply the BlackBox to a fresh model: geometry → filtering → grouping → verification → BOQ. Handled by `boq`, `projects`, `match-elements`, `clash`.
+5. **BlackBox mapping** — map a new project's raw element list onto the canonical rule book via vector + lexical + rule-based matchers. Handled by `match-elements` (7-stage pipeline) + AI Estimate.
+6. **Project-specific data (4D/5D/6D)** — derive scheduling, cost, hours, ordering and environmental footprint per group. Handled by `scheduling`, `advanced_schedule`, `5d_planner`, `risk`, `carbon`, `hse`.
+7. **Saving data & Machine Learning** — persist project history into the database, data lake and ML models so each new project starts further ahead. Handled by `analytics`, `bi_dashboards`, `ai_chat`, `cost_intelligence`, and the rule-learning loop in `clash` (Wave A4) and `match-elements`.
+
+The right-hand side of the diagram is the **automatic data retrieval** layer that every UI surface (Dashboard, BOQ editor, /clash, /match-elements, /files, /scheduling) consumes: dashboards, calculations, reports, tables, charts, geometries, and ERP-ready exports — all driven from the same canonical store. The Machine-Learning column on the far right is where the platform progressively automates classification, parameterisation, recognition and marking, replacing manual steps (🔧) with automatic steps (⚡) over time.
+
+This pipeline is the reason OpenConstructionERP can replace several commercial point-solutions with a single self-hosted stack — every module reads from and writes to the same canonical data layer.
+
+### Technical stack
+
 ```mermaid
 flowchart TB
     UI["Frontend SPA<br>React 18, TypeScript, Vite<br>AG Grid, Tailwind, PDF.js"]

@@ -116,6 +116,9 @@ const PhotoGalleryPage = lazy(() =>
 const MarkupsPage = lazy(() =>
   import('@/features/markups/MarkupsPage').then((m) => ({ default: m.MarkupsPage }))
 );
+const PdfComparePage = lazy(() =>
+  import('@/features/markups/PdfCompare').then((m) => ({ default: m.PdfComparePage }))
+);
 const PunchListPage = lazy(() =>
   import('@/features/punchlist/PunchListPage').then((m) => ({ default: m.PunchListPage }))
 );
@@ -176,6 +179,9 @@ const BIMPage = lazy(() =>
 const BIMQuantityRulesPage = lazy(() =>
   import('@/features/bim/BIMQuantityRulesPage').then((m) => ({ default: m.BIMQuantityRulesPage }))
 );
+const ClashDetectionPage = lazy(() =>
+  import('@/features/clash/ClashDetectionPage').then((m) => ({ default: m.ClashDetectionPage }))
+);
 const UserManagementPage = lazy(() =>
   import('@/features/users/UserManagementPage').then((m) => ({ default: m.UserManagementPage }))
 );
@@ -187,6 +193,15 @@ const ProjectIntelligencePage = lazy(() =>
 );
 const FileManagerPage = lazy(() =>
   import('@/features/file-manager/FileManagerPage').then((m) => ({ default: m.FileManagerPage }))
+);
+const TrashPage = lazy(() =>
+  import('@/features/file-trash/TrashPage').then((m) => ({ default: m.TrashPage }))
+);
+const GlobalSearchPage = lazy(() =>
+  import('@/features/file-distribution').then((m) => ({ default: m.GlobalSearchPage }))
+);
+const TransmittalLogPage = lazy(() =>
+  import('@/features/file-transmittals/TransmittalLogPage').then((m) => ({ default: m.TransmittalLogPage }))
 );
 const SharePage = lazy(() =>
   import('@/features/file-manager/SharePage').then((m) => ({ default: m.SharePage }))
@@ -513,6 +528,7 @@ export default function App() {
         {/* Legacy alias — must come BEFORE /bim/:modelId so the literal
             "quantity-rules" segment isn't swallowed as a UUID model id. */}
         <Route path="/bim/quantity-rules" element={<Navigate to="/bim/rules" replace />} />
+        <Route path="/clash" element={<P title="Clash Detection"><ClashDetectionPage /></P>} />
         <Route path="/assets" element={<P title="Asset Register"><AssetsPage /></P>} />
         <Route path="/bim/:modelId" element={<P title="BIM Viewer"><BIMPage /></P>} />
         <Route path="/projects/:projectId/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />
@@ -562,6 +578,9 @@ export default function App() {
         <Route path="/changeorders" element={<P title="Change Orders"><ChangeOrdersPage /></P>} />
         <Route path="/documents" element={<Navigate to="/files" replace />} />
         <Route path="/photos" element={<P title="Project Photos"><PhotoGalleryPage /></P>} />
+        <Route path="/files/trash" element={<P title="Recycle Bin"><TrashPage /></P>} />
+        <Route path="/files/search" element={<P title="Search across projects"><GlobalSearchPage /></P>} />
+        <Route path="/files/transmittals" element={<P title="Transmittals"><TransmittalLogPage /></P>} />
         <Route path="/files" element={<P title="Project Files"><FileManagerPage /></P>} />
         <Route path="/projects/:projectId/files" element={<P title="Project Files"><FileManagerPage /></P>} />
 
@@ -571,6 +590,7 @@ export default function App() {
         <Route path="/requirements" element={<Navigate to="/bim/rules" replace />} />
 
         <Route path="/markups" element={<P title="Markups"><MarkupsPage /></P>} />
+        <Route path="/markups/compare" element={<P title="Compare Revisions"><PdfComparePage /></P>} />
         <Route path="/punchlist" element={<P title="Punch List"><PunchListPage /></P>} />
         <Route path="/field-reports" element={<P title="Field Reports"><FieldReportsPage /></P>} />
 

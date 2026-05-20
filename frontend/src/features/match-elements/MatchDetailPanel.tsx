@@ -4,7 +4,7 @@
 // Slide-over detail panel for a single match group.
 // 3 tabs: Elements · Method comparison · Apply preview.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { X, CheckCircle2, ChevronRight, Loader2, AlertCircle, XCircle } from 'lucide-react';
@@ -43,6 +43,8 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
   const qc = useQueryClient();
   const [tab, setTab] = useState<'elements' | 'methods' | 'apply'>('methods');
   const [noMatchOpen, setNoMatchOpen] = useState(false);
+  const panelRef = useRef<HTMLElement | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const detailQ = useQuery({
     enabled: !!group,
@@ -98,6 +100,50 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [group, noMatchOpen, onClose]);
 
+  // Move focus into the slide-over the moment it opens. Without this a
+  // keyboard / screen-reader user stays parked on the review table that
+  // is now visually behind a backdrop, with no obvious way into the
+  // panel — the dialog is effectively invisible to them.
+  useEffect(() => {
+    if (!group) return;
+    closeBtnRef.current?.focus();
+  }, [group]);
+
+  // Lightweight focus containment: keep Tab / Shift+Tab inside the
+  // slide-over while it is open (and the nested No-match modal isn't
+  // capturing). A full focus-trap lib would be overkill for one panel;
+  // wrapping focus at the first/last tabbable is enough to stop the
+  // keyboard escaping to the obscured page underneath.
+  useEffect(() => {
+    if (!group || noMatchOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Tab') return;
+      const root = panelRef.current;
+      if (!root) return;
+      const focusable = root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (!root.contains(active)) {
+        e.preventDefault();
+        first?.focus();
+        return;
+      }
+      if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last?.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first?.focus();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [group, noMatchOpen]);
+
   if (!group) return null;
 
   return (
@@ -110,10 +156,17 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
       />
 
       {/* Slide-over */}
-      <aside className="fixed top-0 right-0 bottom-0 w-full sm:w-[680px] bg-white dark:bg-slate-900 z-50 shadow-2xl flex flex-col border-l border-slate-200 dark:border-slate-700">
+      <aside
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="match-detail-title"
+        className="fixed top-0 right-0 bottom-0 w-full sm:w-[680px] bg-white dark:bg-slate-900 z-50 shadow-2xl flex flex-col border-l border-slate-200 dark:border-slate-700"
+      >
         <header className="px-4 py-3 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
           <div className="min-w-0 flex-1">
             <div
+              id="match-detail-title"
               className="text-sm font-semibold truncate"
               title={group.group_key}
             >
@@ -138,6 +191,7 @@ export function MatchDetailPanel({ sessionId, group, onClose }: Props) {
             </div>
           </div>
           <button
+            ref={closeBtnRef}
             type="button"
             onClick={onClose}
             aria-label={t('match_elements.detail.close', 'Close detail panel')}

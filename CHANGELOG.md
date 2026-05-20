@@ -5,6 +5,123 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.10.1] — 2026-05-19 · Match-elements "how it works" collapsed by default
+
+### Changed
+
+- /match-elements: the "How matching works — read this first" explainer is now collapsed by default with a white background, keeping the wizard's first screen tidy. Click to expand the full 8-stage tour.
+
+## [3.10.0] — 2026-05-19 · /files ACC-grade wave + Clash collab/metadata + match-elements polish
+
+### Added
+
+- /files: 10 new sub-modules bringing the document hub to ACC/Aconex parity — `file_versions` (rollback + diff metadata), `file_trash` (30-day soft-delete + recycle bin route), `file_search` (cross-project + content search, /files/search), `file_tags` (polymorphic tags + bulk tag drawer), `file_saved_views` (per-project filter snapshots), `file_distribution` (named distribution lists + bulk recipients), `file_comments` (threaded comments anchored to file_kind+file_id), `file_references` (referenced-in panel from BOQ/Punch/RFI/etc.), `file_transmittals` (formal transmittal wizard + PDF cover, /files/transmittals), `file_approvals` (multi-step approval drawer with stamp burn + sidecar JSON fallback).
+- /files page: ISO 19650 naming-violation banner, Save-view button, extension overflow popover (RVT/RFA/NWD/DWF/DOCX/MPP/PPTX/ZIP), Recently Viewed strip, keyboard-shortcut sheet, bulk soft-delete & bulk-tag bar, drag-drop into folder cards, FileTree with SavedViews rail and Trash node.
+- Clash A2/A3: per-result collaboration locks (`a1b2c3d4e5f6_add_collab_lock_table`) and result-level metadata (`v3048_clash_a2_metadata`, `v3049_clash_collab`) — assignment, status, severity ladder.
+- Sidebar: subdued "beta" badges on recently shipped modules.
+
+### Changed
+
+- Match-elements: removed the redundant "project" stage; wizard starts on model and warms the matching session in the background (no blocking spinner on first navigation). Editable n8n-derived prompts retained.
+- Project detail: dashboard Open-Items panel rows are now click-through to the underlying entity.
+- Equipment: page now hydrates from real backend service; modal lifecycle hardened.
+
+### Notes
+
+- Alembic chain consolidated through `v3071_merge_clash_and_files` (single head).
+- Clash A4 intelligence-layer schema landed (rules JSON, cluster_id, ClashCluster table via `v3049_clash_a4_intelligence`); intelligence engine, FP feedback and rule suggestions follow in v3.10.x.
+- SQLite-only dev smoke trips on the pre-existing `v2918_risk_owner_user_id` batch_alter (FK to oe_users_user not present in fresh-install order); Postgres prod path unaffected.
+
+## [3.9.1] — 2026-05-19 · Clash model labels read as models, not projects
+
+### Fixed
+
+- Clash: BIM model cards no longer show the project/location prefix baked into seeded model names — the label collapses to the discipline/type tail, so two models of one project no longer read as "two projects". Robust without the global project name being hydrated (direct nav / `?project=` deep-link).
+
+## [3.9.0] — 2026-05-19 · BOQ section-scoped add + AI model auto-recovery + toolbar polish
+
+### Fixed
+
+- BOQ (#149): a section's "Add position" now files the partida **inside that section** instead of after the last sub-section.
+- AI Chat (#148): auto-recovers from renamed/retired provider model slugs via `openrouter/auto` then provider default; final error stays actionable.
+- BOQ toolbar (#289): Quality & AI / warnings / Grand Total summary no longer cramped — wrapping pills + flex-wrap layout, professional at all widths.
+
+### Added
+
+- BOQ: per-section **always-visible** primary "Add Position" button (no longer hover-only).
+- Dashboard: **Customize mode** — reorder/show/hide widgets, persisted per user; Settings → Dashboard tab.
+- Markups: **PDF revision compare** (side-by-side / overlay diff of two document revisions).
+
+## [3.8.0] — 2026-05-19 · Clash coordination depth + Match-Elements UX & lifecycle hardening
+
+### Added
+
+- Clash: per-clash **severity** (critical/high/medium/low) — colored badges, severity filter, KPI tile, derived from penetration / clearance ratio.
+- Clash: **run-to-run comparison** (new / resolved / persistent) with carry-forward of status, assignee, comments and due-date across re-runs by a stable clash signature.
+- Clash: per-clash **collaboration** — assignee, due date, and a comments thread.
+- Clash: **CSV export** of the clash list (filters honoured).
+- Clash: group / build selection sets by **any element property** (beyond discipline/type/category/IfcEntity) — backend-enumerated property facets.
+- Clash: **embedded quick 3D preview** of the two clashing elements in the detail panel + "Open in full 3D viewer".
+- Clash & Match Elements: "Beta — new module / may have rough edges" banner with a one-click "Open an issue" path.
+- Match Elements: up-front **vector-DB readiness** check (one-click native Qdrant installer when down) and a collapsible plain-language "How matching works" 8-stage overview; page widened for the data-heavy stages.
+
+### Fixed
+
+- Match Elements: switching project no longer keeps a **stale session** (could write a BOQ to the wrong project); rail jumps are blocked when a prerequisite is missing; the empty-grouping dead-end now shows guidance + a recovery path; scope edits re-sync to the session; added project/model/groups query error states and an actionable "0 confirmed" toast; detail-panel focus trap (a11y).
+- Match backend: region→catalogue routing is **deterministic again** — the live-Qdrant availability probe is gated behind `CWICR_COLLECTION_PROBE` (was silently re-routing non-English regions to English and breaking 97 unit tests).
+
+### Changed
+
+- Clash migration `v3047_clash_severity_delta` — additive, idempotent, single linear head.
+- Sidebar: tighter logo↔search spacing.
+
+## [3.7.0] — 2026-05-19 · Clash Detection module + GitHub issue sweep + file-manager polish
+
+### Added
+
+- New **Clash Detection** module (`/clash`): intra-project geometric interference + clearance coordination over real GLB element geometry — exact OBB-SAT + Möller tri-tri narrow phase, discipline×discipline matrix, Navisworks/Solibri-grade review table, BCF export, one-click "Isolate in 3D".
+- Clash: Navisworks-style category/type **selection sets** (Set A × Set B) as the primary search mode; collision results deep-link into the BIM viewer and frame the camera on the clash centroid.
+- Clash: active-project context panel — model/element/run summary + working links to BIM 3D Viewer, element matcher and project overview.
+- New **Incoming Webhook Leads** module (`oe_webhook_leads`): secure `POST /incoming/{source}` ingestion (API-key/HMAC/JWT, IP allow-list, rate limit), payload→lead mapping, audit log, Settings UI (#147).
+- File manager: clicking a BIM model offers BIM 3D Viewer / CAD-BIM BI Explorer / Clash Detection navigation.
+
+### Fixed
+
+- Multi-currency: foreign-currency positions now convert correctly in **section subtotals** (two places) and project totals; FX-correct CSV/Excel export with a frozen-rate appendix (#111).
+- "Add partida" now inserts directly **below the selected row** instead of elsewhere (#139).
+- AI Chat now renders the streamed answer (OpenRouter/OpenAI SSE) instead of staying blank while tokens are consumed (#138).
+- BOQ supports up to **8 nested section/partida levels** with recursive subtotals and a `/v1/boq/limits/` contract (#136).
+- Resources can carry a unique **code** with a reuse-or-create prompt and master→instance propagation (#133).
+- Clash 3D: collisions now actually display (fixed GLB load-race, element highlight and camera target).
+- File manager: BIM-model and sheet rows no longer report 0 bytes — size falls back to the real GLB artifact / parent-document share.
+- **Hardened JSON-column deserialization**: a legacy/gap-fill scalar in a JSON column (e.g. `activity = construction`) no longer 500s every read of the affected row — fixed the "Failed to add position / Internal server error" and project-profile crashes via a tolerant engine `json_deserializer`.
+- BOQ: deleting a **sub-section that contains nested sub-sections** now works — the editor delegates to the backend's recursive cascade instead of a flat child sweep that silently 409'd.
+- Clash: the active-project panel's **BIM 3D Viewer / Match / Project-overview** buttons now navigate (were inert due to a button-inside-link); BIM target picks the first model with parsed geometry.
+
+### Changed
+
+- Clash page: full-width horizontal setup before a run; config collapses into a left-rail menu once results exist. Models auto-included (intra-project) and labelled without the redundant project prefix.
+- 3D-geometry clash engine optimised to run under 30 s on showcase models (result-preserving).
+
+## [3.6.1] — 2026-05-18 · BOQ hierarchy visible + nesting fixes + project-focus sidebar
+
+### Fixed
+
+- BOQ grid now renders the true nested section tree: sub-sections (sections-in-sections) are no longer dropped — each level is indented with a depth accent, subtotals roll up recursively, collapse works per level (#136).
+- "Add sub-section" no longer silently fails on an ordinal collision (e.g. a stray sibling): the nested ordinal is now globally collision-free (#136).
+- Resource-expand control made clearly visible (persistent tinted chip + count) — it was too faint and read as missing (#133).
+- PDF export no longer crashes (`float += Decimal`) on a BOQ containing ungrouped positions.
+
+### Added
+
+- Section rows show their ordinal and a discoverable "+ Sub" button to create a nested sub-section inline.
+- Project-focus sidebar: needed modules prominent, not-needed small+grey inline, with This-project / All-modules toggle; Guided setup shows Required/Recommended/Optional module tiers.
+- /files: document-type cards redesigned — smaller, more data, modern.
+
+### Changed
+
+- CLI entrypoint label is now `openconstructionerp` (matches the PyPI package name).
+
 ## [3.6.0] — 2026-05-18 · Multi-level BOQ hierarchy + resource-code dedup + match-pipeline restore
 
 ### Added

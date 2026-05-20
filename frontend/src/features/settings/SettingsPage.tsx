@@ -5,6 +5,7 @@ import { getIntlLocale } from '@/shared/lib/formatters';
 import { TranslationManager } from './TranslationManager';
 import { BackupRestore } from './BackupRestore';
 import { RegionalSettings } from './RegionalSettings';
+import { WebhookLeads } from './WebhookLeads';
 import VectorStatusCard from './VectorStatusCard';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -32,8 +33,10 @@ import {
   LogOut,
   ChevronRight,
   Wrench,
+  LayoutGrid,
 } from 'lucide-react';
 import { Card, CardHeader, CardContent, CardFooter, Button, Badge, InfoHint, Skeleton, Breadcrumb } from '@/shared/ui';
+import { DashboardLayoutManager } from '@/features/dashboard/DashboardLayoutManager';
 import { UpdateNotification } from '@/shared/ui/UpdateChecker';
 import { apiGet, apiPatch, apiPost } from '@/shared/lib/api';
 import { SUPPORTED_LANGUAGES } from '@/app/i18n';
@@ -952,7 +955,7 @@ function ProfileCard({ profile, loading, editing, setEditing, formName, setFormN
 
 // ── Tab definitions ──────────────────────────────────────────────────────────
 
-type SettingsTab = 'general' | 'account' | 'regional' | 'bimcad' | 'ai' | 'integrations' | 'advanced';
+type SettingsTab = 'general' | 'dashboard' | 'account' | 'regional' | 'bimcad' | 'ai' | 'integrations' | 'advanced';
 
 interface TabDef {
   id: SettingsTab;
@@ -974,6 +977,7 @@ const DEFAULT_TAB: TabDef = {
 
 const TABS: readonly TabDef[] = [
   DEFAULT_TAB,
+  { id: 'dashboard',    labelKey: 'settings.tab_dashboard',    defaultLabel: 'Dashboard',    icon: LayoutGrid, descKey: 'settings.tab_dashboard_desc',  descDefault: 'Reorder, show or hide dashboard sections' },
   { id: 'account',      labelKey: 'settings.tab_account',      defaultLabel: 'Account',      icon: User,     descKey: 'settings.tab_account_desc',      descDefault: 'Password and sign out' },
   { id: 'regional',     labelKey: 'settings.tab_regional',     defaultLabel: 'Regional',     icon: Globe,    descKey: 'settings.tab_regional_desc',     descDefault: 'Language, timezone, and formats' },
   { id: 'bimcad',       labelKey: 'settings.tab_bimcad',       defaultLabel: 'BIM / CAD',    icon: Layers,   descKey: 'settings.tab_bimcad_desc',       descDefault: 'BIM, takeoff, and DWG modules' },
@@ -1210,6 +1214,22 @@ export function SettingsPage() {
               <AppearanceCard />
               <InterfaceModeCard />
             </>
+          )}
+
+          {/* ── DASHBOARD LAYOUT ─────────────────────────────────── */}
+          {activeTab === 'dashboard' && (
+            <Card className="lg:col-span-2">
+              <CardHeader
+                title={t('dashboard.layout.title', { defaultValue: 'Customize dashboard' })}
+                subtitle={t('settings.dashboard_layout_subtitle', {
+                  defaultValue:
+                    'Choose which sections appear on your dashboard and in what order. This is personal to you and saved to this browser.',
+                })}
+              />
+              <CardContent>
+                <DashboardLayoutManager />
+              </CardContent>
+            </Card>
           )}
 
           {/* ── ACCOUNT ──────────────────────────────────────────── */}
@@ -1455,21 +1475,24 @@ export function SettingsPage() {
 
           {/* ── INTEGRATIONS ─────────────────────────────────────── */}
           {activeTab === 'integrations' && (
-            <Card className="lg:col-span-2">
-              <CardHeader
-                title={t('integrations.title', { defaultValue: 'Integrations' })}
-                subtitle={t('integrations.desc', { defaultValue: 'Connect Teams, Slack, Telegram, Discord, Webhooks' })}
-              />
-              <CardContent>
-                <Link
-                  to="/integrations"
-                  className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-oe-blue/20 bg-oe-blue/[0.04] text-oe-blue text-sm font-medium hover:bg-oe-blue/10 transition-colors"
-                >
-                  <Plug size={14} />
-                  {t('integrations.configure', { defaultValue: 'Configure Integrations' })}
-                </Link>
-              </CardContent>
-            </Card>
+            <div className="lg:col-span-2 space-y-6">
+              <Card>
+                <CardHeader
+                  title={t('integrations.title', { defaultValue: 'Integrations' })}
+                  subtitle={t('integrations.desc', { defaultValue: 'Connect Teams, Slack, Telegram, Discord, Webhooks' })}
+                />
+                <CardContent>
+                  <Link
+                    to="/integrations"
+                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-full border border-oe-blue/20 bg-oe-blue/[0.04] text-oe-blue text-sm font-medium hover:bg-oe-blue/10 transition-colors"
+                  >
+                    <Plug size={14} />
+                    {t('integrations.configure', { defaultValue: 'Configure Integrations' })}
+                  </Link>
+                </CardContent>
+              </Card>
+              <WebhookLeads />
+            </div>
           )}
 
           {/* ── ADVANCED ─────────────────────────────────────────── */}

@@ -39,8 +39,24 @@ from app.modules.costs.qdrant_adapter import (
 
 
 @pytest.fixture(autouse=True)
-def _clear_settings_cache():
-    """Force fresh Settings between tests so cwicr_collection_version overrides stick."""
+def _clear_settings_cache(monkeypatch: pytest.MonkeyPatch):
+    """Isolate the pure region→collection routing contract.
+
+    Two things are pinned here:
+
+    * ``get_settings`` cache is cleared around every test so per-test
+      ``CWICR_COLLECTION_VERSION`` overrides take effect.
+    * ``CWICR_COLLECTION_PROBE=0`` disables the live-Qdrant availability
+      probe in :func:`country_to_collection`. These unit tests assert the
+      *pure* routing contract (``DE_BERLIN`` → ``cwicr_de_v3``); without
+      the probe disabled they fail non-deterministically on any host with
+      a reachable-but-sparsely-populated Qdrant (the production fallback
+      would substitute whatever collection happens to be present). The
+      probe-on fallback behaviour is covered separately by the
+      ``test_probe_*`` tests which re-enable the probe and mock
+      ``_available_cwicr_collections``.
+    """
+    monkeypatch.setenv("CWICR_COLLECTION_PROBE", "0")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
@@ -1289,3 +1305,92 @@ def test_collection_vectors_returns_empty_on_qdrant_failure(
 
     out = _collection_vectors("cwicr_xx_v9")
     assert out == frozenset()
+
+
+# ── Collection availability-probe fallback (the /match "nothing happens" fix) ─
+#
+# When CWICR_COLLECTION_PROBE is on (production default) and a project's
+# native-language collection is absent from a sparsely-populated Qdrant,
+# country_to_collection substitutes the best present collection so the
+# multilingual BGE-M3 encoder still returns real candidates instead of a
+# dead collection name → empty result. These tests pin that contract AND
+# the pure-routing escape hatch the autouse fixture relies on.
+
+
+@pytest.fixture
+def _enable_probe(monkeypatch: pytest.MonkeyPatch):
+    """Re-enable the live-Qdrant availability probe for fallback tests.
+
+    The module-level autouse ``_clear_settings_cache`` pins
+    ``CWICR_COLLECTION_PROBE=0`` (pure routing); these tests opt back in.
+    The ``_available_cwicr_cache`` is cleared so a stale entry from an
+    earlier test can't leak the wrong collection set.
+    """
+    import app.modules.costs.qdrant_adapter as qa
+
+    monkeypatch.setenv("CWICR_COLLECTION_PROBE", "1")
+    get_settings.cache_clear()
+    qa._available_cwicr_cache = None
+    yield
+    qa._available_cwicr_cache = None
+    get_settings.cache_clear()
+
+
+def test_probe_disabled_keeps_routing_pure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With the probe off the naive language name is returned verbatim —
+    even if a live Qdrant would have only ``cwicr_en_v3``. This is the
+    determinism / test-isolation guarantee the autouse fixture leans on."""
+
+    def _boom():  # pragma: no cover — must never be called
+        raise AssertionError("availability probe ran despite CWICR_COLLECTION_PROBE=0")
+
+    # autouse fixture already set CWICR_COLLECTION_PROBE=0; assert no I/O.
+    monkeypatch.setattr("app.modules.costs.qdrant_adapter._get_client", _boom)
+    assert country_to_collection("DE_BERLIN") == "cwicr_de_v3"
+    assert country_to_collection("RU_MOSCOW") == "cwicr_ru_v3"
+
+
+@pytest.mark.usefixtures("_enable_probe")
+def test_probe_falls_back_to_english_when_native_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``DE_BERLIN`` → ``cwicr_en_v3`` when only English is ingested."""
+    monkeypatch.setattr(
+        "app.modules.costs.qdrant_adapter._available_cwicr_collections",
+        lambda: frozenset({"cwicr_en_v3", "cwicr_mn_v3"}),
+    )
+    assert country_to_collection("DE_BERLIN") == "cwicr_en_v3"
+    assert country_to_collection("RU_MOSCOW") == "cwicr_en_v3"
+    # Present collection is still routed to itself, not the fallback.
+    assert country_to_collection("USA_USD") == "cwicr_en_v3"
+
+
+@pytest.mark.usefixtures("_enable_probe")
+def test_probe_unreachable_preserves_naive_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Qdrant down → empty set → naive language name unchanged (the
+    historical down-state UI must keep firing, not silently re-route)."""
+    monkeypatch.setattr(
+        "app.modules.costs.qdrant_adapter._available_cwicr_collections",
+        lambda: frozenset(),
+    )
+    assert country_to_collection("DE_BERLIN") == "cwicr_de_v3"
+
+
+@pytest.mark.usefixtures("_enable_probe")
+def test_country_filter_unpinned_when_language_fallback_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a cross-language fallback substituted ``cwicr_en_v3`` for a
+    German project, ``country_filter_for`` must NOT pin ``"DE"`` — the
+    English collection holds ``country="US"`` rows, so the pin would
+    eliminate every candidate (the exact /match-elements regression)."""
+    monkeypatch.setattr(
+        "app.modules.costs.qdrant_adapter._available_cwicr_collections",
+        lambda: frozenset({"cwicr_en_v3"}),
+    )
+    # Fallback active (de→en) ⇒ no country pin.
+    assert country_filter_for("DE_BERLIN") is None
+    # Native English region still pins normally (US head present).
+    assert country_filter_for("USA_USD") == "US"

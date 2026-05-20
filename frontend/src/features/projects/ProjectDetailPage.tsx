@@ -1630,7 +1630,16 @@ export function ProjectDetailPage() {
               {/* KPI Cards Row */}
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                 {/* Budget consumed */}
-                <Card padding="md" className="relative overflow-hidden">
+                <Card
+                  padding="md"
+                  hoverable
+                  className="relative overflow-hidden cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t('projects.dash_budget_consumed', { defaultValue: 'Budget Consumed' })}
+                  onClick={() => setActiveTab('budget')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('budget'); } }}
+                >
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
@@ -1672,7 +1681,16 @@ export function ProjectDetailPage() {
                 </Card>
 
                 {/* Schedule progress */}
-                <Card padding="md">
+                <Card
+                  padding="md"
+                  hoverable
+                  className="cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t('projects.dash_schedule_progress', { defaultValue: 'Schedule Progress' })}
+                  onClick={() => setActiveTab('schedule')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('schedule'); } }}
+                >
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
@@ -1698,7 +1716,16 @@ export function ProjectDetailPage() {
                 </Card>
 
                 {/* Quality score */}
-                <Card padding="md">
+                <Card
+                  padding="md"
+                  hoverable
+                  className="cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t('projects.dash_quality', { defaultValue: 'Quality Score' })}
+                  onClick={() => navigate('/validation')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/validation'); } }}
+                >
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
@@ -1726,7 +1753,16 @@ export function ProjectDetailPage() {
                 </Card>
 
                 {/* Open items count */}
-                <Card padding="md">
+                <Card
+                  padding="md"
+                  hoverable
+                  className="cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t('projects.dash_open_items', { defaultValue: 'Open Items' })}
+                  onClick={() => navigate('/tasks')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate('/tasks'); } }}
+                >
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
@@ -1751,7 +1787,16 @@ export function ProjectDetailPage() {
               </div>
 
               {/* Budget section — horizontal stacked bar */}
-              <Card padding="md">
+              <Card
+                padding="md"
+                hoverable
+                className="cursor-pointer"
+                role="button"
+                tabIndex={0}
+                aria-label={t('projects.dash_budget_overview', { defaultValue: 'Budget Overview' })}
+                onClick={() => setActiveTab('budget')}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('budget'); } }}
+              >
                 <div className="flex items-center gap-2 mb-4">
                   <DollarSign size={16} className="text-content-tertiary" />
                   <h3 className="text-sm font-semibold text-content-primary">
@@ -1822,7 +1867,16 @@ export function ProjectDetailPage() {
               {/* Middle row: Schedule + Open Items */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {/* Schedule section */}
-                <Card padding="md">
+                <Card
+                  padding="md"
+                  hoverable
+                  className="cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={t('projects.dash_schedule', { defaultValue: 'Schedule' })}
+                  onClick={() => setActiveTab('schedule')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveTab('schedule'); } }}
+                >
                   <div className="flex items-center gap-2 mb-3">
                     <CalendarClock size={16} className="text-content-tertiary" />
                     <h3 className="text-sm font-semibold text-content-primary">
@@ -1901,6 +1955,7 @@ export function ProjectDetailPage() {
                         icon: <MessageSquare size={14} />,
                         color: 'text-oe-blue',
                         bg: 'bg-oe-blue-subtle',
+                        to: '/rfi',
                       },
                       {
                         label: t('projects.dash_submittals', { defaultValue: 'Submittals' }),
@@ -1908,6 +1963,7 @@ export function ProjectDetailPage() {
                         icon: <FileCheck size={14} />,
                         color: 'text-[#7c3aed]',
                         bg: 'bg-[#7c3aed]/10',
+                        to: '/submittals',
                       },
                       {
                         label: t('projects.dash_tasks', { defaultValue: 'Tasks' }),
@@ -1915,6 +1971,7 @@ export function ProjectDetailPage() {
                         icon: <ClipboardList size={14} />,
                         color: 'text-[#0891b2]',
                         bg: 'bg-[#0891b2]/10',
+                        to: '/tasks',
                       },
                       {
                         label: t('projects.dash_ncrs', { defaultValue: 'NCRs' }),
@@ -1922,9 +1979,16 @@ export function ProjectDetailPage() {
                         icon: <AlertTriangle size={14} />,
                         color: dashboardData.quality.ncrs_open > 0 ? 'text-semantic-error' : 'text-content-tertiary',
                         bg: dashboardData.quality.ncrs_open > 0 ? 'bg-semantic-error-bg' : 'bg-surface-secondary',
+                        to: '/punchlist',
                       },
                     ].map((item) => (
-                      <div key={item.label} className="rounded-lg border border-border-light p-3">
+                      <button
+                        key={item.label}
+                        type="button"
+                        onClick={() => navigate(item.to)}
+                        className="rounded-lg border border-border-light p-3 text-left transition-all hover:border-oe-blue/40 hover:bg-surface-secondary hover:-translate-y-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+                        aria-label={`${item.label}: ${item.count}`}
+                      >
                         <div className="flex items-center gap-2 mb-2">
                           <div className={`flex h-6 w-6 items-center justify-center rounded-md ${item.bg} ${item.color}`}>
                             {item.icon}
@@ -1937,27 +2001,34 @@ export function ProjectDetailPage() {
                             {item.alert} {item.alertLabel}
                           </p>
                         )}
-                      </div>
+                      </button>
                     ))}
                   </div>
                   {/* Procurement summary */}
                   <div className="mt-3 pt-3 border-t border-border-light">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Package size={14} className="text-content-tertiary" />
-                      <span className="text-xs font-medium text-content-secondary">
-                        {t('projects.dash_procurement', { defaultValue: 'Procurement' })}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-4 text-xs text-content-secondary">
-                      <span>
-                        <strong className="text-content-primary">{dashboardData.procurement.active_pos}</strong>{' '}
-                        {t('projects.dash_active_pos', { defaultValue: 'active POs' })}
-                      </span>
-                      <span>
-                        <strong className="text-content-primary">{dashboardData.procurement.pending_delivery}</strong>{' '}
-                        {t('projects.dash_pending_delivery', { defaultValue: 'pending delivery' })}
-                      </span>
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/procurement')}
+                      className="block w-full text-left rounded-md transition-colors hover:bg-surface-secondary -mx-2 px-2 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+                      aria-label={t('projects.dash_procurement', { defaultValue: 'Procurement' })}
+                    >
+                      <div className="flex items-center gap-2 mb-2">
+                        <Package size={14} className="text-content-tertiary" />
+                        <span className="text-xs font-medium text-content-secondary">
+                          {t('projects.dash_procurement', { defaultValue: 'Procurement' })}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-content-secondary">
+                        <span>
+                          <strong className="text-content-primary">{dashboardData.procurement.active_pos}</strong>{' '}
+                          {t('projects.dash_active_pos', { defaultValue: 'active POs' })}
+                        </span>
+                        <span>
+                          <strong className="text-content-primary">{dashboardData.procurement.pending_delivery}</strong>{' '}
+                          {t('projects.dash_pending_delivery', { defaultValue: 'pending delivery' })}
+                        </span>
+                      </div>
+                    </button>
                   </div>
                 </Card>
               </div>
@@ -1999,8 +2070,23 @@ export function ProjectDetailPage() {
                           punch_item: 'bg-semantic-error-bg text-semantic-error',
                           field_report: 'bg-semantic-success-bg text-semantic-success',
                         };
+                        const typeRoutes: Record<string, string> = {
+                          rfi_created: '/rfi',
+                          task_created: '/tasks',
+                          change_order: '/changeorders',
+                          document_uploaded: '/files',
+                          punch_item: '/punchlist',
+                          field_report: '/field-reports',
+                        };
+                        const to = typeRoutes[item.type] ?? '/dashboard';
                         return (
-                          <div key={`${item.type}-${item.title.slice(0, 30)}-${idx}`} className="flex items-center gap-3 px-5 py-3">
+                          <button
+                            key={`${item.type}-${item.title.slice(0, 30)}-${idx}`}
+                            type="button"
+                            onClick={() => navigate(to)}
+                            className="flex items-center gap-3 px-5 py-3 w-full text-left transition-colors hover:bg-surface-secondary focus:outline-none focus-visible:bg-surface-secondary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-oe-blue/40"
+                            aria-label={`${typeLabels[item.type] || item.type}: ${item.title}`}
+                          >
                             <div className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-2xs font-bold ${typeColors[item.type] || 'bg-surface-secondary text-content-tertiary'}`}>
                               {(typeLabels[item.type] || item.type).charAt(0).toUpperCase()}
                             </div>
@@ -2013,7 +2099,7 @@ export function ProjectDetailPage() {
                             <span className="text-2xs text-content-tertiary shrink-0 tabular-nums">
                               {formatDate(item.date, i18n.language)}
                             </span>
-                          </div>
+                          </button>
                         );
                       })}
                     </div>
@@ -2122,18 +2208,25 @@ export function ProjectDetailPage() {
                   </div>
                   {/* Document stats */}
                   <div className="mt-4 pt-3 border-t border-border-light">
-                    <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wider mb-2">
-                      {t('projects.dash_documents', { defaultValue: 'Documents' })}
-                    </p>
-                    <div className="flex items-center gap-3 text-xs text-content-secondary">
-                      <span><strong className="text-content-primary">{dashboardData.documents.total}</strong> {t('projects.dash_total', { defaultValue: 'total' })}</span>
-                      <span><strong className="text-content-primary">{dashboardData.documents.published}</strong> {t('projects.dash_published', { defaultValue: 'published' })}</span>
-                      {dashboardData.documents.pending_transmittals > 0 && (
-                        <span className="text-amber-600">
-                          <strong>{dashboardData.documents.pending_transmittals}</strong> {t('projects.dash_pending', { defaultValue: 'pending' })}
-                        </span>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate('/files')}
+                      className="block w-full text-left rounded-md transition-colors hover:bg-surface-secondary -mx-2 px-2 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+                      aria-label={t('projects.dash_documents', { defaultValue: 'Documents' })}
+                    >
+                      <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wider mb-2">
+                        {t('projects.dash_documents', { defaultValue: 'Documents' })}
+                      </p>
+                      <div className="flex items-center gap-3 text-xs text-content-secondary">
+                        <span><strong className="text-content-primary">{dashboardData.documents.total}</strong> {t('projects.dash_total', { defaultValue: 'total' })}</span>
+                        <span><strong className="text-content-primary">{dashboardData.documents.published}</strong> {t('projects.dash_published', { defaultValue: 'published' })}</span>
+                        {dashboardData.documents.pending_transmittals > 0 && (
+                          <span className="text-amber-600">
+                            <strong>{dashboardData.documents.pending_transmittals}</strong> {t('projects.dash_pending', { defaultValue: 'pending' })}
+                          </span>
+                        )}
+                      </div>
+                    </button>
                   </div>
                 </Card>
               </div>

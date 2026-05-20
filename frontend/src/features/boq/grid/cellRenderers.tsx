@@ -10,6 +10,7 @@ import {
   Plus,
   FolderOpen,
   Folder,
+  FolderPlus,
   X,
   BookmarkPlus,
   MoreHorizontal,
@@ -130,6 +131,8 @@ export interface SectionGroupContext {
   collapsedSections: Set<string>;
   onToggleSection: (sectionId: string) => void;
   onAddPosition: (sectionId?: string) => void;
+  /** Issue #136 — create a section nested under this one (sub-section). */
+  onAddSubSection?: (parentSectionId: string) => void;
   currencySymbol: string;
   currencyCode?: string;
   locale?: string;
@@ -155,6 +158,10 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
   const childCount: number = data._childCount ?? 0;
   const subtotal: number = data._subtotal ?? data.total ?? 0;
   const description: string = data.description ?? '';
+  // Issue #136 — nesting level drives left-indentation so a sub-section
+  // reads as a real child of its parent section in the смета.
+  const depth: number = typeof data._depth === 'number' ? data._depth : 0;
+  const ordinal: string = data.ordinal ?? '';
 
   // Issue #88 — when a non-base display currency is active, divide the
   // subtotal by the rate before formatting and print in the active code.
@@ -198,8 +205,11 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
   return (
     <div
       className={`flex items-center w-full h-full px-2 gap-2 select-none group/section transition-colors ${
-        dragOver ? 'bg-oe-blue-subtle/40 border-t-2 border-oe-blue' : ''
+        depth > 0 ? 'border-l-[3px] border-oe-blue' : ''
+      } ${
+        dragOver ? 'bg-oe-blue-subtle border-t-2 border-oe-blue' : ''
       }`}
+      style={depth > 0 ? { paddingLeft: 8 + depth * 22 } : undefined}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData('text/x-section-id', data.id);
@@ -249,6 +259,14 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
       <span className="shrink-0 text-content-tertiary">
         {isCollapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
       </span>
+
+      {ordinal && (
+        <span className="shrink-0 inline-flex items-center h-4 px-1.5 rounded
+                         bg-oe-blue-subtle text-oe-blue text-[10px] font-mono font-semibold
+                         tabular-nums">
+          {ordinal}
+        </span>
+      )}
 
       {renaming ? (
         <input
@@ -320,21 +338,46 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
         </button>
       )}
 
+      {ctx.onAddSubSection && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            ctx.onAddSubSection!(data.id);
+          }}
+          className="shrink-0 h-5 flex items-center gap-1 px-2 rounded ring-1 ring-oe-blue
+                     text-[10px] font-semibold
+                     bg-oe-blue-subtle text-oe-blue
+                     hover:bg-oe-blue hover:text-white
+                     transition-colors"
+          title={t('boq.add_sub_section', { defaultValue: 'Add sub-section nested under this section' })}
+          aria-label={t('boq.add_sub_section', { defaultValue: 'Add sub-section' })}
+        >
+          <FolderPlus size={11} />
+          {t('boq.sub_section_short', { defaultValue: 'Sub' })}
+        </button>
+      )}
+
+      {/* Issue #149 — the per-section "Add position" affordance is the most
+          common action on a section and MUST be discoverable, so it stays
+          visible at all times (not hover-revealed). It targets this exact
+          section id, so the new partida lands in this section — never in the
+          last one. Rendered as the primary section action; "Sub" sits beside
+          it for the rarer nested-section case. */}
       <button
         onClick={(e) => {
           e.stopPropagation();
           ctx.onAddPosition?.(data.id);
         }}
-        className="shrink-0 h-5 flex items-center gap-0.5 px-1.5 rounded
-                   text-[10px] font-medium
-                   text-content-tertiary hover:text-oe-blue
-                   bg-transparent hover:bg-oe-blue-subtle
-                   opacity-0 group-hover/section:opacity-100
-                   transition-all"
+        className="shrink-0 h-5 flex items-center gap-1 px-2 rounded ring-1 ring-oe-blue
+                   text-[10px] font-semibold
+                   bg-oe-blue text-white
+                   hover:bg-oe-blue/90
+                   transition-colors"
         title={t('boq.add_position_to_section', { defaultValue: 'Add position to this section' })}
+        aria-label={t('boq.add_position_to_section', { defaultValue: 'Add position to this section' })}
       >
-        <Plus size={10} />
-        {t('boq.add_item', { defaultValue: 'Add' })}
+        <Plus size={11} />
+        {t('boq.add_position', { defaultValue: 'Add Position' })}
       </button>
 
       {(ctx as FullGridContext | undefined)?.onDeleteSection && (
@@ -565,20 +608,35 @@ export function ExpandCellRenderer(params: ICellRendererParams) {
   const hasResources = Array.isArray(data.metadata?.resources) && data.metadata.resources.length > 0;
   if (!hasResources) return null;
 
+  const resCount = Array.isArray(data.metadata?.resources)
+    ? data.metadata.resources.length
+    : 0;
   const isExpanded = ctx?.expandedPositions?.has(data.id) ?? false;
   const expandTitle = isExpanded
-    ? t('boq.collapse_resources', { defaultValue: 'Collapse resources' })
-    : t('boq.expand_resources', { defaultValue: 'Expand resources' });
+    ? t('boq.collapse_resources', { defaultValue: 'Collapse {{count}} resources', count: resCount })
+    : t('boq.expand_resources', { defaultValue: 'Show {{count}} resources', count: resCount });
 
+  // Solid theme tokens ONLY. `--oe-blue` is a hex-valued CSS variable, so
+  // Tailwind opacity modifiers over it (`bg-oe-blue/10`, `ring-oe-blue/30`)
+  // emit `rgb(#0071e3 / 0.1)` — invalid CSS the browser drops, leaving the
+  // chip transparent + ring-less (it read as "missing"). Every class here
+  // is a real solid token. Modern soft-affordance: a low-contrast tinted
+  // chip at rest (calm, not loud), full blue only on hover/expanded so
+  // it's still unmistakably a control. Size pinned inline so it can never
+  // collapse to icon width.
   return (
     <div className="flex items-center justify-center h-full w-full">
       <button
         onClick={() => ctx?.onToggleResources?.(data.id)}
-        className="h-6 w-6 flex items-center justify-center rounded
-                   text-content-tertiary hover:text-oe-blue hover:bg-oe-blue/10
-                   transition-colors cursor-pointer"
+        style={{ width: 22, height: 22 }}
+        className={`shrink-0 flex items-center justify-center rounded-md ring-1 transition-colors cursor-pointer hover:bg-oe-blue hover:text-white hover:ring-oe-blue ${
+          isExpanded
+            ? 'bg-oe-blue-subtle text-oe-blue-dark ring-oe-blue'
+            : 'bg-oe-blue-subtle text-oe-blue ring-oe-blue-subtle'
+        }`}
         title={expandTitle}
         aria-label={expandTitle}
+        aria-expanded={isExpanded}
       >
         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
       </button>
@@ -3617,14 +3675,14 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
   const renderOrdinalSlot = (width: number) => (
     <span
       key="ordinal"
-      className="shrink-0 inline-flex items-center justify-end self-center pr-2 text-[8px] font-mono whitespace-nowrap overflow-hidden"
+      className="shrink-0 inline-flex items-center justify-end self-center pr-2 text-[9px] font-mono whitespace-nowrap overflow-hidden"
       style={{ width: `${width}px` }}
       title={resourceCode
         ? ctx.t('boq.resource_catalog_code', { defaultValue: 'Catalogue code: {{code}}', code: resourceCode })
         : ctx.t('boq.resource_customised', { defaultValue: 'Customised resource — no catalogue code' })}
     >
       {resourceCode ? (
-        <span className="px-1 py-0.5 rounded bg-surface-secondary/60 text-content-quaternary">
+        <span className="font-normal tracking-tight text-content-tertiary/70 overflow-hidden text-ellipsis">
           {resourceCode}
         </span>
       ) : (

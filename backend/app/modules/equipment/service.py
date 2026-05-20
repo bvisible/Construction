@@ -1,4 +1,4 @@
-"""Equipment service — business logic for fleet, maintenance, rentals, and damage.
+"""‌⁠‍Equipment service — business logic for fleet, maintenance, rentals, and damage.
 
 Key features:
     * record_telemetry — append reading + bump Equipment counters if newer.
@@ -78,7 +78,7 @@ def compute_next_due(
     current_km: Decimal | None = None,
     today: str | None = None,
 ) -> dict[str, Any]:
-    """Compute the next due trigger for a schedule.
+    """‌⁠‍Compute the next due trigger for a schedule.
 
     Returns a dict with `next_due_meter` (Decimal | None) and `next_due_date`
     (str | None). The shape mirrors :class:`MaintenanceSchedule` fields.
@@ -124,7 +124,7 @@ def compute_rental_billing(
     period_end: str,
     hours_logged: Decimal | float | int | None = None,
 ) -> Decimal:
-    """Compute billing for a rental over a period.
+    """‌⁠‍Compute billing for a rental over a period.
 
     Hours billing takes precedence if ``hours_logged`` is provided and the
     rental has a non-zero hourly rate; otherwise day billing applies.
@@ -282,6 +282,34 @@ class EquipmentService:
 
     async def list_types(self) -> list[EquipmentType]:
         return await self.type_repo.list_all()
+
+    async def delete_type(self, type_id: uuid.UUID) -> None:
+        """Delete an equipment type. Blocks if any Equipment still references it."""
+        from sqlalchemy import func as _sa_func, select as _sa_select
+
+        t = await self.type_repo.get_by_id(type_id)
+        if t is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Equipment type not found",
+            )
+        # Block delete when any Equipment still points at this type's code —
+        # otherwise we'd orphan the FK reference (it's a string code, not a
+        # DB-level FK).
+        ref_count = await self.session.scalar(
+            _sa_select(_sa_func.count())
+            .select_from(Equipment)
+            .where(Equipment.type_code == t.code)
+        )
+        if ref_count and ref_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Cannot delete type '{t.code}': {ref_count} equipment "
+                    "unit(s) still reference it"
+                ),
+            )
+        await self.type_repo.delete(type_id)
 
     # ── Equipment ────────────────────────────────────────────────────────
 

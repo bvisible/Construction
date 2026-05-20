@@ -50,7 +50,7 @@ import {
   type UpdatePositionData,
   type CostAutocompleteItem,
   type ResourceCodeMatch,
-  groupPositionsIntoSections,
+  isSection,
   getPositionDepth,
   DEFAULT_MAX_NESTING_DEPTH,
 } from './api';
@@ -82,7 +82,13 @@ import {
   type FullGridContext,
 } from './grid/cellRenderers';
 import { countComments } from './CommentDrawer';
-import { fmtWithCurrency, getUnitsForLocale, saveCustomUnit } from './boqHelpers';
+import {
+  convertToBase,
+  fmtWithCurrency,
+  getUnitsForLocale,
+  resourceAwareTotalInBase,
+  saveCustomUnit,
+} from './boqHelpers';
 import { RESOURCE_TYPES, getResourceTypeLabel } from './boqResourceTypes';
 import { CURRENCY_GROUPS } from '@/features/projects/CreateProjectPage';
 import { useToastStore } from '@/stores/useToastStore';
@@ -174,6 +180,13 @@ interface SectionRow {
   _isSection: true;
   _childCount: number;
   _subtotal: number;
+  /**
+   * Issue #136 — nesting level of this row in the section tree.
+   * 0 = top-level. Drives left-indentation so sections-within-sections
+   * and their child positions read as a real hierarchy in the grid.
+   * Present on section rows AND on the position rows beneath them.
+   */
+  _depth?: number;
 }
 
 interface ResourceRow {
@@ -318,6 +331,17 @@ export interface BOQGridProps {
   locale: string;
   footerRows: FooterRow[];
   onSelectionChanged?: (selectedIds: string[]) => void;
+  /**
+   * Issue #139 — the row the user last *interacted with* (clicked a cell
+   * in / focused), regardless of checkbox selection. ``rowSelection`` has
+   * ``enableClickSelection:false`` (a plain click edits, it does NOT tick
+   * the checkbox), so ``onSelectionChanged`` stays empty when the user
+   * simply clicks a partida and hits "Add Position". Without this signal
+   * the editor fell back to appending at the LAST section instead of
+   * inserting directly below the clicked row — the exact #139 symptom.
+   * ``null`` clears the anchor (focus left the data rows).
+   */
+  onActiveRowChange?: (positionId: string | null) => void;
   onRemoveResource?: (positionId: string, resourceIndex: number) => void;
   onUpdateResource?: (positionId: string, resourceIndex: number, field: string, value: number | string) => void;
   onUpdateResourceFields?: (positionId: string, resourceIndex: number, fields: Record<string, number | string>) => void;
@@ -381,6 +405,8 @@ export interface BOQGridProps {
   onShowLinks?: (positionId: string) => void;
   /** Issue #127 — detach a position from its shared code (value-preserving). */
   onUnlinkPosition?: (positionId: string) => void;
+  /** Feature 1 — open the model→quantity binding panel for a position. */
+  onModelLink?: (positionId: string) => void;
   /* AI features */
   onSuggestRate?: (positionId: string) => void;
   onClassify?: (positionId: string) => void;
@@ -407,6 +433,15 @@ export interface BOQGridProps {
 /** Imperative handle exposed by BOQGrid for external control (e.g. clearing selection). */
 export interface BOQGridHandle {
   clearSelection: () => void;
+  /**
+   * Open a freshly-added leaf partida directly in inline edit on its
+   * Description cell, so the user types straight away instead of hunting
+   * for a cell to click ("Click any cell to edit" UX gap). Polls briefly
+   * because the row only materialises after the post-add refetch; a no-op
+   * for sections, collapsed/missing rows, or once the retry budget is
+   * spent (graceful fall-back to the previous click-to-edit behaviour).
+   */
+  beginEditDescription: (positionId: string) => void;
 }
 
 /* ── Component ─────────────────────────────────────────────────────── */
@@ -434,6 +469,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   locale,
   footerRows,
   onSelectionChanged,
+  onActiveRowChange,
   onRemoveResource,
   onUpdateResource,
   onUpdateResourceFields,
@@ -452,6 +488,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   maxNestingDepth = DEFAULT_MAX_NESTING_DEPTH,
   onShowLinks,
   onUnlinkPosition,
+  onModelLink,
   onSuggestRate,
   onClassify,
   // onCheckAnomalies is consumed by BOQToolbar, not directly by the grid
@@ -832,6 +869,69 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     clearSelection: () => {
       gridApiRef.current?.deselectAll();
     },
+    beginEditDescription: (positionId: string) => {
+      // Open a freshly-added leaf row directly in inline edit on its
+      // Description cell. Two-phase, because:
+      //  • the row only exists after the post-add refetch (poll for it);
+      //  • AG Grid won't edit a row that is virtualised out of the DOM,
+      //    so we must ensureNodeVisible, let the scroll/render settle on
+      //    a later tick, THEN startEditingCell (calling it synchronously
+      //    after ensureNodeVisible is a silent no-op — getEditingCells()
+      //    stays empty);
+      //  • `stopEditingWhenCellsLoseFocus` is on, so DOM focus still
+      //    sitting on the "Add" button tears a fresh editor down — pull
+      //    focus into the editor input once it has mounted.
+      let attempts = 0;
+      const MAX = 30;
+      const step = (): void => {
+        if (attempts++ > MAX) return; // give up → click-to-edit fallback
+        const api = gridApiRef.current;
+        if (!api) { window.setTimeout(step, 150); return; }
+        // Always RE-RESOLVE by id: invalidateAll() can trigger a second
+        // refetch that rebuilds the row model, so any rowIndex captured
+        // on an earlier tick is stale and startEditingCell would no-op.
+        const node = api.getRowNode(positionId);
+        const rowIndex = node?.rowIndex;
+        if (
+          !node ||
+          typeof rowIndex !== 'number' ||
+          rowIndex < 0 ||
+          node.data?._isSection ||
+          node.data?._isFooter
+        ) {
+          window.setTimeout(step, 150);
+          return;
+        }
+        // Edit only succeeds once the row is actually rendered into the
+        // DOM (AG Grid virtualises far rows). Ensure it is visible, then
+        // confirm the cell element exists before starting the editor.
+        api.ensureNodeVisible(node, 'middle');
+        const cell = document.querySelector(
+          `.ag-row[row-id="${positionId}"] .ag-cell[col-id="description"]`,
+        );
+        if (!cell) { window.setTimeout(step, 120); return; }
+        api.setFocusedCell(rowIndex, 'description');
+        api.startEditingCell({ rowIndex, colKey: 'description' });
+        if (api.getEditingCells().length === 0) {
+          // Still mid-scroll/rebuild — retry the whole cycle.
+          window.setTimeout(step, 150);
+          return;
+        }
+        // `stopEditingWhenCellsLoseFocus` is on: focus still on the
+        // toast / "Add" button would tear the fresh editor down — pull
+        // focus into the editor input once it has mounted.
+        window.requestAnimationFrame(() => {
+          const editor = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+            '.ag-cell.ag-cell-inline-editing input, .ag-cell.ag-cell-inline-editing textarea',
+          );
+          if (editor) {
+            editor.focus();
+            editor.select?.();
+          }
+        });
+      };
+      step();
+    },
   }), []);
 
   const fmt = useMemo(
@@ -861,6 +961,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       collapsedSections,
       onToggleSection,
       onAddPosition,
+      onAddSubSection,
       expandedPositions,
       onToggleResources: toggleResources,
       onRemoveResource: onRemoveResource ?? (() => {}),
@@ -906,7 +1007,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       positions,
       customColumns,
     }) as FullGridContext,
-    [currencySymbol, currencyCode, fxRates, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition,
+    [currencySymbol, currencyCode, fxRates, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition, onAddSubSection,
      expandedPositions, toggleResources, onRemoveResource, onUpdateResource, onUpdateResourceFields,
      onSaveResourceToCatalog, onSaveVariantHeaderToCatalog, onOpenCostDbForPosition, onOpenCatalogForPosition, onRepickResourceVariant,
      openVariantPickerSignal, openVariantPickerFor, clearOpenVariantPicker, openPositionVariantPicker, onUpdateVariantHeader,
@@ -1004,8 +1105,10 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   }, [displayCurrency?.code, displayCurrency?.rate]);
 
   /* ── Helper: insert resource sub-rows after an expanded position ── */
-  const insertResourceRows = useCallback((rows: GridRow[], pos: Position) => {
-    rows.push(pos);
+  const insertResourceRows = useCallback((rows: GridRow[], pos: Position, depth = 0) => {
+    // Shallow-copy so attaching the tree-depth marker never mutates the
+    // React Query-cached Position object (Issue #136).
+    rows.push({ ...pos, _depth: depth } as GridRow);
 
     if (!expandedPositions.has(pos.id)) return;
 
@@ -1126,7 +1229,16 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     for (let i = 0; i < resources.length; i++) {
       const r = resources[i]!;
       const rTotal = r.total ?? r.quantity * r.unit_rate;
-      resTotal += rTotal;
+      // Issue #111 (skolodi follow-up) — the per-position resource
+      // subtotal (``_positionResourceTotal``, rendered on the
+      // "Add resource" row) is one of the TWO places the contributor
+      // circled where a USD-priced resource in an ARS project showed
+      // its raw foreign number as if it were base. Convert each
+      // resource's contribution via its own currency before summing so
+      // the subtotal is stated in the project base currency. Resource
+      // currency wins; absent ⇒ project base (no conversion).
+      const rCcy = (r.currency || '').trim() || currencyCode;
+      resTotal += convertToBase(rTotal, rCcy, currencyCode, fxRates ?? null);
 
       const hasVariantCatalog =
         Array.isArray(r.available_variants) && r.available_variants.length >= 2;
@@ -1194,46 +1306,96 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       total: 0,
     };
     rows.push(addRow as GridRow);
-  }, [expandedPositions, currencyCode]);
+    // ``fxRates`` added (Issue #111) — the resource subtotal now depends
+    // on the project FX table, so an FX-rate edit must recompute it.
+  }, [expandedPositions, currencyCode, fxRates]);
 
   /* ── Build row data from positions ────────────────────────────── */
   const rowData: GridRow[] = useMemo(() => {
-    // Issue #111 — section subtotals must rebase per-position currencies
-    // into the project base before summing. Pass the active project FX
-    // table; ``groupPositionsIntoSections`` falls back to raw totals when
-    // no FX is supplied so non-multi-currency BOQs see no behaviour change.
-    const { sections, ungrouped } = groupPositionsIntoSections(positions, {
-      baseCurrency: currencyCode,
-      fxRates: fxRates ?? [],
-    });
-    const rows: GridRow[] = [];
+    const num = (v: unknown): number => {
+      const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+      return Number.isFinite(n) ? n : 0;
+    };
 
-    // Ungrouped positions first
-    for (const pos of ungrouped) {
-      insertResourceRows(rows, pos);
+    // Issue #111 (skolodi follow-up) — rebase a position's total into the
+    // project base before it contributes to any (possibly nested) section
+    // subtotal. ``resourceAwareTotalInBase`` converts BOTH a position-level
+    // ``metadata.currency`` (the verified #131 path) AND the
+    // previously-missed case the contributor circled: a position with NO
+    // ``metadata.currency`` but USD-priced ``metadata.resources`` (its
+    // stored total was built from Σ(r.qty×r.rate) with no FX applied).
+    const rebase = (pos: Position): number => {
+      if (!currencyCode) return num(pos.total);
+      return resourceAwareTotalInBase(
+        pos as unknown as {
+          total?: number | string | null;
+          quantity?: number | string | null;
+          metadata?: Record<string, unknown> | null;
+        },
+        currencyCode,
+        fxRates,
+      );
+    };
+
+    // Issue #136 — render the TRUE section tree. The previous flat grouping
+    // only ever attached non-section positions to a single section level, so
+    // a section nested under another section (sub-section) was dropped from
+    // the tree entirely — it surfaced only as a stray row and the hierarchy
+    // was invisible. We now walk parent_id recursively. A position whose
+    // parent_id is missing or dangling is treated as a root so nothing can
+    // silently vanish from the смета.
+    const byId = new Map<string, Position>();
+    for (const p of positions) byId.set(p.id, p);
+    const childrenOf = new Map<string | null, Position[]>();
+    for (const p of positions) {
+      const pid = p.parent_id && byId.has(p.parent_id) ? p.parent_id : null;
+      const arr = childrenOf.get(pid) ?? [];
+      arr.push(p);
+      childrenOf.set(pid, arr);
     }
+    const sortSiblings = (arr: Position[]): Position[] =>
+      [...arr].sort((a, b) => {
+        if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order;
+        return a.ordinal.localeCompare(b.ordinal, undefined, { numeric: true });
+      });
 
-    // Then sections with their children
-    for (const group of sections) {
-      const sectionRow: GridRow = {
-        ...group.section,
-        _isSection: true,
-        _childCount: group.children.length,
-        _subtotal: group.subtotal,
-        total: group.subtotal,
-      };
-      rows.push(sectionRow);
-
-      const isCollapsed = collapsedSections.has(group.section.id);
-      if (!isCollapsed) {
-        for (const child of group.children) {
-          insertResourceRows(rows, child);
-        }
+    // Section subtotal = Σ rebased line totals of every descendant
+    // position, recursing through any number of nested sub-sections.
+    const subtotalCache = new Map<string, number>();
+    const subtotalOf = (sec: Position): number => {
+      const cached = subtotalCache.get(sec.id);
+      if (cached !== undefined) return cached;
+      let sum = 0;
+      for (const child of childrenOf.get(sec.id) ?? []) {
+        sum += isSection(child) ? subtotalOf(child) : rebase(child);
       }
-    }
+      subtotalCache.set(sec.id, sum);
+      return sum;
+    };
 
+    const rows: GridRow[] = [];
+    const emit = (pos: Position, depth: number): void => {
+      if (isSection(pos)) {
+        const kids = sortSiblings(childrenOf.get(pos.id) ?? []);
+        const subtotal = subtotalOf(pos);
+        rows.push({
+          ...pos,
+          _isSection: true,
+          _depth: depth,
+          _childCount: kids.length,
+          _subtotal: subtotal,
+          total: subtotal,
+        } as GridRow);
+        if (collapsedSections.has(pos.id)) return;
+        for (const child of kids) emit(child, depth + 1);
+      } else {
+        insertResourceRows(rows, pos, depth);
+      }
+    };
+
+    for (const root of sortSiblings(childrenOf.get(null) ?? [])) emit(root, 0);
     return rows;
-  }, [positions, collapsedSections, insertResourceRows]);
+  }, [positions, collapsedSections, insertResourceRows, currencyCode, fxRates]);
 
   /* ── Pinned bottom rows (footer) ──────────────────────────────── */
   const pinnedBottomRowData = useMemo(() => footerRows, [footerRows]);
@@ -1897,15 +2059,21 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       if (!manualResourceDialog) return;
       const { positionId, name, type, unit, quantity, unitRate, currency, code } =
         manualResourceDialog;
-      const effName = (override?.name ?? name).trim();
-      if (!effName) return;
-      const qty = parseFloat(quantity.replace(',', '.')) || 1;
-      const rate =
-        override?.unit_rate ?? (parseFloat(unitRate.replace(',', '.')) || 0);
       const effType = override?.type ?? type;
       const effUnit = (override?.unit ?? unit).trim();
       const effCurrency = override?.currency ?? currency;
       const effCode = (override?.code ?? code).trim();
+      // Issue #133 — when reusing an existing code the user typically types
+      // ONLY the code (that is the whole point of "insert existing"), and a
+      // catalogue/variant-imported master can itself carry a blank ``name``.
+      // Never silently drop the resource: fall back to the code, then the
+      // unit, so it always lands in the смета.
+      const effName =
+        (override?.name ?? name).trim() || effCode || effUnit;
+      if (!effName) return;
+      const qty = parseFloat(quantity.replace(',', '.')) || 1;
+      const rate =
+        override?.unit_rate ?? (parseFloat(unitRate.replace(',', '.')) || 0);
       // Persist user-typed units so they show up next time app-wide.
       if (effUnit) saveCustomUnit(effUnit);
       onAddManualResource?.(positionId, {
@@ -1966,7 +2134,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     const m = manualResourceDialog?.collision;
     if (!m) return;
     finalizeManualResource({
-      name: m.name,
+      name: m.name || m.code,
       type: m.type || manualResourceDialog!.type,
       unit: m.unit,
       unit_rate: m.unit_rate,
@@ -2039,6 +2207,26 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
           onCellClicked={(event) => {
             const field = event.colDef.field;
             const data = event.data;
+
+            // Issue #139 — a plain click does NOT tick the selection
+            // checkbox (enableClickSelection:false), so report the clicked
+            // partida as the active insert anchor so "Add Position"
+            // inserts directly below it. Section / resource / footer rows
+            // clear the anchor (they have dedicated add-child actions).
+            if (
+              data &&
+              data.id &&
+              !data._isSection &&
+              !data._isFooter &&
+              !data._isResource &&
+              !data._isAddResource &&
+              !data._isVariantHeader
+            ) {
+              onActiveRowChange?.(data.id as string);
+            } else {
+              onActiveRowChange?.(null);
+            }
+
             if (!data || data._isSection || data._isFooter) return;
 
             // Click on unit_rate/total cell with resources → expand resources
@@ -2048,6 +2236,29 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
               if (Array.isArray(res) && res.length > 0) {
                 toggleResources(data.id as string);
               }
+            }
+          }}
+          onCellFocused={(event) => {
+            // Keyboard navigation (arrow keys / Tab) also moves the active
+            // insert anchor so Ctrl+Enter / "Add Position" follows the
+            // row the user is on. Guard against the headerless / no-row
+            // focus events AG-Grid emits during refresh.
+            if (!onActiveRowChange) return;
+            const api = event.api;
+            const rowIndex = event.rowIndex;
+            if (rowIndex == null) return;
+            const node = api.getDisplayedRowAtIndex(rowIndex);
+            const d = node?.data as Record<string, unknown> | undefined;
+            if (
+              d &&
+              d.id &&
+              !d._isSection &&
+              !d._isFooter &&
+              !d._isResource &&
+              !d._isAddResource &&
+              !d._isVariantHeader
+            ) {
+              onActiveRowChange(d.id as string);
             }
           }}
           onCellEditingStarted={onCellEditingStarted}
@@ -2161,6 +2372,13 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                     />
                   );
                 })()}
+                {/* ── Feature 1: live model→quantity binding ───────── */}
+                {onModelLink && (
+                  <CtxItem icon={<Cuboid size={14} className="text-oe-blue"/>}
+                    label={t('boq.model_link_action', { defaultValue: 'Model link…' })}
+                    onClick={() => { onModelLink(d.id as string); closeContextMenu(); }}
+                  />
+                )}
                 {/* ── Issue #127: reuse / linked-positions ──────────── */}
                 {onReuseCode && (
                   <CtxItem icon={<Link2 size={14}/>}

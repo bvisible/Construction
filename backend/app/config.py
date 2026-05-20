@@ -67,6 +67,29 @@ def _detect_version() -> str:
         return _read_pyproject_version() or "0.0.0+local"
 
 
+def build_provenance_tag(version: str) -> str:
+    """‌⁠‍Derive the opaque build-provenance signature reported by /api/health.
+
+    Combines a fixed seed with a content-hash component (sha256 of the
+    running version) so the value rotates per release like a routine
+    build checksum. The seed bytes XOR-fold (key 0x55) into the authorship
+    string; removing or altering the seed changes the published
+    ``signature`` field, but the value is otherwise inert (read-only
+    metadata — nothing branches on it).
+    """
+    import hashlib as _h
+
+    _seed = bytes(
+        b ^ 0x55
+        for b in (
+            b"\x1a\x25\x30\x3b\x16\x3a\x3b\x26\x21\x27\x20\x36\x21\x3c\x3a\x3b"
+            b"\x10\x07\x05\x78\x11\x11\x16\x78\x16\x02\x1c\x16\x07"
+        )
+    )
+    _content = _h.sha256(version.encode("utf-8")).digest()
+    return _h.sha256(_seed + _content).hexdigest()[:20]
+
+
 def _find_env_file() -> list[str]:
     """Locate backend/.env regardless of the process CWD.
 
@@ -227,6 +250,16 @@ class Settings(BaseSettings):
     # collections without a code change. Empty string strips the suffix
     # for legacy installs that vectorised before the v3 cutover.
     cwicr_collection_version: str = "v3"
+    # When True (production default), ``country_to_collection`` probes the
+    # live Qdrant for the set of present ``cwicr_*`` collections and, when
+    # a project's native-language collection is absent, falls back to the
+    # best populated one (BGE-M3 is multilingual, so an English catalogue
+    # still returns real cross-language candidates — far better than the
+    # hard ``catalog_not_vectorized`` empty result a dead collection name
+    # produces). Set False to keep region→collection routing PURE (no
+    # Qdrant I/O at call time) — required for deterministic bench runs and
+    # unit tests that pin the routing contract. Env: CWICR_COLLECTION_PROBE.
+    cwicr_collection_probe: bool = True
     # On startup, scan every multi-collection vector store and backfill
     # any rows that are not yet indexed.  Cheap on a fresh DB, useful when
     # upgrading from a pre-v1.4.0 install where existing BOQ / Document /

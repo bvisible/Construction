@@ -10,6 +10,7 @@ import {
   Plus,
   Ruler,
   Save,
+  SlidersHorizontal,
   Trash2,
   X,
 } from 'lucide-react';
@@ -25,7 +26,7 @@ import {
 } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { projectsApi, type Project, type ProjectFxRate } from './api';
-import { CURRENCY_GROUPS } from './CreateProjectPage';
+import { CURRENCY_GROUPS, CreateProjectModal } from './CreateProjectPage';
 import { getVatRate } from '../boq/boqHelpers';
 import { TranslationSettingsTab } from '../translation';
 
@@ -336,6 +337,8 @@ export function ProjectSettingsPage() {
     open: boolean;
     initial: ProjectFxRate | null;
   }>({ open: false, initial: null });
+  // Slice 4 — re-open the setup wizard for this project in EDIT mode.
+  const [editSetupOpen, setEditSetupOpen] = useState(false);
 
   // Sync local state with server state once (and when projectId changes)
   useEffect(() => {
@@ -528,6 +531,36 @@ export function ProjectSettingsPage() {
           {t('common.back_to_project', { defaultValue: 'Back to project' })}
         </Button>
       </div>
+
+      {/* ── Project setup (Slice 4 — re-wizard entry) ───────────────────── */}
+      <Card padding="lg">
+        <CardHeader
+          title={t('project.settings.setup.title', {
+            defaultValue: 'Project setup',
+          })}
+          subtitle={t('project.settings.setup.subtitle', {
+            defaultValue:
+              'Re-run the guided wizard to change the preset, scope and which modules are emphasised in the sidebar.',
+          })}
+          action={
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<SlidersHorizontal size={14} />}
+              onClick={() => setEditSetupOpen(true)}
+            >
+              {t('project.settings.setup.edit', {
+                defaultValue: 'Edit project setup',
+              })}
+            </Button>
+          }
+        />
+      </Card>
+      <CreateProjectModal
+        open={editSetupOpen}
+        onClose={() => setEditSetupOpen(false)}
+        editProjectId={project.id}
+      />
 
       {/* ── Base currency ───────────────────────────────────────────────── */}
       <Card padding="lg">

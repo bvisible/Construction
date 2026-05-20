@@ -29,6 +29,7 @@ import {
   saveSession,
   listSessions,
   deleteSession,
+  sessionFromBimModel,
   type DescribeResponse,
   type AggregateResponse,
   type AggregateGroup,
@@ -3463,6 +3464,45 @@ export function CadDataExplorerPage() {
     enabled: !!sessionId,
   });
 
+  // Deep-link from the file manager's "CAD-BIM BI Explorer" action:
+  // `/data-explorer?bimModel=<id>`. The model has element rows but no
+  // CAD session, so we materialise one server-side and swap the URL to
+  // `?session=<id>`. Idempotent on the backend (reuses an existing
+  // session for the same model), and one-shot here so a back-nav that
+  // restores the URL doesn't re-fire. While it resolves we show a
+  // spinner instead of flashing the empty session picker.
+  const bimModelId = searchParams.get('bimModel') || '';
+  const bimResolveRef = useRef<string | null>(null);
+  const [bimResolveError, setBimResolveError] = useState<string | null>(null);
+  useEffect(() => {
+    if (sessionId) return; // already have a session
+    if (!bimModelId) return;
+    if (bimResolveRef.current === bimModelId) return;
+    bimResolveRef.current = bimModelId;
+    setBimResolveError(null);
+    sessionFromBimModel(bimModelId)
+      .then((res) => {
+        setSearchParams(
+          (prev) => {
+            const next = new URLSearchParams(prev);
+            next.delete('bimModel');
+            next.set('session', res.session_id);
+            return next;
+          },
+          { replace: true },
+        );
+      })
+      .catch((err: Error) => {
+        bimResolveRef.current = null; // allow a manual retry
+        setBimResolveError(
+          err.message ||
+            t('explorer.bim_resolve_failed', {
+              defaultValue: 'Could not open this BIM model in the explorer.',
+            }),
+        );
+      });
+  }, [sessionId, bimModelId, setSearchParams, t]);
+
   const handleSessionReady = useCallback((newSessionId: string) => {
     setSearchParams({ session: newSessionId });
   }, [setSearchParams]);
@@ -3494,6 +3534,34 @@ export function CadDataExplorerPage() {
       if (import.meta.env.DEV) console.error('Failed to delete CAD session:', err.message);
     },
   });
+
+  // Resolving a BIM model into a session — show a spinner (or the
+  // failure) instead of the empty session picker so the deep-link feels
+  // like it "opened the model directly".
+  if (!sessionId && bimModelId) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 h-full">
+        {bimResolveError ? (
+          <EmptyState
+            icon={<AlertCircle size={28} />}
+            title={t('explorer.bim_resolve_failed_title', {
+              defaultValue: 'Could not open this model',
+            })}
+            description={bimResolveError}
+          />
+        ) : (
+          <>
+            <Loader2 size={28} className="animate-spin text-oe-blue" />
+            <p className="text-xs text-content-tertiary">
+              {t('explorer.bim_resolving', {
+                defaultValue: 'Preparing model data for analysis…',
+              })}
+            </p>
+          </>
+        )}
+      </div>
+    );
+  }
 
   if (!sessionId) {
     const recentSessions = allSessions.slice(0, 12);

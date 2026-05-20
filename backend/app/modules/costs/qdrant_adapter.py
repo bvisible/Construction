@@ -1,6 +1,6 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
-"""CWICR Qdrant adapter — 30-collection multilingual cost-rate search.
+"""‌⁠‍CWICR Qdrant adapter — 30-collection multilingual cost-rate search.
 
 Replaces the legacy ``vector_adapter`` (LanceDB + e5-small + 384-dim) for
 the ``/match-elements`` path. The new pipeline holds rate vectors in
@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -77,7 +78,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class QdrantHit:
-    """One result from :func:`search`.
+    """‌⁠‍One result from :func:`search`.
 
     ``score`` is the RRF-fused score from Qdrant Query API, not a raw
     cosine similarity. Use for relative ranking only — absolute values
@@ -113,7 +114,7 @@ class QdrantHit:
 
 
 def _collection_version_suffix() -> str:
-    """Return the configured ``_<ver>`` suffix or empty for legacy installs.
+    """‌⁠‍Return the configured ``_<ver>`` suffix or empty for legacy installs.
 
     Reads ``settings.cwicr_collection_version`` lazily so test monkeypatching
     of the env var after import still takes effect. The leading underscore
@@ -122,6 +123,105 @@ def _collection_version_suffix() -> str:
 
     version = (getattr(get_settings(), "cwicr_collection_version", "") or "").strip()
     return f"_{version}" if version else ""
+
+
+# Process-local cache of the CWICR collection names Qdrant actually
+# holds. Populated lazily by :func:`_available_cwicr_collections`; a
+# short TTL keeps a freshly-ingested catalogue discoverable without a
+# backend restart while still sparing every match call a list_collections
+# round-trip.
+_AVAILABLE_CWICR_TTL_SEC = 30.0
+_available_cwicr_cache: tuple[float, frozenset[str]] | None = None
+
+
+def _available_cwicr_collections() -> frozenset[str]:
+    """Return the set of ``cwicr_*`` collection names present in Qdrant.
+
+    Cached for :data:`_AVAILABLE_CWICR_TTL_SEC`. Returns an empty set
+    (never raises) when Qdrant is unreachable so callers fall back to
+    the naive language-derived name and the existing
+    ``catalog_not_vectorized`` empty-state still fires correctly.
+    """
+
+    global _available_cwicr_cache
+    import time as _t  # noqa: PLC0415
+
+    # Pure-routing escape hatch. When the probe is disabled the function
+    # behaves as if Qdrant were unreachable (empty set) so
+    # :func:`country_to_collection` returns the naive language-derived
+    # name verbatim — no network I/O, fully deterministic. Required for
+    # deterministic bench runs and the routing-contract unit tests, which
+    # otherwise silently fail whenever the dev/CI host happens to have a
+    # sparsely-populated live Qdrant (only ``cwicr_en_v3`` present →
+    # every non-English region falls back to English).
+    if not getattr(get_settings(), "cwicr_collection_probe", True):
+        return frozenset()
+
+    now = _t.perf_counter()
+    if (
+        _available_cwicr_cache is not None
+        and now - _available_cwicr_cache[0] < _AVAILABLE_CWICR_TTL_SEC
+    ):
+        return _available_cwicr_cache[1]
+
+    names: set[str] = set()
+    try:
+        client = _get_client()
+        cols = client.get_collections()
+        for c in getattr(cols, "collections", None) or []:
+            name = getattr(c, "name", "") or ""
+            if name.startswith("cwicr_"):
+                names.add(name)
+    except Exception as exc:  # noqa: BLE001 — degrade, never fail
+        logger.debug("qdrant_adapter: list cwicr collections failed: %s", exc)
+        names = set()
+
+    result = frozenset(names)
+    _available_cwicr_cache = (now, result)
+    return result
+
+
+def _pick_fallback_cwicr(want: str, available: frozenset[str]) -> str | None:
+    """Choose the best present CWICR collection when ``want`` is absent.
+
+    BGE-M3 is multilingual, so an English (or any populated) CWICR
+    collection still yields real cross-language candidates — far better
+    than the hard ``catalog_not_vectorized`` empty result a missing
+    per-language collection used to produce. Preference order:
+
+    1. Same language family ignoring the ``_enriched`` / ``_v?`` tail
+       (e.g. ``cwicr_pt_v3`` → ``cwicr_pt`` if only the unversioned
+       name was ingested).
+    2. English (``cwicr_en*``) — the densest, broadest catalogue and
+       the one CWICR always ships.
+    3. Any remaining populated CWICR collection (deterministic by
+       sorted name so the choice is stable across calls/processes).
+    """
+
+    if not available:
+        return None
+
+    # 1. versionless / suffix-stripped sibling of the requested name.
+    stem = want
+    for tail in ("_enriched",):
+        if stem.endswith(tail):
+            stem = stem[: -len(tail)]
+    base = stem.rsplit("_v", 1)[0] if "_v" in stem else stem
+    siblings = sorted(
+        n for n in available if n == base or n.rsplit("_v", 1)[0] == base
+    )
+    if siblings:
+        return siblings[0]
+
+    # 2. English collection (prefer enriched, then plain).
+    english = sorted(n for n in available if n.startswith("cwicr_en"))
+    if english:
+        non_enriched = [n for n in english if not n.endswith("_enriched")]
+        return (non_enriched or english)[0]
+
+    # 3. Any remaining populated CWICR collection.
+    rest = sorted(n for n in available if not n.endswith("_enriched"))
+    return (rest or sorted(available))[0]
 
 
 def country_to_collection(country: str | None) -> str:
@@ -140,6 +240,20 @@ def country_to_collection(country: str | None) -> str:
     a misconfigured catalogue still hits a real collection rather than
     erroring out.
 
+    Language-fallback (the /match-elements "nothing happens" fix)
+    -------------------------------------------------------------
+    When the language-derived collection (e.g. ``cwicr_pt_v3`` for a
+    Brazil/Portugal project) is **not present** in Qdrant but other
+    CWICR collections are, this returns the best available one rather
+    than a dead name. BGE-M3 is multilingual so an English catalogue
+    still returns real candidates — the prior behaviour silently short-
+    circuited every BIM-vs-cost match to ``catalog_not_vectorized`` and
+    the wizard rendered an empty result. The pick is consistent across
+    the vector-count probe and the search itself because both route
+    through this single function. The probe is best-effort: if Qdrant
+    is unreachable the naive name is returned unchanged so the existing
+    down-state empty UI still fires.
+
     Enriched-collection routing
     ---------------------------
     When ``OE_MATCH_USE_ENRICHED=1`` is set in the environment, the
@@ -156,9 +270,34 @@ def country_to_collection(country: str | None) -> str:
 
     lang = language_for(country)
     base = f"cwicr_{lang}{_collection_version_suffix()}"
-    if os.environ.get("OE_MATCH_USE_ENRICHED", "").strip() in ("1", "true", "True"):
-        return f"{base}_enriched"
-    return base
+    use_enriched = os.environ.get("OE_MATCH_USE_ENRICHED", "").strip() in (
+        "1",
+        "true",
+        "True",
+    )
+    want = f"{base}_enriched" if use_enriched else base
+
+    available = _available_cwicr_collections()
+    if not available:
+        # Qdrant unreachable / no cwicr_* collections discoverable —
+        # keep the historical behaviour so the down-state UI is unchanged.
+        return want
+    if want in available:
+        return want
+    # Enriched requested but only the plain collection exists → use it.
+    if use_enriched and base in available:
+        return base
+    fallback = _pick_fallback_cwicr(want, available)
+    if fallback is not None:
+        logger.info(
+            "qdrant_adapter: collection %r absent for region %r — "
+            "falling back to %r (multilingual BGE-M3 recall)",
+            want,
+            country,
+            fallback,
+        )
+        return fallback
+    return want
 
 
 # Region-id heads DDC ships that differ from the 2-letter ISO-3166
@@ -209,9 +348,59 @@ def country_filter_for(country: str | None) -> str | None:
     if "_" not in raw:
         # Bare code (``DE``, ``USA``, ``RU``) — language-wide intent.
         return None
+
+    # Language-fallback guard (the /match-elements "nothing happens" fix,
+    # part 3). When the project's native language collection is absent
+    # and :func:`country_to_collection` substituted a different-language
+    # CWICR collection (e.g. ``PT_SAOPAULO`` → ``cwicr_en_v3`` which
+    # holds only ``country="US"`` rows), pinning the original region's
+    # head (``"PT"``) as a payload filter matches **zero** points and
+    # silently eliminates every candidate — exactly the symptom the user
+    # reported. Detect the fallback by comparing the collection the
+    # native language *would* select against the one actually resolved;
+    # when they differ, the fallback collection's country domain is not
+    # the project's, so don't pin a country at all (let the multilingual
+    # encoder rank the whole collection).
+    if _language_fallback_active(raw):
+        return None
+
     head = raw.split("_", 1)[0]
     head = _REGION_HEAD_ALIASES.get(head, head)
     return head or None
+
+
+def _language_fallback_active(country: str) -> bool:
+    """True when ``country`` resolves to a substituted (fallback) collection.
+
+    Compares the *naive* language-derived collection name (what the
+    region would map to if its own collection existed) with what
+    :func:`country_to_collection` actually returns after the
+    availability probe. A mismatch means a cross-language fallback was
+    taken and country-payload pinning would be wrong.
+
+    Best-effort: any failure (Qdrant down, import hiccup) returns
+    ``False`` so the historical pinning behaviour is preserved when we
+    can't prove a fallback happened.
+    """
+
+    try:
+        from app.core.match_service.region_language import language_for
+
+        lang = language_for(country)
+        naive = f"cwicr_{lang}{_collection_version_suffix()}"
+        if os.environ.get("OE_MATCH_USE_ENRICHED", "").strip() in (
+            "1",
+            "true",
+            "True",
+        ):
+            naive = f"{naive}_enriched"
+        resolved = country_to_collection(country)
+        # Treat enriched/plain of the same language as "not a fallback".
+        return resolved.rsplit("_v", 1)[0].removesuffix("_enriched") != naive.rsplit(
+            "_v", 1
+        )[0].removesuffix("_enriched")
+    except Exception:  # noqa: BLE001 — degrade to legacy pinning
+        return False
 
 
 # ── Lazy singletons (heavy deps deferred) ────────────────────────────────
@@ -219,6 +408,10 @@ def country_filter_for(country: str | None) -> str | None:
 
 _client: Any = None  # qdrant_client.QdrantClient
 _encoder: Any = None  # FlagEmbedding.BGEM3FlagModel
+# Single-flight guard for the (heavy, ~2 GB) encoder load so a burst of
+# concurrent first /match requests can't race into a half-initialised
+# model. Re-entrant not required — the load body never re-acquires it.
+_ENCODER_LOAD_LOCK = threading.Lock()
 
 # Per-collection capability cache — maps collection name to the set of
 # named-vector keys the collection actually exposes (``dense`` /
@@ -285,40 +478,103 @@ def _get_encoder() -> Any:
     """
 
     global _encoder
+    # ``False`` = HARD unavailable (the [semantic] extra isn't installed)
+    # — there is no point retrying within this process. A *load* failure
+    # (broken HF cache entry, OOM during a concurrent first-call race,
+    # transient disk error) must NOT poison the process: it used to
+    # stamp ``False`` permanently which silently turned every later
+    # /match-elements run into a zero-candidate result even after the
+    # underlying cause cleared. Such failures now raise WITHOUT stamping
+    # ``False`` so the very next match retries the load.
     if _encoder is False:
         raise RuntimeError(
-            "CWICR encoder previously failed to load; install [semantic] extra "
-            "and restart the backend to retry."
+            "CWICR encoder unavailable: the [semantic] extra is not "
+            "installed. Run: pip install openconstructionerp[semantic]"
         )
     if _encoder is not None:
         return _encoder
 
-    try:
-        from FlagEmbedding import BGEM3FlagModel
-    except ImportError as exc:  # pragma: no cover
-        _encoder = False
-        raise RuntimeError(
-            "FlagEmbedding is not installed; install the [semantic] extra: "
-            "pip install openconstructionerp[semantic]"
-        ) from exc
+    # Serialise concurrent first-load attempts. Under the async server
+    # the first /match request fans out across the threadpool; two
+    # coroutines racing into ``BGEM3FlagModel(...)`` simultaneously was a
+    # real source of half-initialised loads that then stuck. The lock
+    # makes the load effectively single-flight; the double-check below
+    # means the loser of the race just returns the winner's encoder.
+    with _ENCODER_LOAD_LOCK:
+        if _encoder is False:
+            raise RuntimeError(
+                "CWICR encoder unavailable: the [semantic] extra is not "
+                "installed. Run: pip install openconstructionerp[semantic]"
+            )
+        if _encoder is not None:
+            return _encoder
+
+        try:
+            from FlagEmbedding import BGEM3FlagModel
+        except ImportError as exc:  # pragma: no cover
+            _encoder = False  # genuinely missing package → hard-disable
+            raise RuntimeError(
+                "FlagEmbedding is not installed; install the [semantic] "
+                "extra: pip install openconstructionerp[semantic]"
+            ) from exc
+        return _load_encoder_locked(BGEM3FlagModel)
+
+
+def _load_encoder_locked(BGEM3FlagModel: Any) -> Any:  # noqa: N803
+    """Inner load body — runs while holding :data:`_ENCODER_LOAD_LOCK`."""
+
+    global _encoder
 
     s = get_settings()
-    model = getattr(s, "cwicr_embedding_model", "BAAI/bge-m3")
+    fp32_model = getattr(s, "cwicr_embedding_model", "BAAI/bge-m3") or "BAAI/bge-m3"
     use_int8 = getattr(s, "cwicr_embedding_int8", True)
-    if use_int8:
-        # The INT8 ONNX checkpoint ships under a separate HF repo. The
-        # FlagEmbedding loader detects ONNX via filename, so the model
-        # id swap is the only change needed.
-        model = "gpahal/bge-m3-onnx-int8"
 
-    logger.info("CWICR encoder: loading %s (int8=%s)", model, use_int8)
-    try:
-        _encoder = BGEM3FlagModel(model, use_fp16=not use_int8)
-    except Exception as exc:  # noqa: BLE001 — any load failure short-circuits
-        logger.warning("CWICR encoder: load failed (%s) — disabling retries", exc)
-        _encoder = False
-        raise RuntimeError(f"CWICR encoder load failed: {exc}") from exc
-    return _encoder
+    # Build the load plan. The INT8 ONNX checkpoint ships under a
+    # separate HF repo (``gpahal/bge-m3-onnx-int8``) that contains ONLY
+    # ``model_quantized.onnx`` — no ``pytorch_model.bin`` /
+    # ``model.safetensors``. Some FlagEmbedding builds can't bootstrap
+    # ``BGEM3FlagModel`` from an ONNX-only repo and raise
+    # ``Error no file named pytorch_model.bin ...``. That used to stamp
+    # the singleton ``False`` permanently, which silently turned EVERY
+    # /match-elements vector run into a zero-candidate result (the
+    # user-visible "match does nothing" bug). So: try INT8 first when
+    # configured, but ALWAYS fall back to the canonical FP32
+    # ``BAAI/bge-m3`` checkpoint before giving up. FP32 BGE-M3 is the
+    # exact model the CWICR v3 collections were embedded with, so recall
+    # is unaffected — only a little slower/heavier than INT8.
+    attempts: list[tuple[str, bool]] = []
+    if use_int8:
+        attempts.append(("gpahal/bge-m3-onnx-int8", True))
+    attempts.append((fp32_model, False))
+
+    last_exc: Exception | None = None
+    for model_id, is_int8 in attempts:
+        logger.info("CWICR encoder: loading %s (int8=%s)", model_id, is_int8)
+        try:
+            _encoder = BGEM3FlagModel(model_id, use_fp16=not is_int8)
+            if last_exc is not None:
+                logger.warning(
+                    "CWICR encoder: recovered on FP32 fallback %s after "
+                    "INT8 load failed (%s)",
+                    model_id,
+                    last_exc,
+                )
+            return _encoder
+        except Exception as exc:  # noqa: BLE001 — try the next plan entry
+            last_exc = exc
+            logger.warning(
+                "CWICR encoder: load of %s failed (%s) — %s",
+                model_id,
+                exc,
+                "trying FP32 fallback" if is_int8 else "no more fallbacks",
+            )
+
+    # Every attempt failed. Do NOT stamp ``_encoder = False`` here — a
+    # load failure is treated as transient/retryable (broken cache that
+    # may get repaired, a concurrent-load race, transient OOM). The next
+    # match call re-enters and retries the full plan. Only the
+    # missing-package path above hard-disables the encoder.
+    raise RuntimeError(f"CWICR encoder load failed: {last_exc}") from last_exc
 
 
 def _encode(texts: list[str], *, with_resources: bool = False) -> dict[str, Any]:
@@ -417,6 +673,109 @@ def _collection_vectors(collection_name: str) -> frozenset[str]:
     result = frozenset(names)
     _collection_vectors_cache[collection_name] = result
     return result
+
+
+# Per-collection payload-key cache. Maps a collection name to the union
+# of payload keys observed across a small sample of its points. Used to
+# gate fragile hard filters (``ifc_class`` et al.) so they're only
+# pinned when the bound collection actually carries that field — the
+# DDC v3 CWICR snapshots (``cwicr_en_v3`` …) do NOT have an
+# ``ifc_class`` payload, so pinning it eliminated every BIM-vs-cost
+# candidate (the user-reported "/match-elements does nothing").
+_collection_payload_keys_cache: dict[str, frozenset[str]] = {}
+
+
+def collection_payload_keys(collection_name: str) -> frozenset[str]:
+    """Return payload keys observed in a sample of ``collection_name``.
+
+    Samples up to 32 points via a single ``scroll`` (no vector pulled)
+    and unions their payload keys. Cached per-process. Returns an empty
+    frozenset on any failure so callers treat "unknown schema" as "field
+    absent" and degrade by *not* pinning the fragile filter — which is
+    the safe direction (broader recall, never an empty result).
+    """
+
+    cached = _collection_payload_keys_cache.get(collection_name)
+    if cached is not None:
+        return cached
+
+    keys: set[str] = set()
+    try:
+        client = _get_client()
+        points, _ = client.scroll(
+            collection_name=collection_name,
+            limit=32,
+            with_payload=True,
+            with_vectors=False,
+        )
+        for p in points or []:
+            pl = getattr(p, "payload", None) or {}
+            keys.update(pl.keys())
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug(
+            "qdrant_adapter: payload-key probe for %s failed: %s",
+            collection_name,
+            exc,
+        )
+        keys = set()
+
+    result = frozenset(keys)
+    _collection_payload_keys_cache[collection_name] = result
+    return result
+
+
+def collection_has_payload_field(country: str | None, field: str) -> bool:
+    """True when the catalogue bound to ``country`` carries ``field``.
+
+    Resolves the region → collection (honouring the language-fallback
+    substitution) and probes that collection's sampled payload schema.
+    Conservative: returns ``False`` when the schema can't be determined
+    so the caller drops the fragile hard filter instead of pinning a
+    field that would zero out the result set.
+    """
+
+    try:
+        collection = country_to_collection(country)
+    except Exception:  # noqa: BLE001
+        return False
+    return field in collection_payload_keys(collection)
+
+
+def _qdrant_collection_points(collection_name: str) -> int:
+    """Return the point count of ``collection_name`` (0 on any failure).
+
+    Tries the exact name, then the ``_v?``-stripped base (covers dev
+    installs that ingested before the v3 rename). Never raises — callers
+    use this only as a "does this catalogue actually have data" signal,
+    so an unreachable Qdrant collapses to 0 and the legacy SQL-only
+    behaviour is preserved by the caller.
+    """
+
+    try:
+        client = _get_client()
+        try:
+            info = client.get_collection(collection_name)
+        except Exception:
+            base = (
+                collection_name.rsplit("_v", 1)[0]
+                if "_v" in collection_name
+                else collection_name
+            )
+            if base == collection_name:
+                return 0
+            info = client.get_collection(base)
+        return int(
+            getattr(info, "points_count", None)
+            or getattr(info, "vectors_count", 0)
+            or 0
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        logger.debug(
+            "qdrant_adapter: point count for %s failed: %s",
+            collection_name,
+            exc,
+        )
+        return 0
 
 
 # ── Public API ───────────────────────────────────────────────────────────

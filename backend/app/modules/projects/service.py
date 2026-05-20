@@ -784,6 +784,34 @@ async def auto_bind_dominant_catalogue(
             ).scalar() or 0
         except Exception:
             current_count = 1  # defensive: keep current binding on lookup error
+
+        # v3-snapshot-only installs carry ZERO SQL ``CostItem`` rows —
+        # the catalogue lives entirely in a ``cwicr_<lang>_v3`` Qdrant
+        # collection (resolved, with cross-language fallback, by
+        # ``country_to_collection``). Counting only SQL rows here made
+        # this function unbind a perfectly valid binding (e.g.
+        # ``PT_SAOPAULO`` backed by ``cwicr_en_v3``) and then return
+        # ``None`` because Pass 1/2 also only inspect SQL — which made
+        # ``run_match`` short-circuit with ``[]`` before the matcher ran
+        # (the user-reported "/match-elements does nothing"). Treat a
+        # populated CWICR collection as "the binding has data" so it is
+        # kept. Best-effort: any probe failure leaves ``current_count``
+        # as-is so behaviour is unchanged when Qdrant is down.
+        if current_count == 0 and row.cost_database_id:
+            try:
+                from app.modules.costs.qdrant_adapter import (  # noqa: PLC0415
+                    country_to_collection,
+                )
+                from app.modules.costs.qdrant_adapter import (  # noqa: PLC0415
+                    _qdrant_collection_points as _qpoints,
+                )
+
+                coll = country_to_collection(row.cost_database_id)
+                if _qpoints(coll) > 0:
+                    current_count = _qpoints(coll)
+            except Exception:  # noqa: BLE001 — degrade to SQL-only signal
+                pass
+
         current_lang = language_for(row.cost_database_id) if row.cost_database_id else None
         # Language mismatch is only a reason to re-bind when we actually
         # have a language target — otherwise we'd thrash on projects with

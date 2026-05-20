@@ -9,7 +9,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, ChevronRight, HardDrive, UploadCloud } from 'lucide-react';
+import { ArrowLeft, ChevronRight, HardDrive, UploadCloud, Search, Send } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { EmptyState } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -18,6 +19,7 @@ import {
   useFileTree,
   useFolderPermissionCounts,
   useIsProjectOwner,
+  useProjectsLite,
   useStorageLocations,
 } from './hooks';
 import { PathBar } from './components/PathBar';
@@ -36,6 +38,13 @@ import { UploadDialog } from './components/UploadDialog';
 import { BulkActionsBar } from './components/BulkActionsBar';
 import { InitialLoadProgress } from './components/InitialLoadProgress';
 import { FilesStatsStrip } from './components/FilesStatsStrip';
+import {
+  RecentlyViewedStrip,
+  recordRecentlyViewed,
+  type RecentItem,
+} from './components/RecentlyViewedStrip';
+import { ShortcutsCheatsheet } from './components/ShortcutsCheatsheet';
+import { useFileShortcuts } from './useFileShortcuts';
 import { primaryModule } from './kindModule';
 import type { FileFilters, FileKind, FileRow } from './types';
 
@@ -103,10 +112,15 @@ export function FileManagerPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [uploadKind, setUploadKind] = useState<FileKind | null>(null);
   const [permsKind, setPermsKind] = useState<FileKind | null>(null);
+  const [showCheatsheet, setShowCheatsheet] = useState(false);
 
   // Folder-permissions surface — gear + lock badge.
   const isOwner = useIsProjectOwner(projectId);
   const permissionCounts = useFolderPermissionCounts(projectId, isOwner);
+  // Resolve a file's project name when opening into a context-store
+  // destination (Clash / BI Explorer) — keeps the global project label
+  // correct even from the cross-project global /files view.
+  const { data: projectsLite = [] } = useProjectsLite();
 
   useEffect(() => {
     writeViewMode(view);
@@ -212,10 +226,36 @@ export function FileManagerPage() {
 
   function handleOpen(row: FileRow) {
     // Opening a file means "take me to the tool that processes it" —
-    // PDFs jump to PDF Takeoff, IFC/RVT to BIM Viewer, DWG to DWG
+    // PDFs jump to PDF Takeoff, IFC/RVT to BIM 3D Viewer, DWG to DWG
     // Takeoff. Plain download stays available from the preview pane.
     const target = primaryModule(row.kind, row.extension);
+    // Destinations that resolve the project from the global context
+    // store (Clash, BI Explorer) need it bound first or they land on
+    // the empty "no project" state. Reuse the known context name when
+    // it's the same project.
+    if (target.setsActiveProject) {
+      const ctx = useProjectContextStore.getState();
+      const name =
+        ctx.activeProjectId === row.project_id
+          ? ctx.activeProjectName
+          : projectsLite.find((p) => p.id === row.project_id)?.name ?? ctx.activeProjectName;
+      ctx.setActiveProject(row.project_id, name);
+    }
+    recordRecentlyViewed(row);
     navigate(target.route(row.project_id, row.id));
+  }
+
+  function handleOpenRecent(item: RecentItem) {
+    const target = primaryModule(item.kind, item.extension);
+    if (target.setsActiveProject) {
+      const ctx = useProjectContextStore.getState();
+      const name =
+        ctx.activeProjectId === item.project_id
+          ? ctx.activeProjectName
+          : projectsLite.find((p) => p.id === item.project_id)?.name ?? ctx.activeProjectName;
+      ctx.setActiveProject(item.project_id, name);
+    }
+    navigate(target.route(item.project_id, item.id));
   }
 
   function handleOpenCategory(kind: FileKind) {
@@ -236,18 +276,40 @@ export function FileManagerPage() {
     setShowUpload(true);
   }
 
+  useFileShortcuts({
+    enabled: !showCheatsheet && !showUpload && !showExport && !showImport,
+    onFocusSearch: () => {
+      const input = document.querySelector<HTMLInputElement>(
+        'input[type="search"]',
+      );
+      input?.focus();
+      input?.select();
+    },
+    onSetView: setView,
+    onEscape: () => {
+      if (previewRow) {
+        setPreviewRow(null);
+        return;
+      }
+      if (selectedIds.size > 0) {
+        setSelectedIds(new Set());
+      }
+    },
+    onToggleCheatsheet: () => setShowCheatsheet((p) => !p),
+  });
+
   if (!projectId) {
     return (
       <div className="flex items-center justify-center h-full">
         <EmptyState
           icon={<HardDrive size={28} />}
-          title={t('files.no_project_title', { defaultValue: 'No active project' })}
+          title={t('files.no_project_title', { defaultValue: 'No active project‌⁠‍' })}
           description={t('files.no_project_desc', {
             defaultValue:
-              'Pick a project from the dashboard to see all of its documents, photos, BIM and DWG files in one place.',
+              'Pick a project from the dashboard to see all of its documents, photos, BIM and DWG files in one place.‌⁠‍',
           })}
           action={{
-            label: t('files.go_to_projects', { defaultValue: 'Go to projects' }),
+            label: t('files.go_to_projects', { defaultValue: 'Go to projects‌⁠‍' }),
             onClick: () => navigate('/projects'),
           }}
         />
@@ -284,7 +346,7 @@ export function FileManagerPage() {
       <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border-light bg-surface-elevated">
         <nav
           className="flex items-center gap-1.5 text-sm min-w-0"
-          aria-label={t('common.breadcrumb', { defaultValue: 'Breadcrumb' })}
+          aria-label={t('common.breadcrumb', { defaultValue: 'Breadcrumb‌⁠‍' })}
         >
           <button
             type="button"
@@ -298,7 +360,7 @@ export function FileManagerPage() {
             disabled={showFolderGrid}
           >
             {!showFolderGrid && <ArrowLeft size={13} />}
-            {t('files.title_all', { defaultValue: 'All files' })}
+            {t('files.title_all', { defaultValue: 'All files‌⁠‍' })}
           </button>
           {!showFolderGrid && (
             <>
@@ -310,14 +372,38 @@ export function FileManagerPage() {
           )}
         </nav>
 
-        <button
-          type="button"
-          onClick={() => handleOpenUpload(selectedKind)}
-          className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-semibold bg-oe-blue text-white hover:bg-oe-blue-hover transition-colors shrink-0"
-        >
-          <UploadCloud size={14} />
-          {t('files.upload', { defaultValue: 'Upload files' })}
-        </button>
+        <div className="flex items-center gap-2">
+          {/* W10 — cross-project search */}
+          <Link
+            to="/files/search"
+            className="hidden sm:inline-flex items-center gap-1.5 h-9 px-2.5 rounded-lg text-xs font-medium text-content-secondary hover:text-content-primary hover:bg-surface-secondary transition-colors"
+            title={t('files.global_search.title', { defaultValue: 'Search across projects' })}
+          >
+            <Search size={13} />
+            <span className="hidden md:inline">
+              {t('files.global_search.short', { defaultValue: 'Search all projects' })}
+            </span>
+          </Link>
+          {/* W7 — transmittal log entry point */}
+          <Link
+            to="/files/transmittals"
+            className="hidden sm:inline-flex items-center gap-1.5 h-9 px-2.5 rounded-lg text-xs font-medium text-content-secondary hover:text-content-primary hover:bg-surface-secondary transition-colors"
+            title={t('files.transmittals.open_log', { defaultValue: 'Transmittal log' })}
+          >
+            <Send size={13} />
+            <span className="hidden md:inline">
+              {t('files.transmittals.open_log', { defaultValue: 'Transmittal log' })}
+            </span>
+          </Link>
+          <button
+            type="button"
+            onClick={() => handleOpenUpload(selectedKind)}
+            className="inline-flex items-center gap-1.5 h-9 px-3 rounded-lg text-xs font-semibold bg-oe-blue text-white hover:bg-oe-blue-hover transition-colors shrink-0"
+          >
+            <UploadCloud size={14} />
+            {t('files.upload', { defaultValue: 'Upload files' })}
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 flex min-h-0">
@@ -330,12 +416,14 @@ export function FileManagerPage() {
             setPreviewRow(null);
           }}
           isLoading={treeLoading}
+          projectId={projectId}
         />
 
         <main className="flex-1 flex flex-col min-w-0">
           {showFolderGrid ? (
             <div className="flex-1 overflow-auto">
               <FilesStatsStrip tree={tree} locations={locations} />
+              <RecentlyViewedStrip projectId={projectId} onOpen={handleOpenRecent} />
               <FolderCardGrid
                 nodes={tree ?? []}
                 isLoading={treeLoading}
@@ -360,6 +448,8 @@ export function FileManagerPage() {
                 totalCount={list?.total ?? 0}
                 extension={extension}
                 onExtensionChange={setExtension}
+                projectId={projectId}
+                category={selectedKind}
               />
               <BulkActionsBar
                 selectedRows={selectedRows}
@@ -435,6 +525,10 @@ export function FileManagerPage() {
           permsKind ? t(`files.category.${permsKind}`, { defaultValue: permsKind }) : undefined
         }
         onClose={() => setPermsKind(null)}
+      />
+      <ShortcutsCheatsheet
+        open={showCheatsheet}
+        onClose={() => setShowCheatsheet(false)}
       />
     </div>
   );

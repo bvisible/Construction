@@ -1,5 +1,5 @@
 import type { ColDef, ValueFormatterParams, ValueGetterParams, ValueSetterParams } from 'ag-grid-community';
-import { convertToBase, fmtWithCurrency } from '../boqHelpers';
+import { convertToBase, fmtWithCurrency, resourceAwareTotalInBase } from '../boqHelpers';
 import { unitColumnValueSetter } from './cellEditors';
 import {
   buildFormulaContext,
@@ -116,9 +116,9 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       headerName: '',
       colId: '_expand',
       field: '_expand',
-      width: 28,
-      minWidth: 28,
-      maxWidth: 28,
+      width: 32,
+      minWidth: 32,
+      maxWidth: 32,
       editable: false,
       sortable: false,
       filter: false,
@@ -126,7 +126,7 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
       suppressNavigable: true,
       suppressHeaderMenuButton: true,
       cellRenderer: 'expandCellRenderer',
-      cellClass: 'p-0',
+      cellClass: 'oe-icon-cell',
     },
     {
       headerName: t('boq.ordinal', { defaultValue: 'Pos.' }),
@@ -182,6 +182,21 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
         const ctx = params.context as { expandedPositions?: Set<string> } | undefined;
         const isExpanded = !!params.data?.id && (ctx?.expandedPositions?.has(params.data.id) ?? false);
         return isExpanded ? 'text-xs font-bold !pl-1 !pr-1' : 'text-xs !pl-1 !pr-1';
+      },
+      // Issue #136 — positions nested under a SUB-section get a left
+      // indent proportional to their depth so the hierarchy is legible.
+      // depth 0 (ungrouped) and depth 1 (under a top-level section) keep
+      // the flush-left look; each deeper level shifts 18px right.
+      cellStyle: (params) => {
+        const d = params.data as Record<string, unknown> | undefined;
+        if (
+          !d || d._isSection || d._isFooter || d._isResource ||
+          d._isAddResource || d._isVariantHeader
+        ) {
+          return null;
+        }
+        const depth = typeof d._depth === 'number' ? d._depth : 0;
+        return depth > 1 ? { paddingLeft: `${(depth - 1) * 18}px` } : null;
       },
     },
     {
@@ -362,17 +377,28 @@ export function getColumnDefs(context: BOQColumnContext): ColDef[] {
         if (!d || d._isFooter || d._isSection) return d?.total ?? 0;
         const meta = (d.metadata || d.metadata_ || {}) as Record<string, unknown>;
         const resources = meta.resources;
-        let raw: number;
-        if (Array.isArray(resources) && resources.length > 0) {
-          // Resource-driven: server-computed total is authoritative
-          raw = d.total ?? 0;
-        } else {
-          // No resources: live compute quantity × unit_rate
-          const q = typeof d.quantity === 'number' ? d.quantity : parseFloat(d.quantity) || 0;
-          const r = typeof d.unit_rate === 'number' ? d.unit_rate : parseFloat(d.unit_rate) || 0;
-          raw = q * r;
-        }
         const ctx = params.context as BOQColumnContext | undefined;
+        if (Array.isArray(resources) && resources.length > 0) {
+          // Resource-driven: server-computed total is authoritative.
+          // Issue #111 (skolodi) — when any resource is priced in a
+          // foreign currency the stored total mixes currencies (built
+          // from Σ(r.qty×r.rate) with no FX); rebase per-resource so a
+          // USD resource in an ARS project no longer reads "1 USD = 1 ARS".
+          return resourceAwareTotalInBase(
+            {
+              total: d.total ?? 0,
+              quantity: d.quantity,
+              metadata: meta,
+            },
+            ctx?.currencyCode,
+            ctx?.fxRates,
+          );
+        }
+        // No resources: live compute quantity × unit_rate, then rebase
+        // via the position-level metadata.currency (verified #131 path).
+        const q = typeof d.quantity === 'number' ? d.quantity : parseFloat(d.quantity) || 0;
+        const r = typeof d.unit_rate === 'number' ? d.unit_rate : parseFloat(d.unit_rate) || 0;
+        const raw = q * r;
         const sourceCurrency = (meta.currency as string | undefined) || ctx?.currencyCode;
         return convertToBase(raw, sourceCurrency, ctx?.currencyCode, ctx?.fxRates);
       },

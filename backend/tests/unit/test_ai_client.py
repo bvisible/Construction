@@ -15,6 +15,7 @@ from app.modules.ai.ai_client import (
     GEMINI_MODEL,
     OPENAI_MODEL,
     OPENROUTER_MODEL,
+    _extract_openai_message_text,
     _model_override_for,
     default_model_for,
     extract_json,
@@ -105,6 +106,62 @@ class TestExtractJson:
         text = '[{"ordinal": "01.01", "description": "incomplete'
         result = extract_json(text)
         assert result is None
+
+
+# ── OpenAI-shaped extraction hardening (issue #138) ──────────────────────────
+
+
+class TestExtractOpenAIMessageText:
+    """A billed completion must NEVER be silently dropped — every response
+    shape resolves to non-empty text or a precise, actionable ValueError."""
+
+    def test_plain_string_content(self):
+        data = {"choices": [{"message": {"content": "  Hello estimator  "}}]}
+        assert _extract_openai_message_text("openrouter", data) == "Hello estimator"
+
+    def test_content_as_typed_parts_list(self):
+        data = {
+            "choices": [
+                {
+                    "message": {
+                        "content": [
+                            {"type": "text", "text": "Part one. "},
+                            {"type": "text", "text": "Part two."},
+                        ]
+                    }
+                }
+            ]
+        }
+        assert _extract_openai_message_text("openai", data) == "Part one. Part two."
+
+    def test_falls_back_to_reasoning_when_content_empty(self):
+        data = {
+            "choices": [
+                {"message": {"content": None, "reasoning": "Chain of thought answer"}}
+            ]
+        }
+        assert (
+            _extract_openai_message_text("openrouter", data)
+            == "Chain of thought answer"
+        )
+
+    def test_in_body_error_without_choices_raises(self):
+        data = {"error": {"message": "insufficient credits"}}
+        with pytest.raises(ValueError, match="insufficient credits"):
+            _extract_openai_message_text("openrouter", data)
+
+    def test_empty_choices_raises(self):
+        with pytest.raises(ValueError, match="no choices"):
+            _extract_openai_message_text("openrouter", {"choices": []})
+
+    def test_empty_message_raises_with_finish_reason(self):
+        data = {
+            "choices": [
+                {"message": {"content": ""}, "finish_reason": "content_filter"}
+            ]
+        }
+        with pytest.raises(ValueError, match="content_filter"):
+            _extract_openai_message_text("openrouter", data)
 
 
 # ── Model constants ──────────────────────────────────────────────────────────
@@ -309,3 +366,109 @@ class TestModelErrorSurfacing:
                 system="s",
                 prompt="p",
             )
+
+    # ── Issue #148 — auto-recovery from renamed/retired model slugs ──────────
+
+    @pytest.mark.asyncio
+    async def test_issue_148_openrouter_model_error_auto_recovers(
+        self, monkeypatch
+    ):
+        """A rejected OpenRouter slug must transparently fall back to
+        ``openrouter/auto`` and return a normal answer — the chat keeps
+        working without the user touching Settings."""
+        from app.modules.ai import ai_client
+
+        seen: list[str | None] = []
+        req = httpx.Request(
+            "POST", "https://openrouter.ai/api/v1/chat/completions"
+        )
+
+        async def fake_compat(
+            provider,
+            api_key,
+            system,
+            prompt,
+            image_base64=None,
+            image_media_type="image/jpeg",
+            max_tokens=4096,
+            model=None,
+        ):
+            seen.append(model)
+            if model == "openrouter/auto":
+                return ("Recovered answer", 42)
+            resp = httpx.Response(
+                400,
+                json={"error": {"message": f"{model} is not a valid model ID"}},
+                request=req,
+            )
+            raise httpx.HTTPStatusError("bad", request=req, response=resp)
+
+        monkeypatch.setattr(ai_client, "call_openai_compatible", fake_compat)
+
+        text, tokens = await ai_client.call_ai(
+            provider="openrouter",
+            api_key="sk-or-test",
+            system="s",
+            prompt="p",
+            model="some/stale-slug",
+        )
+        assert text == "Recovered answer"
+        assert tokens == 42
+        # Stale slug attempted first, then auto-recovered via openrouter/auto.
+        assert seen[0] == "some/stale-slug"
+        assert "openrouter/auto" in seen
+
+    @pytest.mark.asyncio
+    async def test_issue_148_all_fallbacks_fail_raises_actionable(
+        self, monkeypatch
+    ):
+        """When every fallback also fails, the actionable error is still
+        raised (and says the automatic fallbacks were attempted)."""
+        from app.modules.ai import ai_client
+
+        req = httpx.Request(
+            "POST", "https://openrouter.ai/api/v1/chat/completions"
+        )
+
+        async def always_bad(*args, **kwargs):
+            resp = httpx.Response(
+                404,
+                json={"error": {"message": "model not found"}},
+                request=req,
+            )
+            raise httpx.HTTPStatusError("bad", request=req, response=resp)
+
+        monkeypatch.setattr(ai_client, "call_openai_compatible", always_bad)
+
+        with pytest.raises(ValueError) as exc:
+            await ai_client.call_ai(
+                provider="openrouter",
+                api_key="sk-or-test",
+                system="s",
+                prompt="p",
+                model="bad/model",
+            )
+        msg = str(exc.value)
+        assert "bad/model" in msg
+        assert "Settings > AI" in msg
+        assert "automatic fallbacks did not succeed" in msg
+
+    def test_issue_148_fallback_models_for_openrouter(self):
+        """``openrouter/auto`` leads the fallback list and the attempted id
+        is never returned (no infinite same-model retry)."""
+        from app.modules.ai import ai_client
+
+        fbs = ai_client.fallback_models_for(
+            "openrouter", "anthropic/claude-sonnet-4"
+        )
+        assert fbs[0] == "openrouter/auto"
+        assert "anthropic/claude-sonnet-4" not in fbs
+        # If the auto-router itself was the failing id, it is skipped.
+        assert "openrouter/auto" not in ai_client.fallback_models_for(
+            "openrouter", "openrouter/auto"
+        )
+        # A provider with no special fallback still offers its built-in
+        # default (helps when a user override is the stale id).
+        assert ai_client.fallback_models_for("openai", "gpt-stale") == [
+            ai_client.default_model_for("openai")
+        ]
