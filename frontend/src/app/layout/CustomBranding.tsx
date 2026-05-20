@@ -149,20 +149,20 @@ export function CustomBranding({ iconified }: CustomBrandingProps) {
                   {companyName}
                 </span>
               )}
-              {/* "by OpenConstructionERP" — ~1/3 size, sits below user
-                  brand as a subordinate attribution. AGPL-3.0
-                  requirement satisfied via the wordmark + the
-                  colourised "Construction" highlight. */}
+              {/* "by OpenConstructionERP" — minimal subordinate attribution
+                  under the user's brand. AGPL-3.0 attribution requirement
+                  is satisfied while the user's logo stays the dominant
+                  visual; font is small + muted on purpose. */}
               <span
-                className="mt-1.5 block text-[10px] leading-none text-content-tertiary truncate"
+                className="mt-1 block text-[8px] leading-none text-content-quaternary truncate"
                 style={{
                   fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
-                  letterSpacing: '0.02em',
+                  letterSpacing: '0.03em',
                 }}
               >
                 by{' '}
                 <span className="font-semibold tracking-tight">
-                  Open<span className="text-oe-blue/80">Construction</span>
+                  Open<span className="text-oe-blue/60">Construction</span>
                   <span className="text-content-quaternary">ERP</span>
                 </span>
               </span>

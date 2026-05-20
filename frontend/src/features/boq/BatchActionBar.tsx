@@ -1,9 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Trash2, Ruler, X, ChevronDown } from 'lucide-react';
+import { Trash2, Ruler, X, ChevronDown, Percent, Hash, Tag } from 'lucide-react';
 import { getUnitsForLocale } from './boqHelpers';
 
 const UNITS = getUnitsForLocale();
+
+/**
+ * v3.12.0 Stream A — kinds of bulk action emitted by the bar.
+ * `factor` is the multiplier (e.g. 1.10 for +10 %).
+ * `code` is the classification code string for the "set classification" action.
+ */
+export type BatchFactorKind = 'rate' | 'quantity';
+export type BatchClassificationStandard = 'din276' | 'nrm' | 'masterformat';
 
 export interface BatchActionBarProps {
   /** IDs of the currently selected positions. */
@@ -14,6 +22,27 @@ export interface BatchActionBarProps {
   onBatchChangeUnit: (ids: string[], unit: string) => void;
   /** Called to clear the current selection. */
   onClearSelection: () => void;
+  /**
+   * v3.12.0 — multiply each selected row's unit_rate / quantity by a factor.
+   * Optional: caller may omit if the bulk-update endpoint is unavailable.
+   */
+  onBatchFactor?: (ids: string[], kind: BatchFactorKind, factor: number) => void;
+  /** v3.12.0 — set the classification code on all selected positions. */
+  onBatchSetClassification?: (
+    ids: string[],
+    standard: BatchClassificationStandard,
+    code: string,
+  ) => void;
+}
+
+interface FactorDialogState {
+  kind: BatchFactorKind;
+  value: string;
+}
+
+interface ClassificationDialogState {
+  standard: BatchClassificationStandard;
+  code: string;
 }
 
 export function BatchActionBar({
@@ -21,10 +50,14 @@ export function BatchActionBar({
   onBatchDelete,
   onBatchChangeUnit,
   onClearSelection,
+  onBatchFactor,
+  onBatchSetClassification,
 }: BatchActionBarProps) {
   const { t } = useTranslation();
   const [unitDropdownOpen, setUnitDropdownOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [factorDialog, setFactorDialog] = useState<FactorDialogState | null>(null);
+  const [classDialog, setClassDialog] = useState<ClassificationDialogState | null>(null);
   const unitDropdownRef = useRef<HTMLDivElement>(null);
   const count = selectedIds.length;
 
@@ -42,20 +75,22 @@ export function BatchActionBar({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [unitDropdownOpen]);
 
-  // Close confirm dialog on Escape
+  // Close any open dialog on Escape
   useEffect(() => {
-    if (!confirmDeleteOpen) return;
+    if (!confirmDeleteOpen && !factorDialog && !classDialog) return;
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         e.preventDefault();
         setConfirmDeleteOpen(false);
+        setFactorDialog(null);
+        setClassDialog(null);
       }
     }
 
     document.addEventListener('keydown', handleKeyDown, { capture: true });
     return () => document.removeEventListener('keydown', handleKeyDown, { capture: true });
-  }, [confirmDeleteOpen]);
+  }, [confirmDeleteOpen, factorDialog, classDialog]);
 
   if (count === 0) return null;
 
@@ -71,6 +106,22 @@ export function BatchActionBar({
   const handleUnitSelect = (unit: string) => {
     setUnitDropdownOpen(false);
     onBatchChangeUnit(selectedIds, unit);
+  };
+
+  const handleConfirmFactor = () => {
+    if (!factorDialog || !onBatchFactor) return;
+    const parsed = parseFloat(factorDialog.value.replace(',', '.'));
+    if (!Number.isFinite(parsed) || parsed <= 0) return;
+    onBatchFactor(selectedIds, factorDialog.kind, parsed);
+    setFactorDialog(null);
+  };
+
+  const handleConfirmClassification = () => {
+    if (!classDialog || !onBatchSetClassification) return;
+    const code = classDialog.code.trim();
+    if (!code) return;
+    onBatchSetClassification(selectedIds, classDialog.standard, code);
+    setClassDialog(null);
   };
 
   return (
@@ -138,6 +189,45 @@ export function BatchActionBar({
             )}
           </div>
 
+          {/* v3.12.0 Stream A — multiply rate by factor */}
+          {onBatchFactor && (
+            <button
+              type="button"
+              onClick={() => setFactorDialog({ kind: 'rate', value: '1.10' })}
+              aria-label={t('boq.batch_rate_factor', { defaultValue: 'Multiply rate by factor‌⁠‍' })}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs font-medium text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 transition-colors"
+            >
+              <Percent size={14} />
+              {t('boq.batch_rate_factor', { defaultValue: 'Multiply rate‌⁠‍' })}
+            </button>
+          )}
+
+          {/* v3.12.0 Stream A — multiply quantity by factor */}
+          {onBatchFactor && (
+            <button
+              type="button"
+              onClick={() => setFactorDialog({ kind: 'quantity', value: '1.00' })}
+              aria-label={t('boq.batch_qty_factor', { defaultValue: 'Multiply quantity by factor‌⁠‍' })}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 transition-colors"
+            >
+              <Hash size={14} />
+              {t('boq.batch_qty_factor', { defaultValue: 'Multiply qty‌⁠‍' })}
+            </button>
+          )}
+
+          {/* v3.12.0 Stream A — set classification */}
+          {onBatchSetClassification && (
+            <button
+              type="button"
+              onClick={() => setClassDialog({ standard: 'din276', code: '' })}
+              aria-label={t('boq.batch_set_classification', { defaultValue: 'Set classification‌⁠‍' })}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-purple-500/10 px-3 py-1.5 text-xs font-medium text-purple-700 dark:text-purple-300 hover:bg-purple-500/20 transition-colors"
+            >
+              <Tag size={14} />
+              {t('boq.batch_set_classification', { defaultValue: 'Classification‌⁠‍' })}
+            </button>
+          )}
+
           {/* Clear selection */}
           <button
             type="button"
@@ -201,6 +291,166 @@ export function BatchActionBar({
                   defaultValue: 'Delete {{count}} positions',
                   count,
                 })}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v3.12.0 — Factor prompt dialog (rate or quantity) */}
+      {factorDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-lg animate-fade-in"
+            onClick={() => setFactorDialog(null)}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              factorDialog.kind === 'rate'
+                ? t('boq.batch_rate_factor_title', { defaultValue: 'Multiply rate by factor‌⁠‍' })
+                : t('boq.batch_qty_factor_title', { defaultValue: 'Multiply quantity by factor‌⁠‍' })
+            }
+            className="relative z-10 w-full max-w-sm mx-4 rounded-2xl border border-border-light bg-surface-elevated shadow-xl animate-scale-in focus:outline-none"
+          >
+            <div className="px-6 pt-6 pb-4">
+              <h2 className="text-base font-semibold text-content-primary">
+                {factorDialog.kind === 'rate'
+                  ? t('boq.batch_rate_factor_title', { defaultValue: 'Multiply rate by factor‌⁠‍' })
+                  : t('boq.batch_qty_factor_title', { defaultValue: 'Multiply quantity by factor‌⁠‍' })}
+              </h2>
+              <p className="mt-1 text-xs text-content-secondary">
+                {t('boq.batch_factor_hint', {
+                  defaultValue: 'Applied to {{count}} selected positions. Example: 1.10 = +10%.',
+                  count,
+                })}
+              </p>
+              <label className="mt-4 block">
+                <span className="text-xs font-medium text-content-secondary">
+                  {t('boq.batch_factor_label', { defaultValue: 'Factor (> 0)‌⁠‍' })}
+                </span>
+                <input
+                  autoFocus
+                  type="text"
+                  inputMode="decimal"
+                  value={factorDialog.value}
+                  onChange={(e) =>
+                    setFactorDialog({ ...factorDialog, value: e.target.value })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleConfirmFactor();
+                  }}
+                  className="mt-1 w-full h-9 rounded-md border border-border bg-surface-primary px-3 text-sm font-mono text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
+                  aria-label={t('boq.batch_factor_label', { defaultValue: 'Factor (> 0)‌⁠‍' })}
+                />
+              </label>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button
+                type="button"
+                onClick={() => setFactorDialog(null)}
+                className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium bg-surface-primary text-content-primary border border-border hover:bg-surface-secondary transition-all"
+              >
+                {t('common.cancel', { defaultValue: 'Cancel' })}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmFactor}
+                className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-white bg-oe-blue hover:bg-oe-blue-hover transition-all"
+              >
+                {t('common.apply', { defaultValue: 'Apply' })}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* v3.12.0 — Classification dialog */}
+      {classDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-lg animate-fade-in"
+            onClick={() => setClassDialog(null)}
+            aria-hidden="true"
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('boq.batch_set_classification', { defaultValue: 'Set classification‌⁠‍' })}
+            className="relative z-10 w-full max-w-sm mx-4 rounded-2xl border border-border-light bg-surface-elevated shadow-xl animate-scale-in focus:outline-none"
+          >
+            <div className="px-6 pt-6 pb-4">
+              <h2 className="text-base font-semibold text-content-primary">
+                {t('boq.batch_set_classification', { defaultValue: 'Set classification‌⁠‍' })}
+              </h2>
+              <p className="mt-1 text-xs text-content-secondary">
+                {t('boq.batch_class_hint', {
+                  defaultValue: 'Applies to {{count}} selected positions.',
+                  count,
+                })}
+              </p>
+              <label className="mt-4 block">
+                <span className="text-xs font-medium text-content-secondary">
+                  {t('boq.batch_class_standard', { defaultValue: 'Standard‌⁠‍' })}
+                </span>
+                <select
+                  value={classDialog.standard}
+                  onChange={(e) =>
+                    setClassDialog({
+                      ...classDialog,
+                      standard: e.target.value as BatchClassificationStandard,
+                    })
+                  }
+                  className="mt-1 w-full h-9 rounded-md border border-border bg-surface-primary px-2 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
+                >
+                  <option value="din276">DIN 276</option>
+                  <option value="nrm">NRM</option>
+                  <option value="masterformat">MasterFormat</option>
+                </select>
+              </label>
+              <label className="mt-3 block">
+                <span className="text-xs font-medium text-content-secondary">
+                  {t('boq.batch_class_code', { defaultValue: 'Code‌⁠‍' })}
+                </span>
+                <input
+                  autoFocus
+                  type="text"
+                  value={classDialog.code}
+                  onChange={(e) =>
+                    setClassDialog({ ...classDialog, code: e.target.value })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleConfirmClassification();
+                  }}
+                  placeholder={
+                    classDialog.standard === 'din276'
+                      ? '330'
+                      : classDialog.standard === 'nrm'
+                        ? '2.6.1'
+                        : '03 30 00'
+                  }
+                  className="mt-1 w-full h-9 rounded-md border border-border bg-surface-primary px-3 text-sm font-mono text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
+                  aria-label={t('boq.batch_class_code', { defaultValue: 'Code‌⁠‍' })}
+                />
+              </label>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button
+                type="button"
+                onClick={() => setClassDialog(null)}
+                className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium bg-surface-primary text-content-primary border border-border hover:bg-surface-secondary transition-all"
+              >
+                {t('common.cancel', { defaultValue: 'Cancel' })}
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmClassification}
+                disabled={!classDialog.code.trim()}
+                className="flex-1 rounded-lg px-4 py-2.5 text-sm font-medium text-white bg-oe-blue hover:bg-oe-blue-hover transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t('common.apply', { defaultValue: 'Apply' })}
               </button>
             </div>
           </div>

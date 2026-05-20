@@ -12,6 +12,8 @@ Endpoints:
     GET    /boqs/{boq_id}/activity             — Activity log for a BOQ
     POST   /boqs/{boq_id}/positions            — Add a position to a BOQ
     POST   /boqs/{boq_id}/positions/bulk      — Bulk insert multiple positions
+    PATCH  /boqs/{boq_id}/positions/bulk-update — v3.12 Stream A: bulk field/factor update
+    POST   /boqs/{boq_id}/positions/{position_id}/restore-field — v3.12 Stream A: restore one field from a log entry
     PATCH  /positions/{position_id}            — Update a position
     PATCH  /positions/{position_id}/resources/{resource_idx}/variant/
                                                — Re-pick variant on a resource row
@@ -92,6 +94,8 @@ from app.modules.boq.schemas import (
     BOQUpdate,
     BOQWithPositions,
     BOQWithSections,
+    BulkPositionUpdate,
+    BulkUpdateResult,
     CheckScopeRequest,
     CheckScopeResponse,
     ClassificationSuggestion,
@@ -140,6 +144,8 @@ from app.modules.boq.schemas import (
     ResourceSummaryItem,
     ResourceSummaryResponse,
     ResourceTypeSummary,
+    RestoreFieldRequest,
+    RestoreFieldResponse,
     ScopeMissingItem,
     SectionCreate,
     SensitivityItem,
@@ -1736,6 +1742,106 @@ async def update_position(
     # Issue #127: master propagation count / unlink flag is on the
     # position metadata; enrich linked_instance_count for masters.
     return await _position_to_response_with_links(service, position)
+
+
+# ── v3.12.0 Stream A — bulk update & per-field restore ─────────────────────
+
+
+@router.patch(
+    "/boqs/{boq_id}/positions/bulk-update/",
+    response_model=BulkUpdateResult,
+    summary="Bulk update many positions",
+    description=(
+        "Apply one of three bulk mutations to many positions atomically: "
+        "direct field assignment, multiply unit_rate by a factor, or multiply "
+        "quantity by a factor. Each row goes through the normal update path "
+        "so totals recompute, validation resets, and audit rows are written."
+    ),
+    dependencies=[Depends(RequirePermission("boq.update"))],
+)
+async def bulk_update_positions(
+    boq_id: uuid.UUID,
+    data: BulkPositionUpdate,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: BOQService = Depends(_get_service),
+) -> BulkUpdateResult:
+    """Bulk-update endpoint — see :class:`BulkPositionUpdate` for payload.
+
+    The umbrella activity-log entry uses ``action='position.bulk_<kind>'``
+    and carries the full id list (plus failures) in ``changes``, so the
+    activity panel renders one bulk row instead of N per-position rows.
+    """
+    await _verify_boq_owner(session, boq_id, user_id, payload)
+    try:
+        return await service.bulk_update_positions(
+            boq_id, data, actor_id=user_id
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post(
+    "/boqs/{boq_id}/positions/{position_id}/restore-field/",
+    response_model=RestoreFieldResponse,
+    summary="Restore a single field on a position from an activity-log entry",
+    description=(
+        "Look up the supplied log entry, verify it targets this position "
+        "and recorded a change for the named field, then write the supplied "
+        "value through the normal update path. A fresh log row is appended "
+        "noting the source entry id so the restore chain is auditable."
+    ),
+    dependencies=[Depends(RequirePermission("boq.update"))],
+)
+async def restore_position_field(
+    boq_id: uuid.UUID,
+    position_id: uuid.UUID,
+    data: RestoreFieldRequest,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: BOQService = Depends(_get_service),
+) -> RestoreFieldResponse:
+    """Per-cell restore from a prior :class:`BOQActivityLog` entry."""
+    await _verify_boq_owner(session, boq_id, user_id, payload)
+    # Cross-check the position membership before touching the service so
+    # path-tampering returns 404 not 422.
+    existing = await service.position_repo.get_by_id(position_id)
+    if existing is None or existing.boq_id != boq_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Position {position_id} not found in BOQ {boq_id}",
+        )
+    updated = await service.restore_position_field(
+        position_id,
+        field=data.field,
+        value=data.value,
+        log_id=data.log_id,
+        actor_id=user_id,
+    )
+    # Re-read the freshest log so we can echo the restore entry id.
+    new_log_id: uuid.UUID | None = None
+    try:
+        recent, _total = await service.activity_repo.list_for_boq(
+            boq_id, offset=0, limit=1
+        )
+        if recent and recent[0].action == "position.field_restored":
+            new_log_id = recent[0].id
+    except Exception:  # noqa: BLE001 — informational only
+        new_log_id = None
+    return RestoreFieldResponse(
+        position_id=updated.id,
+        field=data.field,
+        restored_value=data.value,
+        source_log_id=data.log_id,
+        new_log_id=new_log_id,
+    )
 
 
 class _ResourceVariantRepickBody(BaseModel):

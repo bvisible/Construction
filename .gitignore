@@ -197,3 +197,7 @@ backend/tmp_api.json
 # Heavy sample data — fetched on demand, not committed
 data/bim/
 docs/media/*.mp4
+
+# Generated license inventories — attached to GH Releases, not committed
+/NOTICE.backend.json
+/NOTICE.frontend.json

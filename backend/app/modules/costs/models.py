@@ -2,12 +2,33 @@
 
 Tables:
     oe_costs_item — cost database entries (CWICR, RSMeans, BKI, custom)
+    oe_regional_indices — region × category cost-factor matrix (v3.12.0)
+    oe_cost_item_usage — append-only usage ledger backing the certainty
+        badge (v3.12.0)
 """
 
-from sqlalchemy import JSON, Boolean, Index, String, Text, UniqueConstraint
+from __future__ import annotations
+
+import uuid
+from datetime import date, datetime
+from decimal import Decimal
+
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.database import Base
+from app.database import GUID, Base
 
 
 class CostItem(Base):
@@ -63,3 +84,105 @@ class CostItem(Base):
 
     def __repr__(self) -> str:
         return f"<CostItem {self.code} ({self.unit} @ {self.rate} {self.currency})>"
+
+
+class RegionalIndex(Base):
+    """‌⁠‍Regional cost-factor row (region × category × effective_date).
+
+    Backs ``GET /v1/costs/regional-adjust`` — given a base rate, the
+    service multiplies by ``factor`` to estimate the same line item's
+    cost in a different region (RSMeans-style city cost index).
+
+    Multiple rows per (region_code, category) are allowed when
+    ``effective_date`` differs so escalation feeds (v3.13.0) can append
+    quarter-on-quarter snapshots without losing history. The lookup
+    always picks the row with the largest ``effective_date`` that is
+    not in the future.
+    """
+
+    __tablename__ = "oe_regional_indices"
+    __table_args__ = (
+        UniqueConstraint(
+            "region_code",
+            "category",
+            "subcategory",
+            "effective_date",
+            name="uq_oe_regional_indices_region_cat_sub_date",
+        ),
+        Index(
+            "ix_oe_regional_indices_region_category",
+            "region_code",
+            "category",
+        ),
+    )
+
+    region_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    subcategory: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    factor: Mapped[Decimal] = mapped_column(
+        Numeric(8, 4), nullable=False, default=Decimal("1.0")
+    )
+    source: Mapped[str] = mapped_column(
+        String(128), nullable=False, default="", server_default=""
+    )
+    effective_date: Mapped[date] = mapped_column(Date(), nullable=False)
+
+    def __repr__(self) -> str:
+        return (
+            f"<RegionalIndex {self.region_code}/{self.category}"
+            f"{('/' + self.subcategory) if self.subcategory else ''} ="
+            f" {self.factor} as-of {self.effective_date}>"
+        )
+
+
+class CostItemUsage(Base):
+    """‌⁠‍Append-only usage ledger for a single ``CostItem``.
+
+    One row per "rate was applied to a BOQ position / assembly /
+    tender". The certainty badge reads ``count(*) + max(used_at)`` from
+    this table to grade rate freshness:
+
+    * green  — used ≥ 10× AND last use < 365 days ago
+    * yellow — used 3..9× OR last use 365..1095 days ago
+    * red    — everything else (never used, or very old)
+
+    Pure append: no updates, no deletes (CASCADE wipes rows when the
+    parent cost item is deleted). Index on ``(cost_item_id,
+    used_at DESC)`` matches the badge's "latest N rows" query.
+    """
+
+    __tablename__ = "oe_cost_item_usage"
+    __table_args__ = (
+        Index(
+            "ix_oe_cost_item_usage_item_time",
+            "cost_item_id",
+            "used_at",
+        ),
+        Index("ix_oe_cost_item_usage_project_id", "project_id"),
+    )
+
+    cost_item_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(),
+        ForeignKey("oe_costs_item.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
+    used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    used_by: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    unit_rate_at_use: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False, default=Decimal("0")
+    )
+    # "boq" | "assembly" | "tender"
+    context: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="boq", server_default="boq"
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<CostItemUsage item={self.cost_item_id}"
+            f" project={self.project_id} at={self.used_at}>"
+        )

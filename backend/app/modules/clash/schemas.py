@@ -117,6 +117,12 @@ class ClashClusterRead(BaseModel):
     can render ``"Cluster N · <label> (n)"`` without a per-result join.
     ``label`` is the heuristic ``"<disc_a> × <disc_b> — Level <s>"``
     string the service derives from the cluster's member rows.
+
+    ``dominant_disciplines`` is the unique discipline pair the label was
+    built from (used by the chip palette to colour clusters by trade);
+    ``storey`` is the dominant storey index when the cluster's member
+    rows resolved one, else ``None``. Both are advisory — the UI never
+    falls over on absence.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -124,6 +130,8 @@ class ClashClusterRead(BaseModel):
     cluster_id: int
     label: str = ""
     size: int = 0
+    dominant_disciplines: list[str] = Field(default_factory=list, max_length=2)
+    storey: int | None = None
 
 
 class ClashFalsePositiveRequest(BaseModel):
@@ -575,3 +583,70 @@ class ClashCompareResponse(BaseModel):
     resolved: list[ClashResultSummary] = Field(default_factory=list)
     persistent: list[ClashPersistentPair] = Field(default_factory=list)
     stats: ClashCompareStats
+
+
+class ClashApplyRuleRequest(BaseModel):
+    """Wave A4 — POST body for ``/runs/{id}/apply-rule-suggestion``.
+
+    Identifies the discipline pair the coordinator wants to widen plus
+    the proposed tolerance. The endpoint appends a fresh
+    :class:`ClashRule` row to ``run.rules`` and re-evaluates the run's
+    existing results: any hard clash on the pair whose ``penetration_m``
+    now sits at or below ``tolerance_m`` is flipped to ``status='ignored'``
+    (with an audit-trail entry). Symmetric on the pair.
+    """
+
+    discipline_a: str = Field(..., max_length=64, min_length=1)
+    discipline_b: str = Field(..., max_length=64, min_length=1)
+    tolerance_m: float = Field(..., ge=0.0, le=10.0)
+
+
+class ClashApplyRuleResponse(BaseModel):
+    """Outcome of ``POST /runs/{id}/apply-rule-suggestion``.
+
+    ``rule_added`` is ``False`` only when the new rule would have been a
+    duplicate of an existing entry (symmetric pair + same tolerance); the
+    re-evaluation pass still runs and ``results_affected`` is the number
+    of clash rows whose status was flipped to ``ignored``.
+    """
+
+    rule_added: bool
+    results_affected: int
+
+
+class ClashDisciplinePairStat(BaseModel):
+    """One discipline×discipline coordination grid cell — KPI projection.
+
+    Mirrors :class:`ClashMatrixCell` but adds ``open_share`` (``open_count
+    / count``, 0..1) so the dashboard can render the "top clashing pairs"
+    table without recomputing the ratio client-side. Zero ``count`` is
+    impossible (the aggregator skips empty cells), so ``open_share`` is
+    always well-defined.
+    """
+
+    a: str
+    b: str
+    count: int
+    open_count: int
+    open_share: float
+
+
+class ClashKpiResponse(BaseModel):
+    """Dashboard projection for ``GET /runs/{id}/kpi``.
+
+    All counts respect every clash in the run (no pagination). ``mttr_hours``
+    is the average wall-clock delta from a row's first ``status='new'``
+    history entry (or ``created_at`` fallback) to its first transition
+    *out* of ``new`` into ``resolved`` — ``None`` when no row has a
+    qualifying transition yet. ``top_clashing_pairs`` is the top five
+    discipline pairs by total ``count`` (ties broken by ``open_count``
+    desc, then pair alphabetic for determinism).
+    """
+
+    total: int
+    by_status: dict[str, int] = Field(default_factory=dict)
+    by_severity: dict[str, int] = Field(default_factory=dict)
+    by_type: dict[str, int] = Field(default_factory=dict)
+    by_discipline_pair: list[ClashDisciplinePairStat] = Field(default_factory=list)
+    mttr_hours: float | None = None
+    top_clashing_pairs: list[ClashDisciplinePairStat] = Field(default_factory=list)

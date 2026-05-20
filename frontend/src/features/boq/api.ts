@@ -241,6 +241,40 @@ export interface UpdatePositionData {
   link_mode?: LinkMode | null;
 }
 
+/**
+ * v3.12.0 Stream A — bulk update payload.
+ * Exactly one of `updates` / `rate_factor` / `quantity_factor` must be
+ * supplied; the server rejects mixed payloads with 422.
+ */
+export interface BulkPositionUpdateData {
+  ids: string[];
+  /** Allow-listed keys only: 'unit' | 'classification' | 'validation_status' | 'source'. */
+  updates?: Record<string, unknown>;
+  rate_factor?: number;
+  quantity_factor?: number;
+}
+
+export interface BulkUpdateResult {
+  updated: number;
+  skipped: number;
+  failed_ids: string[];
+  log_id: string | null;
+}
+
+export interface RestoreFieldData {
+  field: string;
+  value: unknown;
+  log_id: string;
+}
+
+export interface RestoreFieldResponse {
+  position_id: string;
+  field: string;
+  restored_value: unknown;
+  source_log_id: string;
+  new_log_id: string | null;
+}
+
 /* ── Normalize backend metadata_ → metadata ─────────────────────── */
 
 /**
@@ -482,6 +516,10 @@ export interface ActivityEntry {
   details: Record<string, unknown>;
   created_at: string;
   user_name?: string;
+  /** v3.12.0 — target_type (position / markup / boq) for the restore UI. */
+  target_type?: string;
+  /** v3.12.0 — target_id (position UUID) for the per-field restore endpoint. */
+  target_id?: string | null;
 }
 
 export interface ActivityResponse {
@@ -1162,6 +1200,29 @@ export const boqApi = {
     apiPost<Position>(`/v1/boq/boqs/${data.boq_id}/positions/`, data),
   updatePosition: (posId: string, data: UpdatePositionData) =>
     apiPatch<Position>(`/v1/boq/positions/${posId}`, data),
+
+  /**
+   * v3.12.0 Stream A — bulk update positions.
+   * Sends one PATCH covering every selected position id; the server
+   * applies the same direct-set / rate-factor / quantity-factor mutation
+   * to every row and writes a single umbrella activity-log entry.
+   */
+  bulkUpdatePositions: (boqId: string, data: BulkPositionUpdateData) =>
+    apiPatch<BulkUpdateResult, BulkPositionUpdateData>(
+      `/v1/boq/boqs/${boqId}/positions/bulk-update/`,
+      data,
+    ),
+
+  /**
+   * v3.12.0 Stream A — restore a single field on a position from a prior
+   * `BOQActivityLog` entry. The backend writes through the normal update
+   * path so totals recompute, validation resets, and the version bumps.
+   */
+  restorePositionField: (boqId: string, positionId: string, data: RestoreFieldData) =>
+    apiPost<RestoreFieldResponse, RestoreFieldData>(
+      `/v1/boq/boqs/${boqId}/positions/${positionId}/restore-field/`,
+      data,
+    ),
   /**
    * Re-pick the variant on an existing resource row.  Backend reads the
    * cached ``available_variants`` array on the resource entry, finds the
@@ -1231,6 +1292,8 @@ export const boqApi = {
         user_id: string;
         action: string;
         description: string;
+        target_type?: string;
+        target_id?: string | null;
         changes?: Record<string, unknown>;
         metadata_?: Record<string, unknown>;
         metadata?: Record<string, unknown>;
@@ -1247,6 +1310,10 @@ export const boqApi = {
         details: item.changes ?? item.metadata_ ?? item.metadata ?? {},
         created_at: item.created_at,
         user_name: undefined,
+        // v3.12.0 — surface target identity so the per-cell restore UI can
+        // call the position-scoped endpoint with the right ids.
+        target_type: item.target_type,
+        target_id: item.target_id ?? null,
       })),
       total: raw.total ?? 0,
     };

@@ -176,6 +176,10 @@ export interface ClashResult {
    *  older backends — callers default to `{}`. */
   meta?: { severity_suggestion?: ClashSeverity } & Record<string, unknown>;
   bcf_topic_guid: string | null;
+  /** Wave A4 — run-scoped spatial cluster id (DBSCAN over centroids).
+   *  `null` marks DBSCAN noise / legacy rows; the chip group filters
+   *  results by matching this against the active cluster id. */
+  cluster_id?: number | null;
   /** Client-only: original ordinal within the loaded result set, assigned
    *  during the review-table filter pass for the # column / idx sort. */
   __idx?: number;
@@ -285,6 +289,60 @@ export interface ClashRunCreateBody {
   discipline_filter?: string[][] | null;
   set_a?: ClashSelectionSet | null;
   set_b?: ClashSelectionSet | null;
+}
+
+/** Wave A4 — one persisted spatial cluster of clashes within a run.
+ *  ``dominant_disciplines`` is the discipline pair the label is keyed
+ *  off of (used by the chip palette to colour by trade); ``storey`` is
+ *  the dominant level index — `null` when none of the cluster's
+ *  members resolved a storey. Both are advisory; the chip renders
+ *  fine without them. */
+export interface ClashCluster {
+  cluster_id: number;
+  label: string;
+  size: number;
+  dominant_disciplines: string[];
+  storey: number | null;
+}
+
+/** Wave A4 — one per-discipline-pair tolerance override on a run. */
+export interface ClashRule {
+  id: string;
+  discipline_a: string;
+  discipline_b: string;
+  tolerance_m: number;
+  severity_override?: ClashSeverity | null;
+  enabled: boolean;
+}
+
+/** Wave A4 — one engine-mined rule proposal. `rule` is null when there
+ *  is no confident proposal (the wrapper list is empty in that case). */
+export interface ClashRuleSuggestion {
+  rule: ClashRule | null;
+  reason: string;
+  fp_count: number;
+}
+
+/** Wave A4 — one cell of the KPI discipline×discipline grid (incl.
+ *  `open_share` ratio for the dashboard's "top pairs" table). */
+export interface ClashDisciplinePairStat {
+  a: string;
+  b: string;
+  count: number;
+  open_count: number;
+  open_share: number;
+}
+
+/** Wave A4 — KPI dashboard projection returned by GET /runs/{id}/kpi. */
+export interface ClashKpi {
+  total: number;
+  by_status: Record<string, number>;
+  by_severity: Record<string, number>;
+  by_type: Record<string, number>;
+  by_discipline_pair: ClashDisciplinePairStat[];
+  /** `null` when no row has resolved yet (UI hides the MTTR tile). */
+  mttr_hours: number | null;
+  top_clashing_pairs: ClashDisciplinePairStat[];
 }
 
 export const clashApi = {
@@ -566,4 +624,49 @@ export const clashApi = {
           is_owner?: boolean;
         }>,
     ),
+
+  /** Wave A4 — spatial clusters discovered for this run. Empty list when
+   *  the run pre-dates the cluster pass / had no clashes / every clash
+   *  was DBSCAN noise — the chip group simply renders empty. */
+  listClusters: (projectId: string, runId: string) =>
+    apiGet<ClashCluster[]>(
+      `/v1/clash/projects/${projectId}/runs/${runId}/clusters`,
+    ),
+
+  /** Wave A4 — engine-mined rule proposals from the run's FP history.
+   *  Empty when no discipline pair has crossed the suggestion threshold. */
+  listRuleSuggestions: (projectId: string, runId: string) =>
+    apiGet<ClashRuleSuggestion[]>(
+      `/v1/clash/projects/${projectId}/runs/${runId}/rule-suggestions`,
+    ),
+
+  /** Wave A4 — append the proposed rule + re-evaluate existing results.
+   *  Returns `{ rule_added, results_affected }`. */
+  applyRuleSuggestion: (
+    projectId: string,
+    runId: string,
+    body: { discipline_a: string; discipline_b: string; tolerance_m: number },
+  ) =>
+    apiPost<{ rule_added: boolean; results_affected: number }>(
+      `/v1/clash/projects/${projectId}/runs/${runId}/apply-rule-suggestion`,
+      body,
+    ),
+
+  /** Wave A4 — current rule set persisted on the run. */
+  listRules: (projectId: string, runId: string) =>
+    apiGet<ClashRule[]>(
+      `/v1/clash/projects/${projectId}/runs/${runId}/rules`,
+    ),
+
+  /** Wave A4 — replace the entire rule list (idempotent PUT-style PATCH).
+   *  Server caps at 500 entries. */
+  replaceRules: (projectId: string, runId: string, rules: ClashRule[]) =>
+    apiPatch<ClashRule[]>(
+      `/v1/clash/projects/${projectId}/runs/${runId}/rules`,
+      { rules },
+    ),
+
+  /** Wave A4 — aggregate dashboard payload for the KPI tab. */
+  kpi: (projectId: string, runId: string) =>
+    apiGet<ClashKpi>(`/v1/clash/projects/${projectId}/runs/${runId}/kpi`),
 };

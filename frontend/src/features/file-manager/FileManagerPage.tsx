@@ -9,10 +9,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useQueries } from '@tanstack/react-query';
 import { ArrowLeft, ChevronRight, HardDrive, UploadCloud, Search, Send } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import clsx from 'clsx';
 import { EmptyState } from '@/shared/ui';
+import { fetchTagsForFile } from '@/features/file-tags/api';
+import { fileTagsKeys } from '@/features/file-tags/hooks';
+import type { TagRecord } from '@/features/file-tags/types';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import {
   useFileList,
@@ -98,11 +102,35 @@ export function FileManagerPage() {
   const initialKind: FileKind | null =
     queryKind && VALID_KINDS.has(queryKind) ? (queryKind as FileKind) : null;
 
+  // Saved-view filter hydration — when SavedViewsRail applies a view
+  // it serialises ``q``/``sort``/``extension``/``tag_ids`` into the
+  // URL and navigates here. We pick those up on mount so the file
+  // list opens with the saved filter pre-applied instead of an empty
+  // toolbar.
+  const initialQuery = searchParams.get('q') ?? '';
+  const initialSortParam = searchParams.get('sort');
+  const initialSort: NonNullable<FileFilters['sort']> =
+    initialSortParam === 'name' ||
+    initialSortParam === 'size' ||
+    initialSortParam === 'kind' ||
+    initialSortParam === 'modified'
+      ? initialSortParam
+      : 'modified';
+  const initialExtension = searchParams.get('extension') ?? undefined;
+  const initialTagIds = (searchParams.get('tag_ids') ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+
   const [selectedKind, setSelectedKind] = useState<FileKind | null>(initialKind);
-  const [query, setQuery] = useState('');
-  const [sort, setSort] = useState<NonNullable<FileFilters['sort']>>('modified');
+  const [query, setQuery] = useState(initialQuery);
+  const [sort, setSort] = useState<NonNullable<FileFilters['sort']>>(initialSort);
   const [view, setView] = useState<ViewMode>(() => readViewMode());
-  const [extension, setExtension] = useState<string | undefined>(undefined);
+  const [extension, setExtension] = useState<string | undefined>(initialExtension);
+  // W4 — tag filter facet state. Multi-select tag ids that filter the
+  // file list client-side (until the backend ``?tag_ids=`` param is
+  // wired). SavedViewsRail can hydrate this via ``?tag_ids=...``.
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>(initialTagIds);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [previewRow, setPreviewRow] = useState<FileRow | null>(null);
   const [showExport, setShowExport] = useState(false);
@@ -126,17 +154,102 @@ export function FileManagerPage() {
     writeViewMode(view);
   }, [view]);
 
-  // Keep the URL ?kind= param in sync with selection so deep-links work
-  // both ways: pasted URL → loads the right category; UI back-button →
-  // returns to the folder-grid view.
+  // ── URL → state hydration ────────────────────────────────────────────
+  // The state→URL writer below also runs whenever ``searchParams`` change.
+  // Without this effect, an external navigation (SavedViewsRail clicking a
+  // view → ``navigate('/files?kind=...&q=...&sort=...')``) would race that
+  // writer: the writer reads the old state, rebuilds the URL from it, and
+  // overwrites the freshly-applied saved-view params. We pull values FROM
+  // the URL into state when they differ, so the writer's diff guard short-
+  // circuits on the next render and the round-trip stays loss-less.
+  //
+  // ``hydratingFromUrlRef`` flips true while we're applying URL → state, so
+  // any cascaded state change does not bounce back into the writer mid-
+  // hydration and clobber the URL we just read.
+  const hydratingFromUrlRef = useRef(false);
   useEffect(() => {
+    const urlKindRaw = searchParams.get('kind');
+    const urlKindClean = urlKindRaw ? urlKindRaw.replace(/^category:/, '') : null;
+    const urlKind: FileKind | null =
+      urlKindClean && VALID_KINDS.has(urlKindClean) ? (urlKindClean as FileKind) : null;
+    const urlQuery = searchParams.get('q') ?? '';
+    const urlSortParam = searchParams.get('sort');
+    const urlSort: NonNullable<FileFilters['sort']> =
+      urlSortParam === 'name' ||
+      urlSortParam === 'size' ||
+      urlSortParam === 'kind' ||
+      urlSortParam === 'modified'
+        ? urlSortParam
+        : 'modified';
+    const urlExtension = searchParams.get('extension') ?? undefined;
+    const urlTagIdsRaw = searchParams.get('tag_ids') ?? '';
+    const urlTagIds = urlTagIdsRaw
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0);
+
+    let changed = false;
+    if (urlKind !== selectedKind) {
+      changed = true;
+    } else if (urlQuery !== query) {
+      changed = true;
+    } else if (urlSort !== sort) {
+      changed = true;
+    } else if (urlExtension !== extension) {
+      changed = true;
+    } else if (
+      urlTagIds.length !== selectedTagIds.length ||
+      urlTagIds.some((id, i) => id !== selectedTagIds[i])
+    ) {
+      changed = true;
+    }
+    if (!changed) return;
+
+    hydratingFromUrlRef.current = true;
+    setSelectedKind(urlKind);
+    setQuery(urlQuery);
+    setSort(urlSort);
+    setExtension(urlExtension);
+    setSelectedTagIds(urlTagIds);
+    // The writer effect runs after these setters batch-commit; release the
+    // flag on the next microtask so it observes ``hydratingFromUrlRef`` as
+    // true and skips the redundant write.
+    queueMicrotask(() => {
+      hydratingFromUrlRef.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
+
+  // Keep the URL ?kind=, ?q=, ?sort=, ?extension=, ?tag_ids= params in
+  // sync with the active filter state so deep-links work both ways:
+  // pasted URL → loads the right filter; UI back-button → returns to
+  // the folder-grid view. SavedViewsRail re-uses these keys when it
+  // applies a view, so the round trip stays loss-less.
+  useEffect(() => {
+    if (hydratingFromUrlRef.current) return;
     const next = new URLSearchParams(searchParams);
     if (selectedKind) next.set('kind', selectedKind);
     else next.delete('kind');
+    if (query.trim()) next.set('q', query.trim());
+    else next.delete('q');
+    if (sort && sort !== 'modified') next.set('sort', sort);
+    else next.delete('sort');
+    if (extension) next.set('extension', extension);
+    else next.delete('extension');
+    if (selectedTagIds.length > 0) next.set('tag_ids', selectedTagIds.join(','));
+    else next.delete('tag_ids');
     if (next.toString() !== searchParams.toString()) {
       setSearchParams(next, { replace: true });
     }
-  }, [selectedKind, searchParams, setSearchParams]);
+  }, [
+    selectedKind,
+    query,
+    sort,
+    extension,
+    selectedTagIds,
+    searchParams,
+    setSearchParams,
+  ]);
 
   const filters = useMemo<FileFilters>(
     () => ({
@@ -157,6 +270,40 @@ export function FileManagerPage() {
     selectedKind ? projectId : null,
     filters,
   );
+
+  // W4 — when a tag filter is active, fetch the tags assigned to each
+  // visible file and drop rows that don't carry ALL selected tags.
+  // ``useQueries`` fans out one request per visible item; the shared
+  // React Query cache (same key the per-row TagPill renderer uses) keeps
+  // repeated visits warm and never re-issues an in-flight request.
+  // Until the backend learns a ``?tag_ids=`` filter this is the
+  // smallest change that gives the toolbar real teeth.
+  const visibleItems = list?.items ?? [];
+  const tagFilterActive = selectedTagIds.length > 0 && Boolean(projectId);
+  const tagQueries = useQueries({
+    queries: tagFilterActive
+      ? visibleItems.map((row) => ({
+          queryKey: [fileTagsKeys.byFile, projectId, row.kind, row.id],
+          queryFn: () =>
+            fetchTagsForFile(projectId as string, row.kind, row.id),
+          staleTime: 30_000,
+        }))
+      : [],
+  });
+  // Build the row-id → tag-id set lookup. When tag fetches are still
+  // pending for a row we leave it visible (optimistic; gets re-filtered
+  // once the cache settles) so the page never blanks during the
+  // initial fetch.
+  const tagFilteredItems = useMemo(() => {
+    if (!tagFilterActive) return visibleItems;
+    return visibleItems.filter((_row, idx) => {
+      const q = tagQueries[idx];
+      const tags = (q?.data as TagRecord[] | undefined) ?? [];
+      if (q?.isLoading || q?.isFetching) return true;
+      const tagIds = new Set(tags.map((t) => t.id));
+      return selectedTagIds.every((id) => tagIds.has(id));
+    });
+  }, [tagFilterActive, visibleItems, tagQueries, selectedTagIds]);
 
   // Whenever filters change, drop selection that no longer matches the
   // visible result set so the preview pane never shows a stale row.
@@ -191,7 +338,7 @@ export function FileManagerPage() {
   const lastClickedRef = useRef<string | null>(null);
 
   function handleSelect(id: string, additive: boolean, shift = false) {
-    const items = list?.items ?? [];
+    const items = tagFilteredItems;
     if (shift && lastClickedRef.current) {
       const anchor = lastClickedRef.current;
       const a = items.findIndex((r) => r.id === anchor);
@@ -445,11 +592,13 @@ export function FileManagerPage() {
                 onViewChange={setView}
                 onExport={() => setShowExport(true)}
                 onImport={() => setShowImport(true)}
-                totalCount={list?.total ?? 0}
+                totalCount={tagFilterActive ? tagFilteredItems.length : list?.total ?? 0}
                 extension={extension}
                 onExtensionChange={setExtension}
                 projectId={projectId}
                 category={selectedKind}
+                selectedTagIds={selectedTagIds}
+                onSelectedTagsChange={setSelectedTagIds}
               />
               <BulkActionsBar
                 selectedRows={selectedRows}
@@ -459,7 +608,7 @@ export function FileManagerPage() {
               <div className="flex-1 overflow-auto">
                 {view === 'grid' ? (
                   <FileGrid
-                    items={list?.items ?? []}
+                    items={tagFilteredItems}
                     selectedIds={selectedIds}
                     onSelect={handleSelect}
                     onOpen={handleOpen}
@@ -467,7 +616,7 @@ export function FileManagerPage() {
                   />
                 ) : (
                   <FileList
-                    items={list?.items ?? []}
+                    items={tagFilteredItems}
                     selectedIds={selectedIds}
                     onSelect={handleSelect}
                     onOpen={handleOpen}

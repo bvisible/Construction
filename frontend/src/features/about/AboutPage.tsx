@@ -56,11 +56,52 @@ export function AboutPage() {
           </div>
         </div>
 
-        {/* ── Right column — update notification ──
-            The notification component renders its own card; we just give
-            it the column slot so it lives side-by-side with the identity. */}
-        <div>
+        {/* ── Right column — update notification + recent releases ──
+            UpdateNotification renders its own card; the recent-releases
+            mini-list lives below it so the right column visually matches
+            the left identity block's height on wide screens. */}
+        <div className="flex flex-col gap-3">
           <UpdateNotification forceShow hideDismiss />
+
+          {/* Recent releases — last 3 published versions with date so
+              users can see the cadence at a glance without scrolling
+              into the Changelog further down. */}
+          <div className="rounded-xl border border-border-light bg-surface-secondary/40 px-4 py-3">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="text-2xs font-semibold uppercase tracking-wider text-content-tertiary">
+                {t('about.header_recent_label', { defaultValue: 'Recent releases' })}
+              </p>
+              <a
+                href="#changelog"
+                className="text-2xs text-oe-blue hover:underline"
+                onClick={(e) => {
+                  e.preventDefault();
+                  const changelog = document.querySelector('[data-changelog-anchor]');
+                  if (changelog) changelog.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }}
+              >
+                {t('about.header_recent_more', { defaultValue: 'View all →' })}
+              </a>
+            </div>
+            <ul className="space-y-1.5">
+              {[
+                { v: '3.12.0', date: '2026-05-20', note: t('about.recent_3_12_0', { defaultValue: 'Wave 5/6/7 pro-grade — BOQ + Cost Intel + Clash A4 + Files CDE' }) },
+                { v: '3.11.0', date: '2026-05-20', note: t('about.recent_3_11_0', { defaultValue: 'Wave 3/4 modules · Validation@Import · X84 export · /about redesign' }) },
+                { v: '3.10.0', date: '2026-05-19', note: t('about.recent_3_10_0', { defaultValue: '/files ACC-grade wave · Clash collab/metadata · match polish' }) },
+              ].map(r => (
+                <li key={r.v} className="flex items-start gap-2 text-2xs leading-snug">
+                  <span className="shrink-0 inline-flex items-center rounded-md bg-oe-blue/10 text-oe-blue font-mono font-semibold px-1.5 py-0.5">
+                    v{r.v}
+                  </span>
+                  <span className="shrink-0 font-mono text-content-quaternary">{r.date}</span>
+                  <span className="min-w-0 flex-1 truncate text-content-secondary" title={r.note}>
+                    {r.note}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
         </div>
       </div>
 
@@ -79,7 +120,11 @@ export function AboutPage() {
               {t('about.platform_title', { defaultValue: 'Platform Capabilities‌⁠‍' })}
             </h2>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          {/* Stats — one row on wide screens (6 tiles × 1 row) so the card
+              stays compact and lines up vertically with the right-hand
+              Community card. Smaller tile padding + value font keep the
+              shorter tile readable at narrower widths. */}
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2.5">
             {[
               { value: '55K+', label: t('about.stat_costs', { defaultValue: 'Cost Items (CWICR)‌⁠‍' }) },
               { value: '24', label: t('about.stat_langs', { defaultValue: 'Languages‌⁠‍' }) },
@@ -88,9 +133,9 @@ export function AboutPage() {
               { value: '100+', label: t('about.stat_modules', { defaultValue: 'Backend modules‌⁠‍' }) },
               { value: '12', label: t('about.stat_sections', { defaultValue: 'Menu sections‌⁠‍' }) },
             ].map((s, i) => (
-              <div key={i} className="text-center rounded-xl bg-surface-secondary/50 p-4">
-                <div className="text-2xl font-bold text-content-primary">{s.value}</div>
-                <div className="text-xs text-content-tertiary mt-1">{s.label}</div>
+              <div key={i} className="text-center rounded-xl bg-surface-secondary/50 px-2 py-3">
+                <div className="text-xl font-bold text-content-primary leading-none">{s.value}</div>
+                <div className="text-2xs text-content-tertiary mt-1.5 leading-snug">{s.label}</div>
               </div>
             ))}
           </div>
@@ -125,70 +170,85 @@ export function AboutPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-              <a
-                href="https://www.linkedin.com/company/78381569"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="group flex items-center gap-2.5 rounded-lg border border-border-light bg-surface-primary px-3 py-2.5 hover:border-[#0A66C2]/50 hover:bg-[#0A66C2]/[0.04] transition-all"
-              >
-                <span className="shrink-0 h-8 w-8 rounded-md bg-[#0A66C2]/10 text-[#0A66C2] flex items-center justify-center">
-                  <Linkedin size={15} />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-content-primary leading-tight">
-                    LinkedIn
-                  </p>
-                  <p className="text-[10px] text-content-tertiary truncate">
-                    {t('about.community_linkedin', { defaultValue: 'Industry discussions' })}
-                  </p>
-                </div>
-                <ExternalLink size={11} className="text-content-quaternary group-hover:text-[#0A66C2] shrink-0" />
-              </a>
+            {/* Social channels — Telegram is featured on its own row (it's the
+                primary live-support channel) so the chat invite reads first.
+                LinkedIn and X follow on their own rows so the Community card
+                stretches vertically to match the Platform Capabilities card
+                on wide screens. Each tile carries a 2-line copy block instead
+                of a 1-line truncated string. */}
+            <div className="flex flex-col gap-2.5">
 
+              {/* Featured row — Telegram, primary live channel. */}
               <a
                 href="https://t.me/datadrivenconstruction"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="group flex items-center gap-2.5 rounded-lg border border-border-light bg-surface-primary px-3 py-2.5 hover:border-[#26A5E4]/50 hover:bg-[#26A5E4]/[0.04] transition-all"
+                className="group flex items-center gap-3 rounded-lg border border-[#26A5E4]/25 bg-[#26A5E4]/[0.04] px-3.5 py-3 hover:border-[#26A5E4]/50 hover:bg-[#26A5E4]/[0.08] transition-all"
               >
-                <span className="shrink-0 h-8 w-8 rounded-md bg-[#26A5E4]/10 text-[#26A5E4] flex items-center justify-center">
-                  <svg viewBox="0 0 24 24" fill="currentColor" className="h-4 w-4" aria-hidden>
+                <span className="shrink-0 h-10 w-10 rounded-lg bg-[#26A5E4]/15 text-[#26A5E4] flex items-center justify-center">
+                  <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5" aria-hidden>
                     <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71l-4.14-3.06-1.99 1.93c-.23.23-.42.42-.83.42z"/>
                   </svg>
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-content-primary leading-tight">
-                    Telegram
-                  </p>
-                  <p className="text-[10px] text-content-tertiary truncate">
-                    {t('about.community_telegram', { defaultValue: 'Live chat & support' })}
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-content-primary leading-tight">
+                      Telegram
+                    </p>
+                    <span className="inline-flex items-center rounded-md bg-[#26A5E4]/15 text-[#26A5E4] text-2xs font-semibold px-1.5 py-0.5">
+                      {t('about.community_tg_badge', { defaultValue: 'Live' })}
+                    </span>
+                  </div>
+                  <p className="text-xs text-content-secondary mt-0.5 leading-snug">
+                    {t('about.community_telegram_v2', { defaultValue: 'Fastest replies from the maintainers — questions, ideas, bug reports, partnerships.' })}
                   </p>
                 </div>
-                <ExternalLink size={11} className="text-content-quaternary group-hover:text-[#26A5E4] shrink-0" />
+                <ExternalLink size={13} className="text-content-quaternary group-hover:text-[#26A5E4] shrink-0" />
               </a>
 
-              <a
-                href="https://x.com/datadrivenconst"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="group flex items-center gap-2.5 rounded-lg border border-border-light bg-surface-primary px-3 py-2.5 hover:border-slate-700 hover:bg-slate-900/[0.04] dark:hover:border-slate-300 transition-all"
-              >
-                <span className="shrink-0 h-8 w-8 rounded-md bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 flex items-center justify-center">
-                  <svg viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5" aria-hidden>
-                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231zm-1.161 17.52h1.833L7.084 4.126H5.117l11.966 15.644z"/>
-                  </svg>
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold text-content-primary leading-tight">
-                    X / Twitter
-                  </p>
-                  <p className="text-[10px] text-content-tertiary truncate">
-                    {t('about.community_x', { defaultValue: 'Release announcements' })}
-                  </p>
-                </div>
-                <ExternalLink size={11} className="text-content-quaternary group-hover:text-content-primary shrink-0" />
-              </a>
+              {/* LinkedIn + X — paired on one row so the Community card stays
+                  compact and matches the Platform Capabilities card's height. */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <a
+                  href="https://www.linkedin.com/company/78381569"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group flex items-center gap-2.5 rounded-lg border border-border-light bg-surface-primary px-3 py-2.5 hover:border-[#0A66C2]/50 hover:bg-[#0A66C2]/[0.04] transition-all"
+                >
+                  <span className="shrink-0 h-9 w-9 rounded-lg bg-[#0A66C2]/10 text-[#0A66C2] flex items-center justify-center">
+                    <Linkedin size={16} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-content-primary leading-tight">
+                      LinkedIn
+                    </p>
+                    <p className="text-2xs text-content-tertiary mt-0.5 leading-snug">
+                      {t('about.community_linkedin_short', { defaultValue: 'Articles + industry posts' })}
+                    </p>
+                  </div>
+                </a>
+
+                <a
+                  href="https://x.com/datadrivenconst"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group flex items-center gap-2.5 rounded-lg border border-border-light bg-surface-primary px-3 py-2.5 hover:border-slate-700/50 hover:bg-slate-900/[0.04] dark:hover:border-slate-300/40 transition-all"
+                >
+                  <span className="shrink-0 h-9 w-9 rounded-lg bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 flex items-center justify-center">
+                    <svg viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5" aria-hidden>
+                      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231 5.45-6.231zm-1.161 17.52h1.833L7.084 4.126H5.117l11.966 15.644z"/>
+                    </svg>
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-content-primary leading-tight">
+                      X / Twitter
+                    </p>
+                    <p className="text-2xs text-content-tertiary mt-0.5 leading-snug">
+                      {t('about.community_x_short', { defaultValue: 'Release announcements' })}
+                    </p>
+                  </div>
+                </a>
+              </div>
             </div>
 
             <p className="mt-auto pt-4 text-[11px] text-content-tertiary text-center">
@@ -556,16 +616,12 @@ export function AboutPage() {
             </div>
           </div>
 
-          {/* CTA row — bigger contact button + reply-time SLA + secondary case-studies link */}
+          {/* CTA row — primary contact button (case-studies link removed per
+              user request 2026-05-20). */}
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <a href="https://datadrivenconstruction.io/contact-support/" target="_blank" rel="noopener noreferrer">
               <Button variant="primary" size="md" icon={<Mail size={15} />}>
                 {t('about.contact_us', { defaultValue: 'Contact Us' })}
-              </Button>
-            </a>
-            <a href="https://datadrivenconstruction.io/case-studies/" target="_blank" rel="noopener noreferrer">
-              <Button variant="secondary" size="md" icon={<BookOpen size={15} />} iconPosition="left">
-                {t('about.svc_case_studies', { defaultValue: 'Browse case studies' })}
               </Button>
             </a>
           </div>
@@ -662,13 +718,34 @@ export function AboutPage() {
             </div>
             {/* /Left column */}
 
-            {/* ── Right column — what your support enables ── */}
-            <div className="lg:border-l lg:border-border-light/60 dark:lg:border-white/[0.08] lg:pl-6">
+            {/* ── Right column — KPI tiles + what your support enables ──
+                Two stat tiles on top mirror the visual weight of the left
+                column's hero block, so the two halves match height on wide
+                screens without leaving a gap below the bullets. ── */}
+            <div className="lg:border-l lg:border-border-light/60 dark:lg:border-white/[0.08] lg:pl-6 flex flex-col">
               <p className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-3 flex items-center gap-1.5">
                 <Rocket size={12} className="text-oe-blue" />
+                {t('about.support_impact_label', { defaultValue: 'Impact so far' })}
+              </p>
+              <div className="grid grid-cols-2 gap-2.5 mb-4">
+                {[
+                  { value: '24', label: t('about.support_kpi_langs', { defaultValue: 'Languages translated' }) },
+                  { value: '48', label: t('about.support_kpi_regions', { defaultValue: 'Regional cost packs' }) },
+                  { value: '100+', label: t('about.support_kpi_modules', { defaultValue: 'Backend modules' }) },
+                  { value: '55K+', label: t('about.support_kpi_cwicr', { defaultValue: 'CWICR positions' }) },
+                ].map((kpi, i) => (
+                  <div key={i} className="rounded-lg bg-surface-primary/60 backdrop-blur-sm border border-border-light px-3 py-2.5">
+                    <div className="text-lg font-bold text-content-primary leading-tight">{kpi.value}</div>
+                    <div className="text-2xs text-content-tertiary mt-0.5 leading-snug">{kpi.label}</div>
+                  </div>
+                ))}
+              </div>
+
+              <p className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-3 flex items-center gap-1.5">
+                <ArrowRight size={12} className="text-oe-blue" />
                 {t('about.support_enables', { defaultValue: 'Your support enables:' })}
               </p>
-              <ul className="space-y-2">
+              <ul className="space-y-1.5">
                 {[
                   t('about.support_e1', { defaultValue: 'New regional cost databases (CWICR)' }),
                   t('about.support_e2', { defaultValue: 'AI estimation improvements' }),
@@ -677,8 +754,8 @@ export function AboutPage() {
                   t('about.support_e5', { defaultValue: 'Mobile app development' }),
                   t('about.support_e6', { defaultValue: 'Free workshops and documentation' }),
                 ].map((item, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-content-secondary">
-                    <ArrowRight size={12} className="mt-1 shrink-0 text-oe-blue" />
+                  <li key={i} className="flex items-start gap-2 text-xs text-content-secondary">
+                    <ArrowRight size={11} className="mt-1 shrink-0 text-oe-blue" />
                     <span>{item}</span>
                   </li>
                 ))}
@@ -689,13 +766,14 @@ export function AboutPage() {
         </div>
       </Card>
 
-      {/* Free Guidebook — compact 2-col: small cover on the left, full
-          chapter list (the real 10 Parts of the book) on the right. */}
+      {/* Free Guidebook — 5-col internal split: book cover gets 2/5 of the
+          width so the cover image can render larger; the 10-part TOC keeps
+          3/5 and its tiles read tighter and more uniform. */}
       <Card className="animate-card-in" style={{ animationDelay: '300ms' }}>
-        <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="p-6 grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-          {/* ── Left column — small book cover + headline + download CTA ── */}
-          <div className="lg:col-span-1">
+          {/* ── Left column — larger book cover + headline + download CTA ── */}
+          <div className="lg:col-span-2">
             <div className="flex items-center gap-2 mb-3 flex-wrap">
               <BookOpen size={18} className="text-oe-blue" />
               <h2 className="text-lg font-semibold text-content-primary">
@@ -710,7 +788,7 @@ export function AboutPage() {
               href="https://datadrivenconstruction.io/books/"
               target="_blank"
               rel="noopener noreferrer"
-              className="group block overflow-hidden rounded-xl bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800 border border-border-light hover:border-oe-blue/40 hover:shadow-lg transition-all max-w-[200px] mx-auto lg:mx-0"
+              className="group block overflow-hidden rounded-xl bg-gradient-to-br from-slate-50 via-white to-blue-50 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800 border border-border-light hover:border-oe-blue/40 hover:shadow-lg transition-all max-w-[320px] mx-auto lg:mx-0"
               title={t('about.book_cta', { defaultValue: 'Pick your language on datadrivenconstruction.io' })}
             >
               <img
@@ -733,8 +811,8 @@ export function AboutPage() {
           </div>
           {/* /Left column */}
 
-          {/* ── Right column — Part-level table of contents ── */}
-          <div className="lg:col-span-2">
+          {/* ── Right column — Part-level table of contents (narrower) ── */}
+          <div className="lg:col-span-3">
             <p className="text-2xs font-semibold uppercase tracking-wider text-content-tertiary mb-3">
               {t('about.book_toc_label', { defaultValue: 'Inside the book — 10 parts' })}
             </p>
@@ -773,7 +851,10 @@ export function AboutPage() {
       {/* Reference band — Documentation + License side-by-side with matched heights. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
 
-        {/* Documentation */}
+        {/* Documentation — same h-full + flex-col + mt-auto pattern as License so
+            both cards land their CTA button on the same baseline. The body is
+            enriched with a "Popular topics" 2x3 mini-grid to fill the column
+            instead of leaving whitespace below the 4 high-level bullets. */}
         <Card className="animate-card-in h-full flex flex-col" style={{ animationDelay: '240ms' }}>
           <div className="p-6 flex flex-col flex-1">
             <div className="flex items-center gap-3 mb-3">
@@ -802,7 +883,37 @@ export function AboutPage() {
                 </li>
               ))}
             </ul>
-            <div className="mt-auto">
+
+            {/* ── Popular topics — direct deep-links so users jump straight into
+                the doc page they need, instead of landing on the index. ── */}
+            <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-content-tertiary">
+              {t('about.docs_popular_label', { defaultValue: 'Popular topics' })}
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {[
+                { href: 'https://openconstructionerp.com/docs.html#quickstart', label: t('about.docs_pop_quickstart', { defaultValue: 'Quick start — Docker compose' }) },
+                { href: 'https://openconstructionerp.com/docs.html#bim-import', label: t('about.docs_pop_bim', { defaultValue: 'Import BIM (RVT/IFC) → BOQ' }) },
+                { href: 'https://openconstructionerp.com/docs.html#gaeb', label: t('about.docs_pop_gaeb', { defaultValue: 'GAEB X83/X84 import & export' }) },
+                { href: 'https://openconstructionerp.com/docs.html#takeoff', label: t('about.docs_pop_takeoff', { defaultValue: 'PDF takeoff with annotations' }) },
+                { href: 'https://openconstructionerp.com/docs.html#module-sdk', label: t('about.docs_pop_sdk', { defaultValue: 'Module SDK · write a plugin' }) },
+                { href: 'https://openconstructionerp.com/docs.html#deploy', label: t('about.docs_pop_deploy', { defaultValue: 'VPS deployment guide' }) },
+              ].map(topic => (
+                <a
+                  key={topic.href}
+                  href={topic.href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group flex items-center justify-between gap-2 rounded-lg border border-border-light bg-surface-secondary/40 px-3 py-2 hover:border-oe-blue/40 hover:bg-oe-blue/[0.04] transition-all"
+                >
+                  <span className="text-2xs text-content-secondary group-hover:text-content-primary leading-snug">
+                    {topic.label}
+                  </span>
+                  <ArrowRight size={11} className="shrink-0 text-content-quaternary group-hover:text-oe-blue group-hover:translate-x-0.5 transition-all" />
+                </a>
+              ))}
+            </div>
+
+            <div className="mt-auto pt-4">
               <a href="https://openconstructionerp.com/docs.html" target="_blank" rel="noopener noreferrer">
                 <Button variant="primary" size="md" icon={<BookOpen size={15} />}>
                   {t('about.docs_open', { defaultValue: 'Open Docs' })}
@@ -812,7 +923,9 @@ export function AboutPage() {
           </div>
         </Card>
 
-        {/* License */}
+        {/* License — restructured into "You can / You must" so users see the
+            AGPL trade-off at a glance instead of reading prose. CTA at bottom
+            matches the Documentation card's "Open Docs" button position. */}
         <Card className="animate-card-in h-full flex flex-col" style={{ animationDelay: '260ms' }}>
           <div className="p-6 flex flex-col flex-1">
             <div className="flex items-center gap-3 mb-3">
@@ -829,26 +942,77 @@ export function AboutPage() {
               </div>
             </div>
             <p className="text-sm text-content-secondary leading-relaxed mb-4">
-              {t('about.license_desc', { defaultValue: 'OpenConstructionERP is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0). This means you can freely use, modify, and distribute the software, as long as any modifications are also made available under the same license.' })}
+              {t('about.license_desc_short', { defaultValue: 'GNU Affero General Public License v3.0 — copyleft. The full text ships with the source and is also available at gnu.org/licenses/agpl-3.0.' })}
             </p>
-            <div className="flex flex-wrap gap-2 mb-4">
-              <Badge variant="success" size="sm">Free to use</Badge>
-              <Badge variant="success" size="sm">Open source</Badge>
-              <Badge variant="success" size="sm">Self-hosted</Badge>
-              <Badge variant="success" size="sm">No vendor lock-in</Badge>
+
+            {/* ── You can / You must — concrete bullet pairs so the AGPL
+                obligations are visible before download, not after lawyers. ── */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3 mb-4">
+              <div>
+                <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                  {t('about.license_youcan_label', { defaultValue: 'You can' })}
+                </p>
+                <ul className="space-y-1 text-xs text-content-secondary leading-snug">
+                  {[
+                    t('about.license_youcan_1', { defaultValue: 'Use for any purpose, including commercial' }),
+                    t('about.license_youcan_2', { defaultValue: 'Self-host on your own hardware' }),
+                    t('about.license_youcan_3', { defaultValue: 'Modify, fork, and redistribute' }),
+                    t('about.license_youcan_4', { defaultValue: 'Build proprietary modules on top' }),
+                  ].map((b, i) => (
+                    <li key={i} className="flex items-start gap-1.5">
+                      <span className="mt-1 inline-block h-1 w-1 rounded-full bg-emerald-500 shrink-0" />
+                      <span>{b}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="mb-1.5 text-2xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                  {t('about.license_youmust_label', { defaultValue: 'You must' })}
+                </p>
+                <ul className="space-y-1 text-xs text-content-secondary leading-snug">
+                  {[
+                    t('about.license_youmust_1', { defaultValue: 'Share modifications under AGPL-3.0' }),
+                    t('about.license_youmust_2', { defaultValue: 'Provide source to network users' }),
+                    t('about.license_youmust_3', { defaultValue: 'Keep copyright + license notices' }),
+                    t('about.license_youmust_4', { defaultValue: 'Document what you changed' }),
+                  ].map((b, i) => (
+                    <li key={i} className="flex items-start gap-1.5">
+                      <span className="mt-1 inline-block h-1 w-1 rounded-full bg-amber-500 shrink-0" />
+                      <span>{b}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-1.5 mb-4">
+              <Badge variant="success" size="sm">{t('about.license_badge_free', { defaultValue: 'Free to use' })}</Badge>
+              <Badge variant="success" size="sm">{t('about.license_badge_oss', { defaultValue: 'Open source' })}</Badge>
+              <Badge variant="success" size="sm">{t('about.license_badge_selfhost', { defaultValue: 'Self-hosted' })}</Badge>
+              <Badge variant="success" size="sm">{t('about.license_badge_nolockin', { defaultValue: 'No vendor lock-in' })}</Badge>
               <Badge variant="blue" size="sm">AGPL-3.0</Badge>
             </div>
-            <p className="mt-auto text-xs text-content-quaternary">
-              {t('about.license_commercial', { defaultValue: 'For commercial licensing (proprietary use without AGPL obligations), enterprise support, or SLA agreements, please contact us.' })}
-            </p>
+
+            <div className="mt-auto pt-3 border-t border-border-light">
+              <p className="text-xs text-content-secondary mb-2">
+                {t('about.license_commercial_short', { defaultValue: 'Need a commercial licence (without AGPL obligations) or an enterprise SLA?' })}
+              </p>
+              <a href="https://datadrivenconstruction.io/contact-support/" target="_blank" rel="noopener noreferrer">
+                <Button variant="secondary" size="md" icon={<Shield size={15} />}>
+                  {t('about.license_commercial_cta', { defaultValue: 'Commercial licensing' })}
+                </Button>
+              </a>
+            </div>
           </div>
         </Card>
 
       </div>
 
-      {/* Changelog */}
+      {/* Changelog — anchored so the header's "View all" jump target lands
+          on the section heading instead of mid-scroll. */}
       <Card>
-        <div className="p-6">
+        <div className="p-6" data-changelog-anchor>
           <Changelog />
         </div>
       </Card>

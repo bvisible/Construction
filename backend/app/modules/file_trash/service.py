@@ -21,7 +21,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.file_trash.models import FileTrash
@@ -277,6 +276,53 @@ class FileTrashService:
         await self.repo.delete(trash_id)
 
 
+_STORAGE_PATH_KEYS: tuple[str, ...] = (
+    # Documents / photos / sheets / dwg / takeoff all use ``file_path``;
+    # markup persists the source under ``image_path``; BIM models use
+    # ``model_path``. Cover the union so the purge job is kind-agnostic.
+    "file_path",
+    "physical_path",
+    "image_path",
+    "model_path",
+    "storage_path",
+)
+
+
+def _candidate_storage_paths(payload: dict[str, Any]) -> list[str]:
+    """Best-effort extraction of every on-disk path the snapshot mentions.
+
+    Snapshots are JSON blobs of the original ORM row; the column the
+    file lives in depends on the kind. We probe a small whitelist of
+    well-known keys and return only non-empty strings — callers are
+    responsible for the actual existence / unlink check.
+    """
+    out: list[str] = []
+    for key in _STORAGE_PATH_KEYS:
+        val = payload.get(key) if isinstance(payload, dict) else None
+        if isinstance(val, str) and val.strip():
+            out.append(val.strip())
+    return out
+
+
+def _delete_storage_file(path: str) -> bool:
+    """Unlink ``path`` if it exists. Logs + swallows OSErrors.
+
+    Returns True when the file existed and was removed (or never
+    existed in the first place, which is also a successful purge),
+    False on a hard OSError (permission, in-use, etc.).
+    """
+    import os
+
+    try:
+        if os.path.exists(path):
+            os.unlink(path)
+            logger.debug("file_trash purge: removed %s", path)
+        return True
+    except OSError:
+        logger.warning("file_trash purge: could not unlink %s", path, exc_info=True)
+        return False
+
+
 async def purge_expired_trash(
     session: AsyncSession,
     *,
@@ -285,10 +331,13 @@ async def purge_expired_trash(
     """Hard-delete every trash row past its retention window.
 
     Designed as a Celery / cron entry point. Returns the number of rows
-    purged so the job can log a meaningful summary. Does NOT delete
-    files on disk — that side-effect is the kind module's job and is
-    triggered via the ``file_trash.purged`` event (not yet wired here;
-    the spec scopes us to the function + tests, not the celery glue).
+    purged so the job can log a meaningful summary. Best-effort deletes
+    the snapshotted on-disk file as well: snapshots carry the original
+    row's ``file_path`` / ``physical_path`` / ``image_path`` /
+    ``model_path`` so the storage entry can be cleaned up alongside the
+    trash row. A failed unlink is logged but does not abort the purge —
+    the DB row is still removed so the trash table doesn't accumulate
+    "stuck" entries.
     """
     if now is None:
         now = datetime.now(UTC)
@@ -296,7 +345,12 @@ async def purge_expired_trash(
     rows = await repo.expired(now)
     count = 0
     for row in rows:
-        row.purged_at = now
+        # Storage-side cleanup first so we never DB-delete a row whose
+        # file we still believe lives on disk. ``_delete_storage_file``
+        # is graceful — missing files count as success.
+        payload = row.payload_json if isinstance(row.payload_json, dict) else {}
+        for path in _candidate_storage_paths(payload):
+            _delete_storage_file(path)
         await session.delete(row)
         count += 1
     if count:

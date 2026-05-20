@@ -1934,6 +1934,27 @@ def create_app() -> FastAPI:
         except Exception:
             logger.exception("Starter seed failed — /costs and /catalog may be empty")
 
+        # Regional indices seed (v3.12.0 — Stream B). Idempotent: the
+        # script honours the UNIQUE(region, category, subcategory,
+        # effective_date) constraint on ``oe_regional_indices``, so it
+        # only inserts the OE_v3.12 baseline rows once. Failure is
+        # non-fatal — the regional-adjust endpoint falls back to a 1:1
+        # passthrough when no rows are on file.
+        try:
+            from app.scripts.seed_regional_indices import main as _seed_regional_main
+
+            inserted = await _seed_regional_main()
+            if inserted:
+                logger.info(
+                    "Regional indices seed: %d factor rows inserted",
+                    inserted,
+                )
+        except Exception:
+            logger.exception(
+                "Regional indices seed failed — /v1/costs/regional-adjust will "
+                "passthrough until an operator imports a feed"
+            )
+
         # Initialize vector database (LanceDB embedded, no Docker)
         _section("Vector DB")
         _init_vector_db()
@@ -2008,6 +2029,19 @@ def create_app() -> FastAPI:
                     logger.exception("KPI recalculation scheduler failed")
 
         asyncio.create_task(_kpi_scheduler())
+
+        # ── File-trash retention purge (24-hour interval) ─────────────
+        # Walks ``oe_file_trash`` once a day and hard-deletes every row
+        # whose ``trashed_at + retention_days`` window has lapsed. The
+        # registration helper is idempotent so a hot-reload during dev
+        # doesn't end up running two parallel purge loops against the
+        # same database.
+        try:
+            from app.modules.file_trash.jobs import register_jobs as _ft_register_jobs
+
+            _ft_register_jobs()
+        except Exception:
+            logger.exception("file_trash scheduler registration failed")
 
         # ── Cost-DB cache pre-warm (runs once, in background) ──────────
         # The "Add from Database" modal in the BOQ editor calls three

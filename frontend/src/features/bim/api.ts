@@ -494,6 +494,74 @@ export async function fetchBIMElementProperties(
   return rows[0] ?? null;
 }
 
+/**
+ * Schema row describing one column in the model's Parquet dataframe.
+ * Returned by ``GET /models/{id}/dataframe/schema/``.
+ */
+export interface BIMDataframeColumn {
+  name: string;
+  type: string;
+}
+
+/** Fetch the column schema for the model's Parquet dataframe. Used by the
+ *  property-search panel to populate the column dropdown. */
+export async function fetchBIMDataframeSchema(
+  modelId: string,
+  signal?: AbortSignal,
+): Promise<BIMDataframeColumn[]> {
+  const token = useAuthStore.getState().accessToken;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(
+    `/api/v1/bim_hub/models/${encodeURIComponent(modelId)}/dataframe/schema/`,
+    { method: 'GET', headers, signal },
+  );
+  if (!resp.ok) {
+    throw new Error(`Dataframe schema fetch failed (HTTP ${resp.status})`);
+  }
+  const rows = (await resp.json()) as BIMDataframeColumn[];
+  return rows;
+}
+
+/** Filter clause shape accepted by ``POST /models/{id}/dataframe/query/``. */
+export interface BIMDataframeFilter {
+  column: string;
+  op: '=' | '!=' | '<' | '<=' | '>' | '>=' | 'LIKE' | 'IN' | 'NOT IN';
+  value: string | number | (string | number)[];
+}
+
+export interface BIMDataframeQueryBody {
+  columns?: string[];
+  filters?: BIMDataframeFilter[];
+  limit?: number;
+}
+
+/** Run a DuckDB query against the model's Parquet dataframe. Returns the
+ *  matching rows verbatim — caller is responsible for picking the columns
+ *  they need (typically ``id`` to drive viewport isolation). */
+export async function queryBIMDataframe(
+  modelId: string,
+  body: BIMDataframeQueryBody,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>[]> {
+  const token = useAuthStore.getState().accessToken;
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const resp = await fetch(
+    `/api/v1/bim_hub/models/${encodeURIComponent(modelId)}/dataframe/query/`,
+    {
+      method: 'POST',
+      headers,
+      signal,
+      body: JSON.stringify(body),
+    },
+  );
+  if (!resp.ok) {
+    throw new Error(`Dataframe query failed (HTTP ${resp.status})`);
+  }
+  return (await resp.json()) as Record<string, unknown>[];
+}
+
 /** @deprecated Use fetchGeometryBlobUrl() instead — this exposes the JWT in the URL. */
 export function getGeometryUrl(modelId: string): string {
   const token = useAuthStore.getState().accessToken;

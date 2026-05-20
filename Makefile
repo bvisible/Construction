@@ -1,4 +1,4 @@
-.PHONY: help dev dev-backend dev-frontend dev-unix stop test lint format migrate seed seed-cwicr-v3 build
+.PHONY: help dev dev-backend dev-frontend dev-unix stop test lint format migrate seed seed-regional seed-cwicr-v3 build
 
 # ─── Variables ──────────────────────────────────────────────────────────────
 BACKEND_DIR = backend
@@ -93,8 +93,12 @@ migrate-new: ## Create new migration (usage: make migrate-new MSG="add users tab
 migrate-down: ## Rollback last migration
 	cd $(BACKEND_DIR) && alembic downgrade -1
 
-seed: ## Load seed data (cost catalog). Demo projects are auto-created on first backend startup.
+seed: ## Load seed data (cost catalog + regional indices). Demo projects are auto-created on first backend startup.
 	cd $(BACKEND_DIR) && python -m app.scripts.seed_catalog
+	cd $(BACKEND_DIR) && python -m app.scripts.seed_regional_indices
+
+seed-regional: ## Load regional cost-index seed (v3.12.0, idempotent)
+	cd $(BACKEND_DIR) && python -m app.scripts.seed_regional_indices
 
 # Override with REGIONS="--regions USA_USD,GB_LONDON" or REGIONS="--top-n 5".
 # Default ``--top-n 3`` installs the 3 most-popular catalogues so a fresh

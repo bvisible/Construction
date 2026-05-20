@@ -362,6 +362,58 @@ export default function BIMFilterPanel({
     setActiveGroupId(null);
   }, [modelId]);
 
+  // ── window.__oeBimFilter bridge (v3.12.0 / Stream D) ─────────────────
+  // Saved-views need to capture the panel's filter state without forcing
+  // BIMPage to lift it (the panel owns transient UI state — search box,
+  // checkbox sets, etc.). We expose a tiny imperative bridge with the
+  // same shape as ``window.__oeBim`` so the right-panel can call
+  // ``window.__oeBimFilter.get()`` / ``.set(...)`` from anywhere in the
+  // tree. Sets are serialised as arrays so the snapshot survives JSON.
+  useEffect(() => {
+    const w = window as unknown as {
+      __oeBimFilter?: {
+        get: () => {
+          search: string;
+          storeys: string[];
+          types: string[];
+          buildingsOnly: boolean;
+        };
+        set: (snapshot: {
+          search?: string;
+          storeys?: string[];
+          types?: string[];
+          buildingsOnly?: boolean;
+        }) => void;
+      };
+    };
+    w.__oeBimFilter = {
+      get: () => ({
+        search: state.search,
+        storeys: Array.from(state.storeys),
+        types: Array.from(state.types),
+        buildingsOnly: state.buildingsOnly,
+      }),
+      set: (snapshot) => {
+        setState((prev) => ({
+          ...prev,
+          search: snapshot.search ?? prev.search,
+          storeys: snapshot.storeys ? new Set(snapshot.storeys) : prev.storeys,
+          types: snapshot.types ? new Set(snapshot.types) : prev.types,
+          buildingsOnly:
+            snapshot.buildingsOnly !== undefined
+              ? snapshot.buildingsOnly
+              : prev.buildingsOnly,
+        }));
+        // Clear active group highlight — the user is explicitly restoring
+        // a saved view, not applying a saved group.
+        setActiveGroupId(null);
+      },
+    };
+    return () => {
+      if (w.__oeBimFilter) delete w.__oeBimFilter;
+    };
+  }, [state.search, state.storeys, state.types, state.buildingsOnly]);
+
   /** Apply a saved group's `filter_criteria` to the panel state.  Converts
    *  the BIMGroupFilterCriteria array shape into the panel's Set shape. */
   const applyGroupAsFilter = useCallback((group: BIMElementGroup) => {

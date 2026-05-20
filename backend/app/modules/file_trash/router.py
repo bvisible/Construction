@@ -31,7 +31,7 @@ from app.modules.file_trash.schemas import (
     TrashSoftDeleteRequest,
     TrashStatsResponse,
 )
-from app.modules.file_trash.service import FileTrashService
+from app.modules.file_trash.service import FileTrashService, purge_expired_trash
 
 router = APIRouter()
 
@@ -161,3 +161,23 @@ async def purge_trash(
     row = await service.get(trash_id)
     await verify_project_access(row.project_id, user_id, session)
     await service.purge(trash_id, confirm_token=body.confirm_token)
+
+
+@router.post(
+    "/purge-now",
+    dependencies=[Depends(RequirePermission("file_trash.purge"))],
+)
+async def purge_now(
+    session: SessionDep,
+    user_id: CurrentUserId,  # noqa: ARG001 — gate by permission, not by user
+) -> dict[str, int]:
+    """Admin trigger for the retention purge job.
+
+    Walks ``oe_file_trash`` and hard-deletes every row whose
+    ``trashed_at + retention_days`` window has lapsed. Designed for
+    manual smoke testing — the same function runs on a 24-hour
+    scheduler from :func:`app.modules.file_trash.jobs.register_jobs`.
+    """
+    purged = await purge_expired_trash(session)
+    await session.commit()
+    return {"purged": purged}

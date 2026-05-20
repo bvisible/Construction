@@ -40,7 +40,9 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useCostDatabaseStore, REGION_MAP } from '@/stores/useCostDatabaseStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import type { CostItemMetadata } from './api';
+import { CertaintyBadge } from './CertaintyBadge';
 import { EscalationCalculator } from './EscalationCalculator';
+import { RegionalAdjustPanel } from './RegionalAdjustPanel';
 import { CostCategoryTree } from '@/features/boq/CostCategoryTree';
 import { fetchCategoryTree, type CategoryTreeNode } from '@/features/boq/api';
 
@@ -477,6 +479,7 @@ export function CostsPage() {
   const [showCreateAssembly, setShowCreateAssembly] = useState(false);
   const [showCreateItem, setShowCreateItem] = useState(false);
   const [showEscalation, setShowEscalation] = useState(false);
+  const [showRegionalAdjust, setShowRegionalAdjust] = useState(false);
   const [semanticSearch, setSemanticSearch] = useState(false);
 
   // Column sorting
@@ -831,6 +834,15 @@ export function CostsPage() {
           <Button
             variant="secondary"
             size="sm"
+            icon={<Layers size={14} />}
+            onClick={() => setShowRegionalAdjust((p) => !p)}
+            className={showRegionalAdjust ? 'border-oe-blue/40 text-oe-blue bg-oe-blue-subtle/20' : ''}
+          >
+            {t('costs.regional_adjust.toggle', { defaultValue: 'Regional Adjust' })}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
             icon={<Plus size={14} />}
             onClick={() => setShowCreateItem(true)}
           >
@@ -850,6 +862,11 @@ export function CostsPage() {
       {/* Escalation Calculator (collapsible) */}
       {showEscalation && (
         <EscalationCalculator className="mb-5 animate-fade-in" />
+      )}
+
+      {/* Regional Adjust panel (collapsible, v3.12.0) */}
+      {showRegionalAdjust && (
+        <RegionalAdjustPanel className="mb-5 animate-fade-in" />
       )}
 
       {/* Region Tabs */}
@@ -2323,6 +2340,7 @@ function CostItemRow({
         </td>
         <td className="px-4 py-3 text-right font-semibold text-content-primary tabular-nums">
           <div className="inline-flex items-center gap-1.5">
+            <CertaintyBadge costItemId={item.id} />
             <span>{fmt(item.rate)}</span>
             {hasVariants && variantStats && (
               <Badge

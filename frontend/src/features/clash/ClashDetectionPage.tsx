@@ -89,6 +89,10 @@ import {
   type ClashHistoryEntry,
 } from './api';
 import { buildClashBimLink } from './clashBimLink';
+import { ClashClusterChips } from './ClashClusterChips';
+import { ClashRuleEditor } from './ClashRuleEditor';
+import { ClashRuleSuggestionBanner } from './ClashRuleSuggestionBanner';
+import { ClashKpiPanel } from './ClashKpiPanel';
 
 const EMPTY_SET: ClashSelectionSet = {
   disciplines: [],
@@ -493,6 +497,15 @@ export function ClashDetectionPage() {
   const [kpiFilter, setKpiFilter] = useState<
     'all' | 'hard' | 'clearance' | 'open' | 'resolved'
   >('all');
+  // Wave A4 — selected spatial-cluster id (or null = "all"). Filters
+  // the review table to that DBSCAN bucket so the coordinator can walk
+  // through a single hot-spot at a time.
+  const [selectedClusterId, setSelectedClusterId] = useState<number | null>(
+    null,
+  );
+  // Wave A4 — UI flags for the new rule editor modal + KPI dashboard tab.
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [kpiTabOpen, setKpiTabOpen] = useState(false);
 
   // Table state.
   const [sortKey, setSortKey] = useState<SortKey>('idx');
@@ -1163,6 +1176,12 @@ export function ClashDetectionPage() {
       )
         return false;
       if (r.clash_type === 'hard' && r.penetration_m < minPenM) return false;
+      // Wave A4 — restrict to the active cluster chip (null = "all").
+      if (
+        selectedClusterId !== null &&
+        (r.cluster_id ?? null) !== selectedClusterId
+      )
+        return false;
       if (q) {
         const hay = `${r.a_name} ${r.b_name} ${r.a_stable_id} ${r.b_stable_id} ${r.a_discipline} ${r.b_discipline}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -1181,6 +1200,7 @@ export function ClashDetectionPage() {
     fLevelPair,
     fModelPair,
     kpiFilter,
+    selectedClusterId,
   ]);
 
   const sorted = useMemo(() => {
@@ -2273,6 +2293,51 @@ export function ClashDetectionPage() {
 
           {runId && runQ.data && (
             <>
+              {/* ── Wave A4 — rule-suggestion banner + cluster chips +
+                    KPI / rules quick actions. Sits just above the KPI
+                    tiles so the coordinator sees engine-mined hints
+                    before drilling into the result table. */}
+              <ClashRuleSuggestionBanner
+                projectId={projectId}
+                runId={runId}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <ClashClusterChips
+                  projectId={projectId}
+                  runId={runId}
+                  selectedClusterId={selectedClusterId}
+                  onSelect={setSelectedClusterId}
+                  totalClashes={runQ.data.total_clashes}
+                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setRulesOpen(true)}
+                  >
+                    {t('clash.rules.open_editor', { defaultValue: 'Rules…' })}
+                  </Button>
+                  <Button
+                    variant={kpiTabOpen ? 'primary' : 'secondary'}
+                    size="sm"
+                    onClick={() => setKpiTabOpen((v) => !v)}
+                  >
+                    {kpiTabOpen
+                      ? t('clash.kpi_panel.hide', { defaultValue: 'Hide KPI dashboard' })
+                      : t('clash.kpi_panel.show', { defaultValue: 'KPI dashboard' })}
+                  </Button>
+                </div>
+              </div>
+              {kpiTabOpen && (
+                <ClashKpiPanel projectId={projectId} runId={runId} />
+              )}
+              <ClashRuleEditor
+                open={rulesOpen}
+                onClose={() => setRulesOpen(false)}
+                projectId={projectId}
+                runId={runId}
+              />
+
               {/* ── KPI tiles ──────────────────────────────────────── */}
               <div
                 className={clsx(

@@ -85,6 +85,12 @@ import {
 } from '../../features/takeoff/lib/takeoff-groups';
 import { CalibrationDialog } from '../../features/takeoff/components/CalibrationDialog';
 import { MeasurementLedger } from '../../features/takeoff/components/MeasurementLedger';
+import {
+  buildExportFilename,
+  buildTakeoffPdf,
+  buildTakeoffWorkbook,
+  triggerDownload,
+} from '../../features/takeoff/lib/takeoff-export';
 
 // Configure PDF.js worker — bundled locally (no CDN dependency)
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -360,6 +366,11 @@ export default function TakeoffViewerModule({
   // Document persistence + server sync
   const [fileName, setFileName] = useState<string | null>(null);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
+
+  // PDF / Excel export in-flight flags (drive button spinner state).
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingXlsx, setIsExportingXlsx] = useState(false);
   const { hasPersistedData, saveNow, clearPersisted, syncing, syncedToServer } = useMeasurementPersistence({
     fileName,
     measurements,
@@ -1747,6 +1758,123 @@ export default function TakeoffViewerModule({
     URL.revokeObjectURL(url);
     addToast({ type: 'success', title: t('takeoff.csv_exported', { defaultValue: 'Measurements exported to CSV' }) });
   }, [measurements, addToast, t]);
+
+  /**
+   * Resolve the human-friendly project name for export filenames.
+   *
+   * Priority: explicit project context store value → loaded PDF filename
+   * (stripped of extension) → "untitled".  Surface as a thin memo so the
+   * PDF and Excel handlers stay in sync.
+   */
+  const exportProjectName = useMemo(() => {
+    if (activeProjectName) return activeProjectName;
+    if (fileName) return fileName.replace(/\.[^.]+$/, '');
+    return 'untitled';
+  }, [activeProjectName, fileName]);
+
+  /** Export the current PDF with baked-in annotations + summary page. */
+  const handleExportPdf = useCallback(async () => {
+    if (!pdfDoc) {
+      addToast({
+        type: 'warning',
+        title: t('takeoff_viewer.pdf_export_no_doc', { defaultValue: 'Load a PDF first' }),
+      });
+      return;
+    }
+    if (measurements.length === 0) {
+      addToast({
+        type: 'warning',
+        title: t('takeoff_viewer.pdf_export_empty', { defaultValue: 'No measurements to export' }),
+      });
+      return;
+    }
+    setIsExportingPdf(true);
+    addToast({
+      type: 'info',
+      title: t('takeoff_viewer.pdf_export_started', {
+        defaultValue: 'Generating annotated PDF…',
+      }),
+    });
+    try {
+      const pdf = await buildTakeoffPdf({
+        pdfDoc,
+        measurements,
+        hiddenGroups,
+        scale,
+        groupColorMap: GROUP_COLOR_MAP,
+        projectName: exportProjectName,
+      });
+      const blob = pdf.output('blob');
+      triggerDownload(blob, buildExportFilename(exportProjectName, 'pdf'));
+      addToast({
+        type: 'success',
+        title: t('takeoff_viewer.pdf_export_success', {
+          defaultValue: 'Annotated PDF downloaded',
+        }),
+      });
+    } catch (err) {
+      console.error('PDF export failed:', err);
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.pdf_export_failed', {
+          defaultValue: 'Failed to export PDF',
+        }),
+        message: err instanceof Error ? err.message : '',
+      });
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [pdfDoc, measurements, hiddenGroups, scale, exportProjectName, addToast, t]);
+
+  /** Export measurements + summary to an .xlsx workbook. */
+  const handleExportExcel = useCallback(async () => {
+    if (measurements.length === 0) {
+      addToast({
+        type: 'warning',
+        title: t('takeoff_viewer.excel_export_empty', {
+          defaultValue: 'No measurements to export',
+        }),
+      });
+      return;
+    }
+    setIsExportingXlsx(true);
+    addToast({
+      type: 'info',
+      title: t('takeoff_viewer.excel_export_started', {
+        defaultValue: 'Building Excel workbook…',
+      }),
+    });
+    try {
+      const wb = await buildTakeoffWorkbook({
+        measurements,
+        scale,
+        groupColorMap: GROUP_COLOR_MAP,
+        projectName: exportProjectName,
+      });
+      const buf = await wb.xlsx.writeBuffer();
+      const blob = new Blob([buf], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      triggerDownload(blob, buildExportFilename(exportProjectName, 'xlsx'));
+      addToast({
+        type: 'success',
+        title: t('takeoff_viewer.excel_export_success', {
+          defaultValue: 'Excel workbook downloaded',
+        }),
+      });
+    } catch (err) {
+      console.error('Excel export failed:', err);
+      addToast({
+        type: 'error',
+        title: t('takeoff_viewer.excel_export_failed', {
+          defaultValue: 'Failed to export Excel',
+        }),
+        message: err instanceof Error ? err.message : '',
+      });
+    } finally {
+      setIsExportingXlsx(false);
+    }
+  }, [measurements, scale, exportProjectName, addToast, t]);
 
   const deleteMeasurement = useCallback((id: string) => {
     setMeasurements((prev) => {
@@ -3987,11 +4115,32 @@ export default function TakeoffViewerModule({
                   {t('takeoff_viewer.export_to_boq', { defaultValue: 'Export {{count}} measurements to BOQ', count: measurements.length })}
                 </button>
                 <button
+                  onClick={handleExportPdf}
+                  disabled={isExportingPdf || !pdfDoc}
+                  data-testid="takeoff-export-pdf-button"
+                  className="w-full rounded-lg border border-border bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-primary hover:bg-surface-tertiary transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isExportingPdf ? <Loader2 size={14} className="animate-spin" /> : <FileText size={14} />}
+                  {t('takeoff_viewer.export_pdf_annotated', {
+                    defaultValue: 'Export PDF (with annotations)',
+                  })}
+                </button>
+                <button
+                  onClick={handleExportExcel}
+                  disabled={isExportingXlsx}
+                  data-testid="takeoff-export-excel-button"
+                  className="w-full rounded-lg border border-border bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-primary hover:bg-surface-tertiary transition-colors flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isExportingXlsx ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
+                  {t('takeoff_viewer.export_excel_xlsx', { defaultValue: 'Export Excel (.xlsx)' })}
+                </button>
+                <button
                   onClick={handleExportCSV}
+                  data-testid="takeoff-export-csv-button"
                   className="w-full rounded-lg border border-border bg-surface-secondary px-3 py-2 text-xs font-semibold text-content-primary hover:bg-surface-tertiary transition-colors flex items-center justify-center gap-1.5"
                 >
                   <FileSpreadsheet size={14} />
-                  {t('takeoff_viewer.export_excel', { defaultValue: 'Export Excel (CSV)' })}
+                  {t('takeoff_viewer.export_csv', { defaultValue: 'Export CSV' })}
                 </button>
               </div>
             )}

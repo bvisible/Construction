@@ -2022,12 +2022,110 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
             api.flashCells({ rowNodes: flashRowNodes, columns: flashColumns });
           }
         }
+      } else if (e.key === 'd' || e.key === 'D') {
+        /* ── v3.12.0 Stream A — Ctrl+D fill down ──────────────────── */
+        // Copy the focused cell's value to every other selected row in
+        // the SAME column. Mirrors the spreadsheet idiom; AG-Grid does
+        // not define Ctrl+D so this never overrides a built-in.
+        const focusedCell = api.getFocusedCell();
+        if (!focusedCell) return;
+        const colId = focusedCell.column.getColId();
+        if (PASTE_PROTECTED_FIELDS.has(colId)) return;
+        const sourceValue = getCellRawValue(api, focusedCell.rowIndex, colId);
+        if (sourceValue === undefined) return;
+
+        const selectedNodes = api.getSelectedNodes();
+        const targets = selectedNodes.filter((node) => {
+          const d = node.data as Record<string, unknown> | undefined;
+          return d && d.id && !d._isFooter && !d._isSection && !d._isResource;
+        });
+        if (targets.length === 0) return;
+
+        e.preventDefault();
+        let filled = 0;
+        for (const node of targets) {
+          const data = node.data as Record<string, unknown>;
+          if (data[colId] === sourceValue) continue;
+          if (!isCellPasteable(data, colId)) continue;
+          const update: UpdatePositionData = {
+            [colId]: sourceValue,
+          } as UpdatePositionData;
+          const old: UpdatePositionData = {
+            [colId]: data[colId],
+          } as UpdatePositionData;
+          onUpdatePosition(data.id as string, update, old);
+          filled++;
+        }
+        if (filled > 0) {
+          api.flashCells({
+            rowNodes: targets,
+            columns: [focusedCell.column],
+          });
+          addToast(
+            {
+              type: 'success',
+              title: t('boq.fill_down_done', {
+                defaultValue: 'Filled down to {{count}} rows‌⁠‍',
+                count: String(filled),
+              } as Record<string, string>),
+            },
+            { duration: 2000 },
+          );
+        }
+      } else if (e.key === ';' || e.key === ':') {
+        /* ── v3.12.0 Stream A — Ctrl+; insert today (ISO YYYY-MM-DD) ─ */
+        // Inserts only into custom-column date cells (built-in numeric
+        // columns reject non-numeric pastes anyway). Free of AG-Grid
+        // built-ins.
+        const focusedCell = api.getFocusedCell();
+        if (!focusedCell) return;
+        const colId = focusedCell.column.getColId();
+        if (PASTE_PROTECTED_FIELDS.has(colId)) return;
+        if (NUMERIC_FIELDS.has(colId)) return;
+        const rowNode = api.getDisplayedRowAtIndex(focusedCell.rowIndex);
+        if (!rowNode?.data?.id) return;
+        const data = rowNode.data as Record<string, unknown>;
+        if (!isCellPasteable(data, colId)) return;
+
+        const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+        if (data[colId] === today) return;
+
+        e.preventDefault();
+        const update: UpdatePositionData = {
+          [colId]: today,
+        } as UpdatePositionData;
+        const old: UpdatePositionData = {
+          [colId]: data[colId],
+        } as UpdatePositionData;
+        onUpdatePosition(data.id as string, update, old);
+        api.flashCells({
+          rowNodes: [rowNode],
+          columns: [focusedCell.column],
+        });
+        addToast(
+          {
+            type: 'success',
+            title: t('boq.date_inserted', {
+              defaultValue: 'Inserted today ({{date}})‌⁠‍',
+              date: today,
+            } as Record<string, string>),
+          },
+          { duration: 1500 },
+        );
       }
     };
 
     wrapper.addEventListener('keydown', handleKeyDown);
     return () => wrapper.removeEventListener('keydown', handleKeyDown);
-  }, [getCellRawValue, formatCellForClipboard, applyCellPaste, addToast, t]);
+  }, [
+    getCellRawValue,
+    formatCellForClipboard,
+    applyCellPaste,
+    addToast,
+    t,
+    isCellPasteable,
+    onUpdatePosition,
+  ]);
 
   /* ── Right-click on AG Grid cells → context menu ──────────────── */
   const onCellContextMenu = useCallback(

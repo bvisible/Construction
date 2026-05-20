@@ -13,13 +13,15 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Ruler, Camera, Trash2, Play, Pencil, Check, X, Eye, EyeOff, Crosshair } from 'lucide-react';
+import { Ruler, Camera, Trash2, Play, Pencil, Check, X, Eye, EyeOff, Crosshair, Image as ImageIcon } from 'lucide-react';
 import {
   listViewpoints,
   removeViewpoint,
   renameViewpoint,
   addViewpoint,
   type Viewpoint,
+  type SavedBIMFilterState,
+  type BIMClipState,
 } from '@/shared/ui/BIMViewer';
 import { useBIMViewerStore } from '@/stores/useBIMViewerStore';
 import { useBIMMeasurementsStore, type StoredMeasurement } from '@/stores/useBIMMeasurementsStore';
@@ -32,13 +34,25 @@ interface BIMToolsPanelProps {
     position: { x: number; y: number; z: number };
     target: { x: number; y: number; z: number };
   } | null;
-  /** Move the camera to a stored viewpoint. */
+  /** Current filter-panel snapshot, captured at save time alongside the
+   *  camera so the viewpoint round-trips the full inspection context. */
+  getCurrentFilterState?: () => SavedBIMFilterState | null;
+  /** Current ClipManager snapshot (section box / cutting plane). */
+  getCurrentClipState?: () => BIMClipState | null;
+  /** Capture a small PNG thumbnail of the current viewport. The data-URL is
+   *  stored verbatim on the viewpoint and rendered as a 96×64 preview. */
+  getCurrentScreenshot?: (opts?: { width?: number; height?: number }) => string | null;
+  /** Move the camera to a stored viewpoint (and apply its filter / clip if
+   *  the viewpoint carries them). */
   onApplyViewpoint: (vp: Viewpoint) => void;
 }
 
 export default function BIMToolsPanel({
   modelId,
   getCurrentViewpoint,
+  getCurrentFilterState,
+  getCurrentClipState,
+  getCurrentScreenshot,
   onApplyViewpoint,
 }: BIMToolsPanelProps) {
   const { t } = useTranslation();
@@ -57,6 +71,10 @@ export default function BIMToolsPanel({
   const [editingViewDraft, setEditingViewDraft] = useState('');
   const [editingMeasureId, setEditingMeasureId] = useState<string | null>(null);
   const [editingMeasureDraft, setEditingMeasureDraft] = useState('');
+  /** When true, ``handleSave`` also attaches a 320×180 thumbnail to the
+   *  viewpoint. Defaults to ON so the first save is informative; the user
+   *  can disable for camera-only bookmarks (smaller localStorage payload). */
+  const [includeScreenshot, setIncludeScreenshot] = useState(true);
 
   const refresh = useCallback(() => {
     setViews(listViewpoints(modelId));
@@ -70,15 +88,47 @@ export default function BIMToolsPanel({
     const snapshot = getCurrentViewpoint();
     if (!snapshot) return;
     const fallback = new Date().toLocaleString();
+    // Capture the rest of the viewer state at the moment of save — filter
+    // panel selections, section box / clipping plane, and an optional
+    // thumbnail. Each is best-effort: if the bridge isn't installed (e.g.
+    // unit-test harness mounts the panel standalone) we just store the
+    // camera, keeping back-compat with the v3.11.0 payload shape.
+    const filterState = getCurrentFilterState?.() ?? undefined;
+    const clipState = getCurrentClipState?.() ?? undefined;
+    let screenshotDataUrl: string | undefined;
+    if (includeScreenshot && getCurrentScreenshot) {
+      // 320×180 keeps each PNG roughly 30–60 KB — 100 views ≈ 6 MB per
+      // model, well under the typical localStorage cap. Failures fall
+      // back to a camera-only save (the user still gets the bookmark).
+      try {
+        const thumb = getCurrentScreenshot({ width: 320, height: 180 });
+        screenshotDataUrl = thumb ?? undefined;
+      } catch {
+        screenshotDataUrl = undefined;
+      }
+    }
+
     const result = addViewpoint(modelId, {
       name: (name.trim() || fallback).slice(0, 80),
       cameraPos: [snapshot.position.x, snapshot.position.y, snapshot.position.z],
       target: [snapshot.target.x, snapshot.target.y, snapshot.target.z],
+      ...(filterState ? { filterState } : {}),
+      ...(clipState ? { clipState } : {}),
+      ...(screenshotDataUrl ? { screenshotDataUrl } : {}),
     });
     setQuotaWarning(result.quotaExceeded);
     setName('');
     refresh();
-  }, [getCurrentViewpoint, modelId, name, refresh]);
+  }, [
+    getCurrentViewpoint,
+    getCurrentFilterState,
+    getCurrentClipState,
+    getCurrentScreenshot,
+    includeScreenshot,
+    modelId,
+    name,
+    refresh,
+  ]);
 
   const handleRemove = useCallback(
     (id: string) => {
@@ -335,6 +385,21 @@ export default function BIMToolsPanel({
             {t('bim.tools_views_save', { defaultValue: 'Save' })}
           </button>
         </div>
+        {/* Thumbnail toggle — small inline checkbox so the user can opt out
+            of the ~50 KB PNG attachment when bookmarking a hundred angles. */}
+        <label className="flex items-center gap-1.5 text-[10px] text-content-tertiary select-none cursor-pointer">
+          <input
+            type="checkbox"
+            checked={includeScreenshot}
+            onChange={(e) => setIncludeScreenshot(e.target.checked)}
+            className="h-3 w-3"
+            data-testid="save-view-include-screenshot"
+          />
+          <ImageIcon size={10} />
+          {t('bim.tools_views_attach_thumb', {
+            defaultValue: 'Attach thumbnail (PNG, ~50 KB)',
+          })}
+        </label>
         {quotaWarning && (
           <div
             role="alert"
@@ -402,8 +467,45 @@ export default function BIMToolsPanel({
                       data-testid={`apply-view-${v.name}`}
                       title={new Date(v.createdAt).toLocaleString()}
                     >
-                      <Play size={10} className="shrink-0" />
+                      {v.screenshotDataUrl ? (
+                        // Thumbnail preview — keeps the row to ~24px tall by
+                        // forcing a 32×20 aspect window. Image alt is the
+                        // view name so screen readers still announce the row.
+                        <img
+                          src={v.screenshotDataUrl}
+                          alt={v.name}
+                          className="w-8 h-5 rounded object-cover border border-border-light shrink-0"
+                          data-testid="saved-view-thumb"
+                        />
+                      ) : (
+                        <Play size={10} className="shrink-0" />
+                      )}
                       <span className="truncate">{v.name}</span>
+                      {/* Tiny badges hint at what the view captured. */}
+                      {v.clipState && v.clipState.mode !== 'none' && (
+                        <span
+                          className="ms-1 shrink-0 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 px-1 py-px text-[8px] font-semibold uppercase"
+                          title={t('bim.tools_views_has_clip', {
+                            defaultValue: 'Has section clip',
+                          })}
+                        >
+                          {v.clipState.mode}
+                        </span>
+                      )}
+                      {v.filterState && (
+                        (v.filterState.storeys?.length ?? 0) > 0 ||
+                        (v.filterState.types?.length ?? 0) > 0 ||
+                        !!v.filterState.search
+                      ) && (
+                        <span
+                          className="ms-1 shrink-0 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1 py-px text-[8px] font-semibold uppercase"
+                          title={t('bim.tools_views_has_filter', {
+                            defaultValue: 'Has filter',
+                          })}
+                        >
+                          {t('bim.tools_views_filter_badge', { defaultValue: 'flt' })}
+                        </span>
+                      )}
                     </button>
                     <button
                       type="button"

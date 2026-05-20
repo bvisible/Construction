@@ -189,6 +189,14 @@ class SavedViewService:
         view.use_count = (view.use_count or 0) + 1
         view.last_used_at = datetime.now(UTC)
         await self.session.flush()
+        # ``updated_at`` carries an ``onupdate=func.now()`` server-default,
+        # so SQLAlchemy marks the column expired after the flush so it can
+        # refetch the DB-computed value. Touching the attribute during
+        # response serialisation would then trigger a synchronous
+        # lazy-load outside the active greenlet and raise MissingGreenlet
+        # under asyncio. Refresh explicitly so every column is hydrated
+        # before the row leaves the service.
+        await self.session.refresh(view)
         return view
 
     # ── Duplicate ─────────────────────────────────────────────────────────

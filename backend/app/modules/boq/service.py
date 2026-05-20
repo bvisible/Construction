@@ -278,6 +278,8 @@ from app.modules.boq.schemas import (
     BOQUpdate,
     BOQWithPositions,
     BOQWithSections,
+    BulkPositionUpdate,
+    BulkUpdateResult,
     ComparePositionRow,
     CompareSummary,
     CostBreakdownCategory,
@@ -4018,6 +4020,250 @@ class BOQService:
                 pass
 
         return position
+
+    # ── v3.12.0 Stream A — bulk update & per-field restore ───────────────────
+
+    async def bulk_update_positions(
+        self,
+        boq_id: uuid.UUID,
+        payload: BulkPositionUpdate,
+        *,
+        actor_id: uuid.UUID | None = None,
+    ) -> BulkUpdateResult:
+        """Apply one of three bulk mutations to many positions atomically.
+
+        See :class:`BulkPositionUpdate` for the payload contract. Each
+        referenced position is loaded, its membership in ``boq_id`` is
+        verified, and the per-row :meth:`update_position` is invoked so
+        every downstream invariant fires (total recompute, validation
+        reset, optimistic concurrency bump, master-propagation, audit
+        log). Failed rows are collected and returned in
+        :class:`BulkUpdateResult.failed_ids`; the umbrella action is
+        always logged so the bulk action shows in the activity feed
+        even when some rows skipped.
+
+        Args:
+            boq_id: BOQ that every supplied position must belong to.
+            payload: Validated bulk request.
+            actor_id: User id to attribute the activity log to.
+
+        Returns:
+            :class:`BulkUpdateResult` with counts and the umbrella log id.
+
+        Raises:
+            HTTPException 409: BOQ is locked.
+            HTTPException 404: Position id not found / not in BOQ.
+        """
+        boq = await self._ensure_not_locked(boq_id)
+
+        updated = 0
+        failed_ids: list[uuid.UUID] = []
+        # Pre-load all positions in one pass to surface 404s early.
+        # The membership check protects against cross-BOQ id smuggling.
+        positions: dict[uuid.UUID, Position] = {}
+        for pid in payload.ids:
+            row = await self.position_repo.get_by_id(pid)
+            if row is None or row.boq_id != boq_id:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Position {pid} not found in BOQ {boq_id}",
+                )
+            positions[pid] = row
+
+        # Materialise the per-row PositionUpdate payload.
+        for pid, row in positions.items():
+            try:
+                if payload.updates is not None:
+                    update_data = PositionUpdate(**payload.updates)
+                elif payload.rate_factor is not None:
+                    current = _to_decimal(row.unit_rate, default=Decimal("0"))
+                    new_rate = current * Decimal(str(payload.rate_factor))
+                    update_data = PositionUpdate(
+                        unit_rate=float(_quantize_money(new_rate))
+                    )
+                else:
+                    # quantity_factor branch (validator guarantees one is set)
+                    current_q = _to_decimal(row.quantity, default=Decimal("0"))
+                    new_q = current_q * Decimal(str(payload.quantity_factor))
+                    update_data = PositionUpdate(
+                        quantity=float(_quantize_money(new_q))
+                    )
+                await self.update_position(pid, update_data, actor_id=actor_id)
+                updated += 1
+            except HTTPException:
+                failed_ids.append(pid)
+            except ValueError:
+                # Cap overflow / validation — skip the row but keep going.
+                failed_ids.append(pid)
+
+        log_id: uuid.UUID | None = None
+        if actor_id is not None:
+            try:
+                kind = (
+                    "updates"
+                    if payload.updates is not None
+                    else "rate_factor"
+                    if payload.rate_factor is not None
+                    else "quantity_factor"
+                )
+                entry = await self.log_activity(
+                    user_id=actor_id,
+                    action=f"position.bulk_{kind}",
+                    target_type="boq",
+                    description=(
+                        f"Bulk {kind} on {updated} position(s) "
+                        f"(skipped {len(failed_ids)})"
+                    ),
+                    project_id=boq.project_id,
+                    boq_id=boq_id,
+                    target_id=None,
+                    changes={
+                        "ids": [str(i) for i in payload.ids],
+                        "failed_ids": [str(i) for i in failed_ids],
+                        "kind": kind,
+                        "updates": payload.updates,
+                        "rate_factor": payload.rate_factor,
+                        "quantity_factor": payload.quantity_factor,
+                    },
+                )
+                log_id = entry.id
+            except Exception:  # noqa: BLE001 — never break the bulk return
+                logger.debug("Bulk-update umbrella log failed", exc_info=True)
+
+        return BulkUpdateResult(
+            updated=updated,
+            skipped=len(failed_ids),
+            failed_ids=failed_ids,
+            log_id=log_id,
+        )
+
+    async def restore_position_field(
+        self,
+        position_id: uuid.UUID,
+        *,
+        field: str,
+        value: Any,
+        log_id: uuid.UUID,
+        actor_id: uuid.UUID | None = None,
+    ) -> Position:
+        """Restore a single field on a position from a prior log entry.
+
+        Reads the source :class:`BOQActivityLog`, asserts the entry
+        targets this position and recorded a change for ``field``, then
+        delegates to :meth:`update_position` so every invariant fires.
+        A fresh log entry is appended noting which source entry was
+        replayed (so the restore chain is itself auditable).
+
+        Args:
+            position_id: Position to mutate.
+            field: Position attribute to restore (must be a column the
+                normal :class:`PositionUpdate` schema accepts).
+            value: New value (typically the ``old`` side of the diff).
+            log_id: The BOQActivityLog entry being replayed.
+            actor_id: Caller id (required for the new audit row).
+
+        Returns:
+            Updated position.
+
+        Raises:
+            HTTPException 404: position or source log not found.
+            HTTPException 422: field is not restorable / log mismatch.
+        """
+        position = await self.position_repo.get_by_id(position_id)
+        if position is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Position not found",
+            )
+        await self._ensure_not_locked(position.boq_id)
+
+        source: BOQActivityLog | None = await self.session.get(
+            BOQActivityLog, log_id
+        )
+        if source is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Activity log entry {log_id} not found",
+            )
+        if source.target_id != position_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Log entry {log_id} targets a different position "
+                    f"({source.target_id})"
+                ),
+            )
+        changes = source.changes if isinstance(source.changes, dict) else {}
+        if field not in changes:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Field '{field}' has no recorded change in log entry "
+                    f"{log_id}. Available fields: {sorted(changes.keys())}"
+                ),
+            )
+
+        # Build a single-key PositionUpdate. Float fields need numeric
+        # coercion so a stringified '12.5' still validates cleanly.
+        payload_kwargs: dict[str, Any] = {}
+        if field in {"quantity", "unit_rate", "confidence"}:
+            try:
+                payload_kwargs[field] = (
+                    None if value is None or value == "" else float(value)
+                )
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Cannot coerce {field}={value!r} to float",
+                ) from exc
+        elif field in {"classification", "metadata", "cad_element_ids"}:
+            payload_kwargs[field] = value
+        else:
+            payload_kwargs[field] = (
+                None if value is None else str(value)
+            )
+
+        try:
+            update_data = PositionUpdate(**payload_kwargs)
+        except Exception as exc:  # noqa: BLE001 — schema rejections → 422
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Cannot restore field '{field}': {exc!s}"
+                ),
+            ) from exc
+
+        updated = await self.update_position(
+            position_id, update_data, actor_id=actor_id
+        )
+
+        # Standalone audit row so the restore itself is greppable in the
+        # activity feed (``update_position`` already wrote a generic
+        # ``position.updated`` row; this adds context).
+        if actor_id is not None:
+            try:
+                boq = await self.get_boq(position.boq_id)
+                await self.log_activity(
+                    user_id=actor_id,
+                    action="position.field_restored",
+                    target_type="position",
+                    description=(
+                        f"Restored field '{field}' on position "
+                        f"{updated.ordinal} from log {log_id}"
+                    ),
+                    project_id=boq.project_id,
+                    boq_id=position.boq_id,
+                    target_id=position_id,
+                    changes={
+                        "field": field,
+                        "restored_value": _coerce_audit_value(value),
+                        "source_log_id": str(log_id),
+                    },
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("Field-restore audit row failed", exc_info=True)
+
+        return updated
 
     async def repick_resource_variant(
         self,

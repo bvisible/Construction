@@ -64,6 +64,7 @@ import {
 } from '@/shared/ui/BIMViewer/urlState';
 import BIMFilterGroupsPanel from './BIMFilterGroupsPanel';
 import BIMRightPanelTabs from './BIMRightPanelTabs';
+import PropertySearchPanel from './PropertySearchPanel';
 import BIMDiffPanel from './BIMDiffPanel';
 import type { DiffChangeType } from './diffGrouping';
 import ElementAssetCard from './ElementAssetCard';
@@ -78,7 +79,7 @@ import LinkDocumentToBIMModal from './LinkDocumentToBIMModal';
 import LinkActivityToBIMModal from './LinkActivityToBIMModal';
 import LinkRequirementToBIMModal from './LinkRequirementToBIMModal';
 import type { BIMGroupFilterCriteria } from './api';
-import { Filter } from 'lucide-react';
+import { Filter, Search } from 'lucide-react';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -323,7 +324,54 @@ function ModelCard({ model, isActive, onClick, onDelete }: {
             </span>
           )}
         </div>
+        {/* DDC converter version badge — stamped by ifc_processor on a
+            successful DDC pass. Hidden when missing (older imports or
+            text-fallback path). v3.12.0 / Stream D. */}
+        <ConverterVersionBadge metadata={model.metadata} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Render a small "DDC v{X}" pill on a BIM model card when the model
+ * metadata carries a converter_version stamp. Falls back to nothing when
+ * the field is missing — e.g. older imports that pre-date v3.12.0, or
+ * the text-fallback IFC parser path which doesn't use the DDC binary.
+ */
+function ConverterVersionBadge({
+  metadata,
+}: {
+  metadata?: Record<string, unknown> | null;
+}) {
+  const { t } = useTranslation();
+  if (!metadata) return null;
+  const version = metadata.converter_version;
+  if (typeof version !== 'string' || !version) return null;
+  const source = typeof metadata.converter_source === 'string' ? metadata.converter_source : null;
+  const tooltip = source
+    ? t('bim.converter_version_tooltip', {
+        defaultValue: 'Processed with DDC converter v{{version}} (source: {{source}})',
+        version,
+        source,
+      })
+    : t('bim.converter_version_tooltip_no_source', {
+        defaultValue: 'Processed with DDC converter v{{version}}',
+        version,
+      });
+  return (
+    <div
+      className="flex items-center gap-1 text-[9px] font-medium text-content-tertiary"
+      title={tooltip}
+      data-testid="ddc-converter-version-badge"
+    >
+      <span className="inline-block w-1 h-1 rounded-full bg-emerald-400" />
+      <span>
+        {t('bim.converter_version_label', {
+          defaultValue: 'DDC v{{version}}',
+          version,
+        })}
+      </span>
     </div>
   );
 }
@@ -1558,6 +1606,11 @@ export function BIMPage() {
   const [uploadConvertedName, setUploadConvertedName] = useState<string | null>(null);
   const [showUploadOverride, setShowUploadOverride] = useState<boolean | null>(null);
   const [filterPanelOpen, setFilterPanelOpen] = useState(true);
+  /** Property-search popover toggle (v3.12.0 / Stream D). Renders a small
+   *  panel above the 3D viewport with a column / op / value query builder
+   *  routed to ``POST /models/{id}/dataframe/query/``; results are piped
+   *  into the existing isolation set via ``setIsolatedIds``. */
+  const [propertySearchOpen, setPropertySearchOpen] = useState(false);
   // Right-panel visibility lives in the shared BIM viewer store so the
   // keyboard shortcut `S` (RFC 19) can open the Tools tab from anywhere.
   const boqPanelOpen = useBIMViewerStore((s) => s.rightPanelOpen);
@@ -2600,6 +2653,30 @@ export function BIMPage() {
                 {t('bim.summary_button', { defaultValue: 'Summary' })}
               </button>
 
+              {/* Property search — opens a small popover with a column /
+                  operator / value query builder hitting the Parquet via
+                  DuckDB. Matches are piped into the isolation set so the
+                  user sees only the queried elements (v3.12.0 / Stream D). */}
+              <button
+                onClick={() => setPropertySearchOpen((p) => !p)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border ${
+                  propertySearchOpen
+                    ? 'bg-oe-blue/10 text-oe-blue border-oe-blue/30'
+                    : 'text-content-secondary bg-surface-secondary border-border-light hover:bg-surface-tertiary'
+                }`}
+                title={t('bim.property_search_toggle', {
+                  defaultValue: 'Search element properties',
+                })}
+                aria-label={t('bim.property_search_toggle', {
+                  defaultValue: 'Search element properties',
+                })}
+                aria-pressed={propertySearchOpen}
+                data-testid="bim-property-search-toggle"
+              >
+                <Search size={13} />
+                {t('bim.property_search_button', { defaultValue: 'Property search' })}
+              </button>
+
               <button
                 onClick={() => setDimensionsVisible(!dimensionsVisible)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border ${
@@ -2810,6 +2887,27 @@ export function BIMPage() {
         dismissible
         defaultCollapsed={models.some((m) => m.status === 'ready')}
       />
+
+      {/* Property-search popover. Floats below the toolbar so the user can
+          search the full DDC Parquet without leaving the canvas. We wire
+          onIsolate → setIsolatedIds (the same channel the saved-group and
+          clash deep-link use) so matches highlight via the existing
+          isolation pipeline. v3.12.0 / Stream D. The fixed positioning
+          keeps the popover anchored to the viewport edge regardless of the
+          outer flex layout. */}
+      {propertySearchOpen && activeModelId && (
+        <div
+          className="fixed right-6 z-30 w-72 rounded-xl border border-border-light bg-surface-primary shadow-lg"
+          style={{ top: 116 }}
+          data-testid="property-search-popover"
+        >
+          <PropertySearchPanel
+            modelId={activeModelId}
+            onIsolate={(ids) => setIsolatedIds(ids.length > 0 ? ids : null)}
+            onClear={() => setIsolatedIds(null)}
+          />
+        </div>
+      )}
 
       {/* ── 3D Viewport with filter sidebar ── */}
       <div className="flex-1 min-h-0 relative bg-surface-secondary flex">

@@ -199,6 +199,23 @@ def _record_ddc_failure(
     )
 
 
+def _detect_converter_version_safe(extension: str) -> dict[str, str | None]:
+    """‌⁠‍Best-effort wrapper around ``detect_converter_version``.
+
+    Used by the ``_try_cad2data`` success path to attach a DDC version stamp
+    to the BIM result. Re-exports the same dict shape as the underlying
+    helper: ``{"version": str | None, "source": str | None,
+    "binary_path": str | None}``. Never raises — diagnostics must not block
+    a successful import.
+    """
+    try:
+        from app.modules.boq.cad_import import detect_converter_version
+
+        return detect_converter_version(extension)
+    except Exception:  # noqa: BLE001
+        return {"version": None, "source": None, "binary_path": None}
+
+
 def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "standard") -> dict[str, Any] | None:
     """‌⁠‍Try to convert CAD files using DDC converters.
 
@@ -341,11 +358,26 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
                     rc2, stderr2.decode(errors="replace")[:200] if stderr2 else "",
                 )
 
-            return _excel_elements_to_bim_result(
+            result_excel = _excel_elements_to_bim_result(
                 raw_elements,
                 output_dir,
                 real_dae_path=real_dae_path,
             )
+            # Surface the converter version so the frontend can render a
+            # "Processed with DDC v{X}" badge on the model card (Stream D
+            # / v3.12.0). Detection is best-effort and never raises —
+            # missing values silently degrade to ``None`` and the badge
+            # hides. See ``detect_converter_version`` for the dpkg /
+            # parent-dir resolution logic.
+            try:
+                conv_info = _detect_converter_version_safe(ext)
+                if conv_info.get("version"):
+                    result_excel["converter_version"] = conv_info["version"]
+                if conv_info.get("source"):
+                    result_excel["converter_source"] = conv_info["source"]
+            except Exception:  # noqa: BLE001 — diagnostics must never block import
+                pass
+            return result_excel
     except ImportError:
         logger.debug("cad_import module not available")
     except Exception as e:
@@ -450,7 +482,7 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
                     )
                     glb_path = None
 
-        return {
+        result_cad2data: dict[str, Any] = {
             "elements": elements,
             "storeys": sorted(storeys_set),
             "disciplines": sorted(disciplines_set),
@@ -463,6 +495,18 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
             "geometry_quality": "real" if has_geometry else "placeholder",
             "raw_elements": csv_raw_rows,
         }
+        # Same converter-version stamp the DDC RvtExporter / IfcExporter
+        # success path applies — keeps the frontend badge consistent
+        # regardless of which DDC method handled the file.
+        try:
+            conv_info = _detect_converter_version_safe(ext)
+            if conv_info.get("version"):
+                result_cad2data["converter_version"] = conv_info["version"]
+            if conv_info.get("source"):
+                result_cad2data["converter_source"] = conv_info["source"]
+        except Exception:  # noqa: BLE001
+            pass
+        return result_cad2data
     except Exception as e:
         logger.warning("cad2data error: %s", e)
         return None

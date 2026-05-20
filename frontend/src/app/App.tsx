@@ -531,6 +531,7 @@ export default function App() {
         <Route path="/chat" element={<P title="AI Chat"><ERPChatPage /></P>} />
         <Route path="/chat/admin" element={<P title="Chat Observability"><ERPChatAdminStatsPage /></P>} />
         <Route path="/cad-takeoff" element={<Navigate to="/data-explorer" replace />} />
+        <Route path="/cad-explorer" element={<Navigate to="/data-explorer" replace />} />
         <Route path="/data-explorer" element={<P title="Data Explorer"><CadDataExplorerPage /></P>} />
         <Route path="/match-elements" element={<P title="Match Elements"><MatchElementsPage /></P>} />
         <Route path="/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />

@@ -5,6 +5,120 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] — 2026-05-20 · Stable 4.0 — production-ready platform
+
+This is the first **stable 4.x** release. Same code base, same install procedure as the latest 3.12 patch; the version cut signals that the platform is now considered production-ready across the full estimation → takeoff → BIM → BOQ → tender → reporting workflow, with a stable public API surface, multi-tenant security pass complete, and 103 modules shipping in the box.
+
+### What "stable 4.0" means
+
+- **API surface is stable.** Every `/api/v1/*` endpoint shipped in 3.10.x → 3.12.x is now considered part of the public contract. Breaking changes will be marked `/v2`; 4.x patches will only add fields and endpoints, not rename or remove existing ones. OpenAPI spec at `/api/openapi.json` is the source of truth.
+- **Multi-tenant security pass complete.** Cross-category IDOR sweep (memory: `v2.9.15` + `v2.9.14`) closed ~73 endpoints across Planning / Communication / Procurement / Documents. Every project-scoped route enforces `verify_project_access`; every owner-scoped route (dashboards, reports, alerts, saved views, filters) enforces inline `owner_user_id` comparison with 404-not-403 on mismatch.
+- **103 modules ship in the box**, dynamically discovered by the module loader: BOQ + Cost Intelligence + Match Elements + Tendering + BIM Hub + Clash Detection + Takeoff + AI Estimate + ERP Chat + Project Intelligence + Schedule + Tasks + Risk + Daily Diary + Equipment + Service + Finance + Procurement + CRM + Contracts + Subcontractors + Bid Management + Supplier Catalogs + BI Dashboards + Validation + Inspections + Punchlist + Files CDE + Quality + HSE + Portal + Carbon + many more. All have backend + frontend + tests + i18n + permissions.
+- **CAD/BIM pipeline is canonical-format-first.** Every CAD source (DWG, DGN, IFC, RVT) goes through the DDC cad2data converter into a canonical JSON. No IfcOpenShell dependency. BCF allowed as I/O for issues + viewpoints + validation reports. Serve-time magic-byte validation guards the viewer against corrupt blobs.
+- **Cost database: 55,000 priced positions in CWICR, plus 30+ regional v3 catalogues.** Multi-currency BOQ with FX-correct exports. Vector search via Qdrant; multilingual semantic match across 24 languages.
+- **i18n: 24 languages.** EN/DE/RU/zh-Hans/pt-BR/Mongolian are deep native quality. The remaining 17 ship with English `defaultValue` fallbacks; native pass continues in 4.0.x.
+- **Self-host story: one command.** `pip install openconstructionerp && openconstructionerp` boots PostgreSQL-or-SQLite + 103 modules + Qdrant ping + showcase snapshot seed + alembic upgrade. AGPL-3.0 community; commercial licence for source-modification protection.
+
+### Notable since 3.0 milestone (rolled up)
+
+- BIM Hub pro-grade — Site Compass cube, Solo Mode, Trait Lens color-by-property, Element Bundles selection sets, viewpoint state with camera + filter + clip + thumbnail, screenshot export, DDC converter version badge, property search panel.
+- Clash Detection — schema + DBSCAN engine + FP-mining + 6 REST endpoints, KPI dashboard with severity / discipline-pair / top-clashing-pairs / MTTR, rule editor + suggestions banner.
+- Takeoff pro-grade — PDF + DWG measurements, PaddleOCR + YOLO symbol detection, jsPDF export with annotations, exceljs export with per-group subtotals.
+- BOQ pro-grade — bulk multiply rate / qty / classification, per-cell field-history restore, Ctrl+D fill-down + Ctrl+; today, multi-level hierarchy with 8-deep nesting, reusable/linked positions, FX-correct CSV/Excel exports with frozen FX appendix.
+- Match Elements — 7-stage visible pipeline (Convert → Load → Schema → Filter → Group → Match → Rollup), per-stage adjust, vector + lexical + resource matchers, currency-aware rollup, catalogue + display-currency picker.
+- Cost Intelligence — regional indices + cost-item usage telemetry, certainty bands (green/yellow/red), live regional-adjust panel.
+- Files CDE — saved views rail, tag-filter facet, version history with "Make current", 24h trash purge, per-recipient notification fan-out on new revision.
+- Validation@Import — DIN 276 + GAEB + NRM + MasterFormat + BOQ-quality + project-completeness rule packs wired into GAEB / Excel import path; GAEB X84 (Nebenangebot) export writer.
+- BI Dashboards — 5 role-based starter dashboards (CEO / CFO / PM / Site / Safety), 14 system KPIs with 12-week history, 3 reports, 2 schedules, 4 alert rules — installed via idempotent one-click endpoint.
+- AI services — embedding-pool with prewarmed workers, FSM-driven match pipeline, BIM placeholder geometry fallback, Mongolian + Devanagari OCR, lakh-crore numeric parsing, UTM CRS for 16 regions.
+- Ecosystem — license-request page with 90-day affiliate cookies, marketing site with 34-card module grid mirroring the in-app sidebar, openconstructionerp.com production deployment.
+
+### Hand-off
+
+Identical to 3.12.1: no migration steps required. Existing 3.12.x installs upgrade in place via `pip install --upgrade openconstructionerp && alembic upgrade head && systemctl restart openconstructionerp`. Alembic head: `v3096_regional_indices_certainty`.
+
+### Notes
+
+- Native i18n pass for the 17 placeholder locales continues in 4.0.x patch line — defaultValue fallbacks ship today.
+- Audited but not yet shipped: W5.5 Assembly Library, W6.5 BIM Federation, W8 Scheduling CPM, W13 AI Agents — planned for 4.1.
+
+## [3.12.1] — 2026-05-20 · BIM serve-validation · BI starter pack · /match-elements catalogue picker · marketing module-cards · UI polish
+
+### Added
+
+- **/match-elements — Cost catalogue & Display currency pickers** — stage 3 of the wizard ("Confirm the rate catalogue") now exposes two dropdowns: a Cost-catalogue selector listing every loaded CWICR-v3 catalogue (region · city · language · currency) with auto-preselect by project region, and a Display-currency override pre-seeded with the project currency plus every loaded catalogue's currency plus the global commons (EUR/USD/GBP/CHF/PLN/CZK/CAD/AUD/JPY/CNY/BRL/INR/ZAR/TRY/AED/SAR/NOK/SEK/DKK). Catalogue choice flows into `createSession`/`updateSession` as `catalogue_id` (region-string form), overriding the auto-bind for that session.
+- **BI Dashboards — starter pack installer** — empty `/bi-dashboards` grid now shows a one-click "Install starter pack" CTA. New idempotent endpoint `POST /api/v1/bi-dashboards/install-starter-pack` materialises 5 role-based dashboards (CEO · CFO · PM · Site · Safety) with 4-8 widgets each, the 14 system KPIs, 12-week trend history per KPI, 3 reports, 2 schedules and 4 alert rules in one transaction. Re-running is safe; only missing rows are inserted.
+- **Marketing site — full module-cards grid** — 34 cards under "Skip the sales call. See it work." mirroring the in-app sidebar 1:1 (same lucide icons, same module order) with a one-sentence functional description per module. Inline SVG sprite + CSS, no CDN/JS-loader dependency; responsive 4 / 3 / 2 / 1 columns with hover-lift and accent-tinted icon chip.
+
+### Fixed
+
+- **BIM 3D loading — server-side payload validation (Downtown Medical Center / RVT report)** — `_quick_validate_geometry_bytes` now peeks at the first 4 KB of every geometry response in `router.py` and rejects payloads whose magic bytes don't match the extension (`.glb` GLTF2 header, `.dae` COLLADA root, `.gltf` JSON `asset.version`). The exact user-reported case — `<?xml ve` bytes served from a `.glb` slot — now 422s with a diagnostic head dump (`magic mismatch; head=3c 3f 78 6d 6c …`) instead of reaching the browser and crashing Three.js's GLTFLoader. Frontend `ElementManager.parseGeometryBuffer` also surfaces actionable hints when XML/HTML/JSON bytes arrive in a geometry slot (likely converter failure, auth redirect, or proxy error). 11 new unit tests cover valid GLB / GLB magic-mismatch / GLB wrong-version / valid COLLADA / XML-not-COLLADA / HTML error-page / empty / truncated / unknown-extension passthrough / valid GLTF / GLTF missing asset.
+- **BIMViewer pre-existing tsc errors** — unused `tmpDir`/`tmpUp` locals in `BIMViewCube.tsx`, null-safety on `canvas.getBoundingClientRect()` in click handler, and `'iso' → 'iso_ne'` alias mapping in the `window.__oeBim.setViewPreset` bridge so the canonical SceneManager ViewPreset type accepts the friendly alias.
+- **`/about` — Browse case studies button removed** per user request (case-studies link is on datadrivenconstruction.io home).
+
+### Polish
+
+- **`/login`** — manager avatar now `#7cd0ff`, "zero cloud" wraps to next line, "AI-assisted, human-confirmed" block left-aligned; brand+pencil row centered inline (was absolutely-positioned).
+- **`/files/search`** — full-width 2-column layout with filter rail (kinds, sort, group-by-project, view options), recent-searches chips (localStorage), summary header with content-index badge, sticky project headers in grouped view, URL hydration with re-entrancy guard.
+
+### Notes
+
+- i18n native pass for the 17 placeholder locales (es/fr/it/nl/pl/ja/ko/vi/tr/ar/…) deferred to v3.12.2 — all new keys ship with English `defaultValue` fallbacks so they render correctly today; deep native translation needs an out-of-process pass.
+
+## [3.12.0] — 2026-05-20 · Wave 5/6/7 pro-grade — BOQ + Cost Intelligence + Clash A4 + BIM viewpoints + Files CDE + Takeoff PDF/Excel
+
+### Added
+
+- **BOQ pro-grade UX (Wave 5 / Stream A)** —
+  - Bulk operations expansion: "Multiply rate" / "Multiply qty" / "Set classification" chips in the floating BatchActionBar; new endpoint `PATCH /api/v1/boqs/{boq_id}/positions/bulk-update/` accepting `{ids, updates | rate_factor | quantity_factor}` (transactional, allowlist-enforced, audit-logged).
+  - Per-cell restore — new "Field history" tab in VersionHistoryDrawer flattens BOQActivityLog diff entries into per-field rows with a Restore button calling new `POST /api/v1/boqs/{boq_id}/positions/{position_id}/restore-field/` (validates log_id ↔ position ↔ field).
+  - Keyboard shortcuts in BOQGrid — `Ctrl+D` fill-down to all selected rows in the focused column (respects PASTE_PROTECTED_FIELDS), `Ctrl+;` inserts today's ISO date.
+- **Cost Intelligence (Wave 5 / Stream B)** —
+  - `oe_regional_indices` + `oe_cost_item_usage` tables (alembic `v3096_regional_indices_certainty`).
+  - 4 endpoints under `/api/v1/costs/`: `GET regional-adjust`, `GET regional-indices`, `GET {item_id}/certainty`, `POST {item_id}/record-usage`.
+  - Seeded 8×6 regional matrix (DE_BERLIN/DE_MUNICH/UK_LONDON/UK_MANCHESTER/US_NYC/US_LA/FR_PARIS/ES_MADRID × concrete/steel/labor/mep/finishes/sitework), source `OE_v3.12_seed_2026Q2`.
+  - `CertaintyBadge` (green/yellow/red) on every cost row + `RegionalAdjustPanel` live-preview in the toolbar.
+  - Certainty band rule: green if freq≥10 AND age<365d; yellow if freq 3-9 OR age 365-1095d; else red.
+- **Clash Wave A4 wiring (Wave 6 / Stream C)** — schema + DBSCAN engine + FP-mining had landed in v3.11.0 but were unreachable from REST; now wired:
+  - 6 endpoints under `/api/v1/clash/runs/{run_id}/`: `GET clusters`, `GET rule-suggestions`, `POST apply-rule-suggestion`, `GET rules`, `PATCH rules` (cap 500, 422 above), `GET kpi` (total / by_status / by_severity / by_type / by_discipline_pair / top_clashing_pairs / mttr_hours).
+  - `_apply_rules` spliced into `_detect` so per-pair tolerance overrides + severity overrides actually drive detection (was schema-only).
+  - 4 new UI components — `ClashClusterChips` (filter), `ClashRuleEditor` (WideModal CRUD), `ClashRuleSuggestionBanner` (review + apply), `ClashKpiPanel` (tiles + severity bar + top pairs + MTTR).
+- **BIM viewpoint state + property search + DDC version badge (Wave 6 / Stream D)** —
+  - `Viewpoint` now captures full state: `cameraPos`, `target`, `filterState` (storey/types/discipline/isolatedIds), `clipState` (mode/box/plane), `screenshotDataUrl`. Save view → restore view round-trips camera + filter + clip + thumbnail.
+  - `getScreenshot()` on SceneManager → PNG download from a Camera-icon button in the BIMViewer toolbar. Filename includes diacritics-stripped model name + ISO timestamp.
+  - `ConverterVersionBadge` on every model card — shows green-dot `DDC v{X}` pill when `metadata.converter_version` populated (sourced via `dpkg` on Linux or parent-dir on Windows from the v3.11 helper); returns null cleanly when absent.
+  - `PropertySearchPanel` toolbar popover — column dropdown (sourced from DDC Parquet schema) + operator + value query builder; Search → isolates matching elements via existing `setIsolatedIds`. Graceful empty-state when schema unavailable.
+- **Files CDE finish (Wave 7 / Stream E)** —
+  - `SavedViewsRail` spliced into FileManager left sidebar; `SaveViewButton` appears when any filter is active, persists name + filter to `oe_file_saved_view`.
+  - `TagFilterFacet` in the actions bar — multi-select tags, filters file list.
+  - `VersionHistorySection` in FilePreviewPane — chronological version list with `VersionBadge` per row + "Make current" on superseded rows.
+  - Backend: `purge_expired_trash()` background job (24h scheduler) + `POST /api/v1/file-trash/purge-now` admin endpoint deletes underlying file on disk + row.
+  - Backend: `on_file_new_revision(file_id)` hook fans out per-recipient notifications across active matching `oe_file_distribution_list` entries; wired into `register_new_version`.
+- **Takeoff PDF/Excel export (Wave 6 / Stream F)** —
+  - `Export PDF (with annotations)` — client-side jsPDF builder lazy-imported; renders each annotated PDF page to canvas via PDF.js, bakes the existing measurement overlay rendering on top, JPEG-encodes at 0.85; final A4 summary page lists per-group / per-type counts with color swatches. Respects group visibility.
+  - `Export Excel (.xlsx)` — exceljs builder; "Measurements" sheet (Group/Type/Annotation/Page/Value/Unit/Linked BOQ Position + group header rows tinted + per-type subtotal rows + frozen header) and "Summary" sheet (pivot by group with grand-total row).
+  - Filename: `takeoff-{slug(projectName)}-{YYYY-MM-DD}.{ext}`, slug preserves Unicode letters (São Paulo, Cyrillic, etc.).
+- **/about further refinements (post-v3.11)** —
+  - Platform Capabilities — 6 stats collapsed to a single row for compactness, height matched to Community card.
+  - Header right — UpdateNotification now paired with a "Recent releases" mini-list (last 3 versions with date + headline + anchor to in-page Changelog).
+  - Community card — Telegram featured on its own row (cyan-tinted + "Live" badge + 2-line copy), LinkedIn + X each on their own full-width row with longer descriptions, so the card stretches to match Platform Capabilities.
+  - Documentation card — enriched with "Popular topics" 2×3 deep-link grid (Quick start · BIM import · GAEB · Takeoff · Module SDK · VPS deployment).
+  - License card — restructured into "You can / You must" 2-col bullets + badges + "Commercial licensing" CTA at bottom (parallel button position to Documentation's "Open Docs").
+  - Support OpenConstructionERP right column — 4 impact-stat KPI tiles on top mirror the visual weight of the left hero, then the existing "Your support enables" bullet list below.
+  - Free Guidebook — book cover 1/3 → 2/5 column (max-w 200px → 320px) with 10-part TOC column narrowed to 3/5.
+
+### Fixed
+
+- **Stream E hotfix (3 defects from Playwright verification)** —
+  - `POST /api/v1/file-versions/{id}/restore/` was returning 500 → root-caused + fixed in `file_versions/service.py`; "Make current" now flips current-flag correctly with toast confirmation.
+  - `POST /api/v1/file-saved-views/{id}/use/` telemetry was returning 500 → fixed in `file_saved_views/service.py`; `use_count` + `last_used_at` now increment per apply.
+  - `FileManagerPage` URL-sync effect was stripping new query params when a saved view was applied while already on /files → effect now re-reads `searchParams` on URL change instead of only at mount.
+
+### Notes
+
+- 6 implementation streams + 6 deep audit agents + 6 testing agents ran in parallel — first multi-wave structure where audit → slice → ship → verify all ran as independent agent fleets. Audit reports + Playwright screenshots archived under `qa-tests/_v3.12.0-stream-{A,B,C,D,E,F}/`.
+- Deferred to v3.13.0: Assembly Library 2.0, What-If BOQ branches, Model Federation, BCF round-trip, semantic Clash rules + PDF coordination-meeting export + async Celery clustering, CCI/BCIS escalation feeds, supplier price feeds, AI symbol detection (CV pipeline), 3D markup persistence.
+
 ## [3.11.0] — 2026-05-20 · Wave 3/4 modules + Validation@Import + X84 export + /about redesign
 
 ### Added

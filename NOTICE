@@ -23,35 +23,110 @@ signed release artefacts on the GitHub releases page.
 
 Primary third-party components (non-exhaustive):
 
+Backend (base install — `pip install openconstructionerp`):
   * FastAPI ............................. MIT
   * SQLAlchemy .......................... MIT
   * Pydantic ............................ MIT
+  * pydantic-settings ................... MIT
+  * email-validator ..................... CC0-1.0
   * Alembic ............................. MIT
   * Uvicorn ............................. BSD-3-Clause
+  * python-multipart .................... Apache-2.0
+  * aiosqlite ........................... MIT
   * pandas .............................. BSD-3-Clause
   * pyarrow ............................. Apache-2.0
+  * polars .............................. MIT
+  * duckdb .............................. MIT
   * openpyxl ............................ MIT
-  * reportlab ........................... BSD-3-Clause
+  * reportlab ........................... BSD-3-Clause (open-source edition)
   * pdfplumber .......................... MIT
   * httpx ............................... BSD-3-Clause
+  * orjson .............................. Apache-2.0 / MIT
   * structlog ........................... Apache-2.0 / MIT
   * python-jose ......................... MIT
   * bcrypt .............................. Apache-2.0
   * ezdxf ............................... MIT
   * trimesh ............................. MIT
+  * defusedxml .......................... PSF-2.0
+  * pyyaml .............................. MIT
+  * python-dateutil ..................... Apache-2.0 / BSD-3-Clause
+  * rapidfuzz ........................... MIT
+
+Backend optional extras:
+  * [server]  asyncpg .................... Apache-2.0
+  * [server]  psycopg2-binary ............ LGPL-3.0-or-later (with OpenSSL exception)
+  * [server]  celery .................... BSD-3-Clause
+  * [server]  boto3 ..................... Apache-2.0
+  * [vector]  lancedb ................... Apache-2.0
+  * [vector]  fastembed ................. Apache-2.0
+  * [semantic] qdrant-client ............ Apache-2.0
+  * [semantic] sentence-transformers .... Apache-2.0
+  * [semantic] FlagEmbedding (BGE-M3) ... MIT
+  * [cv]      PyMuPDF (pymupdf) ......... AGPL-3.0-or-later  -- see "AGPL Cascade" below
+  * [cv]      ultralytics (YOLO) ........ AGPL-3.0-or-later  -- see "AGPL Cascade" below
+  * [cv]      paddleocr ................. Apache-2.0
+  * [cv]      opencv-python-headless .... Apache-2.0
+  * [cv]      Pillow .................... HPND (PIL/Pillow licence)
+  * [s3]      aioboto3 .................. Apache-2.0
+
+Frontend (compiled into the static bundle shipped inside the wheel):
   * React ............................... MIT
+  * react-dom ........................... MIT
+  * react-router-dom .................... MIT
   * TypeScript .......................... Apache-2.0
   * Vite ................................ MIT
   * Tailwind CSS ........................ MIT
-  * AG Grid Community ................... MIT
-  * PDF.js .............................. Apache-2.0
-  * three.js ............................ MIT
   * Zustand ............................. MIT
   * TanStack Query ...................... MIT
   * i18next ............................. MIT
+  * react-i18next ....................... MIT
   * Lucide icons ........................ ISC
+  * AG Grid Community ................... MIT
+  * PDF.js .............................. Apache-2.0
+  * three.js ............................ MIT
   * Recharts ............................ MIT
-  * Playwright .......................... Apache-2.0
+  * jsPDF ............................... MIT
+  * jspdf-autotable ..................... MIT
+  * exceljs ............................. MIT
+  * jszip ............................... MIT / GPL-3.0 (dual-licensed; we use MIT)
+  * Leaflet ............................. BSD-2-Clause
+  * react-leaflet ....................... Hippocratic / MIT
+  * MapLibre GL ......................... BSD-3-Clause
+  * Yjs ................................. MIT
+  * y-websocket / y-webrtc .............. MIT
+  * dnd-kit ............................. MIT
+  * Playwright (dev) .................... Apache-2.0
+
+A machine-readable, full inventory of every direct and transitive
+dependency at exactly the version this release ships is generated per
+release and published as `NOTICE.backend.json` (pip-licenses output) and
+`NOTICE.frontend.json` (license-checker output) alongside the wheel on
+the GitHub release page.
+
+------------------------------------------------------------------------
+AGPL Cascade -- Optional Components
+------------------------------------------------------------------------
+
+OpenConstructionERP itself is distributed under the GNU Affero General
+Public License v3.0 or later. Two upstream Python packages used inside
+the optional `[cv]` extra group are also AGPL-3.0-or-later:
+
+  * PyMuPDF (Artifex Software, Inc.) -- AGPL-3.0-or-later
+    https://pymupdf.readthedocs.io/en/latest/about.html#license
+  * Ultralytics YOLO (Ultralytics Inc.) -- AGPL-3.0-or-later
+    https://github.com/ultralytics/ultralytics/blob/main/LICENSE
+
+Because these projects are themselves AGPL-3.0, any user who installs
+the `[cv]` extra and then operates a modified version of OpenConstructionERP
+over a network is subject to AGPL-3.0 obligations both from
+OpenConstructionERP and independently from those upstream projects.
+Commercial users who require a non-AGPL path for the computer-vision
+takeoff pipeline must obtain commercial licences directly from Artifex
+Software (PyMuPDF) and Ultralytics Inc. (YOLO) -- OpenConstructionERP's
+commercial licence covers only OpenConstructionERP itself.
+
+Users who install OpenConstructionERP without the `[cv]` extra do not
+pull in these AGPL upstream packages.
 
 ------------------------------------------------------------------------
 Trademarks

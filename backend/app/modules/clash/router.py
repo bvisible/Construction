@@ -35,16 +35,23 @@ from app.modules.clash.schemas import (
     CLASH_GROUP_BY,
     CLASH_PROPERTY_GROUP_PREFIX,
     CLASH_SEVERITIES,
+    ClashApplyRuleRequest,
+    ClashApplyRuleResponse,
     ClashBCFExportRequest,
     ClashBCFExportResponse,
     ClashBCFImportResponse,
     ClashCategoriesResponse,
     ClashCategoryItem,
+    ClashClusterRead,
     ClashCompareResponse,
+    ClashKpiResponse,
     ClashPropertyFacet,
     ClashResultPage,
     ClashResultResponse,
     ClashResultUpdate,
+    ClashRule,
+    ClashRuleList,
+    ClashRuleSuggestion,
     ClashRunCreate,
     ClashRunListItem,
     ClashRunResponse,
@@ -560,3 +567,158 @@ async def unwatch_result(
         project_id, run_id, result_id, str(user_id), watching=False
     )
     return ClashWatchResponse(watchers=watchers, watching=watching)
+
+
+# ── Wave A4 — clusters / rules / suggestions / KPI ────────────────────────
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/clusters",
+    response_model=list[ClashClusterRead],
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_clusters(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> list[ClashClusterRead]:
+    """Spatial clusters discovered for this run (chip group source).
+
+    Empty list when the run pre-dates the cluster pass, has no clashes,
+    or had every clash classified as DBSCAN noise. Each entry carries
+    its derived heuristic label, member size, dominant discipline pair
+    and dominant storey — exactly what the frontend chip group needs.
+    """
+    await _require_project_access(session, project_id, user_id)
+    rows = await service.list_clusters(project_id, run_id)
+    return [ClashClusterRead.model_validate(r) for r in rows]
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/rule-suggestions",
+    response_model=list[ClashRuleSuggestion],
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_rule_suggestions(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> list[ClashRuleSuggestion]:
+    """Engine-mined rule proposals from the run's false-positive history.
+
+    Empty when no discipline pair has crossed the suggestion threshold,
+    or every candidate pair already has a rule. The UI hides the banner
+    in either case — no special-case empty response.
+    """
+    await _require_project_access(session, project_id, user_id)
+    suggestions = await service.rule_suggestions(project_id, run_id)
+    return [ClashRuleSuggestion.model_validate(s) for s in suggestions]
+
+
+@router.post(
+    "/projects/{project_id}/runs/{run_id}/apply-rule-suggestion",
+    response_model=ClashApplyRuleResponse,
+    dependencies=[Depends(RequirePermission("clash.manage_rules"))],
+)
+async def apply_rule_suggestion(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    data: ClashApplyRuleRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashApplyRuleResponse:
+    """Append the proposed rule to the run + re-evaluate existing results.
+
+    Adds the proposed :class:`ClashRule` to ``run.rules`` (unless the
+    pair already has one) and flips any hard clash on the pair whose
+    measured penetration now sits at or below ``tolerance_m`` to
+    ``status='ignored'`` — with a history audit-trail entry so the
+    Activity tab shows the change.
+    """
+    await _require_project_access(session, project_id, user_id)
+    rule_added, affected = await service.apply_rule_suggestion(
+        project_id,
+        run_id,
+        discipline_a=data.discipline_a,
+        discipline_b=data.discipline_b,
+        tolerance_m=data.tolerance_m,
+        actor=str(user_id),
+    )
+    return ClashApplyRuleResponse(
+        rule_added=rule_added, results_affected=affected
+    )
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/rules",
+    response_model=list[ClashRule],
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def list_rules(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> list[ClashRule]:
+    """Current rule set persisted on the run (raw JSON column projection)."""
+    await _require_project_access(session, project_id, user_id)
+    rules = await service.list_rules(project_id, run_id)
+    return [ClashRule.model_validate(r) for r in rules]
+
+
+@router.patch(
+    "/projects/{project_id}/runs/{run_id}/rules",
+    response_model=list[ClashRule],
+    dependencies=[Depends(RequirePermission("clash.manage_rules"))],
+)
+async def replace_rules(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    data: ClashRuleList,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> list[ClashRule]:
+    """Replace the entire rule list (idempotent PUT-style PATCH).
+
+    Pydantic's ``max_length=500`` rejects oversized payloads before they
+    reach the service; the service additionally truncates as defence in
+    depth. Returns the canonical post-save list so the editor stays in
+    sync after one round-trip.
+    """
+    await _require_project_access(session, project_id, user_id)
+    rules = await service.replace_rules(
+        project_id,
+        run_id,
+        [r.model_dump() for r in data.rules],
+    )
+    return [ClashRule.model_validate(r) for r in rules]
+
+
+@router.get(
+    "/projects/{project_id}/runs/{run_id}/kpi",
+    response_model=ClashKpiResponse,
+    dependencies=[Depends(RequirePermission("clash.read"))],
+)
+async def get_kpi(
+    project_id: uuid.UUID,
+    run_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: ClashService = Depends(_get_service),
+) -> ClashKpiResponse:
+    """Aggregate dashboard projection for the KPI tab.
+
+    Computed in-memory from the run's results — one query, no extra
+    joins. ``mttr_hours`` is ``None`` when no row has resolved yet (the
+    UI hides that tile rather than showing ``0``).
+    """
+    await _require_project_access(session, project_id, user_id)
+    payload = await service.compute_kpi(project_id, run_id)
+    return ClashKpiResponse.model_validate(payload)

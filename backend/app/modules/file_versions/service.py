@@ -17,6 +17,7 @@ upload handler).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -26,6 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.file_versions.models import FILE_KINDS, FileVersion
 from app.modules.file_versions.repository import FileVersionRepository
 from app.modules.file_versions.schemas import FileVersionCreate
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_kind(kind: str) -> None:
@@ -147,6 +150,37 @@ class FileVersionService:
             previous_current.superseded_by_id = row.id
             await self.session.flush()
 
+        # ── Fan-out subscription notifications (W10) ─────────────────
+        # Only when this revision actually supersedes a prior current
+        # row do we count it as a "new revision posted" event — the
+        # very first version of a brand-new file is a "created" event
+        # and is owned by the kind module's own upload handler.
+        # Lazy-import so the file_versions module stays runnable when
+        # the file_distribution module is disabled / not installed.
+        if previous_current is not None and previous_current.id != row.id:
+            try:
+                from app.modules.file_distribution.service import (
+                    on_file_new_revision,
+                )
+
+                await on_file_new_revision(
+                    self.session,
+                    project_id=row.project_id,
+                    file_kind=row.file_kind,
+                    file_id=str(row.file_id),
+                    canonical_name=row.canonical_name,
+                    version_number=row.version_number,
+                    actor_id=uploaded_by_id,
+                )
+            except Exception:  # noqa: BLE001
+                # A subscription / notification failure must never
+                # roll back a successful version write.
+                logger.debug(
+                    "on_file_new_revision hook failed; "
+                    "version row was still committed",
+                    exc_info=True,
+                )
+
         return row
 
     async def restore_version(
@@ -183,4 +217,12 @@ class FileVersionService:
             target.uploaded_by_id = actor_id
 
         await self.session.flush()
+        # ``updated_at`` carries an ``onupdate=func.now()`` server-default,
+        # so SQLAlchemy marks the column expired after the flush so it can
+        # refetch the DB-computed value. Touching the attribute during
+        # response serialisation would then trigger a synchronous
+        # lazy-load outside the active greenlet and raise MissingGreenlet
+        # under asyncio. Refresh explicitly so every column is hydrated
+        # before the row leaves the service.
+        await self.session.refresh(target)
         return target

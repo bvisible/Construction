@@ -7,6 +7,7 @@ import clsx from 'clsx';
 import type { FileFilters } from '../types';
 import { SaveViewButton } from '@/features/file-saved-views';
 import type { FilterSnapshot } from '@/features/file-saved-views';
+import { TagFilterFacet } from '@/features/file-tags/TagFilterFacet';
 
 type SortKey = NonNullable<FileFilters['sort']>;
 export type ViewMode = 'grid' | 'list';
@@ -27,6 +28,10 @@ interface FileActionsBarProps {
   projectId?: string | null;
   /** Current category — used to build the FilterSnapshot for Save view. */
   category?: string | null;
+  /** W4 — multi-select tag filter state. Owned by the page so the URL
+   *  round-trip (saved views + bookmarkable filters) stays loss-less. */
+  selectedTagIds?: string[];
+  onSelectedTagsChange?: (tagIds: string[]) => void;
 }
 
 /* Always-visible type pills — the high-traffic AECO formats. Each maps to one
@@ -67,6 +72,8 @@ export function FileActionsBar({
   onExtensionChange,
   projectId,
   category,
+  selectedTagIds,
+  onSelectedTagsChange,
 }: FileActionsBarProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(query);
@@ -211,6 +218,13 @@ export function FileActionsBar({
       )}
 
       <div className="ms-auto flex items-center gap-2">
+        {projectId && onSelectedTagsChange && (
+          <TagFilterFacet
+            projectId={projectId}
+            selectedTagIds={selectedTagIds ?? []}
+            onChange={onSelectedTagsChange}
+          />
+        )}
         {projectId && (
           <SaveViewButton
             projectId={projectId}
@@ -219,8 +233,17 @@ export function FileActionsBar({
               q: query || null,
               sort: sort || null,
               extension: extension ?? null,
+              ...(selectedTagIds && selectedTagIds.length > 0
+                ? { tag_ids: selectedTagIds }
+                : {}),
             } as FilterSnapshot}
-            visible={Boolean(query || category || extension || (sort && sort !== 'modified'))}
+            visible={Boolean(
+              query ||
+                category ||
+                extension ||
+                (sort && sort !== 'modified') ||
+                (selectedTagIds && selectedTagIds.length > 0),
+            )}
           />
         )}
         <div ref={sortRef} className="relative">

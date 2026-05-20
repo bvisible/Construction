@@ -1132,6 +1132,107 @@ export function BOQEditorPage() {
     [boq?.positions, trackedUpdate, addToast, t],
   );
 
+  /**
+   * v3.12.0 Stream A — multiply unit_rate / quantity on every selected row
+   * via the bulk-update endpoint (one PATCH covers all ids, one umbrella
+   * audit row is written). Cache invalidation refreshes the grid so the
+   * recomputed totals land immediately.
+   */
+  const handleBatchFactor = useCallback(
+    async (ids: string[], kind: 'rate' | 'quantity', factor: number) => {
+      if (!boqId || ids.length === 0) return;
+      try {
+        const result = await boqApi.bulkUpdatePositions(boqId, {
+          ids,
+          ...(kind === 'rate' ? { rate_factor: factor } : { quantity_factor: factor }),
+        });
+        queryClient.invalidateQueries({ queryKey: ['boq', boqId] });
+        queryClient.invalidateQueries({ queryKey: ['boq-activity', boqId] });
+        setSelectedPositionIds([]);
+        boqGridRef.current?.clearSelection();
+        addToast({
+          type: result.skipped === 0 ? 'success' : 'warning',
+          title: t('boq.batch_factor_done', {
+            defaultValue: 'Updated {{count}} positions (factor {{factor}})',
+            count: String(result.updated),
+            factor: String(factor),
+          } as Record<string, string>),
+          message:
+            result.skipped > 0
+              ? t('boq.batch_factor_skipped', {
+                  defaultValue: '{{count}} positions could not be updated.',
+                  count: String(result.skipped),
+                } as Record<string, string>)
+              : undefined,
+        });
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e);
+        addToast({
+          type: 'error',
+          title: t('boq.batch_factor_failed', {
+            defaultValue: 'Bulk update failed',
+          }),
+          message: msg,
+        });
+      }
+    },
+    [boqId, queryClient, addToast, t],
+  );
+
+  /**
+   * v3.12.0 Stream A — set classification on every selected row. Writes
+   * `{[standard]: code}` over the existing classification object so
+   * pre-set codes in OTHER standards survive (a position can carry
+   * DIN 276 + MasterFormat simultaneously).
+   */
+  const handleBatchSetClassification = useCallback(
+    async (ids: string[], standard: string, code: string) => {
+      if (!boqId || ids.length === 0) return;
+      try {
+        const classifications: Record<string, Record<string, string>> = {};
+        for (const id of ids) {
+          const existing = (boq?.positions.find((p) => p.id === id)?.classification ??
+            {}) as Record<string, string>;
+          classifications[id] = { ...existing, [standard]: code };
+        }
+        // Fan out via the per-row PATCH so each row keeps its other-standard
+        // codes. The bulk endpoint cannot mass-merge a per-row dict; reusing
+        // trackedUpdate also feeds the undo stack.
+        for (const id of ids) {
+          const oldData: UpdatePositionData = {
+            classification: (boq?.positions.find((p) => p.id === id)
+              ?.classification ?? {}) as Record<string, string>,
+          };
+          const newData: UpdatePositionData = {
+            classification: classifications[id],
+          };
+          trackedUpdate(id, newData, oldData);
+        }
+        setSelectedPositionIds([]);
+        boqGridRef.current?.clearSelection();
+        addToast({
+          type: 'success',
+          title: t('boq.batch_class_done', {
+            defaultValue: 'Classification {{standard}}:{{code}} set on {{count}} positions',
+            standard,
+            code,
+            count: String(ids.length),
+          } as Record<string, string>),
+        });
+      } catch (e) {
+        const msg = e instanceof ApiError ? e.message : String(e);
+        addToast({
+          type: 'error',
+          title: t('boq.batch_class_failed', {
+            defaultValue: 'Classification update failed',
+          }),
+          message: msg,
+        });
+      }
+    },
+    [boqId, boq?.positions, trackedUpdate, addToast, t],
+  );
+
   const handleClearSelection = useCallback(() => {
     setSelectedPositionIds([]);
     setActivePositionId(null);
@@ -4127,6 +4228,8 @@ export function BOQEditorPage() {
         onBatchDelete={handleBatchDelete}
         onBatchChangeUnit={handleBatchChangeUnit}
         onClearSelection={handleClearSelection}
+        onBatchFactor={handleBatchFactor}
+        onBatchSetClassification={handleBatchSetClassification}
       />
 
       {/* ── Export Quality Warning Dialog ──────────────────────────── */}

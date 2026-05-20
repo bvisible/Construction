@@ -50,7 +50,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.bcf.bcf_xml import BCFParseError, parse_bcfzip
 from app.modules.bcf.schemas import PerspectiveCamera, TopicCreate, Vec3, ViewpointCreate
 from app.modules.bcf.service import BCFService
-from app.modules.clash.models import ClashResult, ClashRun
+from app.modules.clash.models import ClashCluster, ClashResult, ClashRun
 from app.modules.clash.repository import ClashRepository
 from app.modules.clash.schemas import (
     CLASH_SEVERITIES,
@@ -431,6 +431,202 @@ def _suggest_rule_from_fps(
         f"widen tolerance to {proposed_tol:g} m"
     )
     return rule, reason, top_count
+
+
+def _coerce_rules(rules: object) -> list[dict]:
+    """Defensive normaliser — return only dict rule entries.
+
+    The ``rules`` column is plain JSON, so a misbehaving caller could
+    insert non-dict noise. The router exposes whatever this returns, so
+    we strip junk silently rather than 500ing.
+    """
+    if not isinstance(rules, list):
+        return []
+    return [r for r in rules if isinstance(r, dict)]
+
+
+def _existing_rule_pairs(rules: object) -> set[frozenset[str]]:
+    """Lowercase symmetric pairs already covered by the run's rule set."""
+    out: set[frozenset[str]] = set()
+    for r in _coerce_rules(rules):
+        a = str(r.get("discipline_a") or "").strip().lower()
+        b = str(r.get("discipline_b") or "").strip().lower()
+        if a and b:
+            out.add(frozenset((a, b)))
+    return out
+
+
+def _collect_fp_pairs(
+    rows: list[ClashResult],
+) -> tuple[list[tuple[str, str]], dict[tuple[str, str], float]]:
+    """Extract canonical FP discipline pairs + their max penetration.
+
+    A clash is treated as a false-positive sample when its current
+    ``status == 'ignored'`` (the FP feedback loop flips ignored on the
+    way through), OR when its history audit trail carries an
+    ``fp_flag``/``flag_fp`` entry. Pair tuples are alphabetically
+    canonical so the suggester sees ``(A, B)`` and ``(B, A)`` as one.
+    """
+    pairs: list[tuple[str, str]] = []
+    max_pen: dict[tuple[str, str], float] = {}
+    for r in rows:
+        is_fp = (r.status or "") == "ignored"
+        if not is_fp:
+            for h in (r.history or []):
+                fld = str((h or {}).get("field", "")).lower()
+                if fld in ("fp_flag", "flag_fp", "false_positive"):
+                    is_fp = True
+                    break
+        if not is_fp:
+            continue
+        a = (r.a_discipline or "").strip() or "Unassigned"
+        b = (r.b_discipline or "").strip() or "Unassigned"
+        pair = (a, b) if a <= b else (b, a)
+        pairs.append(pair)
+        pen = float(r.penetration_m or 0.0)
+        if pen > max_pen.get(pair, 0.0):
+            max_pen[pair] = pen
+    return pairs, max_pen
+
+
+def _dominant_pair_and_storey(
+    members: list[ClashResult],
+) -> tuple[tuple[str, str], int | None]:
+    """Most-common discipline pair + storey of a cluster's member rows.
+
+    Returns ``("",""), None`` when ``members`` is empty so the caller
+    can render the chip with a generic ``"Cluster N"`` label without
+    branching on type. Mirrors the inner logic of
+    :func:`_label_for_cluster` but exposed as a structured tuple for the
+    REST projection.
+    """
+    if not members:
+        return ("", ""), None
+    pair_counts: dict[tuple[str, str], int] = {}
+    storey_counts: dict[int, int] = {}
+    for m in members:
+        a = (getattr(m, "a_discipline", "") or "Unassigned").strip() or "Unassigned"
+        b = (getattr(m, "b_discipline", "") or "Unassigned").strip() or "Unassigned"
+        pair = (a, b) if a <= b else (b, a)
+        pair_counts[pair] = pair_counts.get(pair, 0) + 1
+        for sk in ("a_storey", "b_storey"):
+            sv = getattr(m, sk, None)
+            if sv is None:
+                continue
+            try:
+                storey_counts[int(sv)] = storey_counts.get(int(sv), 0) + 1
+            except (TypeError, ValueError):
+                continue
+    if not pair_counts:
+        return ("", ""), None
+    top_pair = max(pair_counts, key=lambda p: (pair_counts[p], p))
+    top_storey: int | None = None
+    if storey_counts:
+        top_storey = max(storey_counts, key=lambda s: (storey_counts[s], -s))
+    return top_pair, top_storey
+
+
+def _resolved_mttr_hours(rows: list[ClashResult]) -> float | None:
+    """Average wall-clock hours from row creation to first ``resolved``.
+
+    Each row contributes one sample iff its history has at least one
+    ``status``-field entry with ``after == 'resolved'``. The earliest
+    such entry's ``ts`` minus the row's ``created_at`` is the row's
+    resolution latency in hours. Returns ``None`` when no row qualifies
+    (the dashboard hides the MTTR tile in that case).
+    """
+    samples: list[float] = []
+    for r in rows:
+        history = getattr(r, "history", None) or []
+        resolved_ts: str | None = None
+        for h in history:
+            if not isinstance(h, dict):
+                continue
+            if str(h.get("field", "")).lower() != "status":
+                continue
+            if str(h.get("after", "")).lower() != "resolved":
+                continue
+            ts = str(h.get("ts") or "")
+            if ts and (resolved_ts is None or ts < resolved_ts):
+                resolved_ts = ts
+        if not resolved_ts:
+            continue
+        try:
+            ended = datetime.fromisoformat(resolved_ts.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        started = getattr(r, "created_at", None)
+        if started is None:
+            continue
+        # Both timestamps need to be tz-aware for the subtraction to
+        # work; coerce naive timestamps (legacy SQLite test rows) to UTC.
+        utc = timezone.utc
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=utc)
+        if ended.tzinfo is None:
+            ended = ended.replace(tzinfo=utc)
+        delta = (ended - started).total_seconds() / 3600.0
+        if delta >= 0:
+            samples.append(delta)
+    if not samples:
+        return None
+    return round(sum(samples) / len(samples), 3)
+
+
+def _compute_kpi(rows: list[ClashResult]) -> dict:
+    """Build the dashboard JSON projection for ``GET /runs/{id}/kpi``.
+
+    One pass over the row list. ``top_clashing_pairs`` is the top five
+    discipline pairs by ``count`` (open_count desc, then pair alphabetic
+    on ties — deterministic).
+    """
+    total = len(rows)
+    by_status: dict[str, int] = {}
+    by_severity: dict[str, int] = dict.fromkeys(CLASH_SEVERITIES, 0)
+    by_type: dict[str, int] = {}
+    pair_counts: dict[tuple[str, str], dict[str, int]] = {}
+    for r in rows:
+        st = (r.status or "new")
+        by_status[st] = by_status.get(st, 0) + 1
+        sev = getattr(r, "severity", None) or "medium"
+        by_severity[sev] = by_severity.get(sev, 0) + 1
+        ct = r.clash_type or "hard"
+        by_type[ct] = by_type.get(ct, 0) + 1
+        a = (r.a_discipline or "Unassigned").strip() or "Unassigned"
+        b = (r.b_discipline or "Unassigned").strip() or "Unassigned"
+        pair = (a, b) if a <= b else (b, a)
+        cell = pair_counts.setdefault(pair, {"count": 0, "open_count": 0})
+        cell["count"] += 1
+        if st in OPEN_STATUSES:
+            cell["open_count"] += 1
+    by_pair_full: list[dict] = []
+    for (a, b), c in sorted(pair_counts.items()):
+        count = c["count"]
+        open_count = c["open_count"]
+        share = (open_count / count) if count else 0.0
+        by_pair_full.append(
+            {
+                "a": a,
+                "b": b,
+                "count": count,
+                "open_count": open_count,
+                "open_share": round(share, 4),
+            }
+        )
+    # Top five by count desc, open_count desc, pair alphabetic — stable.
+    top_pairs = sorted(
+        by_pair_full,
+        key=lambda p: (-p["count"], -p["open_count"], p["a"], p["b"]),
+    )[:5]
+    return {
+        "total": total,
+        "by_status": by_status,
+        "by_severity": by_severity,
+        "by_type": by_type,
+        "by_discipline_pair": by_pair_full,
+        "mttr_hours": _resolved_mttr_hours(rows),
+        "top_clashing_pairs": top_pairs,
+    }
 
 
 def _severity_suggestion(
@@ -1182,6 +1378,11 @@ class ClashService:
         name = (data.name or "").strip() or (
             f"Clash run {_now():%Y-%m-%d %H:%M}"
         )
+        # Wave A4 — initial rule set carried straight from the request.
+        # The engine consults the (possibly empty) list during the broad
+        # phase; the rule editor endpoints (PATCH /rules) can mutate it
+        # post-hoc without re-running the engine.
+        rules_payload = [r.model_dump() for r in (data.rules or [])]
         run = ClashRun(
             project_id=project_id,
             name=name,
@@ -1198,6 +1399,7 @@ class ClashService:
             status="running",
             created_by=str(user_id),
             summary={},
+            rules=rules_payload,
         )
         self.repo.add_run(run)
         await self.session.flush()
@@ -1212,6 +1414,13 @@ class ClashService:
             run.element_count = len(elements)
             run.total_clashes = len(results)
             run.summary = _build_summary(results)
+            # Wave A4 — spatial cluster pass over centroids. Pure
+            # write-only: failures degrade to "no clusters" rather than
+            # failing the whole run.
+            try:
+                await self._persist_clusters(run, results)
+            except Exception:  # noqa: BLE001 — clustering is best-effort
+                logger.exception("Clash run %s cluster pass failed", run.id)
             run.status = "completed"
             run.completed_at = _now()
         except Exception as exc:  # noqa: BLE001 — surface, don't 500 the run
@@ -1404,6 +1613,246 @@ class ClashService:
         run = await self.get_run(project_id, run_id)
         await self.repo.delete_run(run)
 
+    # ── Wave A4: clusters, rules, suggestions, KPI ─────────────────────
+
+    async def _persist_clusters(
+        self, run: ClashRun, results: list[ClashResult]
+    ) -> None:
+        """Run DBSCAN over centroids → stamp ``cluster_id`` + ClashCluster.
+
+        Pure side-effect over the result rows + the ``oe_clash_cluster``
+        table. Skipped when there are fewer than two results (a single
+        clash is never a "cluster"). The cluster pass is wrapped in a
+        broad ``except`` by the caller — every failure mode here
+        (degenerate centroids, DBSCAN cap, write error) leaves
+        ``cluster_id`` columns at ``NULL`` and the chip group simply
+        renders empty.
+        """
+        if not results or len(results) < _DEFAULT_CLUSTER_MIN_SAMPLES:
+            return
+        # Defensive copy of the existing rows so re-run replaces (the
+        # carry-forward path may have produced a fresh list).
+        await self.repo.clear_clusters(run.id)
+        points = [
+            (float(r.cx or 0.0), float(r.cy or 0.0), float(r.cz or 0.0))
+            for r in results
+        ]
+        labels = _dbscan_cluster(points)
+        # Group members by label so we can persist one ClashCluster per
+        # bucket. ``None`` is DBSCAN noise — no row, no chip.
+        buckets: dict[int, list[ClashResult]] = {}
+        for r, cid in zip(results, labels, strict=False):
+            r.cluster_id = cid
+            if cid is None:
+                continue
+            buckets.setdefault(cid, []).append(r)
+        if not buckets:
+            return
+        cluster_rows: list[ClashCluster] = []
+        for cid, members in sorted(buckets.items()):
+            label = _label_for_cluster(members, cid)
+            cluster_rows.append(
+                ClashCluster(
+                    run_id=run.id,
+                    cluster_id=cid,
+                    label=label,
+                    size=len(members),
+                )
+            )
+        self.repo.add_clusters(cluster_rows)
+
+    async def list_clusters(
+        self, project_id: uuid.UUID, run_id: uuid.UUID
+    ) -> list[dict]:
+        """Return ``[{cluster_id, label, size, dominant_disciplines, storey}]``.
+
+        ``dominant_disciplines`` and ``storey`` are derived from the
+        cluster's member rows (a single pass — no per-cluster DB query).
+        IDOR-guarded via :meth:`get_run`.
+        """
+        await self.get_run(project_id, run_id)
+        clusters = await self.repo.clusters_for_run(run_id)
+        if not clusters:
+            return []
+        # Index members so we can attach the dominant pair + storey.
+        rows = await self.repo.all_results(run_id)
+        by_cluster: dict[int, list[ClashResult]] = {}
+        for r in rows:
+            cid = getattr(r, "cluster_id", None)
+            if cid is None:
+                continue
+            by_cluster.setdefault(int(cid), []).append(r)
+
+        out: list[dict] = []
+        for c in clusters:
+            members = by_cluster.get(int(c.cluster_id), [])
+            dom_pair, dom_storey = _dominant_pair_and_storey(members)
+            out.append(
+                {
+                    "cluster_id": int(c.cluster_id),
+                    "label": c.label or "",
+                    "size": int(c.size or len(members)),
+                    "dominant_disciplines": list(dom_pair),
+                    "storey": dom_storey,
+                }
+            )
+        return out
+
+    async def list_rules(
+        self, project_id: uuid.UUID, run_id: uuid.UUID
+    ) -> list[dict]:
+        """Return the run's persisted rule list (raw JSON-friendly dicts)."""
+        run = await self.get_run(project_id, run_id)
+        return _coerce_rules(run.rules)
+
+    async def replace_rules(
+        self,
+        project_id: uuid.UUID,
+        run_id: uuid.UUID,
+        rules: list[dict],
+    ) -> list[dict]:
+        """Replace the rule set on a run (capped at 500). Returns the saved list.
+
+        Capped server-side as a defence-in-depth complement to the
+        schema's ``max_length=500`` — a misbehaving client cannot stuff
+        the run with thousands of inert rows. Reassigns the JSON column
+        so SQLAlchemy detects the change across backends.
+        """
+        run = await self.get_run(project_id, run_id)
+        capped = list(rules)[:500]
+        run.rules = capped
+        await self.session.flush()
+        return _coerce_rules(run.rules)
+
+    async def rule_suggestions(
+        self, project_id: uuid.UUID, run_id: uuid.UUID
+    ) -> list[dict]:
+        """Mine the run's recorded false-positive history for rule suggestions.
+
+        Each suggestion is keyed off discipline pairs that were *ignored
+        with a reason* (FP feedback). A pair must cross
+        :data:`_FP_SUGGESTION_THRESHOLD` to surface. The pair is matched
+        symmetrically; a rule already on the run (same pair, regardless
+        of tolerance) suppresses the suggestion to avoid suggesting
+        what's already in place.
+        """
+        run = await self.get_run(project_id, run_id)
+        rows = await self.repo.all_results(run_id)
+        fp_pairs, fp_max_pen = _collect_fp_pairs(rows)
+        existing_pairs = _existing_rule_pairs(run.rules)
+        # Filter out pairs that already have a rule, then mine.
+        filtered_pairs = [
+            p for p in fp_pairs if frozenset(p) not in existing_pairs
+        ]
+        filtered_max_pen = {
+            k: v for k, v in fp_max_pen.items()
+            if frozenset(k) not in existing_pairs
+        }
+        rule, reason, fp_count = _suggest_rule_from_fps(
+            filtered_pairs, filtered_max_pen
+        )
+        if rule is None:
+            return []
+        return [{"rule": rule, "reason": reason, "fp_count": fp_count}]
+
+    async def apply_rule_suggestion(
+        self,
+        project_id: uuid.UUID,
+        run_id: uuid.UUID,
+        discipline_a: str,
+        discipline_b: str,
+        tolerance_m: float,
+        *,
+        actor: str,
+    ) -> tuple[bool, int]:
+        """Append a new rule + re-evaluate existing results.
+
+        Adds a fresh :class:`ClashRule` row to ``run.rules`` (symmetric on
+        the pair — duplicates against any existing pair are skipped with
+        ``rule_added=False``). Any hard clash on the pair whose
+        ``penetration_m`` now falls at or below ``tolerance_m`` is
+        flipped to ``status='ignored'``, with a history entry.
+
+        Returns ``(rule_added, results_affected)``.
+        """
+        run = await self.get_run(project_id, run_id)
+        da = (discipline_a or "").strip()
+        db_ = (discipline_b or "").strip()
+        if not da or not db_:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="discipline_a and discipline_b must be non-empty",
+            )
+        existing = _coerce_rules(run.rules)
+        pair = frozenset((da.lower(), db_.lower()))
+        already = any(
+            frozenset(
+                (
+                    str(r.get("discipline_a") or "").strip().lower(),
+                    str(r.get("discipline_b") or "").strip().lower(),
+                )
+            )
+            == pair
+            for r in existing
+        )
+        rule_added = False
+        if not already:
+            new_rule = {
+                "id": f"sugg-{da}-{db_}-{int(_now().timestamp())}"[:64],
+                "discipline_a": da[:64],
+                "discipline_b": db_[:64],
+                "tolerance_m": float(tolerance_m),
+                "severity_override": None,
+                "enabled": True,
+            }
+            run.rules = (existing + [new_rule])[:500]
+            rule_added = True
+        # Re-evaluate: every hard clash on this pair whose penetration
+        # now sits at or below the new tolerance becomes ``ignored``.
+        rows = await self.repo.all_results(run_id)
+        affected = 0
+        for r in rows:
+            if (r.clash_type or "") != "hard":
+                continue
+            r_pair = frozenset(
+                ((r.a_discipline or "").strip().lower(),
+                 (r.b_discipline or "").strip().lower())
+            )
+            if r_pair != pair:
+                continue
+            if float(r.penetration_m or 0.0) > float(tolerance_m):
+                continue
+            if r.status == "ignored":
+                continue
+            self._append_history(
+                r,
+                str(actor or "system"),
+                "status",
+                r.status,
+                "ignored",
+            )
+            r.status = "ignored"
+            affected += 1
+        # Refresh the cached status counts so the dashboard KPI stays true.
+        if affected or rule_added:
+            run.summary = _build_summary(rows)
+        await self.session.flush()
+        return rule_added, affected
+
+    async def compute_kpi(
+        self, project_id: uuid.UUID, run_id: uuid.UUID
+    ) -> dict:
+        """Aggregate a dashboard-ready KPI payload for a run.
+
+        Single in-memory pass over every result row — no extra DB calls
+        beyond the existing list-by-run query. MTTR is derived from the
+        history audit trail (status→resolved transitions); ``None`` when
+        no row has a qualifying transition yet (the UI hides the tile).
+        """
+        await self.get_run(project_id, run_id)
+        rows = await self.repo.all_results(run_id)
+        return _compute_kpi(rows)
+
     # ── Engine ─────────────────────────────────────────────────────────
 
     def _detect(
@@ -1572,13 +2021,32 @@ class ClashService:
                     ):
                         continue
 
+                # Wave A4 — per-discipline-pair tolerance override. The
+                # first matching enabled rule (symmetric on the pair)
+                # swaps in its ``tolerance_m`` for the run-wide value and
+                # the result will pick up its ``severity_override``.
+                pair_rule = _apply_rules(run, (da, db))
+                pair_tol = tol
+                if pair_rule is not None:
+                    try:
+                        pair_tol = float(pair_rule.get("tolerance_m") or tol)
+                    except (TypeError, ValueError):
+                        pair_tol = tol
+
                 row = self._test_pair(
-                    run, ea, ba, da, ga, eb, bb_, db, gb, tol, clr,
+                    run, ea, ba, da, ga, eb, bb_, db, gb, pair_tol, clr,
                     triA=tri_by_idx[key[0]], triB=tri_by_idx[key[1]],
                     oa=obb_by_idx[key[0]], ob=obb_by_idx[key[1]],
                     hard_enabled=hard_enabled,
                 )
                 if row is not None:
+                    if pair_rule is not None:
+                        sev_override = pair_rule.get("severity_override")
+                        if (
+                            isinstance(sev_override, str)
+                            and sev_override in CLASH_SEVERITIES
+                        ):
+                            row.severity = sev_override
                     results.append(row)
                     if len(results) >= _MAX_RESULTS:
                         logger.warning(

@@ -25,16 +25,30 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import CurrentUserId, RequirePermission, RequireRole, SessionDep
+from app.dependencies import (
+    CurrentUserId,
+    OptionalUserPayload,
+    RequirePermission,
+    RequireRole,
+    SessionDep,
+)
 from app.modules.costs.matcher import (
     MatchResult,
     match_cwicr_for_position,
     match_cwicr_items,
 )
+from app.modules.costs.models import CostItem
+from app.modules.costs.intelligence import (
+    CostCertaintyService,
+    CostUsageRecorder,
+    RegionalIndexService,
+)
 from app.modules.costs.schemas import (
     CategoryTreeNode,
+    CertaintyBadge,
     CostAutocompleteItem,
     CostItemCreate,
     CostItemResponse,
@@ -43,6 +57,9 @@ from app.modules.costs.schemas import (
     CostSuggestion,
     CwicrMatchFromPositionRequest,
     CwicrMatchRequest,
+    RecordUsageRequest,
+    RegionalAdjustResponse,
+    RegionalIndexResponse,
     SuggestCostsForElementRequest,
 )
 from app.modules.costs.service import CostItemService
@@ -3975,3 +3992,155 @@ async def match_cwicr_from_position(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
         ) from exc
+
+
+# ── Cost Intelligence (v3.12.0 — Stream B) ────────────────────────────────
+
+
+@router.get("/regional-adjust/", response_model=RegionalAdjustResponse)
+async def regional_adjust(
+    session: SessionDep,
+    user: OptionalUserPayload,
+    region: str = Query(..., min_length=2, max_length=64, description="Region code, e.g. DE_BERLIN"),
+    category: str = Query(..., min_length=2, max_length=64, description="Category key"),
+    base_rate: float = Query(..., ge=0, description="Unit rate in the catalogue's currency"),
+    subcategory: str | None = Query(
+        default=None,
+        max_length=64,
+        description="Optional finer slice — falls back to the whole-category row when absent.",
+    ),
+) -> RegionalAdjustResponse:
+    """‌⁠‍Preview the same rate in a different region.
+
+    RSMeans-style city cost index lookup — multiplies ``base_rate`` by
+    the most recent ``factor`` on file for ``(region, category)``.
+    When no factor exists, returns a 1:1 passthrough so the frontend
+    can render the row without branching on null.
+
+    Read-only and public (parity with autocomplete / search). The
+    estimator is expected to confirm before applying the adjusted rate
+    onto a BOQ position — no auto-apply.
+    """
+    _ = user  # accept anonymous
+    svc = RegionalIndexService(session)
+    adjusted, factor, source, effective = await svc.adjust(
+        region, category, base_rate, subcategory=subcategory
+    )
+    return RegionalAdjustResponse(
+        region=region.strip().upper(),
+        category=category.strip().lower(),
+        base_rate=base_rate,
+        factor_applied=factor,
+        adjusted_rate=adjusted,
+        source=source,
+        effective_date=effective,
+    )
+
+
+@router.get(
+    "/regional-indices/",
+    response_model=list[RegionalIndexResponse],
+)
+async def list_regional_indices(
+    session: SessionDep,
+    user: OptionalUserPayload,
+    region: str = Query(..., min_length=2, max_length=64),
+) -> list[RegionalIndexResponse]:
+    """‌⁠‍List every cost-index row for ``region``.
+
+    Used by the Regional Adjust panel to populate the category picker
+    and show historical effective dates. Ordered by category then
+    effective_date desc so the freshest entries surface first.
+    """
+    _ = user
+    svc = RegionalIndexService(session)
+    rows = await svc.list_for_region(region)
+    return [RegionalIndexResponse.model_validate(row) for row in rows]
+
+
+@router.get("/{item_id}/certainty/", response_model=CertaintyBadge)
+async def get_cost_item_certainty(
+    item_id: uuid.UUID,
+    session: SessionDep,
+    user: OptionalUserPayload,
+) -> CertaintyBadge:
+    """‌⁠‍Return the green / yellow / red certainty badge for one cost item.
+
+    Aggregates the usage ledger into:
+
+    * ``frequency`` — total recorded uses across all projects.
+    * ``age_days`` — days since the most recent use (``999999`` when
+      the item has never been used).
+    * ``confidence_badge`` — bucketed band per the rules documented on
+      ``schemas.CertaintyBadge``.
+
+    Returns 404 when ``item_id`` does not exist in ``oe_costs_item``.
+    """
+    _ = user
+    svc = CostCertaintyService(session)
+    try:
+        data = await svc.compute(item_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
+        ) from exc
+    return CertaintyBadge.model_validate(data)
+
+
+@router.post(
+    "/{item_id}/record-usage/",
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_cost_item_usage(
+    item_id: uuid.UUID,
+    body: RecordUsageRequest,
+    session: SessionDep,
+    user: OptionalUserPayload,
+) -> dict[str, object]:
+    """‌⁠‍Append one row to the usage ledger.
+
+    Called from the BOQ apply-rate path so the next user of the same
+    rate sees an up-to-date certainty badge. Body intentionally small:
+    the timestamp is server-stamped, the cost-item id rides on the
+    URL.
+
+    Returns the new usage row's id + the refreshed certainty band so
+    the frontend can update its badge cache in one round-trip.
+    """
+    # Verify cost item exists so we can give a precise 404 rather than
+    # letting the FK CASCADE constraint do it at commit time.
+    item_check = await session.execute(
+        select(CostItem).where(CostItem.id == item_id).limit(1)
+    )
+    if item_check.scalar_one_or_none() is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"CostItem {item_id} not found",
+        )
+
+    recorder = CostUsageRecorder(session)
+    used_by: uuid.UUID | None = None
+    sub = (user or {}).get("sub") if user else None
+    if sub:
+        try:
+            used_by = uuid.UUID(str(sub))
+        except (TypeError, ValueError):
+            # Anonymous / demo-token id may be non-UUID — silently drop.
+            used_by = None
+
+    row = await recorder.record(
+        item_id,
+        project_id=body.project_id,
+        unit_rate_at_use=body.unit_rate_at_use,
+        context=body.context,
+        used_by=used_by,
+    )
+    await session.commit()
+
+    certainty = await CostCertaintyService(session).compute(item_id)
+    return {
+        "id": str(row.id),
+        "cost_item_id": str(item_id),
+        "used_at": row.used_at.isoformat() if row.used_at else None,
+        "certainty": CertaintyBadge.model_validate(certainty).model_dump(mode="json"),
+    }

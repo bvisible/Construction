@@ -605,3 +605,124 @@ class SubscriptionService:
             raise DistributionNotFoundError(str(subscription_id))
         await self.session.delete(row)
         await self.session.flush()
+
+
+# ── Cross-module hooks ──────────────────────────────────────────────────────
+
+
+async def on_file_new_revision(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_kind: str,
+    file_id: str,
+    canonical_name: str,
+    version_number: int,
+    actor_id: uuid.UUID | None = None,
+) -> int:
+    """Fan-out notifications for a newly-uploaded file revision.
+
+    Looks up every active :class:`FileDistributionSubscription` whose
+    ``project_id`` matches and whose ``file_kind`` is either ``"*"`` or
+    equals the incoming kind. For each subscriber that resolves to an
+    internal user (``subscriber_user_id IS NOT NULL``) we create an
+    in-app notification via :class:`NotificationService`.
+
+    External-only subscribers (those with ``subscriber_user_id IS
+    NULL``) are not notified here — the email digest channel owns that
+    side of the fan-out and lives outside this module. Returns the
+    count of notifications created so callers / tests can assert on
+    delivery.
+
+    Designed to run in the same transaction as the version write but
+    safe to call from a detached event handler too: it never raises,
+    and a missing notifications module degrades gracefully (the
+    function logs at debug and returns 0).
+    """
+    # Skip the ``"updated"`` event branch entirely when subscriptions
+    # explicitly opt out of it via ``notify_on``. We treat a new
+    # revision as ``"updated"`` because the file identity (project
+    # scope + canonical name) is unchanged — only the contents
+    # changed. Subs that asked only for ``"created"`` get nothing.
+    stmt = select(FileDistributionSubscription).where(
+        FileDistributionSubscription.project_id == project_id,
+        FileDistributionSubscription.active.is_(True),
+        or_(
+            FileDistributionSubscription.file_kind == file_kind,
+            FileDistributionSubscription.file_kind == "*",
+        ),
+    )
+    result = await session.execute(stmt)
+    subs = list(result.scalars().all())
+    if not subs:
+        return 0
+
+    # Per-sub ``notify_on`` filter — keep only subs that opted into
+    # ``"updated"`` (our model for "new revision posted").
+    matching: list[FileDistributionSubscription] = []
+    for sub in subs:
+        events = list(sub.notify_on or [])
+        if not events or "updated" in events:
+            matching.append(sub)
+    if not matching:
+        return 0
+
+    # Lazy-import the notification module so this file's import graph
+    # stays free of a hard dependency on ``notifications``. A clean
+    # install that disables the notifications module (e.g. minimal
+    # build) gets a graceful no-op + debug log instead of an
+    # ImportError.
+    try:
+        from app.modules.notifications.service import NotificationService
+    except Exception:  # noqa: BLE001
+        logger.debug(
+            "on_file_new_revision: notifications module not available; "
+            "skipping fan-out",
+        )
+        return 0
+
+    notif_svc = NotificationService(session)
+    created = 0
+    for sub in matching:
+        if sub.subscriber_user_id is None:
+            # External-only subscriber — out of scope here; email
+            # digest channel handles those.
+            continue
+        try:
+            await notif_svc.create(
+                user_id=sub.subscriber_user_id,
+                notification_type="file_revision",
+                title_key="notifications.file_distribution.new_revision.title",
+                body_key="notifications.file_distribution.new_revision.body",
+                body_context={
+                    "canonical_name": canonical_name,
+                    "version_number": str(version_number),
+                    "file_kind": file_kind,
+                },
+                entity_type=f"file_{file_kind}",
+                entity_id=str(file_id),
+                action_url=f"/files?file={file_id}",
+                metadata={
+                    "project_id": str(project_id),
+                    "subscription_id": str(sub.id),
+                    "actor_id": str(actor_id) if actor_id else None,
+                },
+            )
+            created += 1
+        except Exception:  # noqa: BLE001
+            # Per-subscriber failure must not block the fan-out for
+            # the remaining recipients.
+            logger.exception(
+                "on_file_new_revision: failed to notify user_id=%s",
+                sub.subscriber_user_id,
+            )
+    if created:
+        logger.info(
+            "on_file_new_revision: fan-out created %d notification(s) "
+            "for project=%s kind=%s file=%s",
+            created,
+            project_id,
+            file_kind,
+            file_id,
+        )
+    return created

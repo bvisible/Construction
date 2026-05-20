@@ -77,6 +77,28 @@ function save(s: Persisted) {
 
 export const useBrandingStore = create<BrandingState>((set, get) => {
   const initial = load();
+
+  // Cross-tab sync — when localStorage[STORAGE_KEY] changes in another
+  // tab (e.g. user edits branding on /login while the app is open in
+  // another window, or vice-versa), re-hydrate this tab's store so the
+  // sidebar / login screen stays consistent without a reload. Same-tab
+  // edits go through setLogo/setCompanyName so they bypass this path.
+  if (typeof window !== 'undefined') {
+    window.addEventListener('storage', (e) => {
+      if (e.key !== STORAGE_KEY) return;
+      const fresh = load();
+      const current = get();
+      if (
+        fresh.mode === current.mode &&
+        fresh.logoDataUrl === current.logoDataUrl &&
+        fresh.companyName === current.companyName
+      ) {
+        return;
+      }
+      set(fresh);
+    });
+  }
+
   return {
     ...initial,
     setLogo: (dataUrl) => {

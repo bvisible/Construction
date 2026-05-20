@@ -1,7 +1,7 @@
 // DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 
-import { apiPost } from '@/shared/lib/api';
+import { apiGet, apiPost } from '@/shared/lib/api';
 
 /* ── CWICR abstract-resource variant types ─────────────────────────────── */
 
@@ -204,4 +204,106 @@ export async function matchCwicrFromPosition(
     '/v1/costs/match-from-position/',
     body,
   );
+}
+
+/* ── Cost Intelligence (v3.12.0 — Stream B) ────────────────────────────── */
+
+/** Green / yellow / red confidence band on a cost item.  Mirrors
+ *  ``backend/app/modules/costs/intelligence.py::classify_certainty``. */
+export type CertaintyBand = 'green' | 'yellow' | 'red';
+
+/** Response shape for ``GET /v1/costs/{id}/certainty/``. */
+export interface CertaintyBadge {
+  cost_item_id: string;
+  frequency: number;
+  age_days: number;
+  source: string;
+  confidence_badge: CertaintyBand;
+  /** ISO-8601 timestamp of the most recent use, or null when never used. */
+  last_used_at: string | null;
+}
+
+/** Response shape for ``GET /v1/costs/regional-adjust/``. */
+export interface RegionalAdjustResponse {
+  region: string;
+  category: string;
+  base_rate: number;
+  factor_applied: number;
+  adjusted_rate: number;
+  source: string;
+  effective_date: string | null;
+}
+
+/** Response shape for ``GET /v1/costs/regional-indices/``. */
+export interface RegionalIndexRow {
+  id: string;
+  region_code: string;
+  category: string;
+  subcategory: string | null;
+  factor: number;
+  source: string;
+  effective_date: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Request body for ``POST /v1/costs/{id}/record-usage/``. */
+export interface RecordUsageRequest {
+  project_id: string;
+  context: 'boq' | 'assembly' | 'tender';
+  unit_rate_at_use: number;
+}
+
+/** Fetch the certainty badge for a cost item.  Returns null on 404 so
+ *  the caller can render an "unknown" pill without throwing. */
+export async function fetchCertainty(
+  costItemId: string,
+): Promise<CertaintyBadge | null> {
+  try {
+    return await apiGet<CertaintyBadge>(`/v1/costs/${costItemId}/certainty/`);
+  } catch (err) {
+    if (err instanceof Error && /404/.test(err.message)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/** Preview an adjusted rate for a different region. */
+export async function previewRegionalAdjust(args: {
+  region: string;
+  category: string;
+  baseRate: number;
+  subcategory?: string;
+}): Promise<RegionalAdjustResponse> {
+  const params = new URLSearchParams({
+    region: args.region,
+    category: args.category,
+    base_rate: String(args.baseRate),
+  });
+  if (args.subcategory) params.set('subcategory', args.subcategory);
+  return apiGet<RegionalAdjustResponse>(
+    `/v1/costs/regional-adjust/?${params.toString()}`,
+  );
+}
+
+/** Enumerate every regional index row on file for ``region``. */
+export async function listRegionalIndices(
+  region: string,
+): Promise<RegionalIndexRow[]> {
+  const params = new URLSearchParams({ region });
+  return apiGet<RegionalIndexRow[]>(
+    `/v1/costs/regional-indices/?${params.toString()}`,
+  );
+}
+
+/** Record a usage event so the next certainty fetch reflects it. */
+export async function recordCostItemUsage(
+  costItemId: string,
+  body: RecordUsageRequest,
+): Promise<{ id: string; certainty: CertaintyBadge }> {
+  return apiPost<
+    { id: string; certainty: CertaintyBadge },
+    RecordUsageRequest
+  >(`/v1/costs/${costItemId}/record-usage/`, body);
 }

@@ -2,7 +2,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { Download, Mail, FolderOpen, Copy, X, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag, ExternalLink, Activity, Share2, Lock, Send, ClipboardCheck, CheckCircle2, Link as LinkIcon } from 'lucide-react';
+import { Download, Mail, FolderOpen, Copy, X, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag, ExternalLink, Activity, Share2, Lock, Send, ClipboardCheck, CheckCircle2, Link as LinkIcon, History, RotateCcw, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -15,6 +15,9 @@ import { isTauri, openInOSFinder, copyToClipboard } from '../lib/tauri';
 import { modulesForKind, primaryModule } from '../kindModule';
 import { ActivityDrawer } from './ActivityDrawer';
 import { VersionDropdown } from '@/features/file-versions/VersionDropdown';
+import { useFileVersions, useRestoreVersion } from '@/features/file-versions/hooks';
+import { VersionBadge } from '@/features/file-versions/VersionBadge';
+import type { FileVersionResponse } from '@/features/file-versions/types';
 import { CommentThread } from '@/features/file-comments/CommentThread';
 import { NamingViolationBanner } from '@/features/file-references/NamingViolationBanner';
 import { ReferencedInPanel } from '@/features/file-references/ReferencedInPanel';
@@ -467,6 +470,13 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
           currentUserId={null}
           className="mt-3"
         />
+
+        {/* W1 — chronological version history with per-row download +
+            restore buttons. Sits next to the Activity / Referenced-in /
+            Comments sections so the preview pane reads as a single
+            scroll surface ("tabs" in the same flat-section vocabulary
+            the rest of the pane already uses). */}
+        <VersionHistorySection fileId={row.id} kind={row.kind} />
       </div>
 
       {/* Full audit timeline as a right-edge slide-over. Mounted at the
@@ -640,6 +650,140 @@ function ActivityLogSection({ documentId }: { documentId: string }) {
               </li>
             );
           })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/* ── Version history timeline ──────────────────────────────────────────
+   Backend endpoint: GET /v1/file-versions/?file_id=&kind=. Returns the
+   full chain newest-first. Each row exposes a Download (when the chain
+   item carries an addressable URL — the chain doesn't currently carry
+   ``download_url``, so the button degrades to "Current" for the live
+   row and is hidden on superseded rows we can't address) plus a Restore
+   button that calls ``POST /v1/file-versions/{id}/restore/``.
+
+   Gracefully renders null on 404 / error so older backends that
+   haven't run the file-versions migration can't break the preview
+   pane. */
+function VersionHistorySection({
+  fileId,
+  kind,
+}: {
+  fileId: string;
+  kind: FileKind;
+}) {
+  const { t } = useTranslation();
+  const addToast = useToastStore((s) => s.addToast);
+  const { data: versions, isLoading, isError } = useFileVersions(fileId, kind);
+  const restore = useRestoreVersion(fileId, kind);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+
+  if (isError) return null;
+  const rows = versions ?? [];
+  if (!isLoading && rows.length === 0) return null;
+
+  const handleRestore = (v: FileVersionResponse) => {
+    if (restore.isPending) return;
+    setPendingId(v.id);
+    restore.mutate(v.id, {
+      onSuccess: (restored) => {
+        addToast({
+          type: 'success',
+          title: t('files.versions.restored_title', {
+            defaultValue: 'Restored to V{{n}}',
+            n: String(restored.version_number).padStart(2, '0'),
+          }),
+        });
+        setPendingId(null);
+      },
+      onError: (err: Error) => {
+        addToast({
+          type: 'error',
+          title: t('files.versions.restore_failed', {
+            defaultValue: 'Could not restore version',
+          }),
+          message: err.message,
+        });
+        setPendingId(null);
+      },
+    });
+  };
+
+  return (
+    <div className="border-t border-border-light pt-3 mt-3">
+      <h4 className="flex items-center gap-1.5 text-2xs font-medium uppercase tracking-wider text-content-tertiary mb-2">
+        <History size={11} strokeWidth={2} />
+        {t('files.versions.section_label', { defaultValue: 'Versions' })}
+        {rows.length > 0 && (
+          <span className="ms-1 text-content-quaternary tabular-nums">({rows.length})</span>
+        )}
+      </h4>
+      {isLoading ? (
+        <div className="h-3 rounded bg-surface-secondary animate-pulse" />
+      ) : (
+        <ol className="space-y-1.5" data-testid="version-history-list">
+          {rows.map((v) => (
+            <li
+              key={v.id}
+              data-testid={`version-history-row-${v.version_number}`}
+              className={clsx(
+                'flex items-start gap-2 rounded-md border px-2 py-1.5',
+                v.is_current
+                  ? 'border-oe-blue/30 bg-oe-blue/5'
+                  : 'border-border-light bg-surface-elevated',
+              )}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <VersionBadge
+                    versionNumber={v.version_number}
+                    isCurrent={v.is_current}
+                  />
+                  <DateDisplay
+                    value={v.uploaded_at}
+                    format="datetime"
+                    className="text-[10px] text-content-tertiary"
+                  />
+                </div>
+                {v.notes && (
+                  <p className="mt-0.5 text-[11px] text-content-secondary line-clamp-2">
+                    {v.notes}
+                  </p>
+                )}
+              </div>
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                {v.is_current ? (
+                  <span className="text-[10px] font-medium text-oe-blue uppercase tracking-wide">
+                    {t('files.versions.current', { defaultValue: 'Current' })}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleRestore(v)}
+                    disabled={restore.isPending}
+                    data-testid={`version-history-restore-${v.version_number}`}
+                    className={clsx(
+                      'inline-flex items-center gap-1 h-6 px-1.5 rounded text-[10px] font-medium',
+                      'text-oe-blue hover:bg-oe-blue/10',
+                      'disabled:opacity-50 disabled:cursor-not-allowed',
+                    )}
+                    title={t('files.versions.make_current_title', {
+                      defaultValue: 'Promote this version to current',
+                    })}
+                  >
+                    {pendingId === v.id ? (
+                      <Loader2 size={10} className="animate-spin" />
+                    ) : (
+                      <RotateCcw size={10} />
+                    )}
+                    {t('files.versions.make_current', { defaultValue: 'Make current' })}
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
         </ol>
       )}
     </div>

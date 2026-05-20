@@ -10,7 +10,7 @@ from sqlalchemy import case, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.bim_hub.models import BIMElement, BIMModel
-from app.modules.clash.models import ClashResult, ClashRun
+from app.modules.clash.models import ClashCluster, ClashResult, ClashRun
 from app.modules.clash.schemas import (
     CLASH_PROPERTY_GROUP_PREFIX,
     SEVERITY_ORDER,
@@ -447,4 +447,26 @@ class ClashRepository:
             stmt = stmt.where(
                 ClashResult.status.in_(("new", "active", "reviewed"))
             )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    # ── ClashCluster (Wave A4) ─────────────────────────────────────────
+
+    def add_clusters(self, clusters: list[ClashCluster]) -> None:
+        """Bulk-add cluster label rows for a run. Caller flushes."""
+        if clusters:
+            self.session.add_all(clusters)
+
+    async def clear_clusters(self, run_id: uuid.UUID) -> None:
+        """Wipe a run's persisted cluster labels (re-run replaces)."""
+        await self.session.execute(
+            delete(ClashCluster).where(ClashCluster.run_id == run_id)
+        )
+
+    async def clusters_for_run(self, run_id: uuid.UUID) -> list[ClashCluster]:
+        """Every persisted cluster label for a run, lowest id first."""
+        stmt = (
+            select(ClashCluster)
+            .where(ClashCluster.run_id == run_id)
+            .order_by(ClashCluster.cluster_id.asc())
+        )
         return list((await self.session.execute(stmt)).scalars().all())
