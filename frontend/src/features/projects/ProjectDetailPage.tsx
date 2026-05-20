@@ -2053,7 +2053,10 @@ export function ProjectDetailPage() {
                     </div>
                   ) : (
                     <div className="divide-y divide-border-light">
-                      {dashboardData.recent_activity.map((item, idx) => {
+                      {/* //// NEOFFICE PATCH — defensive: shield against a
+                          malformed dashboard payload (e.g. trailing-slash
+                          404 returning {detail: …} instead of the dashboard). */}
+                      {(dashboardData.recent_activity ?? []).map((item, idx) => {
                         const typeLabels: Record<string, string> = {
                           rfi_created: 'RFI',
                           task_created: t('projects.dash_task', { defaultValue: 'Task' }),
@@ -2477,7 +2480,11 @@ export function ProjectDetailPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border-light">
-                        {budgetDashboard.items!.map((item) => (
+                        {/* //// NEOFFICE PATCH — `items` is optional in the
+                            5d/dashboard payload; the `!` assertion masked
+                            a runtime crash ("D.map is not a function")
+                            when the backend returns no items array. */}
+                        {(budgetDashboard.items ?? []).map((item) => (
                           <tr key={item.name} className="hover:bg-surface-secondary transition-colors">
                             <td className="px-4 py-2.5 text-content-primary">{item.name}</td>
                             <td className="px-4 py-2.5 text-right tabular-nums text-content-secondary">
