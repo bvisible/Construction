@@ -8,7 +8,6 @@ validated end-to-end against osiris in bridge milestone J6.
 from __future__ import annotations
 
 import uuid
-from types import SimpleNamespace
 
 from app.modules.neoffice.bridge import frappe_client, mappers
 from app.modules.schedule.models import Activity, Schedule, WorkOrder
@@ -137,14 +136,8 @@ async def test_push_activity_posts_payload_and_token(monkeypatch):
     """A configured bridge posts the payload + token to the upsert endpoint."""
     _FakeAsyncClient.captured = {}
     monkeypatch.setattr(frappe_client.httpx, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(
-        frappe_client,
-        "get_settings",
-        lambda: SimpleNamespace(
-            activity_bridge_url="https://osiris.example/",
-            activity_bridge_token="tok-abc",
-        ),
-    )
+    monkeypatch.setenv("ACTIVITY_BRIDGE_URL", "https://osiris.example/")
+    monkeypatch.setenv("ACTIVITY_BRIDGE_TOKEN", "tok-abc")
 
     ok = await frappe_client.push_activity({"neoconstruction_source_id": "wo-1"})
 
@@ -158,11 +151,8 @@ async def test_push_activity_posts_payload_and_token(monkeypatch):
 
 async def test_push_activity_skips_when_unconfigured(monkeypatch):
     """An unconfigured bridge no-ops instead of raising."""
-    monkeypatch.setattr(
-        frappe_client,
-        "get_settings",
-        lambda: SimpleNamespace(activity_bridge_url="", activity_bridge_token=""),
-    )
+    monkeypatch.delenv("ACTIVITY_BRIDGE_URL", raising=False)
+    monkeypatch.delenv("ACTIVITY_BRIDGE_TOKEN", raising=False)
 
     ok = await frappe_client.push_activity({"neoconstruction_source_id": "wo-x"})
     assert ok is False
