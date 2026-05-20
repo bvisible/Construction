@@ -129,8 +129,8 @@ class _FakeAsyncClient:
     async def __aexit__(self, *args):
         return False
 
-    async def post(self, url, json=None):
-        _FakeAsyncClient.captured = {"url": url, "json": json}
+    async def post(self, url, json=None, headers=None):
+        _FakeAsyncClient.captured = {"url": url, "json": json, "headers": headers}
         return _FakeResponse()
 
 
