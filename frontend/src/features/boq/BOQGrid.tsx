@@ -500,7 +500,14 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   bimModelId,
   onHighlightBIMElements,
 }, ref) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  // `t` is a fresh function on every render which would invalidate the
+  // `columnDefs` useMemo every render and force AG Grid to rebuild its
+  // column model (resets sort, width, pinning state). Mirror the latest
+  // `t` into a ref and key the memo on the actual language string instead
+  // — v4.3 audit (BOQGrid column-defs thrash).
+  const tRef = useRef(t);
+  tRef.current = t;
   const navigate = useNavigate();
   const gridRef = useRef<AgGridReact>(null);
   const gridApiRef = useRef<GridApi | null>(null);
@@ -1019,7 +1026,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
 
   /* ── Column defs (standard + custom) ─────────────────────────────── */
   const columnDefs = useMemo(() => {
-    const defs = getColumnDefs({ currencySymbol, currencyCode, locale, fmt, t, displayCurrency: displayCurrency ?? null });
+    const defs = getColumnDefs({ currencySymbol, currencyCode, locale, fmt, t: tRef.current, displayCurrency: displayCurrency ?? null });
     // Override ordinal column with custom renderer
     const ordinalCol = defs.find((c) => c.field === 'ordinal');
     if (ordinalCol) {
@@ -1056,7 +1063,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       }
     }
     return defs;
-  }, [currencySymbol, currencyCode, locale, fmt, t, customColumns, positions, boqVariables, displayCurrency]);
+  }, [currencySymbol, currencyCode, locale, fmt, i18n.language, customColumns, positions, boqVariables, displayCurrency]);
 
   /* ── Calculated-column refresh on positions change ──────────────────
    * AG Grid re-runs `valueGetter` on every refresh; for cross-position
@@ -1097,11 +1104,29 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
    * memo rebuilds (it depends on `displayCurrency`), but AG Grid keeps
    * the prior formatted strings cached for already-rendered cells.
    * Force a cell refresh on the total column so every footer / section
-   * subtotal / per-position total reformats in lock-step. */
+   * subtotal / per-position total reformats in lock-step.
+   *
+   * Full-width section rows are NOT part of the `total` column — they
+   * render through SectionFullWidthRenderer, which reads `_subtotal` and
+   * divides by `displayCurrency.rate` itself. `refreshCells` does not
+   * reach them, so without an explicit redraw the section subtotals
+   * stay frozen at the previous currency. That was the regression
+   * reported on multi-currency BOQs (Spanish video, nested HIJO_*
+   * sections showing 0.00 in ARS while the grand total updated).
+   */
   useEffect(() => {
-    if (!gridApiRef.current) return;
-    gridApiRef.current.refreshCells({ columns: ['total'], force: true });
-    gridApiRef.current.refreshHeader();
+    const api = gridApiRef.current;
+    if (!api) return;
+    api.refreshCells({ columns: ['total'], force: true });
+    const sectionNodes: unknown[] = [];
+    api.forEachNode((node: unknown) => {
+      const data = (node as { data?: { _isSection?: boolean } } | null)?.data;
+      if (data?._isSection) sectionNodes.push(node);
+    });
+    if (sectionNodes.length > 0) {
+      api.redrawRows({ rowNodes: sectionNodes as never[] });
+    }
+    api.refreshHeader();
   }, [displayCurrency?.code, displayCurrency?.rate]);
 
   /* ── Helper: insert resource sub-rows after an expanded position ── */

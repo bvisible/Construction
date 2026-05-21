@@ -135,9 +135,17 @@ async def _on_hse_incident_root_cause(event: Event) -> None:
                 "qms.ncr.mirrored_from_hse",
                 {
                     "source_capa_id": str(capa.id),
+                    # capa.source_ref is the HSE incident UUID when
+                    # source_type == "incident" (gated above).
+                    "hse_incident_id": (
+                        str(capa.source_ref) if capa.source_ref else ""
+                    ),
                     "ncr_id": str(mirror.id),
                     "project_id": str(capa.project_id),
                     "severity": severity,
+                    "ncr_owner_user_id": (
+                        str(capa.owner_user_id) if capa.owner_user_id else ""
+                    ),
                 },
                 source_module="qms",
             )

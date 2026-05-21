@@ -569,6 +569,7 @@ describe('Visual Regression — LoginPage', () => {
   // so a static snapshot match is inherently flaky. The login form itself
   // (form fields, submit button, demo access) is exercised by the e2e
   // Playwright suite where animation timing is deterministic.
+  // SKIP: LoginPage marketing background runs a setInterval-driven typewriter ticker, so each render captures a different DOM state and the snapshot match is inherently flaky. Re-enable when: ticker accepts a deterministic-pause prop (or jsdom gets fake-timers wired into snapshot capture). Tracked in v4.3 backlog.
   it.skip('renders the login form (skipped — flaky due to typewriter ticker)', async () => {
     const { LoginPage } = await import('@/features/auth/LoginPage');
     const { container } = render(

@@ -277,25 +277,27 @@ function RegionTabBar({
   }
 
   if (regions.length === 0 && totalItemCount === 0) {
+    // Use the shared EmptyState component so the copy + CTA are consistent
+    // with the other module empty states (favourites, recent, no-results).
+    // The CTA routes to the regional-database importer.
     return (
-      <div className="mb-6 rounded-xl border-2 border-dashed border-border-light bg-surface-secondary/50 p-6 text-center">
-        <Database size={28} className="mx-auto mb-2 text-content-tertiary" strokeWidth={1.5} />
-        <p className="text-sm font-medium text-content-primary mb-1">
-          {t('costs.no_database_loaded', { defaultValue: 'No database loaded‌⁠‍' })}
-        </p>
-        <p className="text-xs text-content-tertiary mb-3">
-          {t('costs.import_first_hint', {
+      <div
+        className="mb-6"
+        data-testid="costs-no-database-empty-state"
+      >
+        <EmptyState
+          icon={<Database size={28} strokeWidth={1.5} />}
+          title={t('costs.no_database_loaded', { defaultValue: 'No database loaded‌⁠‍' })}
+          description={t('costs.import_first_hint', {
             defaultValue: 'Import a regional cost database to start searching 55,000+ items.‌⁠‍',
           })}
-        </p>
-        <Button
-          variant="primary"
-          size="sm"
-          icon={<Upload size={14} />}
-          onClick={() => navigate('/costs/import')}
-        >
-          {t('costs.import_database', { defaultValue: 'Import Database‌⁠‍' })}
-        </Button>
+          action={{
+            label: t('costs.import_regional_database', {
+              defaultValue: 'Import a regional database‌⁠‍',
+            }),
+            onClick: () => navigate('/costs/import'),
+          }}
+        />
       </div>
     );
   }
@@ -1703,9 +1705,23 @@ function CreateAssemblyFromCostsModal({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const addToast = useToastStore((s) => s.addToast);
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [name, setName] = useState('');
   const [unit, setUnit] = useState('m2');
   const [isCreating, setIsCreating] = useState(false);
+
+  // Resolve project currency from the active-project context. No hardcoded
+  // fallback (CLAUDE.md "no hardcoded currency fallbacks") — when neither
+  // the project nor any item carries a currency, ship an empty string so
+  // the user is forced into an explicit choice at the next surface.
+  const { data: projects } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => apiGet<Project[]>('/v1/projects/'),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const projectCurrency =
+    projects?.find((p) => p.id === activeProjectId)?.currency ?? '';
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1730,7 +1746,7 @@ function CreateAssemblyFromCostsModal({
         name: name.trim(),
         unit,
         category: 'General',
-        currency: 'EUR',
+        currency: projectCurrency,
       });
 
       // Add each cost item as a component
@@ -1761,7 +1777,7 @@ function CreateAssemblyFromCostsModal({
     } finally {
       setIsCreating(false);
     }
-  }, [name, unit, items, addToast, t, onSuccess, navigate]);
+  }, [name, unit, items, projectCurrency, addToast, t, onSuccess, navigate]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 animate-fade-in" onClick={onClose}>
@@ -1827,7 +1843,7 @@ function CreateAssemblyFromCostsModal({
             </div>
             <div className="flex items-center justify-between mt-2 text-xs">
               <span className="text-content-tertiary">{t('assemblies.total_rate_sum', { defaultValue: 'Total rate (sum of components)' })}</span>
-              <span className="font-semibold text-content-primary tabular-nums">{fmt(totalRate)} EUR</span>
+              <span className="font-semibold text-content-primary tabular-nums">{projectCurrency ? `${fmt(totalRate)} ${projectCurrency}` : fmt(totalRate)}</span>
             </div>
           </div>
         </div>
@@ -1850,12 +1866,15 @@ function CreateAssemblyFromCostsModal({
 }
 
 
+// Currency is derived from the active project at form-open time (see
+// `CreateCostItemModal` below) — never hardcoded here. See CLAUDE.md
+// "no hardcoded currency fallbacks".
 const INITIAL_COST_ITEM_FORM = {
   code: '',
   description: '',
   unit: 'm2',
   rate: '',
-  currency: 'EUR',
+  currency: '',
 };
 
 function CreateCostItemModal({
@@ -1867,8 +1886,22 @@ function CreateCostItemModal({
 }) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const { data: projects } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => apiGet<Project[]>('/v1/projects/'),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+  const projectCurrency =
+    projects?.find((p) => p.id === activeProjectId)?.currency ?? '';
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [form, setForm] = useState(INITIAL_COST_ITEM_FORM);
+  // Seed the currency from the active project context — if no project is
+  // active, the user must pick one in the form select. No EUR/USD baked in.
+  const [form, setForm] = useState(() => ({
+    ...INITIAL_COST_ITEM_FORM,
+    currency: projectCurrency,
+  }));
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -1877,6 +1910,15 @@ function CreateCostItemModal({
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
+
+  // When the projects query resolves after the modal mounts, seed the form
+  // currency from the active project — only if the user hasn't already picked
+  // one (guards against clobbering an explicit choice mid-edit).
+  useEffect(() => {
+    if (projectCurrency && !form.currency) {
+      setForm((prev) => ({ ...prev, currency: projectCurrency }));
+    }
+  }, [projectCurrency, form.currency]);
 
   const UNITS = ['m', 'm2', 'm3', 'kg', 't', 'pcs', 'lsum', 'h', 'set', 'lm'];
 

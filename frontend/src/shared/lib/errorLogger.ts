@@ -170,6 +170,63 @@ function saveToStorage(): void {
   }
 }
 
+/**
+ * Fire-and-forget POST of a single entry to the backend client-error sink.
+ *
+ * The backend route is unauthenticated and rate-limited at 30 req/min per
+ * IP, so we send each entry exactly once at capture time. ``keepalive``
+ * lets the browser flush the request even if the page is unloading (so
+ * navigation-time errors still reach the server).
+ *
+ * Disabled by setting ``VITE_ENABLE_ERROR_REPORTING=false`` at build time
+ * (e.g. for air-gapped installs). Default is enabled.
+ *
+ * Anything that goes wrong here is intentionally swallowed — we never
+ * want the error reporter itself to surface more errors.
+ */
+function postToBackend(entry: ErrorLogEntry): void {
+  try {
+    const flag =
+      typeof import.meta !== 'undefined' &&
+      typeof (import.meta as { env?: Record<string, string | undefined> }).env !==
+        'undefined'
+        ? (import.meta as { env: Record<string, string | undefined> }).env
+            .VITE_ENABLE_ERROR_REPORTING
+        : undefined;
+    if (flag === 'false') return;
+    if (typeof fetch === 'undefined') return;
+
+    const stackLines = (entry.stack ?? '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .slice(0, 64);
+
+    const body = JSON.stringify({
+      timestamp: entry.timestamp,
+      error_id: entry.id,
+      message: entry.message,
+      stack_lines: stackLines,
+      user_agent: entry.userAgent,
+      path: entry.url,
+    });
+
+    // Fire-and-forget — never await. keepalive lets the browser flush
+    // during page unload.
+    void fetch('/api/v1/client-errors/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+      credentials: 'omit',
+    }).catch(() => {
+      // ignored — the error reporter must never surface errors
+    });
+  } catch {
+    // ignored — the error reporter must never surface errors
+  }
+}
+
 function loadFromStorage(): void {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -196,6 +253,7 @@ function addEntry(entry: ErrorLogEntry): void {
     memoryBuffer = memoryBuffer.slice(-MAX_MEMORY_ENTRIES);
   }
   saveToStorage();
+  postToBackend(entry);
 }
 
 // ---------------------------------------------------------------------------

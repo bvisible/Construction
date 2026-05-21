@@ -810,3 +810,165 @@ class BIMModelSchemaResponse(BaseModel):
     )
     element_count: int = 0
     member_element_ids: list[UUID] = Field(default_factory=list)
+
+
+# ── BIM Federation schemas (v4.0 / Slice 1) ──────────────────────────────────
+
+
+FederationDiscipline = Literal[
+    "arch",
+    "struct",
+    "mep",
+    "landscape",
+    "civil",
+    "other",
+]
+
+
+class FederationOriginOffset(BaseModel):
+    """Shared origin offset applied to every federation member at render time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+
+class FederationCreate(BaseModel):
+    """Create a new BIM federation under a project."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    project_id: UUID
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str | None = None
+    origin_offset: FederationOriginOffset = Field(
+        default_factory=FederationOriginOffset
+    )
+    shared_units: str = Field(default="m", min_length=1, max_length=20)
+
+
+class FederationUpdate(BaseModel):
+    """Partial update for a federation header (metadata only)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    origin_offset: FederationOriginOffset | None = None
+    shared_units: str | None = Field(default=None, min_length=1, max_length=20)
+
+
+class FederationModelAdd(BaseModel):
+    """Add an existing BIM model to a federation."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    bim_model_id: UUID
+    discipline: FederationDiscipline = "other"
+    color_hint: str | None = Field(default=None, max_length=20)
+    visible: bool = True
+    z_order: int = 0
+
+
+class FederationModelResponse(BaseModel):
+    """A single member-model link inside a federation."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    federation_id: UUID
+    bim_model_id: UUID
+    discipline: str
+    color_hint: str | None = None
+    visible: bool
+    z_order: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class FederationResponse(BaseModel):
+    """Federation header (no members) returned from list / create endpoints."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    name: str
+    description: str | None = None
+    origin_offset: dict[str, Any] = Field(default_factory=dict)
+    shared_units: str
+    member_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class FederationFullResponse(FederationResponse):
+    """Federation header *plus* its members, ordered by z_order ascending."""
+
+    members: list[FederationModelResponse] = Field(default_factory=list)
+
+
+class FederationListResponse(BaseModel):
+    """Paginated federation list."""
+
+    items: list[FederationResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+# ── Federation Type Tree (v4.0 / Slice 2) ─────────────────────────────────
+#
+# Counter-intuitive design note
+# -----------------------------
+# Most BIM viewers nest the federation tree as
+# ``Federation › Model › Storey › Element``. BIMcollab Zoom inverts it to
+# ``Federation › IfcClass › [all instances across all models]``. The flat-
+# by-class layout is what makes "color all mechanical ducts red across 12
+# models" a single click instead of a 12-step traversal. The endpoint and
+# schemas below model the flat-by-class shape; the per-model split is
+# kept as a drill-down (``member_breakdown``) so the user can still see
+# how a given class is distributed across the federation members.
+
+
+class FederationTypeTreeMember(BaseModel):
+    """Per-member breakdown for one IfcClass inside the federation.
+
+    Surfaces in the type-tree drill-down: "IfcWall has 1 234 instances
+    across 3 members — 600 in ARCH, 500 in STRUCT, 134 in MEP".
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    model_id: UUID
+    model_name: str
+    discipline: str
+    element_count: int
+
+
+class FederationTypeTreeClass(BaseModel):
+    """A single IfcClass row in the federation-flat type tree."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    ifc_class: str
+    display_name: str
+    element_count: int
+    member_breakdown: list[FederationTypeTreeMember] = Field(default_factory=list)
+    sample_properties: list[str] = Field(default_factory=list)
+
+
+class FederationTypeTreeResponse(BaseModel):
+    """Aggregated, federation-flat type tree response.
+
+    Empty (``total_elements=0``, ``classes=[]``) but valid when the
+    federation has no members or none of the members have ingested
+    elements yet — the page renders an explicit empty state instead of
+    blowing up.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    federation_id: UUID
+    total_elements: int = 0
+    classes: list[FederationTypeTreeClass] = Field(default_factory=list)

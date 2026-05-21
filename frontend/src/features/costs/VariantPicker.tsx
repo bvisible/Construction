@@ -64,10 +64,20 @@ type SortMode = 'default' | 'price_asc' | 'price_desc' | 'label';
 
 /** Format a price in the given currency using the active i18n locale. */
 function formatPrice(value: number, currency: string): string {
+  // Currency-style formatting requires an ISO code — when the caller passes
+  // an empty string (no project currency context, no per-row currency in the
+  // CWICR row), skip the currency style entirely and render the bare number.
+  // Never substitute USD/EUR — see CLAUDE.md "no hardcoded currency fallbacks".
+  if (!currency) {
+    return new Intl.NumberFormat(getIntlLocale(), {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
   try {
     return new Intl.NumberFormat(getIntlLocale(), {
       style: 'currency',
-      currency: currency || 'USD',
+      currency,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
@@ -76,7 +86,7 @@ function formatPrice(value: number, currency: string): string {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
-    return currency ? `${n} ${currency}` : n;
+    return `${n} ${currency}`;
   }
 }
 

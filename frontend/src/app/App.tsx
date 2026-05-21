@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState, useCallback, useEffect } from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 // //// NEOFFICE PATCH — Frappe-embedded layout swap
 // WHY: When the SPA boots inside /neoconstruction/* (Frappe Desk page) we
 // swap AppLayout → FrappeLayout so we inherit the Frappe sidebar/header
@@ -13,7 +13,7 @@ const EmbeddedLayout =
     : AppLayout;
 // //// END NEOFFICE PATCH
 import { DashboardPage } from '@/features/dashboard';
-import { LoginPage, LoginPageNext, RegisterPage, ForgotPasswordPage } from '@/features/auth';
+import { LoginPage, RegisterPage, ForgotPasswordPage } from '@/features/auth';
 import { ProjectsPage, CreateProjectPage, ProjectDetailPage, ProjectSettingsPage } from '@/features/projects';
 // Import the lightweight BOQ pages from their source modules directly,
 // NOT via the `@/features/boq` barrel.  The barrel re-exports
@@ -27,25 +27,23 @@ import { BOQListPage } from '@/features/boq/BOQListPage';
 import { CreateBOQPage } from '@/features/boq/CreateBOQPage';
 import { TemplatesPage } from '@/features/boq/TemplatesPage';
 import { syncCustomUnitsFromServer } from '@/features/boq/boqHelpers';
-import { CostsPage, ImportDatabasePage } from '@/features/costs';
-import { OnboardingWizard } from '@/features/onboarding';
-import { AssembliesPage, AssemblyEditorPage, CreateAssemblyPage } from '@/features/assemblies';
+import { CostsPage } from '@/features/costs';
 import { ValidationPage } from '@/features/validation';
 import { NlRuleBuilderPanel } from '@/features/compliance';
 import { QuantitiesPage } from '@/features/quantities';
-import { ModulesPage, ModuleDeveloperGuide } from '@/features/modules';
+import { useModuleRouteElements } from '@/modules/ModuleRoutes';
 // //// NEOFFICE PATCH — Swiss Pack feature import
 import { SwissPackPage } from '@/features/swiss-pack';
 // //// END NEOFFICE PATCH
-import { useModuleRouteElements } from '@/modules/ModuleRoutes';
-// //// NEOFFICE PATCH — SettingsPage import dropped (route redirected to /ai-estimate)
+// //// NEOFFICE PATCH — SettingsPage import dropped (route redirected to /ai-estimate).
+// ModulesPage / ModuleDeveloperGuide are NOT imported here either — they
+// are defined as lazy() chunks further down (upstream moved them).
 // import { SettingsPage } from '@/features/settings';
 // //// END NEOFFICE PATCH
 import { DatabaseSetupPage } from '@/features/setup';
 import { IntegrationsPage } from '@/features/integrations';
 import { AboutPage } from '@/features/about/AboutPage';
-import { QuickEstimatePage } from '@/features/ai';
-import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, ErrorBoundary, NotFoundPage, OnboardingTour, OfflineBanner } from '@/shared/ui';
+import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, ErrorBoundary, NotFoundPage, OnboardingTour, OfflineBanner, PWAInstallPrompt } from '@/shared/ui';
 import GlobalSearchModal from '@/features/search/GlobalSearchModal';
 import { useGlobalSearchStore } from '@/stores/useGlobalSearchStore';
 import { FloatingQueuePanel } from './layout/FloatingQueuePanel';
@@ -194,6 +192,17 @@ const ClashDetectionPage = lazy(() =>
 const UserManagementPage = lazy(() =>
   import('@/features/users/UserManagementPage').then((m) => ({ default: m.UserManagementPage }))
 );
+// Admin: read-only audit-log timeline (`audit.view` Manager+).
+const AuditLogPage = lazy(() =>
+  import('@/features/admin/AuditLogPage').then((m) => ({ default: m.AuditLogPage }))
+);
+// Admin: read-only permissions matrix — roles × modules × permissions
+// (gated server-side by `audit.view`).
+const PermissionsMatrixPage = lazy(() =>
+  import('@/features/admin/PermissionsMatrixPage').then((m) => ({
+    default: m.PermissionsMatrixPage,
+  })),
+);
 const ArchitectureMapPage = lazy(() =>
   import('@/features/architecture/ArchitectureMapPage').then((m) => ({ default: m.ArchitectureMapPage }))
 );
@@ -284,6 +293,72 @@ const SupplierCatalogsPage = lazy(() =>
 const BIDashboardsPage = lazy(() =>
   import('@/features/bi-dashboards').then((m) => ({ default: m.BIDashboardsPage }))
 );
+// v4.1 — three additional P1 Slice-1 features land behind dedicated routes
+// (Assembly Library was already eagerly imported by the assemblies feature
+// index in its Slice-1 PR). Pages are net-new so they pile on the end of
+// the lazy-import block to keep diffs surgical.
+const FederationsPage = lazy(() =>
+  import('@/features/bim/FederationsPage').then((m) => ({ default: m.FederationsPage }))
+);
+const CoordinationHubPage = lazy(() =>
+  import('@/features/coordination/CoordinationHubPage').then((m) => ({
+    default: m.CoordinationHubPage,
+  }))
+);
+const CPMView = lazy(() =>
+  import('@/features/schedule/CPMView').then((m) => ({ default: m.CPMView }))
+);
+const AgentsPage = lazy(() =>
+  import('@/features/ai-agents').then((m) => ({ default: m.AgentsPage }))
+);
+
+// Admin/settings/assemblies — code-split out of the boot bundle.
+// These pages are reachable from the sidebar but not part of the default
+// landing flow, so keeping them lazy trims the initial chunk significantly
+// (v4.3 audit). Deep-imported by file path to avoid pulling neighbouring
+// pages via barrel re-exports.
+const SettingsPage = lazy(() =>
+  import('@/features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+);
+const ModulesPage = lazy(() =>
+  import('@/features/modules/ModulesPage').then((m) => ({ default: m.ModulesPage }))
+);
+const ModuleDeveloperGuide = lazy(() =>
+  import('@/features/modules/ModuleDeveloperGuide').then((m) => ({ default: m.ModuleDeveloperGuide }))
+);
+const AssembliesPage = lazy(() =>
+  import('@/features/assemblies/AssembliesPage').then((m) => ({ default: m.AssembliesPage }))
+);
+const AssemblyEditorPage = lazy(() =>
+  import('@/features/assemblies/AssemblyEditorPage').then((m) => ({ default: m.AssemblyEditorPage }))
+);
+const AssemblyLibraryPage = lazy(() =>
+  import('@/features/assemblies/AssemblyLibraryPage').then((m) => ({ default: m.AssemblyLibraryPage }))
+);
+const CreateAssemblyPage = lazy(() =>
+  import('@/features/assemblies/CreateAssemblyPage').then((m) => ({ default: m.CreateAssemblyPage }))
+);
+const ImportDatabasePage = lazy(() =>
+  import('@/features/costs/ImportDatabasePage').then((m) => ({ default: m.ImportDatabasePage }))
+);
+const OnboardingWizard = lazy(() =>
+  import('@/features/onboarding/OnboardingWizard').then((m) => ({ default: m.OnboardingWizard }))
+);
+const LoginPageNext = lazy(() =>
+  import('@/features/auth/LoginPageNext').then((m) => ({ default: m.LoginPageNext }))
+);
+const QuickEstimatePage = lazy(() =>
+  import('@/features/ai/QuickEstimatePage').then((m) => ({ default: m.QuickEstimatePage }))
+);
+
+// CPMView is keyed by the schedule it analyses, so the route reads :id and
+// forwards it through. Kept as a tiny inline component to avoid bloating
+// the schedule feature with a route-wrapper that only exists for App.tsx.
+function CPMViewRoute() {
+  const { id } = useParams<{ id: string }>();
+  if (!id) return null;
+  return <CPMView scheduleId={id} />;
+}
 
 function LoadingScreen() {
   return (
@@ -499,14 +574,16 @@ export default function App() {
         {/* Public share-link landing page — no auth required, no app shell */}
         <Route path="/share/:token" element={<SharePage />} />
 
-        {/* //// NEOFFICE PATCH — Frappe-embedded auth bypass (4 routes) */}
+        {/* //// NEOFFICE PATCH — Frappe-embedded auth bypass (4 routes).
+            In embedded mode the user is already authenticated by Frappe,
+            so the OCE auth pages must never render — redirect to /. */}
         <Route
           path="/login"
           element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <Navigate to="/" replace /> : <LoginPage />)}
         />
         <Route
           path="/login-next"
-          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <Navigate to="/" replace /> : <LoginPageNext />)}
+          element={isFrappeEmbedded ? <Navigate to="/" replace /> : (isAuthenticated ? <Navigate to="/" replace /> : <Suspense fallback={<LoadingScreen />}><LoginPageNext /></Suspense>)}
         />
         <Route
           path="/register"
@@ -520,13 +597,14 @@ export default function App() {
 
         {/* Onboarding — full-screen, no layout */}
         <Route path="/onboarding" element={
-          <RequireAuth><OnboardingWizard /></RequireAuth>
+          <RequireAuth><Suspense fallback={<LoadingScreen />}><OnboardingWizard /></Suspense></RequireAuth>
         } />
 
         {/* App — all protected, all real pages */}
         <Route path="/" element={<P title="Dashboard"><DashboardPage /></P>} />
 
         <Route path="/ai-estimate" element={<P title="AI Quick Estimate"><QuickEstimatePage /></P>} />
+        <Route path="/ai-agents" element={<P title="AI Agents"><AgentsPage /></P>} />
         <Route path="/advisor" element={<P title="AI Cost Advisor"><AdvisorPage /></P>} />
         <Route path="/chat" element={<P title="AI Chat"><ERPChatPage /></P>} />
         <Route path="/chat/admin" element={<P title="Chat Observability"><ERPChatAdminStatsPage /></P>} />
@@ -535,11 +613,13 @@ export default function App() {
         <Route path="/data-explorer" element={<P title="Data Explorer"><CadDataExplorerPage /></P>} />
         <Route path="/match-elements" element={<P title="Match Elements"><MatchElementsPage /></P>} />
         <Route path="/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />
+        <Route path="/bim/federations" element={<P title="BIM Federations"><FederationsPage /></P>} />
         <Route path="/bim/rules" element={<P title="BIM Rules"><BIMQuantityRulesPage /></P>} />
         {/* Legacy alias — must come BEFORE /bim/:modelId so the literal
             "quantity-rules" segment isn't swallowed as a UUID model id. */}
         <Route path="/bim/quantity-rules" element={<Navigate to="/bim/rules" replace />} />
         <Route path="/clash" element={<P title="Clash Detection"><ClashDetectionPage /></P>} />
+        <Route path="/coordination" element={<P title="Model Coordination"><CoordinationHubPage /></P>} />
         <Route path="/assets" element={<P title="Asset Register"><AssetsPage /></P>} />
         <Route path="/bim/:modelId" element={<P title="BIM Viewer"><BIMPage /></P>} />
         <Route path="/projects/:projectId/bim" element={<P title="BIM Viewer"><BIMPage /></P>} />
@@ -562,6 +642,7 @@ export default function App() {
         <Route path="/catalog" element={<P title="Resource Catalog"><CatalogPage /></P>} />
 
         <Route path="/assemblies" element={<P title="Assemblies"><AssembliesPage /></P>} />
+        <Route path="/assemblies/library" element={<P title="Assembly Library"><AssemblyLibraryPage /></P>} />
         <Route path="/assemblies/new" element={<P title="New Assembly"><CreateAssemblyPage /></P>} />
         <Route path="/assemblies/:assemblyId" element={<P title="Assembly Editor"><AssemblyEditorPage /></P>} />
 
@@ -573,6 +654,7 @@ export default function App() {
         <Route path="/dwg-takeoff" element={<P title="DWG Takeoff"><DwgTakeoffPage /></P>} />
 
         <Route path="/schedule" element={<P title="4D Schedule"><SchedulePage /></P>} />
+        <Route path="/schedule/:id/cpm" element={<P title="CPM"><CPMViewRoute /></P>} />
 
         <Route path="/5d" element={<P title="5D Cost Model"><CostModelPage /></P>} />
 
@@ -639,6 +721,8 @@ export default function App() {
         <Route path="/ncr" element={<P title="NCR"><NCRPage /></P>} />
 
         <Route path="/users" element={<P title="User Management"><UserManagementPage /></P>} />
+        <Route path="/admin/audit-log" element={<P title="Audit Log"><AuditLogPage /></P>} />
+        <Route path="/admin/permissions" element={<P title="Permissions Matrix"><PermissionsMatrixPage /></P>} />
         <Route path="/modules" element={<P title="Modules"><ModulesPage /></P>} />
         <Route path="/modules/developer-guide" element={<P title="Module Developer Guide"><ModuleDeveloperGuide /></P>} />
         {/* //// NEOFFICE PATCH — Swiss Pack route */}
@@ -717,6 +801,11 @@ export default function App() {
       </Routes>
       <ToastContainer />
       <FloatingQueuePanel />
+      {/* Mobile PWA — Slice 1.  Single, discrete install nudge handled
+          entirely inside <PWAInstallPrompt /> (cooldown, iOS branch,
+          standalone-mode detection).  Safe to mount unauthenticated:
+          on login screen the user may also want to install the app. */}
+      <PWAInstallPrompt />
       {/* DDC-CWICR-OE */}
       <span aria-hidden="true" style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
         {'\u200B\u200C\u200D\u200B\u200C\u200D\u200B'}

@@ -27,6 +27,8 @@ from app.modules.bim_hub import file_storage as bim_file_storage
 from app.modules.bim_hub.models import (
     BIMElement,
     BIMElementGroup,
+    BIMFederation,
+    BIMFederationModel,
     BIMModel,
     BIMModelDiff,
     BIMQuantityMap,
@@ -34,6 +36,7 @@ from app.modules.bim_hub.models import (
 )
 from app.modules.bim_hub.repository import (
     BIMElementRepository,
+    BIMFederationRepository,
     BIMModelDiffRepository,
     BIMModelRepository,
     BIMQuantityMapRepository,
@@ -50,6 +53,15 @@ from app.modules.bim_hub.schemas import (
     BIMQuantityMapCreate,
     BIMQuantityMapUpdate,
     BOQElementLinkCreate,
+    FederationCreate,
+    FederationFullResponse,
+    FederationModelAdd,
+    FederationModelResponse,
+    FederationResponse,
+    FederationTypeTreeClass,
+    FederationTypeTreeMember,
+    FederationTypeTreeResponse,
+    FederationUpdate,
     QuantityMapApplyRequest,
     QuantityMapApplyResult,
 )
@@ -69,6 +81,30 @@ async def _safe_publish(
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
         _logger_events.debug("Event publish skipped (SQLite async): %s", name)
+
+
+def _humanise_ifc_class(ifc_class: str) -> str:
+    """Best-effort human label for an IfcClass string.
+
+    ``"IfcWall"`` → ``"Wall"``, ``"IfcDuctSegment"`` → ``"Duct Segment"``.
+    Anything that does not look like an IfcXxx class name is returned
+    verbatim. The display_name is intentionally NOT i18n'd here: the
+    federation type tree is a developer-facing surface that maps a
+    canonical IFC class to a fallback label; the FE is free to translate
+    by class id (``ifc_class``) later without re-fetching.
+    """
+    if not ifc_class:
+        return "Unclassified"
+    raw = ifc_class[3:] if ifc_class.startswith("Ifc") else ifc_class
+    if not raw:
+        return ifc_class
+    # Insert space before each interior capital: "DuctSegment" → "Duct Segment".
+    out_chars: list[str] = []
+    for idx, ch in enumerate(raw):
+        if idx > 0 and ch.isupper() and not raw[idx - 1].isupper():
+            out_chars.append(" ")
+        out_chars.append(ch)
+    return "".join(out_chars)
 
 
 def _safe_float(value: Any) -> float | None:
@@ -2865,4 +2901,387 @@ class BIMHubService:
             created_at=group.created_at,
             updated_at=group.updated_at,
             member_element_ids=parsed_ids,
+        )
+
+    # ── BIM Federation (v4.0 / Slice 1) ──────────────────────────────────────
+
+    async def create_federation(
+        self, payload: FederationCreate,
+    ) -> FederationResponse:
+        """Persist a new federation header (no members yet)."""
+        repo = BIMFederationRepository(self.session)
+        federation = BIMFederation(
+            project_id=payload.project_id,
+            name=payload.name,
+            description=payload.description,
+            origin_offset=payload.origin_offset.model_dump(),
+            shared_units=payload.shared_units,
+        )
+        await repo.create(federation)
+        await self.session.refresh(federation)
+        logger.info(
+            "BIM federation created: %s (project=%s)",
+            federation.name,
+            federation.project_id,
+        )
+        return self._federation_to_response(federation)
+
+    async def list_federations(
+        self,
+        project_id: uuid.UUID,
+        *,
+        offset: int = 0,
+        limit: int = 100,
+    ) -> tuple[list[FederationResponse], int]:
+        """List federations for a project."""
+        repo = BIMFederationRepository(self.session)
+        rows, total = await repo.list_for_project(
+            project_id, offset=offset, limit=limit,
+        )
+        return [self._federation_to_response(f) for f in rows], total
+
+    async def get_federation(
+        self, federation_id: uuid.UUID,
+    ) -> BIMFederation:
+        """Fetch a federation with members or raise 404."""
+        repo = BIMFederationRepository(self.session)
+        federation = await repo.get(federation_id)
+        if federation is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Federation not found",
+            )
+        return federation
+
+    async def get_federation_full(
+        self, federation_id: uuid.UUID,
+    ) -> FederationFullResponse:
+        """Get a federation header plus its z-ordered member list."""
+        federation = await self.get_federation(federation_id)
+        return self._federation_to_full_response(federation)
+
+    async def update_federation(
+        self,
+        federation_id: uuid.UUID,
+        payload: FederationUpdate,
+    ) -> FederationFullResponse:
+        """Patch a federation header (members untouched)."""
+        federation = await self.get_federation(federation_id)
+        fields = payload.model_dump(exclude_unset=True)
+        if "origin_offset" in fields and fields["origin_offset"] is not None:
+            # FederationOriginOffset → dict
+            offset = fields["origin_offset"]
+            if hasattr(offset, "model_dump"):
+                fields["origin_offset"] = offset.model_dump()
+        if fields:
+            repo = BIMFederationRepository(self.session)
+            await repo.update_fields(federation_id, **fields)
+        await self.session.refresh(federation)
+        return self._federation_to_full_response(federation)
+
+    async def delete_federation(self, federation_id: uuid.UUID) -> None:
+        """Delete a federation. Members cascade via FK."""
+        federation = await self.get_federation(federation_id)
+        await self.session.delete(federation)
+        await self.session.flush()
+        logger.info("BIM federation deleted: %s", federation_id)
+
+    async def add_federation_member(
+        self,
+        federation_id: uuid.UUID,
+        payload: FederationModelAdd,
+    ) -> FederationModelResponse:
+        """Bind an existing BIM model to a federation.
+
+        Verifies that the BIM model exists AND belongs to the same project
+        as the federation — cross-project membership would break the
+        project-ownership authorization model.
+        """
+        federation = await self.get_federation(federation_id)
+        # The model must exist and live in the same project as the
+        # federation. ``BIMModelRepository`` already enforces existence;
+        # we re-check project here.
+        model_repo = BIMModelRepository(self.session)
+        model = await model_repo.get(payload.bim_model_id)
+        if model is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="BIM model not found",
+            )
+        if model.project_id != federation.project_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "BIM model belongs to a different project — federations "
+                    "can only contain models from the same project"
+                ),
+            )
+        repo = BIMFederationRepository(self.session)
+        # Duplicate guard — the DB-level UniqueConstraint will also fire,
+        # but a friendly 409 beats a raw IntegrityError 500.
+        existing = await repo.find_member(federation_id, payload.bim_model_id)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Model is already a member of this federation",
+            )
+        member = BIMFederationModel(
+            federation_id=federation_id,
+            bim_model_id=payload.bim_model_id,
+            discipline=payload.discipline,
+            color_hint=payload.color_hint,
+            visible=payload.visible,
+            z_order=payload.z_order,
+        )
+        try:
+            await repo.add_member(member)
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Model is already a member of this federation",
+            ) from exc
+        await self.session.refresh(member)
+        logger.info(
+            "BIM federation member added: federation=%s model=%s",
+            federation_id,
+            payload.bim_model_id,
+        )
+        return FederationModelResponse.model_validate(member)
+
+    async def remove_federation_member(
+        self,
+        federation_id: uuid.UUID,
+        bim_model_id: uuid.UUID,
+    ) -> None:
+        """Remove a model from a federation by model id."""
+        # Touching the federation ensures 404 propagates correctly when
+        # the federation itself is missing/foreign.
+        await self.get_federation(federation_id)
+        repo = BIMFederationRepository(self.session)
+        member = await repo.find_member(federation_id, bim_model_id)
+        if member is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Federation member not found",
+            )
+        await repo.remove_member(member.id)
+        await self.session.flush()
+        logger.info(
+            "BIM federation member removed: federation=%s model=%s",
+            federation_id,
+            bim_model_id,
+        )
+
+    @staticmethod
+    def _federation_to_response(
+        federation: BIMFederation,
+    ) -> FederationResponse:
+        return FederationResponse(
+            id=federation.id,
+            project_id=federation.project_id,
+            name=federation.name,
+            description=federation.description,
+            origin_offset=federation.origin_offset or {},
+            shared_units=federation.shared_units,
+            member_count=len(federation.members or []),
+            created_at=federation.created_at,
+            updated_at=federation.updated_at,
+        )
+
+    @staticmethod
+    def _federation_to_full_response(
+        federation: BIMFederation,
+    ) -> FederationFullResponse:
+        members_sorted = sorted(
+            federation.members or [],
+            key=lambda m: (m.z_order, m.created_at),
+        )
+        return FederationFullResponse(
+            id=federation.id,
+            project_id=federation.project_id,
+            name=federation.name,
+            description=federation.description,
+            origin_offset=federation.origin_offset or {},
+            shared_units=federation.shared_units,
+            member_count=len(members_sorted),
+            created_at=federation.created_at,
+            updated_at=federation.updated_at,
+            members=[
+                FederationModelResponse.model_validate(m) for m in members_sorted
+            ],
+        )
+
+    # ── Federation Type Tree (v4.0 / Slice 2) ───────────────────────────────
+
+    async def aggregate_federation_type_tree(
+        self, federation_id: uuid.UUID,
+    ) -> FederationTypeTreeResponse:
+        """Compute the federation-flat type tree.
+
+        Walks every BIM element that belongs to a model that is a
+        member of the federation, groups by ``element_type`` (= IfcClass),
+        and returns:
+
+        * one row per IfcClass with the total element count,
+        * a per-member breakdown for the drill-down ("how many IfcWalls
+          live in the ARCH model vs. the STRUCT model"),
+        * a small ``sample_properties`` set drawn from the first
+          representative element of each class so the colour-by-property
+          UI knows which property keys are even worth offering.
+
+        The "federation-flat, not per-model" shape mirrors BIMcollab Zoom
+        and is the key UX insight: it makes "select every IfcDuctSegment
+        across 12 federated models" a one-click operation.
+
+        Empty federations / federations whose members have no elements
+        return ``total_elements=0`` and ``classes=[]`` — the response is
+        always well-formed.
+        """
+        # 1. Resolve federation + members (raises 404 when missing).
+        federation = await self.get_federation(federation_id)
+        members = list(federation.members or [])
+        if not members:
+            return FederationTypeTreeResponse(
+                federation_id=federation_id,
+                total_elements=0,
+                classes=[],
+            )
+
+        # 2. Build a stable model_id → (model_name, discipline) map.
+        #    The federation's stored discipline tag wins over the model
+        #    row's own discipline (member-level override is the source
+        #    of truth for federation context).
+        member_model_ids = [m.bim_model_id for m in members]
+        model_rows = (
+            (
+                await self.session.execute(
+                    select(BIMModel).where(BIMModel.id.in_(member_model_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        model_lookup: dict[uuid.UUID, tuple[str, str]] = {}
+        for row in model_rows:
+            model_lookup[row.id] = (row.name, row.discipline or "other")
+        # Overlay the federation-member discipline (canonical for this fed).
+        for member in members:
+            existing = model_lookup.get(member.bim_model_id)
+            if existing is None:
+                # Stale member referencing a deleted model — surface a
+                # neutral placeholder so the row is still countable.
+                model_lookup[member.bim_model_id] = (
+                    f"model-{str(member.bim_model_id)[:8]}",
+                    member.discipline or "other",
+                )
+            else:
+                model_lookup[member.bim_model_id] = (
+                    existing[0],
+                    member.discipline or existing[1],
+                )
+
+        # 3. Aggregate per (model_id, ifc_class).
+        #    SQLAlchemy func.count on a non-nullable PK column is the
+        #    fast path across all supported dialects (SQLite + Postgres).
+        agg_stmt = (
+            select(
+                BIMElement.model_id,
+                BIMElement.element_type,
+                func.count(BIMElement.id).label("element_count"),
+            )
+            .where(BIMElement.model_id.in_(member_model_ids))
+            .group_by(BIMElement.model_id, BIMElement.element_type)
+        )
+        agg_rows = (await self.session.execute(agg_stmt)).all()
+        if not agg_rows:
+            return FederationTypeTreeResponse(
+                federation_id=federation_id,
+                total_elements=0,
+                classes=[],
+            )
+
+        # 4. Pivot to {ifc_class -> {model_id -> count}} with a parallel
+        #    {ifc_class -> total} for sort + total computation.
+        class_totals: dict[str, int] = {}
+        class_per_model: dict[str, dict[uuid.UUID, int]] = {}
+        for model_id, element_type, element_count in agg_rows:
+            # NULL / empty element_type rolls up under "Unclassified" so
+            # they never silently disappear from the tree.
+            ifc_class = element_type if element_type else "Unclassified"
+            class_totals[ifc_class] = class_totals.get(ifc_class, 0) + int(element_count)
+            per_model = class_per_model.setdefault(ifc_class, {})
+            per_model[model_id] = per_model.get(model_id, 0) + int(element_count)
+
+        # 5. Pull one representative element per class to extract the
+        #    sample_properties — capped at 6 keys so the UI tooltip
+        #    stays readable.
+        #    A single subquery per class would be cleaner but Postgres
+        #    + SQLite both run this fine as N small queries (N = number
+        #    of distinct classes, typically < 50). For very wide models
+        #    we could swap to DISTINCT ON; the current shape keeps
+        #    portability simple.
+        sample_props: dict[str, list[str]] = {}
+        for ifc_class in class_totals:
+            element_type_filter = (
+                BIMElement.element_type == ifc_class
+                if ifc_class != "Unclassified"
+                else BIMElement.element_type.is_(None)
+            )
+            sample_stmt = (
+                select(BIMElement.properties)
+                .where(
+                    BIMElement.model_id.in_(member_model_ids),
+                    element_type_filter,
+                )
+                .limit(1)
+            )
+            row = (await self.session.execute(sample_stmt)).scalar_one_or_none()
+            if isinstance(row, dict):
+                sample_props[ifc_class] = list(row.keys())[:6]
+            else:
+                sample_props[ifc_class] = []
+
+        # 6. Materialise the response, sorted by element_count DESC. Ties
+        #    break by ifc_class ASC so the order is fully deterministic
+        #    (tests + UI snapshots depend on this).
+        classes_payload: list[FederationTypeTreeClass] = []
+        for ifc_class in sorted(
+            class_totals.keys(), key=lambda c: (-class_totals[c], c)
+        ):
+            per_model = class_per_model.get(ifc_class, {})
+            breakdown_rows: list[FederationTypeTreeMember] = []
+            # Sort the breakdown by element_count DESC then model_name
+            # ASC for a stable visual order across renders.
+            sorted_pairs = sorted(
+                per_model.items(),
+                key=lambda kv: (-kv[1], model_lookup.get(kv[0], ("", ""))[0]),
+            )
+            for model_id, count in sorted_pairs:
+                model_name, discipline = model_lookup.get(
+                    model_id, (f"model-{str(model_id)[:8]}", "other"),
+                )
+                breakdown_rows.append(
+                    FederationTypeTreeMember(
+                        model_id=model_id,
+                        model_name=model_name,
+                        discipline=discipline,
+                        element_count=int(count),
+                    )
+                )
+            classes_payload.append(
+                FederationTypeTreeClass(
+                    ifc_class=ifc_class,
+                    display_name=_humanise_ifc_class(ifc_class),
+                    element_count=int(class_totals[ifc_class]),
+                    member_breakdown=breakdown_rows,
+                    sample_properties=sample_props.get(ifc_class, []),
+                )
+            )
+
+        total_elements = sum(class_totals.values())
+        return FederationTypeTreeResponse(
+            federation_id=federation_id,
+            total_elements=total_elements,
+            classes=classes_payload,
         )

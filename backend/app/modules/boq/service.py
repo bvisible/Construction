@@ -21,6 +21,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -1939,7 +1940,31 @@ class BOQService:
         grandchildren, etc. Breadth-first with a ``visited`` guard so a
         corrupt cycle terminates. Used by the move path so re-parenting a
         deep branch is rejected if ANY leaf would exceed the cap.
+
+        v4.2.2 Round 2 Wave C: was O(nodes_in_subtree) DB roundtrips via
+        ``list_children`` per node. Now one ``list_all_for_boq`` plus an
+        in-memory parent→children index — every walk is single-query.
+        The traversal cap (``MAX_NESTING_DEPTH + 4``) is preserved exactly
+        so semantics are unchanged for a corrupt/over-deep branch.
         """
+        # Resolve the BOQ owning ``root_id``. A missing root is treated as
+        # a height of 0 (matches the prior behaviour where ``list_children``
+        # on an unknown id returned an empty list).
+        root_node = await self.position_repo.get_by_id(root_id)
+        if root_node is None:
+            return 0
+        all_positions = await self.position_repo.list_all_for_boq(root_node.boq_id)
+        # Build parent→children index honouring the same sort_order the
+        # original ``list_children`` query used.
+        children_by_parent: dict[uuid.UUID, list[Position]] = {}
+        for pos in all_positions:
+            pid = pos.parent_id
+            if pid is None:
+                continue
+            children_by_parent.setdefault(pid, []).append(pos)
+        # ``list_all_for_boq`` already orders by ``sort_order, ordinal`` so
+        # each bucket inherits the same ordering ``list_children`` returned.
+
         height = 0
         visited: set[uuid.UUID] = set()
         frontier: list[tuple[uuid.UUID, int]] = [(root_id, 0)]
@@ -1952,7 +1977,7 @@ class BOQService:
                 height = level
             if level > MAX_NESTING_DEPTH + 4:
                 break
-            for child in await self.position_repo.list_children(node_id):
+            for child in children_by_parent.get(node_id, ()):
                 frontier.append((child.id, level + 1))
         return height
 
@@ -2288,6 +2313,11 @@ class BOQService:
         the first colliding ordinal, or ``None``. Never raises — duplicate
         detection is advisory and must not break a write.
         """
+        # PERF: v4.2.2 Round 2 Wave C audit — already single-query
+        # (one ``list_all_for_boq`` then in-memory fingerprint scan;
+        # ``_content_fingerprint`` reads scalar columns only). Replacing
+        # the python scan with a DB-side hash filter would need a
+        # ``content_hash`` column + backfill — deferred (model refactor).
         try:
             target = _content_fingerprint(description, unit, quantity, unit_rate)
             for pos in await self.position_repo.list_all_for_boq(boq_id):
@@ -7234,6 +7264,43 @@ class BOQService:
             for link in await self.quantity_link_repo.list_for_boq(boq_id)
         }
 
+        # v4.2.2 Round 2 Wave C: snapshot every bound position's scalar
+        # state in ONE bulk query up front so the per-link loop doesn't
+        # fan out into N ``get_by_id`` round-trips. We don't keep the ORM
+        # instances live — the *first* ``update_fields`` call (either on
+        # a position or its link) triggers ``session.expire_all()``,
+        # which would render every cached instance lazy-load-prone. So
+        # we copy the scalar fields the loop actually reads into plain
+        # dicts (mirrors the link snapshot pattern above), then look up
+        # by id without ever touching the ORM. The common case (each
+        # link binds a distinct position, none mutated twice) costs ONE
+        # bulk query total instead of N round-trips.
+        position_ids_to_load: list[uuid.UUID] = []
+        seen_position_ids: set[uuid.UUID] = set()
+        for link_id in link_ids:
+            snap = snap_by_id.get(link_id)
+            if snap is None:
+                continue
+            pid = snap["position_id"]
+            if pid in seen_position_ids:
+                continue
+            seen_position_ids.add(pid)
+            position_ids_to_load.append(pid)
+        pos_snap_by_id: dict[uuid.UUID, dict] = {
+            p.id: {
+                "id": p.id,
+                "ordinal": p.ordinal,
+                "quantity": p.quantity,
+                "unit_rate": p.unit_rate,
+                "metadata_": dict(p.metadata_ or {}),
+            }
+            for p in await self.position_repo.list_by_ids(position_ids_to_load)
+        }
+        # Tracks positions this batch already mutated — a later
+        # iteration that touches the same position must re-read from DB
+        # (the snapshot's ``quantity`` / ``metadata_`` are stale).
+        mutated_position_ids: set[uuid.UUID] = set()
+
         results: list[QuantityLinkApplyResultRow] = []
         applied = 0
         skipped = 0
@@ -7256,7 +7323,19 @@ class BOQService:
                 )
                 continue
 
-            position = await self.position_repo.get_by_id(snap["position_id"])
+            position_id = snap["position_id"]
+            # Use the cached scalar snapshot unless this position was
+            # already mutated in this batch (then its snapshot is stale)
+            # or was never in the bulk fetch (concurrent delete race).
+            position: Any
+            if position_id in mutated_position_ids or position_id not in pos_snap_by_id:
+                position = await self.position_repo.get_by_id(position_id)
+            else:
+                # SimpleNamespace gives ``position.ordinal`` / ``.quantity``
+                # / ``.unit_rate`` / ``.metadata_`` attribute access that's
+                # drop-in compatible with the ORM ``Position`` reads the
+                # downstream code performs — no lazy loads possible.
+                position = SimpleNamespace(**pos_snap_by_id[position_id])
             if position is None:
                 skipped += 1
                 results.append(
@@ -7330,6 +7409,9 @@ class BOQService:
                 total=new_total,
                 metadata_=meta,
             )
+            # update_fields → session.expire_all(); any later iteration
+            # that touches this position must re-read from DB.
+            mutated_position_ids.add(snap["position_id"])
             await self.quantity_link_repo.update_fields(
                 snap["id"],
                 status="active",

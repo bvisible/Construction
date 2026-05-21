@@ -180,6 +180,21 @@ class PositionRepository:
         """Get position by ID."""
         return await self.session.get(Position, position_id)
 
+    async def list_by_ids(self, position_ids: list[uuid.UUID]) -> list[Position]:
+        """Bulk-fetch positions by id set in one query.
+
+        v4.2.2 Round 2 Wave C: callers that previously looped
+        ``get_by_id`` per id (an N+1) should pre-fetch with this method
+        and look up by id from a dict. Returns positions in unspecified
+        order; the empty input case is short-circuited so SQLAlchemy
+        never emits a degenerate ``WHERE id IN ()`` query.
+        """
+        if not position_ids:
+            return []
+        stmt = select(Position).where(Position.id.in_(position_ids))
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_children(self, parent_id: uuid.UUID) -> list[Position]:
         """List direct children of a position (one level only)."""
         stmt = select(Position).where(Position.parent_id == parent_id).order_by(Position.sort_order)

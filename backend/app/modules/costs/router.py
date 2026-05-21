@@ -19,12 +19,13 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re as _re
 import uuid
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +35,7 @@ from app.dependencies import (
     RequirePermission,
     RequireRole,
     SessionDep,
+    verify_project_access,
 )
 from app.modules.costs.matcher import (
     MatchResult,
@@ -93,7 +95,10 @@ _REGION_CURRENCY: dict[str, str] = {
     "NL_AMSTERDAM": "EUR",
     "BE_BRUSSELS": "EUR",
     "PT_LISBON": "EUR",
-    "PT_SAOPAULO": "BRL",
+    # NOTE: ``PT_SAOPAULO`` was historically present as ``BRL`` — that's a
+    # mislabeled entry (São Paulo is Brazil, prefix should be ``BR_``).
+    # Kept canonical key is ``BR_SAOPAULO`` (see below). The bogus
+    # ``PT_SAOPAULO`` is intentionally not registered here.
     "GB_LONDON": "GBP",
     "IE_DUBLIN": "EUR",
     "PL_WARSAW": "PLN",
@@ -119,7 +124,24 @@ _REGION_CURRENCY: dict[str, str] = {
 }
 
 
-def _resolve_currency(currency: str | None, region: str | None) -> str:
+# CWICR region tags follow the convention ``<2-letter country>_<UPPERCASE city>``
+# (a few legacy tags use a 3-letter prefix like ``USA_``). Anything that doesn't
+# match this shape is almost certainly junk / a typo and should not be silently
+# resolved to "EUR" — we log a warning so operations can spot the bad row.
+_REGION_FORMAT_RE = _re.compile(r"^[A-Z]{2,3}_[A-Z0-9]+$")
+
+
+def _is_valid_region_format(region: str) -> bool:
+    """Return True when ``region`` looks like a canonical CWICR region tag."""
+    return bool(_REGION_FORMAT_RE.match(region))
+
+
+def _resolve_currency(
+    currency: str | None,
+    region: str | None,
+    *,
+    warnings: list[str] | None = None,
+) -> str:
     """‌⁠‍Return the catalogue currency, deriving it from region when empty.
 
     The CWICR import historically stored ``currency = ''`` because the source
@@ -131,15 +153,40 @@ def _resolve_currency(currency: str | None, region: str | None) -> str:
         2. ``_REGION_CURRENCY[region]`` when the region matches a known key.
         3. ``"EUR"`` as a final fallback so the API never returns an
            empty currency string to the frontend.
+
+    When falling back to EUR (step 3), a structured warning is emitted via
+    ``logger.warning`` and — if a ``warnings`` list is supplied by the caller
+    — a short human-readable message is appended so the route handler can
+    surface it to the API response (frontend renders as a non-blocking toast).
+    Malformed region strings (not matching ``XX_CITY``) are also flagged,
+    even when the lookup would otherwise have succeeded.
     """
     if isinstance(currency, str):
         cleaned = currency.strip().upper()
         if cleaned:
             return cleaned
     if isinstance(region, str):
-        mapped = _REGION_CURRENCY.get(region.strip().upper())
-        if mapped:
-            return mapped
+        normalized = region.strip().upper()
+        if normalized:
+            if not _is_valid_region_format(normalized):
+                msg = (
+                    f"Cost row uses non-canonical region tag {normalized!r} "
+                    f"(expected ``XX_CITY``); currency falls back to EUR."
+                )
+                logger.warning(msg)
+                if warnings is not None and msg not in warnings:
+                    warnings.append(msg)
+            else:
+                mapped = _REGION_CURRENCY.get(normalized)
+                if mapped:
+                    return mapped
+                msg = (
+                    f"Unknown region {normalized!r} — no entry in "
+                    f"_REGION_CURRENCY; currency falls back to EUR."
+                )
+                logger.warning(msg)
+                if warnings is not None and msg not in warnings:
+                    warnings.append(msg)
     return "EUR"
 
 
@@ -622,6 +669,12 @@ async def search_cost_items(
         items, total, has_more, next_cursor = await service.search_costs_paginated(query)
     resolved_locale = _resolve_cost_locale(locale, accept_language)
 
+    # Currency-fallback warnings — accumulate per-row issues so the FE can
+    # surface one non-blocking toast per request instead of one per row.
+    # _resolve_currency() (called from the schema validator + the manual
+    # payload paths below) appends de-duplicated messages here.
+    currency_warnings: list[str] = []
+
     # Lite payload trim — drops the heavy ``components`` array and trims
     # ``metadata_`` to a small whitelist. CWICR rows average ~38 KB each
     # (31 KB components + 6.6 KB metadata); a 10-row page is 380 KB on
@@ -629,6 +682,26 @@ async def search_cost_items(
     # though the SQL is fast. With ``lite=true`` a 10-row page drops to
     # ~3 KB. ``components_count`` preserves the "has breakdown" hint.
     def _serialize(i: Any) -> dict[str, Any]:
+        # Funnel each row's empty-currency rows through _resolve_currency()
+        # explicitly so the warning list captures bad rows. The schema
+        # validator runs internally too, but it can't reach the route-scoped
+        # warnings list, so do the resolve here BEFORE model_validate.
+        try:
+            row_currency = getattr(i, "currency", None) or ""
+            row_region = getattr(i, "region", None)
+            if not (isinstance(row_currency, str) and row_currency.strip()):
+                resolved = _resolve_currency(
+                    row_currency, row_region, warnings=currency_warnings,
+                )
+                # Stamp the resolved value onto the ORM instance so the
+                # schema validator (which can't see ``warnings``) sees a
+                # populated currency and short-circuits.
+                try:
+                    i.currency = resolved
+                except Exception:
+                    pass
+        except Exception:
+            logger.debug("Currency warning capture skipped", exc_info=True)
         payload = _localize_response_payload(
             CostItemResponse.model_validate(i), resolved_locale,
         )
@@ -656,14 +729,22 @@ async def search_cost_items(
                 }
         return payload
 
-    return {
-        "items": [_serialize(i) for i in items],
+    serialized = [_serialize(i) for i in items]
+    response: dict[str, Any] = {
+        "items": serialized,
         "total": total,
         "limit": limit,
         "offset": offset,
         "next_cursor": next_cursor,
         "has_more": has_more,
     }
+    # ``warnings``: non-fatal data-quality issues the FE renders as a single
+    # transient toast (one entry per distinct message — duplicates already
+    # collapsed by _resolve_currency). Omitted when empty so clients that
+    # don't know about the field see no change in the response shape.
+    if currency_warnings:
+        response["warnings"] = currency_warnings
+    return response
 
 
 # ── Regions ───────────────────────────────────────────────────────────────
@@ -1213,20 +1294,28 @@ async def qdrant_smoke_search(
 @router.post(
     "/vector/index/",
     dependencies=[Depends(RequirePermission("costs.create"))],
+    # Either ``JSONResponse`` (when the vector backend is unavailable → 503)
+    # or a plain ``dict`` (happy path). FastAPI can't auto-derive a single
+    # response model from that union, and we want the bare-dict happy-path
+    # serialisation untouched — so we opt out of response-model generation.
+    response_model=None,
 )
 async def vectorize_cost_items(
     session: SessionDep,
     _user_id: CurrentUserId,
     region: str | None = Query(default=None, description="Only index items from this region"),
     batch_size: int = Query(default=256, ge=32, le=1024),
-) -> dict:
+) -> JSONResponse | dict:
     """Generate embeddings and index cost items into vector DB.
 
     Uses FastEmbed/ONNX (all-MiniLM-L6-v2, 384d) locally — no API key needed.
     Default backend: LanceDB (embedded, no Docker required).
 
-    Returns a graceful 200 with an error message when vector dependencies
-    (sentence-transformers, LanceDB) are not available instead of a 500.
+    Returns ``503 Service Unavailable`` when the vector backend
+    (Qdrant / LanceDB / embedding model) is not reachable or not
+    installed. Body keeps the legacy ``{"indexed": 0, "message":
+    ..., "error": ...}`` shape so existing clients still parse it;
+    only the status code flips from the previous silent 200.
     """
     import asyncio
     import time
@@ -1238,34 +1327,47 @@ async def vectorize_cost_items(
         from app.core.vector import encode_texts, get_embedder, vector_index
     except Exception as exc:
         logger.warning("Vector module import failed: %s", exc)
-        return {
-            "indexed": 0,
-            "message": "Vector indexing is not available: vector module failed to load.",
-            "error": str(exc),
-        }
+        return JSONResponse(
+            content={
+                "indexed": 0,
+                "message": "Vector indexing is not available: vector module failed to load.",
+                "error": str(exc),
+            },
+            status_code=503,
+        )
 
     # Verify embedding model is loadable (run in thread with short timeout
     # so a slow model download doesn't hang the request indefinitely).
     try:
         embedder = await asyncio.wait_for(asyncio.to_thread(get_embedder), timeout=30)
         if embedder is None:
-            return {
-                "indexed": 0,
-                "message": "Vector indexing is not available: no embedding model found. "
-                "Install sentence-transformers (pip install sentence-transformers).",
-            }
+            return JSONResponse(
+                content={
+                    "indexed": 0,
+                    "message": "Vector indexing is not available: no embedding model "
+                    "found. Install sentence-transformers (pip install "
+                    "sentence-transformers).",
+                },
+                status_code=503,
+            )
     except TimeoutError:
-        return {
-            "indexed": 0,
-            "message": "Vector indexing is not available: embedding model loading timed out. "
-            "The model may need to be downloaded first — try again later.",
-        }
+        return JSONResponse(
+            content={
+                "indexed": 0,
+                "message": "Vector indexing is not available: embedding model loading "
+                "timed out. The model may need to be downloaded first — try again later.",
+            },
+            status_code=503,
+        )
     except Exception as exc:
         logger.warning("Embedding model check failed: %s", exc)
-        return {
-            "indexed": 0,
-            "message": f"Vector indexing is not available: {exc}",
-        }
+        return JSONResponse(
+            content={
+                "indexed": 0,
+                "message": f"Vector indexing is not available: {exc}",
+            },
+            status_code=503,
+        )
 
     from app.modules.costs.models import CostItem
 
@@ -2995,6 +3097,15 @@ async def load_cwicr_database(
         duration,
     )
     _invalidate_cost_cache()
+
+    # Schema-level failures (e.g. parquet missing the required ``rate_code``
+    # column) must surface as 422 Unprocessable Entity — the file was
+    # uploaded fine, the server understood it, but the payload doesn't
+    # carry the columns this endpoint needs. The previous silent 200 made
+    # the failure invisible to monitoring + client retry logic. The body
+    # shape is preserved so existing UIs that read ``error`` still work.
+    if result_data.get("error") == "no rate_code column":
+        return JSONResponse(content=result_data, status_code=422)
     return result_data
 
 
@@ -4127,6 +4238,16 @@ async def record_cost_item_usage(
         except (TypeError, ValueError):
             # Anonymous / demo-token id may be non-UUID — silently drop.
             used_by = None
+
+    # IDOR guard: when the caller is authenticated, verify they can see the
+    # target project before we record a usage row attributed to it. Without
+    # this check, any authenticated user could attribute apply-events to any
+    # project UUID they happen to know. Anonymous callers (no usable sub)
+    # skip the check — the demo / pre-auth analytics path is preserved
+    # (the unauth ledger row has ``used_by = NULL`` so it can't be used to
+    # forge an identity-attributed history).
+    if used_by is not None:
+        await verify_project_access(body.project_id, str(used_by), session)
 
     row = await recorder.record(
         item_id,

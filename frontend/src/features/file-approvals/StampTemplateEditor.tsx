@@ -181,9 +181,22 @@ export function StampTemplateEditor({
         <WideModalField
           label={t('files.approvals.stamp_preview', { defaultValue: 'Preview' })}
         >
-          <div
-            className="h-24 border border-border-light rounded-md flex items-center justify-center bg-surface-secondary/30"
-            dangerouslySetInnerHTML={{ __html: previewSvg }}
+          {/*
+            Render the user-pasted SVG inside a sandboxed iframe. The empty
+            `sandbox=""` attribute strips ALL capabilities (scripts, forms,
+            same-origin, popups, top-navigation), so any <script> embedded in
+            a malicious stamp template cannot execute when another user
+            opens the editor.  srcDoc keeps the content fully inline — no
+            network round-trip, no separate origin to manage.
+          */}
+          <iframe
+            sandbox=""
+            srcDoc={previewSvg}
+            className="h-24 w-full border border-border-light rounded-md bg-surface-secondary/30"
+            title={t('files.approvals.stamp_preview', { defaultValue: 'Preview' })}
+            aria-label={t('fileApprovals.stamps.previewLabel', {
+              defaultValue: 'Stamp preview',
+            })}
           />
         </WideModalField>
         <WideModalField

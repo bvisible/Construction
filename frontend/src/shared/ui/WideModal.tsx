@@ -33,6 +33,8 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import clsx from 'clsx';
 
+import { useFocusTrap } from '@/shared/hooks/useFocusTrap';
+
 export type WideModalSize = 'sm' | 'md' | 'lg' | 'xl' | '2xl' | 'full';
 
 const SIZE_CLASSES: Record<WideModalSize, string> = {
@@ -119,6 +121,12 @@ export function WideModal({
     );
     focusable?.focus();
   }, [open]);
+
+  // Trap Tab inside the panel and restore focus to the triggering
+  // element when the modal closes (covers Escape, backdrop click and
+  // explicit close-button). The earlier source comment claimed a trap
+  // existed but the implementation was missing — Round 2 Wave D audit.
+  useFocusTrap(panelRef, open);
 
   if (!open) return null;
 

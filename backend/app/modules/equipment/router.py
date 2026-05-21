@@ -64,7 +64,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies import RequirePermission, SessionDep
+from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.equipment.schemas import (
     DamageReportCreate,
     DamageReportResponse,
@@ -194,10 +194,13 @@ async def create_equipment(
 @router.get("/equipment/{equipment_id}", response_model=EquipmentResponse)
 async def get_equipment(
     equipment_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("equipment.read")),
     service: EquipmentService = Depends(_get_service),
 ) -> EquipmentResponse:
     e = await service.get_equipment(equipment_id)
+    await verify_project_access(e.project_id, str(user_id), session)
     return EquipmentResponse.model_validate(e)
 
 
@@ -205,9 +208,13 @@ async def get_equipment(
 async def update_equipment(
     equipment_id: uuid.UUID,
     data: EquipmentUpdate,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("equipment.update")),
     service: EquipmentService = Depends(_get_service),
 ) -> EquipmentResponse:
+    existing = await service.get_equipment(equipment_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
     e = await service.update_equipment(equipment_id, data)
     return EquipmentResponse.model_validate(e)
 
@@ -215,9 +222,13 @@ async def update_equipment(
 @router.delete("/equipment/{equipment_id}", status_code=204)
 async def delete_equipment(
     equipment_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("equipment.delete")),
     service: EquipmentService = Depends(_get_service),
 ) -> None:
+    existing = await service.get_equipment(equipment_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
     await service.delete_equipment(equipment_id)
 
 

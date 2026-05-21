@@ -18,13 +18,56 @@ import asyncio
 import inspect
 import logging
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
+
+
+def _log_failures(
+    coro: Coroutine[Any, Any, Any],
+    *,
+    name: str,
+) -> asyncio.Task[Any]:
+    """‌⁠‍Schedule *coro* as a detached task that logs failures at WARNING.
+
+    Without this wrapper, ``asyncio.create_task`` will swallow exceptions
+    silently if no one awaits the resulting task — leaving event-driven
+    side-effects (auto-PO from tender award, schedule-progress roll-up
+    from field reports, etc.) invisible when they crash.
+
+    Usage::
+
+        _log_failures(_create_po_from_award(event), name="procurement.auto_po")
+
+    Args:
+        coro: The coroutine to launch.
+        name: Human-readable label used in the failure log line.
+
+    Returns:
+        The created task (callers may ignore it).
+    """
+    task = asyncio.create_task(coro)
+
+    def _done(t: asyncio.Task[Any]) -> None:
+        try:
+            exc = t.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is not None:
+            logger.warning(
+                "Detached task %r failed: %s: %s",
+                name,
+                type(exc).__name__,
+                exc,
+                exc_info=exc,
+            )
+
+    task.add_done_callback(_done)
+    return task
 
 # Stable bus protocol revision tag — bumped only when the wire shape
 # of EventResult changes.  Persisted as a fixed string so subscribers

@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select
 
 from app.core.job_run import JobRun
+from app.dependencies import CurrentUserId
 from app.modules.jobs.schemas import JobRunListResponse, JobRunRead
 
 if TYPE_CHECKING:
@@ -129,7 +130,7 @@ async def list_jobs(
 
 
 @router.post("/{job_id}/cancel", response_model=JobRunRead)
-async def cancel_job(job_id: uuid.UUID) -> JobRunRead:
+async def cancel_job(job_id: uuid.UUID, _user_id: CurrentUserId) -> JobRunRead:
     """Best-effort cancel of a still-active JobRun.
 
     Behaviour:
@@ -139,6 +140,12 @@ async def cancel_job(job_id: uuid.UUID) -> JobRunRead:
         * If the JobRun is already ``success`` / ``failed`` /
           ``cancelled``: returns the row unchanged.
         * If the id is unknown: 404.
+
+    Authentication is required: the JobRun model carries no project_id
+    or created_by linkage (RFC 34 §4 W0.1 keeps the table generic), so
+    we cannot ownership-gate per-row — but we MUST keep anonymous callers
+    out of the mutation surface to prevent third parties from cancelling
+    any active job they can guess a UUID for.
     """
     factory = _get_session_factory()
     async with factory() as session:

@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { AlertTriangle, Trash2, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 
+import { useFocusTrap } from '@/shared/hooks/useFocusTrap';
+
 export interface ConfirmDialogProps {
   open: boolean;
   onConfirm: () => void;
@@ -71,6 +73,11 @@ export function ConfirmDialog({
       confirmRef.current?.focus();
     }
   }, [open]);
+
+  // Trap Tab / Shift+Tab inside the dialog and restore focus to the
+  // triggering element on close. Without this, Tab walks the focus
+  // back into the obscured page underneath — fails WCAG 2.4.3.
+  useFocusTrap(dialogRef, open);
 
   if (!open) return null;
 

@@ -24,7 +24,7 @@ from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.core.upload_guards import reject_if_xlsx_bomb
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
@@ -85,10 +85,14 @@ def _report_to_response(report: object) -> FieldReportResponse:
         signature_by=report.signature_by,  # type: ignore[attr-defined]
         signature_data=report.signature_data,  # type: ignore[attr-defined]
         status=report.status,  # type: ignore[attr-defined]
-        approved_by=report.approved_by,  # type: ignore[attr-defined]
+        # approved_by / created_by are now GUID() columns — read as
+        # uuid.UUID; stringify for the str-typed response schema. (v40
+        # typing fix: matches daily_diary's convention while keeping the
+        # API shape unchanged.)
+        approved_by=str(report.approved_by) if report.approved_by else None,  # type: ignore[attr-defined]
         approved_at=report.approved_at,  # type: ignore[attr-defined]
         document_ids=report.document_ids or [],  # type: ignore[attr-defined]
-        created_by=report.created_by,  # type: ignore[attr-defined]
+        created_by=str(report.created_by) if report.created_by else None,  # type: ignore[attr-defined]
         metadata=getattr(report, "metadata_", {}),  # type: ignore[attr-defined]
         created_at=report.created_at,  # type: ignore[attr-defined]
         updated_at=report.updated_at,  # type: ignore[attr-defined]
@@ -138,21 +142,36 @@ async def get_current_weather(
     lat: float = Query(..., description="Latitude"),
     lon: float = Query(..., description="Longitude"),
     _user_id: CurrentUserId = None,  # type: ignore[assignment]
-) -> dict:
-    """Fetch current weather for a location (optional, requires OPENWEATHERMAP_API_KEY)."""
+) -> JSONResponse:
+    """Fetch current weather for a location (optional, requires OPENWEATHERMAP_API_KEY).
+
+    Returns 503 (Service Unavailable) when the upstream provider is
+    unreachable or no API key is configured. The body keeps the legacy
+    ``{"available": False, "error": ...}`` shape so existing clients
+    that branch on ``available`` still work; the status code now also
+    surfaces the failure to monitoring + retry layers (the previous
+    silent-200 made the dashboard's "weather widget healthy" indicator
+    impossible to drive from HTTP status alone).
+    """
     from app.config import get_settings
     from app.modules.fieldreports.weather import fetch_weather
 
     settings = get_settings()
     api_key = settings.openweathermap_api_key
     if not api_key:
-        return {"available": False, "error": "OpenWeatherMap API key not configured"}
+        return JSONResponse(
+            content={"available": False, "error": "OpenWeatherMap API key not configured"},
+            status_code=503,
+        )
 
     result = await fetch_weather(lat, lon, api_key=api_key)
     if result is None:
-        return {"available": False, "error": "Weather fetch failed"}
+        return JSONResponse(
+            content={"available": False, "error": "Weather fetch failed"},
+            status_code=503,
+        )
 
-    return {"available": True, **result}
+    return JSONResponse(content={"available": True, **result}, status_code=200)
 
 
 # ── Import template ─────────────────────────────────────────────────────────

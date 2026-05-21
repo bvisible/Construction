@@ -1063,6 +1063,9 @@ async def get_boq(
 )
 async def get_boq_structured(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> BOQWithSections:
     """Get a BOQ with hierarchical sections, subtotals, markups, and totals.
@@ -1075,6 +1078,7 @@ async def get_boq_structured(
     - Net total (direct cost + markups)
     - Grand total
     """
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     return await service.get_boq_structured(boq_id)
 
 
@@ -1086,6 +1090,9 @@ async def get_boq_structured(
 )
 async def get_boq_activity(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     service: BOQService = Depends(_get_service),
@@ -1095,6 +1102,7 @@ async def get_boq_activity(
     Returns a chronological audit trail of all mutations: position additions,
     updates, deletions, markup changes, exports, etc.
     """
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     return await service.get_activity_for_boq(boq_id, offset=offset, limit=limit)
 
 
@@ -1504,6 +1512,9 @@ async def create_budget_from_boq(
 )
 async def create_revision(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> BOQResponse:
     """Create a new revision of a BOQ.
@@ -1511,6 +1522,7 @@ async def create_revision(
     Duplicates the entire BOQ (positions + markups) and links the copy
     back to the original via parent_estimate_id for revision tracking.
     """
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     # Ensure Projects model is registered in SQLAlchemy metadata (FK resolution)
     from app.modules.projects import models as _proj_models  # noqa: F401
 
@@ -5362,9 +5374,16 @@ async def _extract_from_cad(content: bytes, ext: str, filename: str) -> dict[str
             "cad_no_converter": True,
         }
 
+    # Strip any directory components from the uploaded filename before
+    # we use it to build a path inside the tempdir. Without this a
+    # filename like "../../etc/passwd" would land outside ``tmpdir``.
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in ("..", "."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     # Save to temp dir, convert, parse
     with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = Path(tmpdir) / filename
+        input_path = Path(tmpdir) / safe_name
         input_path.write_bytes(content)
 
         output_dir = Path(tmpdir) / "output"

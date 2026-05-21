@@ -83,7 +83,25 @@ def configure_logging(settings: Settings) -> None:
         logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
-    logging.basicConfig(level=getattr(logging, settings.log_level), format="%(message)s")
+    # Plain stdlib formatter carries the request-id context so logs emitted
+    # by SQLAlchemy / FastAPI / business code outside structlog still get
+    # tagged with the correlation ID. ``%(request_id)s`` is injected by
+    # ``RequestIDLogFilter`` (defaults to "-" off-request).
+    from app.middleware.request_id import RequestIDLogFilter
+
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level),
+        format="%(asctime)s %(levelname)s [%(request_id)s] %(name)s: %(message)s",
+        force=True,
+    )
+    _rid_filter = RequestIDLogFilter()
+    root_logger = logging.getLogger()
+    # Attach to root so every handler inherits the filter; also attach
+    # directly to existing handlers since logging.Filter does not propagate
+    # through ``Logger.addFilter`` to already-attached handlers reliably.
+    root_logger.addFilter(_rid_filter)
+    for handler in root_logger.handlers:
+        handler.addFilter(_rid_filter)
 
 
 def _init_vector_db() -> None:
@@ -936,6 +954,12 @@ def create_app() -> FastAPI:
 
     app.add_middleware(SecurityHeadersMiddleware)
 
+    # ── Request correlation ID (must precede SlowRequestLogger so its log
+    # lines carry the ID via the RequestIDLogFilter context) ───────────────
+    from app.middleware.request_id import RequestIDMiddleware
+
+    app.add_middleware(RequestIDMiddleware)
+
     # ── Slow request logger (warns on > 500ms responses) ──────────────────
     from app.middleware.slow_request_logger import SlowRequestLoggerMiddleware
 
@@ -1072,6 +1096,7 @@ def create_app() -> FastAPI:
     @app.get("/api/health", tags=["System"])
     async def health_check() -> dict[str, Any]:
         import os as _os
+        from pathlib import Path as _Path
 
         result: dict[str, Any] = {
             "status": "healthy",
@@ -1095,6 +1120,51 @@ def create_app() -> FastAPI:
             result["database"] = "ok"
         except Exception:
             result["database"] = "error"
+            result["status"] = "degraded"
+
+        # Alembic head match — does the DB's current revision equal the
+        # latest script head on disk? A mismatch usually means somebody
+        # forgot ``alembic upgrade head`` after a deploy and stale models
+        # will start raising OperationalError as soon as a request hits a
+        # new column. ``None`` if the check itself blew up (no alembic.ini
+        # nearby, broken script tree, etc.) — visible but non-fatal.
+        try:
+            from alembic.config import Config as _AlembicConfig
+            from alembic.runtime.migration import MigrationContext as _MigCtx
+            from alembic.script import ScriptDirectory as _ScriptDir
+            from sqlalchemy import text as _text  # noqa: F401
+
+            from app.database import engine as _engine
+
+            _ini = _Path(__file__).resolve().parent.parent / "alembic.ini"
+            if _ini.is_file():
+                _cfg = _AlembicConfig(str(_ini))
+                _script = _ScriptDir.from_config(_cfg)
+                _expected = _script.get_current_head()
+
+                async with _engine.connect() as _conn:
+                    _actual = await _conn.run_sync(
+                        lambda sync_conn: _MigCtx.configure(sync_conn).get_current_revision()
+                    )
+                result["alembic_head_matches"] = _expected == _actual
+                if _expected != _actual:
+                    result["status"] = "degraded"
+            else:
+                result["alembic_head_matches"] = None
+        except Exception as _exc:  # noqa: BLE001
+            logger.warning("Alembic head check failed: %s", _exc)
+            result["alembic_head_matches"] = None
+
+        # Frontend dist presence — the wheel ships ``app/_frontend_dist/``;
+        # a missing ``index.html`` means the SPA shell will 404 and users
+        # see a blank page even though /api endpoints work.
+        try:
+            _dist_index = _Path(__file__).resolve().parent / "_frontend_dist" / "index.html"
+            result["frontend_dist_present"] = _dist_index.is_file()
+            if not result["frontend_dist_present"]:
+                result["status"] = "degraded"
+        except Exception:
+            result["frontend_dist_present"] = False
             result["status"] = "degraded"
 
         # Process memory (RSS) in MB — available on all platforms
@@ -1873,6 +1943,25 @@ def create_app() -> FastAPI:
             )
         except Exception:
             logger.debug("Procurement Tenders alias not available (non-fatal)")
+
+        # Coordination Hub — module directory is ``coordination_hub`` (the
+        # full name keeps the package self-describing) but the canonical
+        # public URL is ``/api/v1/coordination/...`` so the surface matches
+        # the industry term ("Model Coordination") rather than our internal
+        # directory layout. Mount the alias here in addition to the
+        # auto-mount the loader does at ``/api/v1/coordination-hub``.
+        try:
+            from app.modules.coordination_hub.router import (
+                router as coord_router,
+            )
+
+            app.include_router(
+                coord_router,
+                prefix="/api/v1/coordination",
+                tags=["Coordination Hub"],
+            )
+        except Exception:
+            logger.debug("Coordination Hub alias not available (non-fatal)")
 
         # 4D module (Section 6) — mount schedules + EAC schedule links at /api/v2
         try:

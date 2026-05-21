@@ -21,6 +21,7 @@ from app.core.job_run import JobRun
 from app.core.job_runner import register_handler, submit_job, unregister_handler
 from app.core.jobs import get_celery_app
 from app.database import Base
+from app.dependencies import get_current_user_id
 from app.modules.jobs.router import router as jobs_router
 
 
@@ -43,6 +44,10 @@ async def client(session_factory):
     """
     app = FastAPI()
     app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["Background Jobs"])
+
+    # POST /cancel now requires authentication — override the dep so the
+    # tests don't need to mint real JWTs against the test app.
+    app.dependency_overrides[get_current_user_id] = lambda: "00000000-0000-0000-0000-000000000001"
 
     with patch("app.modules.jobs.router._get_session_factory", return_value=session_factory):
         transport = ASGITransport(app=app)

@@ -19,6 +19,13 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 
+from app.core.file_signature import (
+    ALLOWED_PHOTO_TYPES,
+    SIGNATURE_BYTES_REQUIRED,
+    FileSignatureMismatch,
+    mime_for_signature,
+    require as require_signature,
+)
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.punchlist.schemas import (
     PinToSheetRequest,
@@ -265,6 +272,7 @@ async def transition_status(
     item_id: uuid.UUID,
     data: PunchStatusTransition,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("punchlist.update")),
     service: PunchListService = Depends(_get_service),
 ) -> PunchItemResponse:
@@ -274,6 +282,8 @@ async def transition_status(
     - resolved -> verified requires punchlist.verify permission and a different user
     - verified -> closed requires punchlist.verify permission
     """
+    existing = await service.get_item(item_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
     # For verify and close transitions, require the verify permission
     if data.new_status in ("verified", "closed"):
         # Check verify permission manually
@@ -295,6 +305,7 @@ async def transition_status(
 async def pin_to_sheet(
     item_id: uuid.UUID,
     data: PinToSheetRequest,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("punchlist.update")),
     service: PunchListService = Depends(_get_service),
@@ -304,6 +315,8 @@ async def pin_to_sheet(
     Updates the punch item's document_id, page, location_x, and location_y
     fields so the item is visually anchored on a drawing sheet.
     """
+    existing = await service.get_item(item_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
     if data.sheet_id is None and data.document_id is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -332,15 +345,12 @@ async def upload_photo(
     _perm: None = Depends(RequirePermission("punchlist.update")),
     service: PunchListService = Depends(_get_service),
 ) -> PunchItemResponse:
-    """Upload a photo for a punch item."""
-    # Validate file type
-    allowed_types = {"image/jpeg", "image/png", "image/webp", "image/heic"}
-    if file.content_type and file.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file type: {file.content_type}. Allowed: {', '.join(allowed_types)}",
-        )
+    """Upload a photo for a punch item.
 
+    Content-type headers are attacker-controlled, so we validate the raw
+    magic bytes against :data:`ALLOWED_PHOTO_TYPES` (jpeg, png, gif, webp,
+    heic, heif, tiff). SVG and any other format are rejected with 415.
+    """
     try:
         content = await file.read()
     except Exception:
@@ -349,6 +359,24 @@ async def upload_photo(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unable to read uploaded photo",
         )
+
+    # Magic-byte gate: read enough bytes to identify the signature and
+    # reject anything outside the photo allow-list. Storing an attacker-
+    # controlled MIME on the cross-linked Document would let later
+    # consumers serve it as HTML/SVG/etc., so we derive the stored MIME
+    # from the detected signature instead of trusting ``file.content_type``.
+    try:
+        detected = require_signature(
+            content[:SIGNATURE_BYTES_REQUIRED],
+            ALLOWED_PHOTO_TYPES,
+            filename=file.filename,
+        )
+    except FileSignatureMismatch as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(exc),
+        )
+    safe_mime = mime_for_signature(detected)
 
     # Now that we've accepted the body, prepare the destination.
     PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
@@ -385,7 +413,7 @@ async def upload_photo(
             description=f"Punch list photo for item {item_id}",
             category="photo",
             file_size=len(content),
-            mime_type=file.content_type or "image/jpeg",
+            mime_type=safe_mime,
             file_path=str(filepath),
             version=1,
             uploaded_by=user_id or "",

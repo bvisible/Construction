@@ -5,15 +5,69 @@ Set DATABASE_URL to 'sqlite+aiosqlite:///./openestimate.db' for SQLite mode.
 """
 
 import json
+import logging
+import time
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import datetime
 
-from sqlalchemy import DateTime, MetaData, String, TypeDecorator, func
+from sqlalchemy import DateTime, MetaData, String, TypeDecorator, event as sa_event, func
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from app.config import get_settings
+
+_slow_query_logger = logging.getLogger("slow_queries")
+
+
+@sa_event.listens_for(Engine, "before_cursor_execute")
+def _record_query_start(
+    conn,  # noqa: ANN001 — SQLA passes the dialect connection
+    cursor,  # noqa: ANN001
+    statement: str,
+    parameters,  # noqa: ANN001
+    context,  # noqa: ANN001
+    executemany: bool,
+) -> None:
+    """Stash a high-resolution start timestamp on the connection info dict.
+
+    SQLAlchemy fires this for both async and sync engines because the async
+    engine delegates to a sync DBAPI under the hood; one listener is enough.
+    """
+    conn.info["query_start_time"] = time.perf_counter()
+
+
+@sa_event.listens_for(Engine, "after_cursor_execute")
+def _log_slow_query(
+    conn,  # noqa: ANN001
+    cursor,  # noqa: ANN001
+    statement: str,
+    parameters,  # noqa: ANN001
+    context,  # noqa: ANN001
+    executemany: bool,
+) -> None:
+    """Log statements that exceed ``settings.slow_query_ms`` at WARNING level."""
+    start = conn.info.pop("query_start_time", None)
+    if start is None:
+        return
+    elapsed_ms = (time.perf_counter() - start) * 1000.0
+    try:
+        threshold = get_settings().slow_query_ms
+    except Exception:  # noqa: BLE001 — never break a query on settings hiccup
+        return
+    if threshold <= 0 or elapsed_ms <= threshold:
+        return
+    _slow_query_logger.warning(
+        "Slow query: %.1fms — %s",
+        elapsed_ms,
+        statement[:200],
+        extra={
+            "elapsed_ms": round(elapsed_ms, 2),
+            "statement": statement[:200],
+            "executemany": executemany,
+        },
+    )
 
 _NS = uuid.UUID("d4d4c300-1909-4ddc-b01c-0a44e3b01c00")
 
@@ -135,10 +189,9 @@ def create_engine_from_settings():
     }
 
     if _is_sqlite(url):
-        # Enable WAL mode for concurrent reads during writes
-        from sqlalchemy import event as sa_event
-        from sqlalchemy.engine import Engine
-
+        # Enable WAL mode for concurrent reads during writes.
+        # ``sa_event`` and ``Engine`` are imported at module top so the
+        # slow-query listeners share the same symbols.
         @sa_event.listens_for(Engine, "connect")
         def _set_sqlite_pragma(dbapi_conn: object, _: object) -> None:
             cursor = dbapi_conn.cursor()  # type: ignore[union-attr]

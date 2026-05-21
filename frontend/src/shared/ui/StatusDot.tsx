@@ -4,6 +4,14 @@ type StatusDotVariant = 'success' | 'warning' | 'error' | 'neutral' | 'info';
 
 interface StatusDotProps {
   variant: StatusDotVariant;
+  /**
+   * Visible text label rendered next to the dot. Strongly encouraged
+   * for WCAG 1.4.1 (color is not the only indicator). When omitted we
+   * still render an sr-only fallback derived from the variant so
+   * screen-reader users get a non-color signal — but sighted users
+   * with colour-blindness will only see a coloured circle, so prefer
+   * passing an explicit label when space allows.
+   */
   label?: string;
   pulse?: boolean;
   className?: string;
@@ -17,9 +25,21 @@ const dotStyles: Record<StatusDotVariant, string> = {
   neutral: 'bg-content-tertiary',
 };
 
+const variantSrLabels: Record<StatusDotVariant, string> = {
+  success: 'Success',
+  warning: 'Warning',
+  error: 'Error',
+  info: 'Info',
+  neutral: 'Neutral',
+};
+
 export function StatusDot({ variant, label, pulse, className }: StatusDotProps) {
+  const srFallback = variantSrLabels[variant];
   return (
-    <span className={clsx('inline-flex items-center gap-2', className)}>
+    <span
+      className={clsx('inline-flex items-center gap-2', className)}
+      role="status"
+    >
       <span className="relative flex h-2.5 w-2.5">
         {pulse && (
           <span
@@ -33,7 +53,13 @@ export function StatusDot({ variant, label, pulse, className }: StatusDotProps) 
           className={clsx('relative inline-flex h-2.5 w-2.5 rounded-full', dotStyles[variant])}
         />
       </span>
-      {label && <span className="text-sm text-content-secondary">{label}</span>}
+      {label ? (
+        <span className="text-sm text-content-secondary">{label}</span>
+      ) : (
+        // sr-only fallback so the variant is announced even when no
+        // visible label is supplied (RunDock and similar dense rows).
+        <span className="sr-only">{srFallback}</span>
+      )}
     </span>
   );
 }

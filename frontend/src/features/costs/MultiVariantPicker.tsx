@@ -100,10 +100,19 @@ interface MultiVariantPickerProps {
 /* ── Helpers ──────────────────────────────────────────────────────────── */
 
 function formatPrice(value: number, currency: string): string {
+  // Currency-style formatting requires an ISO code — when the caller passes
+  // an empty string, render the bare number. Never substitute USD/EUR —
+  // see CLAUDE.md "no hardcoded currency fallbacks".
+  if (!currency) {
+    return new Intl.NumberFormat(getIntlLocale(), {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
   try {
     return new Intl.NumberFormat(getIntlLocale(), {
       style: 'currency',
-      currency: currency || 'USD',
+      currency,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
@@ -112,7 +121,7 @@ function formatPrice(value: number, currency: string): string {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
-    return currency ? `${n} ${currency}` : n;
+    return `${n} ${currency}`;
   }
 }
 
@@ -248,7 +257,10 @@ export function MultiVariantPicker({
     return sum;
   }, [picks, slots]);
 
-  const subtotalCurrency = slots[0]?.currency || 'USD';
+  // No hardcoded currency fallback — when none of the slots carry a
+  // currency, render the subtotal as a bare number (formatPrice handles
+  // empty string explicitly). See CLAUDE.md "no hardcoded currency fallbacks".
+  const subtotalCurrency = slots[0]?.currency || '';
 
   /* Bulk actions. Each one is idempotent — re-clicking always re-seeds. */
   const applyAll = (

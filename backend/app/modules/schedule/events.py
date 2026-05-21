@@ -28,12 +28,11 @@ already best-effort once it leaves the truck.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from typing import Any
 
-from app.core.events import Event, event_bus
+from app.core.events import Event, _log_failures, event_bus
 from app.database import async_session_factory
 from app.modules.schedule.models import Activity
 from app.modules.schedule.service_4d import ScheduleProgressService
@@ -61,8 +60,15 @@ async def _on_field_report_submitted(event: Event) -> None:
     rationale: the publisher is still inside its request transaction
     when ``event_bus.publish`` returns, so a synchronous handler that
     opens a second writer would block on the single-writer lock.
+
+    Failures inside the detached coroutine are surfaced via
+    :func:`app.core.events._log_failures` so they hit the logs at WARNING
+    (previously silent).
     """
-    asyncio.create_task(_record_schedule_progress(event))
+    _log_failures(
+        _record_schedule_progress(event),
+        name="schedule.field_report_progress_rollup",
+    )
 
 
 async def _record_schedule_progress(event: Event) -> None:

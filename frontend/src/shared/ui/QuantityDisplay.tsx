@@ -22,7 +22,10 @@ export function QuantityDisplay({
   precision = 2,
   className,
 }: QuantityDisplayProps) {
-  const { measurementSystem, numberLocale } = usePreferencesStore();
+  // Selector-scoped reads — keep this component out of the re-render
+  // path for unrelated preferences-store mutations (v4.3 audit).
+  const measurementSystem = usePreferencesStore((s) => s.measurementSystem);
+  const numberLocale = usePreferencesStore((s) => s.numberLocale);
 
   if (value == null) {
     return <span className={clsx('text-content-tertiary', className)}>&mdash;</span>;

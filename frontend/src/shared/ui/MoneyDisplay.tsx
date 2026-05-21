@@ -35,7 +35,10 @@ export function MoneyDisplay({
   className,
   colorize = false,
 }: MoneyDisplayProps) {
-  const { currency: defaultCurrency, numberLocale } = usePreferencesStore();
+  // Selector-scoped reads — without these the component re-renders on
+  // every unrelated preferences-store mutation (v4.3 audit).
+  const defaultCurrency = usePreferencesStore((s) => s.currency);
+  const numberLocale = usePreferencesStore((s) => s.numberLocale);
 
   if (amount == null) {
     return <span className={clsx('text-content-tertiary', className)}>&mdash;</span>;

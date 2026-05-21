@@ -189,6 +189,7 @@ function createWrapper(queryClient: QueryClient) {
 // Production code is unaffected (real browsers all use one realm). The
 // ApiError unit tests below + the e2e Playwright tests cover the same
 // behaviour end-to-end. Re-enable when the jsdom/undici story improves.
+// SKIP: jsdom + undici fetch reject MSW's AbortSignal as a cross-realm instance, so MSW intercepts never resolve. Re-enable when: MSW v3 + jsdom land single-realm AbortSignal compat (or we migrate to happy-dom + native fetch). Tracked in v4.3 backlog.
 describe.skip('Projects API — MSW integration', () => {
   it('useQuery: fetches project list and returns correct data', async () => {
     const queryClient = makeQueryClient();
@@ -338,6 +339,7 @@ describe.skip('Projects API — MSW integration', () => {
 // SKIPPED — same root cause as Projects API tests above (jsdom/undici/MSW
 // AbortSignal realm mismatch). Production behaviour is covered by Playwright
 // e2e tests + ApiError unit tests.
+// SKIP: jsdom + undici fetch reject MSW's AbortSignal as a cross-realm instance, so MSW intercepts never resolve. Re-enable when: MSW v3 + jsdom land single-realm AbortSignal compat (or we migrate to happy-dom + native fetch). Tracked in v4.3 backlog.
 describe.skip('BOQ API — MSW integration', () => {
   it('useQuery: fetches BOQ list for a project and returns correct data', async () => {
     const queryClient = makeQueryClient();
@@ -540,6 +542,7 @@ describe.skip('BOQ API — MSW integration', () => {
 ═══════════════════════════════════════════════════════════════════════ */
 
 // SKIPPED — same root cause as the API integration tests above.
+// SKIP: same jsdom + undici + MSW AbortSignal realm-mismatch as the two suites above — loading-state transitions never see the mocked response. Re-enable when: MSW v3 + jsdom land single-realm AbortSignal compat. Tracked in v4.3 backlog.
 describe.skip('React Query loading state transitions', () => {
   it('transitions from loading → success for project list', async () => {
     const queryClient = makeQueryClient();

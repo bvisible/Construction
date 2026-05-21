@@ -21,6 +21,13 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Respo
 
 logger = logging.getLogger(__name__)
 
+from app.core.file_signature import (
+    ALLOWED_CAD_TYPES,
+    ALLOWED_PHOTO_TYPES,
+    SIGNATURE_BYTES_REQUIRED,
+    FileSignatureMismatch,
+    require as require_signature,
+)
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, check_ai_rate_limit
 from app.modules.ai.ai_client import (
     call_ai,
@@ -361,6 +368,24 @@ async def photo_estimate(
             detail="Uploaded file is empty.",
         )
 
+    # Magic-byte gate: the request ``Content-Type`` header above is fully
+    # controlled by the caller, so an attacker could declare ``image/png``
+    # while uploading an HTML page, PE, or shellscript and have the AI
+    # vision pipeline (or a downstream document store) treat the bytes
+    # as something they're not. Inspect the first few bytes and reject
+    # anything outside the photo allow-list.
+    try:
+        require_signature(
+            image_bytes[:SIGNATURE_BYTES_REQUIRED],
+            ALLOWED_PHOTO_TYPES,
+            filename=file.filename,
+        )
+    except FileSignatureMismatch as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(exc),
+        ) from exc
+
     # Parse optional project_id
     parsed_project_id: uuid.UUID | None = None
     if project_id:
@@ -430,6 +455,31 @@ async def file_estimate(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File is empty.")
+
+    # Magic-byte gate per category. The extension above is attacker-
+    # controlled (the request multipart filename is fully client-supplied),
+    # so we must also confirm the file's actual signature matches the
+    # category we're about to dispatch into. CSV/text files have no
+    # reliable magic byte — skip the check for that category only.
+    _CATEGORY_SIG_ALLOW: dict[str, frozenset[str]] = {
+        "pdf": frozenset({"pdf"}),
+        "excel": frozenset({"zip", "ole"}),
+        "cad": ALLOWED_CAD_TYPES,
+        "image": ALLOWED_PHOTO_TYPES,
+    }
+    allowed_sigs = _CATEGORY_SIG_ALLOW.get(category)
+    if allowed_sigs is not None:
+        try:
+            require_signature(
+                content[:SIGNATURE_BYTES_REQUIRED],
+                allowed_sigs,
+                filename=file.filename,
+            )
+        except FileSignatureMismatch as exc:
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=str(exc),
+            ) from exc
 
     parsed_project_id: uuid.UUID | None = None
     if project_id:

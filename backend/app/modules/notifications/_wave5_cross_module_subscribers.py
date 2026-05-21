@@ -631,6 +631,98 @@ async def _on_variation_completed(event: Event) -> None:
         )
 
 
+# ── QMS: HSE→QMS NCR mirror → notification ───────────────────────────────
+
+
+async def _on_qms_ncr_mirrored_from_hse(event: Event) -> None:
+    """‌⁠‍``qms.ncr.mirrored_from_hse`` → notify HSE incident owner + QMS owner.
+
+    Closes the visibility gap: when an HSE incident's CAPA spawns a
+    mirrored QMS NCR (see ``qms/events.py::_on_hse_incident_root_cause``),
+    both the originating HSE incident reporter and the QMS NCR owner
+    should see the cross-module hand-off in their notification inbox.
+
+    Payload (from publisher):
+        - hse_incident_id (may be empty if CAPA had no source_ref)
+        - ncr_id
+        - project_id
+        - severity
+        - ncr_owner_user_id (may be empty)
+    """
+    if not await _can_open_isolated_session():
+        return
+    data = event.data or {}
+    ncr_id = data.get("ncr_id")
+    hse_incident_id = data.get("hse_incident_id") or ""
+    severity = data.get("severity") or "minor"
+    if not ncr_id:
+        return
+    try:
+        async with async_session_factory() as session:
+            recipients: set[str] = set()
+
+            # Resolve HSE incident owner via the linked SafetyIncident row.
+            if hse_incident_id:
+                try:
+                    incident_uuid = uuid.UUID(str(hse_incident_id))
+                except (ValueError, TypeError):
+                    incident_uuid = None
+                if incident_uuid is not None:
+                    from app.modules.safety.models import (  # noqa: PLC0415
+                        SafetyIncident,
+                    )
+
+                    incident = await session.get(SafetyIncident, incident_uuid)
+                    if incident is not None and incident.created_by:
+                        recipients.add(str(incident.created_by))
+
+            # Resolve QMS owner (best-effort; payload may carry it directly,
+            # else fall back to QMSNCR.raised_by).
+            qms_owner = data.get("ncr_owner_user_id") or ""
+            if qms_owner:
+                recipients.add(str(qms_owner))
+            else:
+                try:
+                    ncr_uuid = uuid.UUID(str(ncr_id))
+                except (ValueError, TypeError):
+                    ncr_uuid = None
+                if ncr_uuid is not None:
+                    from app.modules.qms.models import QMSNCR  # noqa: PLC0415
+
+                    ncr = await session.get(QMSNCR, ncr_uuid)
+                    if ncr is not None and ncr.raised_by:
+                        recipients.add(str(ncr.raised_by))
+
+            if not recipients:
+                return
+
+            svc = NotificationService(session)
+            for uid in recipients:
+                await svc.create(
+                    user_id=uid,
+                    notification_type=(
+                        "qms_ncr_mirrored_critical"
+                        if severity in {"critical", "major"}
+                        else "qms_ncr_mirrored"
+                    ),
+                    title_key="notifications.qms.ncr_mirrored_from_hse.title",
+                    body_key="notifications.qms.ncr_mirrored_from_hse.body",
+                    body_context={
+                        "hse_incident_id": str(hse_incident_id),
+                        "ncr_id": str(ncr_id),
+                        "severity": severity,
+                    },
+                    entity_type="qms_ncr",
+                    entity_id=str(ncr_id),
+                    action_url=f"/qms/ncrs/{ncr_id}",
+                )
+            await session.commit()
+    except Exception:
+        logger.debug(
+            "notifications: _on_qms_ncr_mirrored_from_hse failed", exc_info=True,
+        )
+
+
 # ── Registration ─────────────────────────────────────────────────────────
 
 
@@ -643,6 +735,7 @@ _SUBSCRIPTIONS: tuple[tuple[str, Callable[[Event], object]], ...] = (
     ("carbon.boq_position.assigned", _on_boq_position_assigned),
     ("bid_management.package.awarded", _on_bid_package_awarded),
     ("variations.contract_sum.updated", _on_variation_completed),
+    ("qms.ncr.mirrored_from_hse", _on_qms_ncr_mirrored_from_hse),
 )
 
 

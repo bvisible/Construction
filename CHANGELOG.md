@@ -5,6 +5,239 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.4] — 2026-05-21 · Round 4 — 20-module deep improvements sweep
+
+A single release bundling 20 parallel module-deep audit + fix passes on previously under-tested modules. Every module touched here got a baseline pytest file; combined ~140 new tests.
+
+### Security
+
+- **`teams`: critical RBAC bypass closed.** `create_team`, `add_member`, `remove_member` had no `verify_project_access` gate — any authenticated user could create teams in any project and self-elevate to `owner`/`project_manager`, inheriting elevated permissions. Service-layer project-access check + self-elevation block on elevated roles.
+- **`architecture_map`: critical information disclosure closed.** Was `Depends(get_current_user_id)` only → every viewer/estimator could enumerate the full ERP architecture (table names, model columns, module deps). Now requires `architecture.read` admin permission with router-level + per-endpoint defence.
+- **`rfq_bidding`: award role gate.** `award_bid` only required `rfq.update` (EDITOR) but FSM declares admin/manager. Added service-layer 403 check on `{admin, manager, owner}`. Also: bid-submission state-escape blocked (vendors could submit against draft/awarded/cancelled), past-deadline submissions 409.
+- **`smart_views`: federation read leak.** `_can_read` returned `True` blindly for federation scope → anyone with a federation UUID could read any federation-scoped view. Now resolves `BIMFederation.project_id` and checks accessible project set. Closes backlog #103 (federation visibility staleness on owner change) via new event subscriber on `projects.project.updated`.
+- **`opencde_api`: `$orderby` allowlist + LIKE-wildcard injection.** `parse_orderby` used bare `getattr(BCFTopic, field, None)` accepting ORM relationships; user-supplied label literal interpolated into `LIKE %"<value>"%` without escaping `%`/`_`/`\`. Both fixed; scalar columns only + SQLA `.like(escape="\\")`.
+- **`pipelines`: `create_pipeline` accepted `project_id` from body without `verify_project_access`.** Now gated.
+- **`coordination_hub`: silent write on `coordination.read` GET.** Viewer hitting `/thresholds` committed seed rows. Now `allow_seed` is permission-derived; viewers get ephemeral defaults.
+- **`compliance_docs` + `correspondence`: magic-byte upload endpoints.** Mirror v4.2.1 punchlist + v4.2.3 AI fixes — extension-only validation replaced with `app.core.file_signature.require_signature`.
+- **`correspondence`: CRLF subject sanitisation.** Email-header injection vector closed; control chars stripped from `subject` on create + update.
+- **`contacts`: PII redaction in logs + import-error responses + duplicate-email race (IntegrityError → 409) + PATCH audit `user_id` propagation.**
+- **`erp_chat`: history role/length sanitisation.** Smuggled `system` role in `conversation_history` now dropped — kills prompt-injection via fake system turn. Content capped at 4000 chars, tail-windowed to 20 most recent.
+- **`ai_agents`: tool-context spoofing fix.** An LLM that forged `__agent_context__` in tool_args could spoof the user; trusted context now strips and re-injects. Idempotency-Key header dedupes retries.
+- **`clash_ai_triage`: rate limit added to triage/batch/replay endpoints** (was none) + 180s wall-timeout + structured per-call cost log.
+- **`enterprise_workflows`: action_type whitelist + MAX_STEPS=32 cap + role validation.**
+
+### Performance
+
+- **`opencde_api`: N+1 in `create_topic`** — was loading every BCFTopic row for the project to compute monotonic index via `len(list(...))`. Replaced with `SELECT COUNT(*)`.
+- **`project_intelligence`: LLM LRU cache (sha256-keyed, 60s TTL) + bounded state cache (was unbounded → memory leak on long-lived process).**
+- **`pipelines`: max-nodes cap (256), per-node `asyncio.wait_for` timeout (300s), row-ids cap (5000) on `source.boq` / `transform.filter` envelopes.**
+
+### Correctness
+
+- **`clash_cost_impact`: Decimal-exact rollup.** Was reading 2dp-rounded floats and re-summing → drift up to `0.005 × N`. Now sums exact Decimals, rounds once at the boundary; `ROUND_HALF_UP` instead of banker's even.
+- **`coordination_hub`: warn/error threshold invariant.** Inverted pairs could persist and silently break the elif-cascade.
+- **`rfq_bidding`: money/currency Decimal validation** + 3-letter ISO normalisation + score field validation. Also fixed latent `MissingGreenlet` bug (ORM access after `expire_all()` — hidden in prod because the prior `try: except: pass` audit-log catch swallowed it).
+- **`markups` + `dwg_takeoff`: Float → Numeric(18,6) / Numeric(10,6)** on `measurement_value`, `pixels_per_unit`, `real_distance`, `scale_override`, `thickness`, `scale_denominator`. New alembic migrations `v3097_markups_measurement_numeric` (merges two heads) + `v3097_dwg_takeoff_decimal_quantities`. Float precision drift no longer leaks into BOQ via takeoff/markups.
+- **`dwg_takeoff`: magic-byte validation moved pre-write.** Renamed PDFs/ZIPs no longer land on disk before the sniff.
+- **`compliance_ai`: was stub-only.** Built `POST /from-nl` with auth + rate-limit + 2000-char input cap + 1024-token AI cap + structured verdict log + `_log_failures`-wrapped event publish. Fixed latent double-prefix bug (`/api/v1/compliance-ai/compliance-ai/_health`).
+- **`smart_views`: federation views now appear in `list_visible_to_user`** (previously excluded entirely).
+
+### Observability
+
+- New structured cost / outcome logs across: `erp_chat`, `ai_agents`, `clash_ai_triage`, `project_intelligence`, `compliance_ai`, `pipelines`, `coordination_hub`, `teams`, `enterprise_workflows` — each emits a single `module.operation` INFO record with relevant fields (tokens, duration, cost, actor, outcome).
+- `architecture_map` now writes per-endpoint audit log of who's enumerating system architecture.
+- `teams` publishes `teams.team.{created,updated,deleted}` and `teams.membership.{added,removed}` events for permission-cache invalidation.
+- `compliance_docs` publishes `compliance_docs.expiry.alert` event on status transitions.
+
+### DB
+
+- `alembic v3097_markups_measurement_numeric` (merge migration for multi-head)
+- `alembic v3097_dwg_takeoff_decimal_quantities`
+- `alembic v3098_correspondence_attachments_column` (adds `attachments JSON NOT NULL DEFAULT []` to `oe_correspondence_correspondence` — required for the new attachments endpoint to work on existing prod DBs)
+
+Single head at `v3098`.
+
+### Tests
+
+~140 new tests across:
+- `test_coordination_hub.py` (5), `test_smart_views.py` (3), `test_clash_ai_triage.py` (12), `test_clash_cost_impact.py` (9), `test_cost_match.py` (13), `test_rfq_bidding.py` (11), `test_pipelines.py` (4), `test_erp_chat.py` (5)
+- `test_teams.py` (2), `test_contacts.py` (11), `test_correspondence.py` (6), `test_compliance_ai.py` (4), `test_compliance_docs.py` (12), `test_enterprise_workflows.py` (6), `test_ai_agents.py` (6), `test_project_intelligence.py` (7)
+- `test_dwg_takeoff_service.py` (11), `test_markups.py` (4), `test_opencde_api.py` (30), `test_architecture_map.py` (11)
+
+### Notes
+
+`cost_match` was found to be a stub-only module (the matching logic lives in `match_elements`; cost_match is reserved for T12 assembly material-layer matching). Baseline tests pin current shape with a guard that fails when models.py lands, prompting full T12 coverage. No regressions detected in any adjacent suite.
+
+## [4.2.3] — 2026-05-21 · Security hardening + observability foundation + bundle slimdown
+
+### Added
+
+- **Request correlation IDs.** New `app/middleware/request_id.py` (`RequestIDMiddleware`) generates `uuid4().hex[:16]` (or honours a client-supplied `X-Request-ID` matching `^[A-Za-z0-9_-]{1,64}$`), stores it in a `ContextVar`, echoes it on every response. Wired into the root logger via `RequestIDLogFilter` so every log line in the process gets the request ID injected. Format prefix is now `[%(request_id)s]`.
+- **Slow-query logging.** SQLAlchemy `before_cursor_execute` / `after_cursor_execute` event listeners measure each statement; anything over `OE_SLOW_QUERY_MS` (default 500 ms) is logged at WARNING with structured `extra={elapsed_ms, statement[:200], executemany}`. Covers both async and sync engines.
+- **`/api/health` deepened.** Adds `alembic_head_matches` (script head vs DB current rev) and `frontend_dist_present` (`_frontend_dist/index.html` exists). Either being false flips top-level `status` to `"degraded"` (still 200 — load balancers can probe without page-flapping).
+- **Operator runbook.** New `docs/RUNBOOK.md` (156 lines): service basics, restart / logs / health probes, deploy procedure, sqlite backup-restore, alembic `DATABASE_SYNC_URL` gotcha, rollback, common-500 causes. Extracted from internal memory so on-call doesn't need Claude or Artem to recover the box.
+- **Client-error sink endpoint.** New module `oe_client_errors`: `POST /api/v1/client-errors/` accepts anonymised payloads (length-capped: message ≤ 2048, ≤ 64 stack lines, ua / path ≤ 512), per-IP 30/min rate limit, logs at WARNING with structured `extra`. Frontend `errorLogger.ts` now POSTs alongside localStorage (fire-and-forget, `keepalive: true`, gated by `VITE_ENABLE_ERROR_REPORTING`).
+- **FK indexes migration (`v3096_round3_fk_indexes`).** Adds 6 missing indexes: `oe_contracts_progress_claim_line.contract_line_id`, `oe_clash_issue.{first_seen,last_seen,resolved}_run_id`, `oe_crm_opportunity.lost_reason_code`, `oe_equipment_work_order.schedule_id`. Inspector-guarded so re-running is safe. The other 8 audit-flagged FKs turned out to be already covered by composite indexes.
+
+### Security
+
+- **Closed `POST /api/v1/jobs/{job_id}/cancel` unauthenticated mutation.** Requires `CurrentUserId` now (the `JobRun` model has no project/owner column, so per-row ownership gating isn't possible yet — authentication is the floor).
+- **Path-traversal hardening in CAD/BOQ smart-import.** `takeoff/router.py:1382`, `takeoff/router.py:1617`, and `boq/router.py:5377` all built `Path(tmpdir) / filename` from `file.filename`. Now normalise to `Path(filename).name` (drops any directory components) and 400 on empty / `.` / `..`. Normal filenames like `report.xlsx` are unchanged.
+- **AI photo / file estimate now magic-byte validates.** `ai/router.py` `photo-estimate` calls `require_signature(... ALLOWED_PHOTO_TYPES ...)`; `file-estimate` uses a per-category allow-list (pdf / excel / cad / image), skipping only `csv` (no reliable signature). Bytes whose declared `Content-Type` doesn't match the magic prefix → HTTP 415.
+- **StampTemplateEditor XSS fix.** `frontend/src/features/file-approvals/StampTemplateEditor.tsx:184` used `dangerouslySetInnerHTML` to preview pasted SVG. A shared malicious template could `<script>` against the next viewer. Now renders inside `<iframe sandbox="" srcDoc={...} />` — empty sandbox attribute strips all capabilities (no scripts, no same-origin, no forms).
+
+### Fixed
+
+- **3 silent-fail `200 + {error}` responses → proper status codes.**
+  - `fieldreports/router.py` `/weather/` 200 → 503 when provider key missing or upstream fetch fails.
+  - `costs/router.py` `/vector/index/` 200 → 503 (× 4 sibling early-returns) when Qdrant unreachable.
+  - `costs/router.py` rate import 200 + "no rate_code column" → 422 with the same body shape.
+- **Broken collection in `test_tendering_leveling.py` repaired.** `AddendumCreate` was never added with the bid-leveling Addendum feature — the test targets unimplemented service methods on top of a missing schema. Marked `pytest.mark.skip` at module level with a docstring listing the 4 implementation prerequisites for re-enable, plus a guarded import so the file becomes valid the moment the feature ships. 5,922 tests now collect cleanly.
+
+### Changed
+
+- **Frontend bundle slimdown.** `index-*.js` 1.76 MB → **1.27 MB** (gzip 311 KB). Five unused deps dropped (`leaflet`, `react-leaflet`, `@types/leaflet`, `jszip`, `i18next-http-backend`, `i18next-browser-languagedetector` — 11 packages removed in total including transitives). Seven admin pages converted from eager to `React.lazy()` (`SettingsPage`, `ModulesPage`, `ModuleDeveloperGuide`, `AssembliesPage` + 3 siblings, `ImportDatabasePage`, `OnboardingWizard`, `LoginPageNext`, `QuickEstimatePage`) — each emits its own chunk; total ~530 KB raw split off the main chunk.
+- **BOQ grid column stability.** `BOQGrid.tsx` previously listed the i18next `t` function as a `useMemo` dependency. Because `useTranslation()` returns a fresh `t` on every render, column defs rebuilt every render → AG Grid `setColumnDefs` re-ran constantly. Replaced with `i18n.language` as the real dep and a `tRef` for the latest `t`. Removes a measurable repaint on every unrelated state update.
+- **`MoneyDisplay` / `QuantityDisplay` Zustand reads use field selectors.** Each cell was subscribing to the full preferences store; an unrelated preference change (theme toggle, locale switch) re-rendered every money / quantity cell in the BOQ. Now uses `useStore(s => s.field)` per field.
+- **4 orphan `describe.skip` / `it.skip` blocks annotated.** Sites in `api-mocks.test.tsx` and `visual-regression.test.tsx` now carry a single-line `// SKIP: <reason>. Re-enable when: <condition>. Tracked in v4.3 backlog.` so future maintainers can decide without guessing.
+
+### Notes
+
+109 modules load (was 108 — `oe_client_errors` added). Boot time on VPS unchanged at ~3-4 min. No additional Python deps; alembic chain stays single-head at `v3096_round3_fk_indexes`. Frontend dev deps `@types/leaflet` also removed.
+
+## [4.2.2] — 2026-05-21 · i18n + a11y + event flow + performance polish
+
+### Added
+
+- **`useFocusTrap` hook.** New `frontend/src/shared/hooks/useFocusTrap.ts` — captures `document.activeElement` on mount, intercepts Tab / Shift+Tab to wrap focus within the container, restores focus on cleanup (covers Escape, backdrop click, explicit close). Filters disabled / `aria-hidden` / off-screen nodes. Now wired into `ConfirmDialog` + `WideModal`.
+- **`role="navigation" aria-label="Main navigation"` landmark on Sidebar.** Screen readers can now identify the sidebar and skip-nav directly to it.
+- **3 previously-orphan event subscribers now wired:**
+  - `qms.ncr.mirrored_from_hse` → notifications wave-5 dispatcher (in-app notification to HSE incident creator + QMS NCR owner)
+  - `procurement.supplier_rating_update` → procurement events log subscriber (INFO with `ncr_id` / `supplier_id` / severity — stub until supplier-rating model lands)
+  - `contracts.risk_register_update` → risk-events subscriber materialises a risk row with `metadata.source_incident_id` for idempotency (PostgreSQL-gated)
+- **Detached-task error visibility.** New `_log_failures(coro, *, name)` helper in `app.core.events` attaches a done-callback that logs failures at WARNING with exception class + traceback. Wired into `procurement._on_tender_awarded` and `schedule._on_field_report_submitted`. No more silent task failures.
+
+### Fixed
+
+- **i18n: 327 missing `admin.*` keys backfilled across 23 locales.** Permissions Matrix + Audit Log pages now render correctly in ar, bg, cs, da, es, fi, fr, hi, hr, id, it, ja, ko, mn, nl, no, pl, pt, ro, sv, th, tr, vi, zh — 24 × 54 = 1,296 inserts. DE + RU already complete in native; EN unchanged. Translation refinements pending — initial release ships the English fallback so the UI works correctly in every locale.
+- **StatusDot color-only-meaning gap.** Component now always renders a screen-reader-only `<span>` with the variant name ("Success" / "Warning" / "Error" / "Info" / "Neutral") when no visible `label` is supplied. Wrapper gets `role="status"`. Color-blind + high-contrast users now have a text signal.
+- **BOQ N+1 query loops.**
+  - `_subtree_height` (`boq/service.py:1935`): per-node `list_children` → single `list_all_for_boq` + in-memory parent→children index. O(subtree_size) → O(1) round-trips.
+  - `apply_quantity_links` (`boq/service.py:7234`): per-link `get_by_id` lookup → new bulk `PositionRepository.list_by_ids` + snapshot dict. N round-trips → 1.
+
+### Removed
+
+- **Unused exports:** `FloatingChatButton` (only referenced in a stale comment).
+- **Unused frontend dep:** `react-is` (zero direct imports; still pulled transitively by recharts / ag-grid / testing-library where actually needed).
+- **Dev scratch artefacts:** `frontend/_capture_v4_news.mjs`, `frontend/_capture_v4_v2.mjs`, `frontend/_verify_cards_layout.mjs`, `tmp/check_full.py`, `tmp/check_vi.py`. These were one-off v4.0 marketing capture / i18n-build scripts that didn't belong in the shipped tree.
+
+### Notes
+
+Test coverage this release: 299 BOQ + 198 events / risk / procurement / qms / hse / notifications + 18 a11y (ConfirmDialog + WideModal) + 14 admin-i18n — all green.
+
+`email-validator` was intentionally **not** removed: pydantic's `EmailStr` uses it via `users` / `portal` / `file_distribution` / `file_transmittals` and would `ImportError` at runtime without it.
+
+## [4.2.1] — 2026-05-21 · Security & correctness hotfix
+
+### Fixed
+
+- **IDOR closures across legacy modules.** Added `_verify_boq_owner()` to BOQ `get_boq_structured`, `get_boq_activity`, `create_revision`; added `verify_project_access()` to Equipment GET/PATCH/DELETE `/equipment/{id}`, Punchlist `/items/{id}/transition/` + `/pin-to-sheet/`, Meetings `/{meeting_id}/complete/`, and Costs `/v1/costs/{item_id}/record-usage/`. Surfaced by the v4.2.0 20-wave QA sweep.
+- **Coordination Hub serial KPI fetch.** Replaced 6 sequential `await` calls in `coordination_hub.service.build_dashboard()` with a single `asyncio.gather(...)` — dashboard load time now matches the slowest single counter rather than their sum. 37 backend tests still green.
+- **MeasureTool snap-to-vertex X axis.** Removed dead `(raw.x - raw.x)` term in `frontend/src/shared/ui/BIMViewer/MeasureTool.ts:221`. Snapping now reads the correct X coordinate; 9 vitest specs green including the 8-pixel snap test.
+- **Hardcoded currency fallbacks removed.** `'USD'` fallbacks in `CwicrMatchPanel`, `VariantPicker`, `MultiVariantPicker`, and the `'EUR'` literals in `CostsPage` (`handleCreateAssembly`, `INITIAL_COST_ITEM_FORM`, totals badge) now resolve from the project context via `useProjectContextStore` + `/v1/projects/` query, matching how `AddToBOQModal` / `FinancePage` / `MatchWizardFlow` already do it. Empty fallback when no project context — explicit user choice required.
+- **Change Orders float-in-money → Decimal-validated `str`.** Every monetary field in `changeorders.schemas` (`cost_impact`, `cost_delta`, `original_quantity`, `new_quantity`, `original_rate`, `new_rate`, summary totals) now serialises as `str` with a Decimal coercer mirroring `finance.schemas`. Router conversions updated. No DB column change.
+- **Punchlist photo upload — magic-byte validation.** Removed spoof-able content-type-only check from `/items/{id}/photo`; now uses `app.core.file_signature.require_signature()` (jpeg/png/gif/webp/heic/heif/tiff; SVG/XML/PDF/scripts rejected with 415). The cross-linked `Document.mime_type` now uses the detected MIME, not the client-supplied header.
+
+### Notes
+
+Cumulative test count this release: 21 backend unit + 37 coordination_hub + 47 changeorders/punchlist + 24 costs frontend + 9 MeasureTool. AGPL-3.0 compliance unchanged.
+
+## [4.2.0] — 2026-05-21 · Coordination · Smart Views · Permissions · Sidebar restructure
+
+### Added
+
+- **Model Coordination Hub.** New top-level `/coordination` landing page unifies federations + clashes + smart views + rule packs + BCF activity into one project-scoped view. Glass-card visual treatment on a gradient backdrop with per-metric color accents (rose / amber / emerald / sky). Health traffic-light banner surfaces "all clear" / "attention" / "alert" based on open-clash and failing-rule counts. Quick Actions row gives one-click jumps to Clash, Federations, Rule packs, Smart views. New `coordination_hub` backend module with KPI rollup, trade matrix, timeline, configurable alert thresholds (4 metrics: open clashes total, high-severity clashes, cost-impact % of budget, model age days; with default seeding + admin overrides). Trade matrix cells are drill-down links into the clash list with the discipline pair pre-filtered. 37 new backend tests + 27 frontend tests, all green.
+- **Smart Views — rules not snapshots.** Net-new module with a rule-based view engine: each rule has a selector (`ifc_class` + property + operator + value) and an action (color / hide / transparent / isolate). The viewer re-evaluates rules against the current federation every time it loads, so a "Walls by fire rating" view stays correct as the model evolves. Per-view scope (user / project / federation). Six built-in presets ship out of the box (Walls by FireRating, MEP by discipline, Concrete C30/37+, Doors fire-rated, Exterior walls, Spaces by zone) + UI to install them with one click. Share-by-link: generate signed `itsdangerous` HMAC token, copy URL, revoke from owner. New alembic migrations `v41_smart_views` + `v41_smart_views_share`. 62 backend tests + 43 frontend tests.
+- **Clash Smart Issues — deterministic identity.** ClashIssue rows now carry a SHA1 signature (sorted GUID pair + spatial bucket + clash_type) so re-running clash detection preserves issue identity, comments and suppression across runs. Bulk suppression service (`bulk_suppress(project_id, issue_ids, reason)`) with IDOR-safe ownership gate + audit-logged history fan-out. New alembic migration `v41_clash_signature_smart_issues`. Frontend filter persistence (severity / status / discipline / sort) per-project in localStorage with version envelope + 5-project LRU + debounced writes. 82 clash tests including 8 new bulk-suppression tests + 17 frontend filter-persistence tests.
+- **BCF 3.0 — zip export + reader + OpenCDE REST API.** Stdlib-only BCF 3.0 writer with deterministic UTC dates, PNG magic-byte snapshot validation, duplicate-GUID guard, and zip-slip prevention via `_safe_dir` GUID hex validation. Reader uses `defusedxml` (XXE / DTD disabled) with 100 MiB uncompressed cap, 10 000-entry cap, and `_is_unsafe_zip_path` guard against absolute / drive-letter / `..` paths. New OpenCDE REST API at `/api/v1/bcf/3.0/` exposes the buildingSMART 15-endpoint conformance profile (projects, topics CRUD, comments, viewpoints, snapshot bytes, current-user) with OData `$filter` / `$orderby` / `$top` / `$skip`, ETag (sha1 of modified_date) and `If-Match` stale-write detection. Round-trip integrity test verifies that a 5-topic × 3-viewpoint × 10-comment + snapshots archive survives writer → reader → writer with identical structure (incl. unicode / emoji / CJK titles). 42 OpenCDE tests + 14 round-trip tests, all green.
+- **Clash AI Triage.** Persisted LLM-based clash severity verdicts. `MODEL_COSTS` Decimal table covers 9 OpenAI + Anthropic + xAI models with `Numeric(10,4)` cost columns for auditing. Deterministic prompts (`PROMPT_VERSION="v1.0"`) with `_sanitise()` stripping control chars + backticks + tagging `ignore previous` / `system:` / `assistant:` lines as `[SUSPICIOUS]`. Per-user API key resolution via `AISettings` (never from process env, never logged). Replay endpoint refuses 410 Gone when the source clash was deleted (FK on-delete nulled `clash_id`). New alembic migration `v41_clash_ai_triage`.
+- **Clash Cost Impact.** Rolls clash-to-BOQ links into a per-project total open cost impact. Decimal arithmetic end-to-end (no float). Currency-aware. Graceful handling of missing BOQ links (404 short-circuits, no crash). Defended against 404-vs-403 timing oracle by resolving `project_id` before access-check.
+- **BIM Requirements — Rules-as-Code YAML.** Add LOD 300 (15 rules) + LOD 400 (18 rules) + COBie 2.4 handover (15 rules) seed packs in repo-root `data/bim_rules/` next to the existing 5 packs. Pure rule_runtime evaluator (no DB / IO; tested with synthetic elements). YAML loader uses `yaml.safe_load` + strict tag block-list (rejects `!!python/object/apply`, `!!python/name`). RulePackPreviewModal frontend adds a "Test against current model" section with color-coded pass / warn / fail chips per rule + click-through drill-down. 56 rules total across 8 packs; 121 backend tests + 29 frontend tests.
+- **Federation Type Tree (Slice 2) + Federated Viewer (Slice 3).** Flat-by-class type tree groups elements across all federation members (not per-model nested) so a "Walls" entry surfaces every wall regardless of source model. New 3D federated viewer composes multiple GLTF members into one scene with per-member visibility / color hints / dispose-on-unmount discipline (BufferGeometry / Material / Texture / Renderer / Controls / RAF / ResizeObserver all cleaned up). 22 viewer tests + 16 type-tree tests.
+- **Coordination Hub Dashboard.** Coordination-hub backend aggregator pulls live counts from clash + bim_hub + bim_requirements + smart_views + bcf + clash_cost_impact with `_safe_count` / `_safe_scalar` / `_safe_list` graceful degradation (missing table → 0 + WARNING log, never 500). 30 s per-project cache. Trade matrix runs a single GROUP BY clash query and normalises pair keys symmetrically. Timeline UNIONs clash_runs + federations + requirement_sets + BCF topics with 50-newest-first cap.
+- **Module-presence dimming.** New endpoint `GET /api/v1/projects/{project_id}/module-presence` returns a flat bool map across 56 modules ("does this project have any data for module X"). Each probe is a `SELECT 1 ... LIMIT 1` with index-only access; all 56 run concurrently via `asyncio.gather` so total latency stays under 200 ms. 60 s per-project cache. Frontend `useModulePresence()` hook drives a 3-state visual gradient in the sidebar: empty modules render at 55 % opacity + `text-zinc-500`, populated modules render at normal weight. 7 backend tests + 7 hook tests.
+- **Sidebar restructure — lifecycle order.** Sidebar groups now follow the project lifecycle: Overview → Estimating → Catalogues & Reference → Takeoff → Model Coordination → AI & Tools → Commercial → Planning → Field Operations → Communication → Documents → Quality → Safety & HSE → Finance & Procurement → Analytics & Reports → Regional. The old monolithic "AI & Estimation" group is split into Estimating (BOQ + Match Elements + AI Estimate + Estimation Dashboard) and Catalogues & Reference (Costs + Catalog + Assemblies + Assembly Library). Assets moved from Documents to Field Operations (assets are physical inventory, not paperwork). New `nav.group_catalogues` + `nav.group_analytics` + `nav.group_ai_estimation_desc` keys across all 27 locales. Visual separator (`<hr>`) before Regional marks the boundary between project-work and reference/setup surfaces.
+- **/ai-estimate redesign.** Glass hero header with `BrainCircuit` gradient badge + `model: gpt-4o` pulsing pill. Premium textarea with violet focus ring + inner shadow glow. Four auto-fill example chips (Berlin apartments, NYC office fit-out, Rotterdam warehouse, London school) shown only when the prompt is empty. New `useQuickEstimateHistory()` hook persists last 20 estimates per user in localStorage with version envelope + LRU eviction + storage-corruption fallback. Six example prompts in `examplePrompts.ts` cover apartment / office / warehouse / school / single-family / hospital MEP scenarios. 20 new tests.
+- **/admin/permissions — editable.** Permissions matrix is now fully editable for admins (read-only fallback for non-admins). Click a `(role, perm)` cell to set `min_role = role` with optimistic React Query update + automatic rollback on error + per-cell spinner during pending mutation. Confirmation modal on every change. Lockout-protection modal blocks demoting `permissions.admin` or `system.permissions.*` below admin (refused both client-side + server-side with HTTP 400 `admin_lockout_blocked`). Role filter dropdown, preset apply buttons (viewer-default / editor-default / manager-default), CSV export. All changes audit-logged via existing audit module. 9 backend tests + 8 frontend tests + 28 new locale keys per EN / DE / RU.
+- **/about — Changelog redesign.** Two-column CSS-columns layout with `[column-fill:_balance]` for variable-height entries. Expanded from ~70 to **118 historical entries** spanning v0.1.0 (2026-03-27) → v4.2.0 (2026-05-21). Each entry is one short summary line per release (≤ 90 chars). Glass-style cards with hover lift. Latest 7 entries get visible `NEW` / `FIX` / `BETA` / `SECURITY` / `MILESTONE` tag badges; entries older than 6 months render at 70 % opacity so they recede. Semver-aware runtime sort preserves descending order.
+- **Marketing-site Mongolian locale.** Backfilled 121-key gap on 17 of 20 marketing-site locales (last updated Apr 23 vs EN/DE/RU updated Apr 29). 4 parallel translation agents bridged the gap to 100 % native quality. `LOCALE_VERSION` bumped to `20260521b`.
+
+### Fixed
+
+- **P0: `bim_requirements` permissions registry.** Module's router gated endpoints with `RequirePermission("bim_requirements.read|create|update|delete|export")` but the keys were never registered, so non-admin users hit 403 on legitimate calls. New `permissions.py` registers all five keys with their min-role (VIEWER / EDITOR / MANAGER) + `on_startup()` wiring in `__init__.py`.
+- **P1: clash_ai_triage replay-IDOR on NULL clash_id.** `verify_project_access` previously only ran when `existing.clash_id is not None`; if the source clash was deleted (FK on-delete nulls clash_id) any caller with `clash_triage.execute` could replay. Endpoint now returns 410 Gone with `"Source clash was deleted; triage cannot be replayed."`.
+- **P1: bim_requirements `/template/` missing permission gate.** Endpoint only required authentication, not `bim_requirements.read`. Inconsistent with siblings — added `Depends(RequirePermission("bim_requirements.read"))`.
+- **P1: clash_cost_impact 404/403 timing oracle.** `get_clash_impact` called the service before access-check, enabling a 404-vs-403 timing oracle that confirmed a clash UUID exists across project boundaries. New lightweight `project_id_for_clash()` resolver runs first; access-check then runs against the resolved project_id; impact computation only runs if the check passes.
+- **P1: MeasureTool snap-math dead-code.** `MeasureTool.ts:220` had `(raw.x - raw.x) +` in the `clickPx` Vector2 X component. Removed.
+- **P1: i18n gaps — TradeMatrix + YamlEditor + Smart Views enums.** `CoordinationTradeMatrix.tsx` hardcoded discipline labels (Arch / Struct / MEP / Landscape / Civil / Other) → now `t('coordination.discipline.*')`. `YamlEditor.tsx` bare "parsed" badge → `t('rulePacks.parsed_badge')`. `SmartViewRuleEditor.tsx` `OPERATORS` + `ACTIONS` enum values rendered raw to international users → now translated via label map.
+- **P2: BCF upload cap harmonisation.** `clash/router.py` was 25 MiB, `bcf/router.py` was 100 MiB for the structurally-identical BCF archive. Both now 100 MiB to match `BCFReader.DEFAULT_MAX_TOTAL_BYTES`.
+
+### Notes
+
+- All recently-added modules pass full audit (clash, bcf, smart_views, bim_requirements, clash_cost_impact, clash_ai_triage, coordination_hub) — production-quality, no IfcOpenShell, no OpenCascade, Decimal end-to-end for money, IDOR-gated, defusedxml for XML, `yaml.safe_load` for YAML.
+- `NOTICE.frontend.json` regenerated for v4.2.0 (966 packages incl. new `vite-plugin-pwa` + `workbox-build` + `workbox-window` from v4.1.0).
+- Alembic chain stays a single linear tip: `v40_fieldreports_uuid_typing → v41_clash_signature_smart_issues → v41_smart_views → v41_clash_ai_triage → v41_smart_views_share → v41_coordination_thresholds`.
+- **AGPL-compatibility maintained** — no IfcOpenShell, no OpenCascade, no new GPL-2-only deps. BCF is an XML format (not an IfcOpenShell dependency) and remains allowed per the 2026-04-26 decision.
+
+## [4.1.0] — 2026-05-21 · P1 wave rollup · BIM diagnostic UX · marketing-site i18n complete
+
+### Added
+
+- **BIM geometry error reporting — plain-language UX rewrite.** Every geometry-fetch error path (401 / 403 / 404 / 422 / 5xx / network) now ships a structured payload with a non-PII `request_id` correlation header (UUID4) returned via `X-Request-Id`, a status-aware headline ("Your session expired" vs "The 3D file looks damaged"), a backend-derived `cause` field that maps 422 reasons into 6 plain-language categories (HTML page instead of mesh, IFC schedule with no geometry, magic-byte mismatch, truncated upload, unsupported glTF version, generic), an actionable `remediation`, and a "Copy bug report" button that emits a ready-to-email markdown block (Request ID + HTTP status + cause + first 8 bytes hex/ASCII + size + UA + URL — zero PII). Backend `logger.warning` lines correlate by `request_id` for one-grep triage.
+- **Mac `uv pip install -e ./backend` fix.** New `[tool.hatch.build.targets.editable]` block with empty `force-include` map in `backend/pyproject.toml` so editable installs no longer require the bundled `frontend/dist`.
+- **Marketing site — hero headline + module-overview block i18n on 20 languages.** "Run the whole construction project" hero now carries `data-i18n-html="hero.headline"` with `data-anchor="primary"` / `data-anchor="secondary"` attributes on emphasized words; SVG animation switched to attribute-based anchor lookup so translations with different word counts/orders still render correctly. 175 new keys (`modgrid.*` module-overview card grid + `demo.card_*` + `hero.headline` + `modgrid.show_less`) translated into all 19 non-English locales (de / fr / es / it / pt / nl · sv / no / da / fi · ru / pl / cs / bg · zh / ja / ko / ar / tr) with industry-correct terminology (Leistungsverzeichnis, Przedmiar robót, Ведомость объёмов, 工程量清单, قائمة الكميات). `LOCALE_VERSION` bumped to `20260521a`.
+
+- **BIM Federation — Slice 1.** Federations are named groups of N BIM models sharing an origin (e.g. architectural + structural + MEP), with per-discipline membership, z-ordering, visibility, and color hints. This slice ships data persistence + list/detail UI; the federated 3D viewer that composes members into a single scene is deferred to Slice 2.
+  - New tables `oe_bim_federation` + `oe_bim_federation_model` (alembic `v40_bim_federations`, linearised at the tail of the v40 chain `assembly_templates → ai_agents → cpm_weekly → bim_federations`). Cascading FKs on both link sides clean up membership rows when either the federation or the constituent BIM model is deleted.
+  - Endpoints on the existing BIM Hub module: `POST /api/v1/bim-hub/federations/` · `GET /api/v1/bim-hub/federations/?project_id=…` · `GET /api/v1/bim-hub/federations/{id}` (detail with members ordered by `z_order`) · `PUT /api/v1/bim-hub/federations/{id}` · `DELETE /api/v1/bim-hub/federations/{id}` · `POST /api/v1/bim-hub/federations/{id}/models` · `DELETE /api/v1/bim-hub/federations/{id}/models/{model_id}`. Project ownership is the sole ACL — federations inherit it from their project, and cross-project model adds 400.
+  - New `/bim/federations` route + `FederationsPage` with project selector, federation card grid, create modal, and detail drawer (member list, discipline pill, color swatch, add/remove member).
+  - 6 new tests in `backend/tests/modules/bim_hub/test_federations.py` (create, add member + duplicate guard, list filtered by project, detail z-order, cross-project access denial, delete cascades member links) — all green.
+  - i18n keys under `bim.federation.*` for EN / DE / RU.
+
+- **Scheduling — CPM Slice 1.** First-class Critical Path Method engine on top of the existing schedule + schedule_advanced modules. Pure-Python forward + backward pass (no scipy / networkx) at `backend/app/modules/schedule_advanced/cpm.py` computes ES / EF / LS / LF, total float, free float, and critical-path marking on a `TaskNetwork`; cycles are detected via DFS and surface the offending node path through `CycleError`; disconnected sub-networks are scheduled per island. Companion `leveling.py` ships a serial-greedy `level_by_resource_max` heuristic (priority = LS asc → total_float asc → id asc) that shifts activities forward (never backward) to honour per-resource ceilings. New `WeeklyCommitment` table (alembic v40_cpm_weekly) backs the lightweight Last-Planner commit flow with auto-computed PPC = actual / planned clamped to [0, 1]. Four additive endpoints under `/api/v1/schedule-advanced/{schedule_id}/…`: `compute-cpm` (persists ES / EF / LS / LF / float / critical onto each Activity row and returns project_duration + critical path), `level-resources`, `commitments`, `ppc?week=`. New `frontend/src/features/schedule/CPMView.tsx` renders an ES / EF / LS / LF / float column grid with a red "CRITICAL" badge on critical rows plus toolbar buttons to recompute CPM or open a resource-leveling modal. EN / DE / RU translations under `schedule.cpm.*`. 8 new tests in `backend/tests/modules/schedule_advanced/test_cpm.py` (textbook 6-activity AOA critical path A → C → F = 11d, forward pass, backward pass, total float, cycle detection, disconnected sub-network, leveling ceiling enforcement, PPC math) — all green; existing 61 schedule_advanced unit tests stay passing. FS-only in Slice 1; SS / FF / SF dependency types and parallel-SGS leveling are wired as TODO comments for Slice 2.
+- **AI Agents framework — Slice 1.** New `backend/app/modules/ai_agents/` module adds a generic ReAct-style agent loop on top of the existing single-call `ai` LLM client. Ships a `Tool` protocol + `ToolRegistry`, a declarative `Agent` dataclass, and an `AgentRunner` that loops "LLM -> tool_call -> observation -> repeat" until a final answer or `max_iterations` (defaults to 8, then `status=failed reason=iter_limit`). LLM is abstracted behind an `LLMBridge` protocol — production `CallAILLM` wraps `ai.ai_client.call_ai` with a deterministic `<tool_call>{json}</tool_call>` text-protocol parser (no provider-specific tool-use APIs); tests use `ScriptedLLM` for offline replay. Per-run history persists to two new strictly-additive tables (`oe_ai_agents_run` + `oe_ai_agents_step`, alembic `v40_ai_agents`) so the UI can render every thought / tool_call / observation / answer as a vertical timeline. Endpoints: `GET /api/v1/ai-agents/agents/`, `GET /tools/`, `POST /runs/`, `GET /runs/`, `GET /runs/{id}`. Sample `boq_drafter` agent declares three tools: `search_costs(q, region)` (proxies `costs.matcher.match_cwicr_items` with a deterministic mock fallback), `suggest_assembly(description)` (mock stub, TODO to wire to `assemblies.repository`), and `create_position(...)` which returns a structured PROPOSAL payload — never writes the BOQ (CLAUDE.md "AI-augmented, human-confirmed"). 9 pytest tests cover scripted-LLM happy path, iter-limit cap, registry dispatch, unknown-tool error step, BOQ-drafter end-to-end, DB persistence, text-protocol parser, and `on_step` callback. New `frontend/src/features/ai-agents/AgentsPage.tsx` renders the agent catalogue + run launcher + live polling timeline; EN/DE/RU `agents.*` keys.
+- **Mobile PWA — Slice 1.** OpenConstructionERP is now installable as a Progressive Web App on Android / iOS / desktop Chromium browsers.
+  - `vite-plugin-pwa` wired into `frontend/vite.config.ts` with workbox `generateSW`: precaches the app shell (`index.html` + JS/CSS/HTML/SVG/WOFF2 bundles), `NavigationRoute` falls back to `/index.html` so offline deep-links still resolve, and three runtime cache lanes — `oce-static-assets` (CacheFirst for fonts/images/hashed asset chunks), `oce-i18n-locales` (StaleWhileRevalidate for `assets/i18n-<code>-*.js`), and `oce-api` (NetworkFirst with 8 s timeout, GET-only, cached only as offline fallback for idempotent reads).
+  - Web App Manifest declares name "OpenConstructionERP", short_name "OCERP", `theme_color` sky-600 (`#0284c7`), `background_color` `#f7fbff`, `display: standalone`, scope `/`, start_url `/`, plus 192/256/384/512 SVG icons + a 512 maskable variant under `frontend/public/pwa/` (modern browsers accept SVG icons in a manifest directly; an optional `frontend/scripts/build-pwa-icons.mjs` helper rasterizes to PNG when `sharp` is installed).
+  - New `<PWAInstallPrompt />` (`frontend/src/shared/ui/PWAInstallPrompt.tsx`) mounted once in `App.tsx`: discrete bottom-right toast that captures `beforeinstallprompt`, persists 30-day dismissal in localStorage, and replaces itself with a one-time "Add to Home Screen via Share menu" hint on iOS Safari (UA-sniffed; iOS Chrome/Edge correctly excluded). Hides automatically when already in `display-mode: standalone`.
+  - New `<OfflineFallback />` (`frontend/src/shared/ui/OfflineFallback.tsx`) — minimal full-page "You're offline" surface with a best-effort "last synced N minutes ago" line backed by an `oce.pwa.lastSyncAt` localStorage key, ready to be wired into workbox's NavigationRoute fallback or rendered inline by feature pages.
+  - Touch-friendly tweaks on Daily Diary, Punch List, and Photo Gallery: bottom-anchored FAB visible only on viewports `≤sm` (≥44×44 tap target via `min-h-[44px] min-w-[44px]`) that fires each page's primary action (new diary / new punch item / upload photo), so site crews on phones reach the verb without scrolling past header + filter chrome.
+  - 8 new EN/DE/RU `pwa.*` translation keys (`install_prompt_title`, `install_prompt_body`, `install_button`, `not_now_button`, `ios_hint_body`, `offline_title`, `offline_body`, `last_synced`).
+  - New `frontend/tests/pwa/manifest.test.ts` + `service-worker.test.ts` (vitest) — assert the build outputs the expected manifest fields + workbox runtime caches; skip cleanly when the build hasn't been produced yet. Always-on guards on `vite.config.ts` text catch accidental plugin removal. `frontend/scripts/pwa-install.spec.ts` Playwright spec scaffolded (skipped) for a future Linux job that includes Lighthouse.
+
+- **Assembly Library — Slice 1.** Platform-wide canonical recipe templates with backend + frontend + i18n. 25 ready-to-use templates ship in the box covering concrete walls (C25/30, C30/37), brick walls (KSL 11.5/17.5 cm), drywall partitions (W111/W112), in-situ slabs (20/25 cm), cement screed, flat roof (bitumen 2-layer), ETICS facade insulation, interior wood + exterior steel doors, uPVC + aluminum windows, tile/vinyl/parquet floor finishes, copper pipe DN20, sanitary WC, wall radiator, RC column 30×30, steel beam HEB200, open-cut excavation, and backfill. Each template carries DE / RU / ES translations and a DIN 276 + MasterFormat anchor.
+  - New table `oe_assemblies_template` (alembic v40) seeded idempotently at module startup.
+  - `GET /api/v1/assemblies/templates/` lists/filters templates (q · category · tag · DIN 276 · MasterFormat); `GET /api/v1/assemblies/templates/{id}` fetches one; `POST /api/v1/assemblies/templates/{id}/apply` resolves each component's free-text `cost_match_query` against the project's bound cost catalogue via the existing lexical matcher (no Qdrant required) and returns a non-persisted preview with rolled-up totals for human confirmation.
+  - New `/assemblies/library` route + sidebar entry under Estimation with a card-grid browser, category chips, search, and drawer-based apply workflow.
+  - 7 new tests in `backend/tests/modules/assemblies/test_templates.py` (seed count, list, category filter, DIN 276 filter, apply with cost resolution, quantity scaling, DE/RU/ES translation coverage) — all green; full assemblies suite stays at 45 passing.
+
+## [4.0.1] — 2026-05-20 · BIM ViewCube polish · marketing-site forms migrated off formsubmit
+
+### Fixed
+
+- **BIM ViewCube — clicking the cube no longer locks orbit controls.** When two cube clicks landed back-to-back, the second `flyTo` cancelled the first tween via `_tweenReject(...)` but never restored `controls.enabled` to its pre-tween value, leaving `OrbitControls` permanently disabled. New class field `_tweenWasControlsEnabled` is restored on both completion AND cancellation paths, so re-clicking the cube during an animation now correctly re-enables mouse orbit when the second animation completes.
+- **BIM ViewCube — placement / sizing / chrome.** Cube moved from `top-3 right-3` to `bottom-3 + left = leftPanelWidth + 16px` so it sits to the right of the filter sidebar instead of being hidden behind it. Size increased 80 → 112 px. Wrapper `bg-white/70 backdrop-blur shadow-md ring-1` chrome removed — the cube is now a bare transparent canvas that floats over the viewport.
+
+### Marketing-site infrastructure (no impact on the wheel)
+
+- All marketing-site forms (`/partners.html`, `/index.html` newsletter / popup / homepage inquiry) migrated off the dead `formsubmit.co` relay onto an in-house Hostinger SMTP path running on the demo VPS. New endpoints `/api/partners-apply`, `/api/subscribe`, `/api/inquiry` accept JSON POST, persist to JSONL on disk, and send both an admin notification and a customer ack via `info@openconstructionerp.com`.
+- Module cards (added in 4.0.0) moved out from above the demo-player carousel down to a dedicated section after the GIF tour-player, and reflowed into a denser 6-col layout with smaller icon chips, tighter padding, and a category-tinted hover lift.
+- Static `index.html` version fallback bumped to `v4.0.0` (was `v3.0.4`); release ticker refreshed to show v4.0.0 / v3.12.1 / v3.12.0 / v3.11.0. Dynamic GitHub Releases fetch already returned v4.0.0 — this only matters for SEO bots / slow connections.
+
+### Notes
+
+- Same alembic head as 4.0.0 (`v3096_regional_indices_certainty`). No data migration required.
+
 ## [4.0.0] — 2026-05-20 · Stable 4.0 — production-ready platform
 
 This is the first **stable 4.x** release. Same code base, same install procedure as the latest 3.12 patch; the version cut signals that the platform is now considered production-ready across the full estimation → takeoff → BIM → BOQ → tender → reporting workflow, with a stable public API surface, multi-tenant security pass complete, and 103 modules shipping in the box.

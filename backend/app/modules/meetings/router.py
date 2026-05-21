@@ -1101,6 +1101,7 @@ async def delete_meeting(
 @router.post("/{meeting_id}/complete/", response_model=MeetingResponse)
 async def complete_meeting(
     meeting_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("meetings.update")),
     service: MeetingService = Depends(_get_service),
@@ -1111,6 +1112,8 @@ async def complete_meeting(
     Draft meetings must be scheduled first.
     Open action items are automatically converted to tasks.
     """
+    existing = await service.get_meeting(meeting_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
     meeting = await service.complete_meeting(meeting_id, user_id=user_id)
     return _meeting_to_response(meeting)
 

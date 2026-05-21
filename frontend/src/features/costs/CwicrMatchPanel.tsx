@@ -354,7 +354,7 @@ export function CwicrMatchPanel(props: CwicrMatchPanelProps) {
           stats={activeVariantPick.detail.metadata.variant_stats}
           anchorEl={activeVariantPick.anchorEl}
           unitLabel={activeVariantPick.detail.unit || ''}
-          currency={activeVariantPick.detail.currency || activeVariantPick.match.currency || 'USD'}
+          currency={activeVariantPick.detail.currency || activeVariantPick.match.currency || ''}
           onApply={(chosen) => {
             const pending = activeVariantPick;
             setActiveVariantPick(null);

@@ -135,6 +135,11 @@ class Settings(BaseSettings):
     database_max_overflow: int = 10
     database_echo: bool = False
     max_batch_size: int = 443
+    # Slow-query threshold (milliseconds). Statements exceeding this elapsed
+    # wall time are logged at WARNING level via SQLAlchemy ``before_cursor_execute``
+    # / ``after_cursor_execute`` listeners — see ``app.database``. Set to 0 to
+    # disable the check. Env: ``OE_SLOW_QUERY_MS``.
+    slow_query_ms: int = 500
 
     # ── Redis ────────────────────────────────────────────────────────────
     redis_url: str | None = "redis://localhost:6379/0"

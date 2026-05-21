@@ -1,11 +1,15 @@
 """‌⁠‍Change Order Pydantic schemas — request/response models.
 
 Defines create, update, and response schemas for change orders and their items.
-Numeric values (cost_impact, cost_delta, quantities, rates) are exposed as floats
-in the API but stored as strings in SQLite-compatible models.
+Monetary values (cost_impact, cost_delta, quantities, rates) are exposed as
+canonical decimal *strings* on the wire (matching the ``finance`` module
+contract) and stored as ``String(50)`` in the SQLite-compatible models.
+Floats are deliberately avoided to prevent silent binary-rounding loss on
+money values.
 """
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
@@ -14,6 +18,37 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # Bound ints at PostgreSQL INT4 max — anything above is clearly bad input and
 # would overflow the underlying column.
 _INT32_MAX = 2_147_483_647
+
+
+def _validate_decimal(v: str, field_name: str = "value") -> str:
+    """‌⁠‍Validate that a string is a valid decimal number (allows negative — CO
+    cost impacts can be credits)."""
+    try:
+        Decimal(v)
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid decimal value for {field_name}: {v!r}") from exc
+    return v
+
+
+def _validate_non_negative_decimal(v: str, field_name: str = "value") -> str:
+    """‌⁠‍Validate that a string is a valid non-negative decimal number."""
+    try:
+        d = Decimal(v)
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise ValueError(f"Invalid decimal value for {field_name}: {v!r}") from exc
+    if d < 0:
+        raise ValueError(f"{field_name} must be non-negative, got {v!r}")
+    return v
+
+
+def _decimal_to_str(v: object) -> object:
+    """Response-side coercion: turn ORM ``Decimal`` / numeric values into
+    canonical strings. Non-Decimal, non-numeric inputs pass through untouched."""
+    if isinstance(v, Decimal):
+        return format(v, "f")
+    if isinstance(v, (int, float)):
+        return format(Decimal(str(v)), "f")
+    return v
 
 # ── Change Order schemas ─────────────────────────────────────────────────────
 
@@ -96,16 +131,21 @@ class ChangeOrderItemResponse(BaseModel):
     change_order_id: UUID
     description: str
     change_type: str
-    original_quantity: float = 0.0
-    new_quantity: float = 0.0
-    original_rate: float = 0.0
-    new_rate: float = 0.0
-    cost_delta: float = 0.0
+    original_quantity: str = "0"
+    new_quantity: str = "0"
+    original_rate: str = "0"
+    new_rate: str = "0"
+    cost_delta: str = "0"
     unit: str
     sort_order: int
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
+
+    _coerce_decimal = field_validator(
+        "original_quantity", "new_quantity", "original_rate", "new_rate", "cost_delta",
+        mode="before",
+    )(lambda cls, v: _decimal_to_str(v))
 
 
 class ChangeOrderResponse(BaseModel):
@@ -124,13 +164,17 @@ class ChangeOrderResponse(BaseModel):
     approved_by: str | None = None
     submitted_at: str | None = None
     approved_at: str | None = None
-    cost_impact: float = 0.0
+    cost_impact: str = "0"
     schedule_impact_days: int = 0
     currency: str
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
     item_count: int = 0
+
+    _coerce_decimal = field_validator("cost_impact", mode="before")(
+        lambda cls, v: _decimal_to_str(v)
+    )
     # T3: Procore-style commitment / RFI links + approval-chain cursor.
     # Normalised to ``[]`` on read so legacy COs that pre-date v3082
     # (where the columns are physically NULL) still serialize cleanly.
@@ -158,13 +202,23 @@ class ChangeOrderItemCreate(BaseModel):
         default="modified",
         pattern=r"^(added|removed|modified)$",
     )
-    original_quantity: float = Field(default=0.0, ge=0.0, le=1e12, allow_inf_nan=False)
-    new_quantity: float = Field(default=0.0, ge=0.0, le=1e12, allow_inf_nan=False)
-    original_rate: float = Field(default=0.0, ge=0.0, le=1e12, allow_inf_nan=False)
-    new_rate: float = Field(default=0.0, ge=0.0, le=1e12, allow_inf_nan=False)
+    original_quantity: str = Field(default="0", max_length=50)
+    new_quantity: str = Field(default="0", max_length=50)
+    original_rate: str = Field(default="0", max_length=50)
+    new_rate: str = Field(default="0", max_length=50)
     unit: str = Field(default="", max_length=20)
     sort_order: int = Field(default=0, ge=0, le=_INT32_MAX)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    _coerce_in = field_validator(
+        "original_quantity", "new_quantity", "original_rate", "new_rate",
+        mode="before",
+    )(lambda cls, v: _decimal_to_str(v))
+
+    @field_validator("original_quantity", "new_quantity", "original_rate", "new_rate")
+    @classmethod
+    def _check_non_negative_decimal(cls, v: str) -> str:
+        return _validate_non_negative_decimal(v)
 
 
 class ChangeOrderItemUpdate(BaseModel):
@@ -177,13 +231,25 @@ class ChangeOrderItemUpdate(BaseModel):
         default=None,
         pattern=r"^(added|removed|modified)$",
     )
-    original_quantity: float | None = Field(default=None, ge=0.0, le=1e12, allow_inf_nan=False)
-    new_quantity: float | None = Field(default=None, ge=0.0, le=1e12, allow_inf_nan=False)
-    original_rate: float | None = Field(default=None, ge=0.0, le=1e12, allow_inf_nan=False)
-    new_rate: float | None = Field(default=None, ge=0.0, le=1e12, allow_inf_nan=False)
+    original_quantity: str | None = Field(default=None, max_length=50)
+    new_quantity: str | None = Field(default=None, max_length=50)
+    original_rate: str | None = Field(default=None, max_length=50)
+    new_rate: str | None = Field(default=None, max_length=50)
     unit: str | None = Field(default=None, max_length=20)
     sort_order: int | None = Field(default=None, ge=0, le=_INT32_MAX)
     metadata: dict[str, Any] | None = None
+
+    _coerce_in = field_validator(
+        "original_quantity", "new_quantity", "original_rate", "new_rate",
+        mode="before",
+    )(lambda cls, v: _decimal_to_str(v))
+
+    @field_validator("original_quantity", "new_quantity", "original_rate", "new_rate")
+    @classmethod
+    def _check_non_negative_decimal(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_non_negative_decimal(v)
 
 
 # ── Approval-chain schemas (T3 — Procore-style multi-step approval) ──────────
@@ -241,10 +307,14 @@ class ChangeOrderSummary(BaseModel):
     submitted_count: int = 0
     approved_count: int = 0
     rejected_count: int = 0
-    total_approved_amount: float = 0.0
-    total_cost_impact: float = 0.0
+    total_approved_amount: str = "0"
+    total_cost_impact: str = "0"
     total_time_impact_days: int = 0
     total_schedule_impact_days: int = 0
     # Resolved by the repository from the project / CO rows. Empty only
     # when neither carries a currency — never a literal "EUR" (task #217).
     currency: str = ""
+
+    _coerce_decimal = field_validator(
+        "total_approved_amount", "total_cost_impact", mode="before"
+    )(lambda cls, v: _decimal_to_str(v))

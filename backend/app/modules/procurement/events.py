@@ -26,14 +26,13 @@ manually from the UI.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import select
 
-from app.core.events import Event, event_bus
+from app.core.events import Event, _log_failures, event_bus
 from app.database import async_session_factory
 from app.modules.procurement.models import PurchaseOrder, PurchaseOrderItem
 from app.modules.procurement.repository import (
@@ -64,8 +63,15 @@ async def _on_tender_awarded(event: Event) -> None:
     second async session inside this handler synchronously would deadlock
     the database (single-writer lock). Detaching via ``create_task`` lets
     the publishing transaction commit and close before we open ours.
+
+    Failures inside the detached coroutine are surfaced via
+    :func:`app.core.events._log_failures` so they hit the logs at WARNING
+    (previously silent).
     """
-    asyncio.create_task(_create_po_from_award(event))
+    _log_failures(
+        _create_po_from_award(event),
+        name="procurement.auto_po_from_tender_award",
+    )
 
 
 async def _create_po_from_award(event: Event) -> None:
@@ -218,6 +224,37 @@ async def _create_po_from_award(event: Event) -> None:
         )
 
 
-# Register subscriber at module import — module_loader picks this up
+async def _on_supplier_rating_update(event: Event) -> None:
+    """‌⁠‍``procurement.supplier_rating_update`` → adjust supplier scorecard.
+
+    Published by ``qms/events.py::_on_ncr_raised_fanout`` whenever an NCR
+    is raised (line 167 of that file). For now this is a stub that logs
+    the payload at INFO so the cross-module hand-off is *observable*; a
+    full implementation will resolve the supplier via the NCR's linked
+    inspection row and decrement a per-supplier rating column once the
+    procurement scorecard model gains one.
+
+    TODO(v4.2.2 audit): once procurement gains a `Supplier.rating` or a
+    dedicated `SupplierScorecard` model, replace the log line with a
+    real "mark as under_review" / numeric decrement. Tracking issue
+    in the orphan-publisher audit.
+    """
+    data = event.data or {}
+    ncr_id = data.get("ncr_id") or ""
+    project_id = data.get("project_id") or ""
+    severity = data.get("severity") or ""
+    supplier_id = data.get("supplier_id") or ""
+    logger.info(
+        "procurement.supplier_rating_update received "
+        "(stub — TODO v4.2.2 audit): ncr_id=%s project_id=%s "
+        "supplier_id=%s defect_severity=%s",
+        ncr_id, project_id, supplier_id, severity,
+    )
+
+
+# Register subscribers at module import — module_loader picks this up
 # automatically when ``oe_procurement`` is loaded.
 event_bus.subscribe("tendering.package.awarded", _on_tender_awarded)
+event_bus.subscribe(
+    "procurement.supplier_rating_update", _on_supplier_rating_update,
+)

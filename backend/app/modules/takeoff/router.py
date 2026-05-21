@@ -1376,10 +1376,17 @@ async def cad_extract(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
+    # Strip any directory components from the uploaded filename before
+    # we use it to build a path inside the tempdir. Without this a
+    # filename like "../../etc/passwd" would land outside ``tmpdir``.
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in ("..", "."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     start_time = time.monotonic()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = Path(tmpdir) / filename
+        input_path = Path(tmpdir) / safe_name
         input_path.write_bytes(content)
 
         output_dir = Path(tmpdir) / "output"
@@ -1611,10 +1618,17 @@ async def cad_columns(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
+    # Strip any directory components from the uploaded filename before
+    # we use it to build a path inside the tempdir. Without this a
+    # filename like "../../etc/passwd" would land outside ``tmpdir``.
+    safe_name = Path(filename).name
+    if not safe_name or safe_name in ("..", "."):
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
     start_time = time.monotonic()
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = Path(tmpdir) / filename
+        input_path = Path(tmpdir) / safe_name
         input_path.write_bytes(content)
 
         output_dir = Path(tmpdir) / "output"
