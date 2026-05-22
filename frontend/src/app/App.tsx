@@ -317,9 +317,13 @@ const AgentsPage = lazy(() =>
 // landing flow, so keeping them lazy trims the initial chunk significantly
 // (v4.3 audit). Deep-imported by file path to avoid pulling neighbouring
 // pages via barrel re-exports.
-const SettingsPage = lazy(() =>
-  import('@/features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
-);
+// //// NEOFFICE PATCH — SettingsPage lazy chunk disabled: the /settings
+// route is redirected to /ai-estimate in embedded mode, so the component
+// is never rendered. Leaving the lazy() in place trips tsc TS6133.
+// const SettingsPage = lazy(() =>
+//   import('@/features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+// );
+// //// END NEOFFICE PATCH
 const ModulesPage = lazy(() =>
   import('@/features/modules/ModulesPage').then((m) => ({ default: m.ModulesPage }))
 );
