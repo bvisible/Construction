@@ -37,6 +37,8 @@ export interface AuditFilters {
   dateFrom?: string | null;
   /** ISO-8601 inclusive upper bound on `created_at`. */
   dateTo?: string | null;
+  /** Sort by `created_at`. Defaults to newest-first server-side. */
+  sort?: 'asc' | 'desc' | null;
   /** Page size — backend caps at 200. */
   limit?: number;
   /** Page offset (rows to skip). */
@@ -62,15 +64,47 @@ export function buildAuditListUrl(filters: AuditFilters = {}): string {
   if (filters.userId) qs.set('user_id_filter', filters.userId);
   if (filters.dateFrom) qs.set('date_from', filters.dateFrom);
   if (filters.dateTo) qs.set('date_to', filters.dateTo);
+  if (filters.sort) qs.set('sort', filters.sort);
   if (filters.limit != null) qs.set('limit', String(filters.limit));
   if (filters.offset != null) qs.set('offset', String(filters.offset));
   const query = qs.toString();
   return `/v1/audit${query ? `?${query}` : ''}`;
 }
 
+/**
+ * Build the URL for the `/v1/audit/count` endpoint. The endpoint accepts
+ * the same filter set as the list, minus pagination + sort — count is
+ * order-independent and not paginated, so we strip those before
+ * serialising.
+ */
+export function buildAuditCountUrl(filters: AuditFilters = {}): string {
+  const qs = new URLSearchParams();
+  if (filters.entityType) qs.set('entity_type', filters.entityType);
+  if (filters.action) qs.set('action', filters.action);
+  if (filters.userId) qs.set('user_id_filter', filters.userId);
+  if (filters.dateFrom) qs.set('date_from', filters.dateFrom);
+  if (filters.dateTo) qs.set('date_to', filters.dateTo);
+  const query = qs.toString();
+  return `/v1/audit/count${query ? `?${query}` : ''}`;
+}
+
 /** Fetch a single page of audit-log entries. */
 export async function listAuditEntries(filters: AuditFilters = {}): Promise<AuditEntry[]> {
   return apiGet<AuditEntry[]>(buildAuditListUrl(filters));
+}
+
+/**
+ * Fetch the total row count for the current filter set. Falls back to
+ * ``null`` when the backend doesn't yet ship the `/count` endpoint —
+ * the caller treats `null` as "unknown" and hides the X-of-Y label.
+ */
+export async function countAuditEntries(filters: AuditFilters = {}): Promise<number | null> {
+  try {
+    const res = await apiGet<{ total: number }>(buildAuditCountUrl(filters));
+    return typeof res?.total === 'number' ? res.total : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Fetch the audit trail for one specific entity (newest-first). */

@@ -80,7 +80,7 @@ SMTP_USER=noreply@yourco.com
 SMTP_PASSWORD=          # app password or service account
 SMTP_FROM="OpenConstructionERP <noreply@yourco.com>"
 SMTP_TLS=true
-SALES_INBOX=sales@openconstructionerp.com
+SALES_INBOX=info@datadrivenconstruction.io
 ```
 
 You need three things on the mail server side:
@@ -113,7 +113,7 @@ transactional use (form submissions, password resets) — not for marketing blas
 
 ### Recommendation
 
-For our case (form submissions to `sales@`), run **Postal** as a dedicated container
+For our case (form submissions to `info@datadrivenconstruction.io`), run **Postal** as a dedicated container
 on the same VPS as the ERP. The app points at it via `SMTP_HOST=postal.internal`,
 Postal delivers outbound with DKIM signing, and you get a dashboard of every message
 with delivery status / bounce logs.
@@ -130,7 +130,7 @@ Until the `/api/v1/inquiries/license` endpoint is live, the form on `#license` d
 
 1. Submit via `fetch()` to `data-api="/api/v1/inquiries/license"`.
 2. On network/API failure, surfaces a **"Backend offline — open email client"** link
-   that `mailto:`-prefills `sales@openconstructionerp.com` with all the form fields.
+   that `mailto:`-prefills `info@datadrivenconstruction.io` with all the form fields.
 
 So the site is shippable now; the backend work unblocks *proper* submissions but is
 not blocking for deploy.

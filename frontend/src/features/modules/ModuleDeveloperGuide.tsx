@@ -58,7 +58,7 @@ interface CodeProps {
 
 function Code({ lang, children }: CodeProps) {
   return (
-    <pre className="not-prose relative overflow-x-auto rounded-lg bg-gray-900 dark:bg-gray-950 text-gray-100 text-[11.5px] leading-relaxed p-4 font-mono border border-border-light">
+    <pre className="not-prose relative my-4 overflow-x-auto rounded-lg bg-gray-900 dark:bg-gray-950 text-gray-100 text-[11.5px] leading-relaxed p-4 pt-5 font-mono border border-border-light">
       {lang && (
         <span className="absolute top-2 right-2 text-[9px] uppercase tracking-wider text-gray-400">
           {lang}
@@ -71,7 +71,7 @@ function Code({ lang, children }: CodeProps) {
 
 function Inline({ children }: { children: React.ReactNode }) {
   return (
-    <code className="rounded bg-surface-secondary px-1 py-0.5 text-[12px] font-mono text-oe-blue">
+    <code className="mx-0.5 rounded bg-surface-secondary px-1.5 py-0.5 text-[12px] font-mono text-oe-blue">
       {children}
     </code>
   );
@@ -310,7 +310,7 @@ curl "http://localhost:8000/api/v1/hello_world/?name=Artem"
           <p className="text-sm text-content-secondary leading-relaxed mb-4">
             {t('modules.dev_what_desc', {
               defaultValue:
-                'Every business feature in this system — BOQ, BIM Hub, Schedule, CDE, regional BOQ packs, AI tooling — is a self-contained module. A module can add REST routes, database tables, UI pages, validation rules, translations, or any combination. You can enable, disable, install, or replace any module without touching the core.',
+                'OpenConstructionERP v4.3 ships with 110+ modules. Every business feature — BOQ, BIM Hub, Schedule, CDE, regional BOQ packs, AI tooling — is a self-contained module. A module can add REST routes, database tables, UI pages, validation rules, translations, or any combination. You can enable, disable, install, or replace any module without touching the core.',
             })}
           </p>
           <div className="grid sm:grid-cols-3 gap-3">
@@ -368,9 +368,17 @@ curl "http://localhost:8000/api/v1/hello_world/?name=Artem"
             })}
           </p>
           <div className="space-y-5">
-            <Step number={1} title={t('modules.dev_step_copy', { defaultValue: 'Copy the template' })}>
+            <Step number={1} title={t('modules.dev_step_copy', { defaultValue: 'Scaffold from the template' })}>
+              <p>
+                Two equivalent options — the Makefile target is the one used in CI examples,
+                a raw copy works on machines without <Inline>make</Inline>.
+              </p>
               <Code lang="bash">
-{`cp -r modules/oe-module-template backend/app/modules/my_module`}
+{`# Option A — Makefile target (uses the scaffolder script)
+make module-new NAME=oe_my_module
+
+# Option B — plain copy of the template
+cp -r modules/oe-module-template backend/app/modules/my_module`}
               </Code>
             </Step>
 
@@ -384,14 +392,19 @@ curl "http://localhost:8000/api/v1/hello_world/?name=Artem"
 {`from app.core.module_loader import ModuleManifest
 
 manifest = ModuleManifest(
-    name="oe_my_module",        # unique, snake_case, oe_ prefix
+    name="oe_my_module",            # unique, snake_case, oe_ prefix
     version="0.1.0",
     display_name="My Module",
     description="One-line description",
     author="Your Name",
-    category="community",        # core | integration | regional | community
-    depends=["oe_projects"],     # modules this needs
-    auto_install=False,          # user enables it from /modules
+    category="community",            # core | integration | regional | community
+    depends=["oe_projects"],         # hard deps — load fails without them
+    optional_depends=["oe_boq"],     # soft deps — present-if-installed
+    display_name_i18n={              # localized display names (optional)
+        "de": "Mein Modul",
+        "ru": "Мой модуль",
+    },
+    auto_install=False,              # True = enabled on first boot
     enabled=True,
 )`}
               </Code>
@@ -702,12 +715,11 @@ export const MODULE_REGISTRY = [..., myFeature];`}
                 {t('modules.dev_events_publish', { defaultValue: 'Publish an event' })}
               </p>
               <Code lang="python">
-{`from app.core.events import publish_event
+{`from app.core.events import event_bus
 
-await publish_event(
+await event_bus.publish(
     "my_module.item.created",
     {"item_id": item.id, "name": item.name},
-    source_module="oe_my_module",
 )`}
               </Code>
             </div>
@@ -717,12 +729,14 @@ await publish_event(
               </p>
               <Code lang="python">
 {`# backend/app/modules/my_module/events.py
-from app.core.events import subscribe
+from app.core.events import event_bus
 
-@subscribe("boq.position.updated")
-async def on_boq_change(payload):
+async def on_boq_change(event):
+    # event.payload is the dict from publish()
     # re-index, notify, whatever
-    ...`}
+    ...
+
+event_bus.subscribe("boq.position.updated", on_boq_change)`}
               </Code>
             </div>
           </div>
@@ -772,12 +786,23 @@ async def on_boq_change(payload):
           <Step number={1} title={t('modules.dev_perms_step1', { defaultValue: 'Declare in permissions.py' })}>
             <Code lang="python">
 {`# backend/app/modules/my_module/permissions.py
-PERMISSIONS = [
-    ("my_module.read",   "Read My Module data"),
-    ("my_module.create", "Create My Module items"),
-    ("my_module.update", "Update My Module items"),
-    ("my_module.delete", "Delete My Module items"),
-]`}
+from app.core.permissions import Role, permission_registry
+
+
+def register_my_module_permissions() -> None:
+    permission_registry.register_module_permissions(
+        "my_module",
+        {
+            "my_module.read":   Role.VIEWER,   # anyone signed in
+            "my_module.create": Role.EDITOR,
+            "my_module.update": Role.EDITOR,
+            "my_module.delete": Role.MANAGER,
+        },
+    )
+
+
+# Called automatically by the module loader on startup.
+register_my_module_permissions()`}
             </Code>
           </Step>
 
@@ -786,11 +811,11 @@ PERMISSIONS = [
 {`from fastapi import Depends
 from app.dependencies import RequirePermission
 
-@router.post("/")
-async def create_item(
-    data: CreateItemSchema,
-    _: None = Depends(RequirePermission("my_module.create")),
-):
+@router.post(
+    "/items",
+    dependencies=[Depends(RequirePermission("my_module.create"))],
+)
+async def create_item(data: CreateItemSchema):
     return await service.create(data)`}
             </Code>
           </Step>
@@ -800,7 +825,7 @@ async def create_item(
             <p className="text-xs text-content-secondary">
               {t('modules.dev_perms_roles', {
                 defaultValue:
-                  'Roles admin / manager / editor / viewer are assembled from permission sets. Admin always has every permission (bypass). New permissions default to admin+manager only unless you explicitly grant them in backend/app/modules/users/seed_roles.py.',
+                  'Roles are ordered admin > manager > editor > viewer. When you grant a permission to Role.EDITOR, every editor + manager + admin gets it automatically — admin always bypasses, so you never list admin explicitly. Unregistered permission names default to admin-only, which is safe but usually not what you want.',
               })}
             </p>
           </div>
@@ -1100,7 +1125,7 @@ npx playwright test my-   # filter by spec name`}
 
           <div className="space-y-4">
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-4">
-              <p className="font-semibold text-sm text-content-primary mb-1">
+              <p className="font-semibold text-sm text-content-primary mb-1.5">
                 {t('modules.dev_trouble_1_q', {
                   defaultValue: 'Module does not appear under Modules & Marketplace',
                 })}
@@ -1114,7 +1139,7 @@ npx playwright test my-   # filter by spec name`}
             </div>
 
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-4">
-              <p className="font-semibold text-sm text-content-primary mb-1">
+              <p className="font-semibold text-sm text-content-primary mb-1.5">
                 {t('modules.dev_trouble_2_q', {
                   defaultValue: '404 on your routes',
                 })}
@@ -1128,7 +1153,7 @@ npx playwright test my-   # filter by spec name`}
             </div>
 
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-4">
-              <p className="font-semibold text-sm text-content-primary mb-1">
+              <p className="font-semibold text-sm text-content-primary mb-1.5">
                 {t('modules.dev_trouble_3_q', {
                   defaultValue: 'Alembic autogenerate produces empty migration',
                 })}
@@ -1142,7 +1167,7 @@ npx playwright test my-   # filter by spec name`}
             </div>
 
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-4">
-              <p className="font-semibold text-sm text-content-primary mb-1">
+              <p className="font-semibold text-sm text-content-primary mb-1.5">
                 {t('modules.dev_trouble_4_q', {
                   defaultValue: 'Frontend shows raw i18n key like "modules.my_feature.title"',
                 })}
@@ -1156,7 +1181,7 @@ npx playwright test my-   # filter by spec name`}
             </div>
 
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-4">
-              <p className="font-semibold text-sm text-content-primary mb-1">
+              <p className="font-semibold text-sm text-content-primary mb-1.5">
                 {t('modules.dev_trouble_5_q', {
                   defaultValue: '403 Missing permission: my_module.create',
                 })}
@@ -1170,7 +1195,7 @@ npx playwright test my-   # filter by spec name`}
             </div>
 
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-4">
-              <p className="font-semibold text-sm text-content-primary mb-1">
+              <p className="font-semibold text-sm text-content-primary mb-1.5">
                 {t('modules.dev_trouble_6_q', {
                   defaultValue: 'TypeScript error in manifest.ts about routes',
                 })}
@@ -1184,7 +1209,7 @@ npx playwright test my-   # filter by spec name`}
             </div>
 
             <div className="rounded-lg border border-border-light bg-surface-secondary/30 p-4">
-              <p className="font-semibold text-sm text-content-primary mb-1">
+              <p className="font-semibold text-sm text-content-primary mb-1.5">
                 {t('modules.dev_trouble_7_q', {
                   defaultValue: 'Nav item not appearing in sidebar',
                 })}

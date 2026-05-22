@@ -316,7 +316,7 @@ class Settings(BaseSettings):
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
-    smtp_from: str = "notifications@openconstructionerp.com"
+    smtp_from: str = "info@datadrivenconstruction.io"
     smtp_tls: bool = True
     # Public URL used to build password-reset and notification links.
     # Falls back to the first CORS origin so dev installs work without

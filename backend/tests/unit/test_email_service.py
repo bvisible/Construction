@@ -106,7 +106,7 @@ class TestSmtpBackend:
             "smtp_port": 587,
             "smtp_user": "",
             "smtp_password": "",
-            "smtp_from": "notifications@openconstructionerp.com",
+            "smtp_from": "info@datadrivenconstruction.io",
             "smtp_tls": True,
         }
         base.update(overrides)

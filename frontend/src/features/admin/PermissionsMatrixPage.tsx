@@ -351,6 +351,10 @@ export function PermissionsMatrixPage() {
   // ── Mutations ──────────────────────────────────────────────────────
 
   const toggleMutation = useMutation({
+    // Opt out of the global "Operation failed" toast in main.tsx — the
+    // local onError below surfaces a contextual "Update failed" toast,
+    // and the user was seeing both stacked on a single click.
+    meta: { suppressGlobalErrorToast: true },
     mutationFn: ({ permissionKey, newMinRole }: { permissionKey: string; newMinRole: MatrixRole }) =>
       updatePermissionMinRole(permissionKey, newMinRole),
     // Optimistic update: rewrite the cached matrix immediately, roll
@@ -411,6 +415,9 @@ export function PermissionsMatrixPage() {
   });
 
   const presetMutation = useMutation({
+    // Same rationale as ``toggleMutation``: keep the "Preset failed"
+    // toast below as the single visible message.
+    meta: { suppressGlobalErrorToast: true },
     mutationFn: (preset: string) => applyPermissionPreset(preset),
     onSuccess: (result) => {
       addToast(

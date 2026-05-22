@@ -201,10 +201,10 @@ SMTP_HOST = os.environ.get("SMTP_HOST", "")
 SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
 SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
-SMTP_FROM = os.environ.get("SMTP_FROM", "noreply@openconstructionerp.com")
+SMTP_FROM = os.environ.get("SMTP_FROM", "info@datadrivenconstruction.io")
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-RESEND_FROM = os.environ.get("RESEND_FROM", "OpenConstructionERP <noreply@openconstructionerp.com>")
+RESEND_FROM = os.environ.get("RESEND_FROM", "OpenConstructionERP <info@datadrivenconstruction.io>")
 
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "info@datadrivenconstruction.io")
 

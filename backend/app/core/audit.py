@@ -8,8 +8,9 @@ Usage:
 
 import logging
 import uuid
+from datetime import datetime
 
-from sqlalchemy import JSON, String, select
+from sqlalchemy import JSON, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -85,6 +86,25 @@ async def audit_log(
     return entry
 
 
+def _parse_iso(value: str | None) -> datetime | None:
+    """Best-effort ISO-8601 → ``datetime`` parser.
+
+    Accepts the trailing ``Z`` shorthand for UTC. Returns ``None`` for
+    blank/unparseable inputs — callers should treat that as "no filter".
+    """
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 async def get_audit_entries(
     session: AsyncSession,
     *,
@@ -92,13 +112,18 @@ async def get_audit_entries(
     entity_id: str | None = None,
     user_id: str | None = None,
     action: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    sort: str = "desc",
     limit: int = 50,
     offset: int = 0,
 ) -> list[AuditEntry]:
     """Query audit log entries with optional filters.
 
     All filter parameters are optional — when omitted, that filter is not
-    applied.  Results are ordered newest-first.
+    applied. ``date_from``/``date_to`` accept ISO-8601 strings (``Z``
+    accepted as UTC). ``sort`` is ``"desc"`` (newest first, default) or
+    ``"asc"`` (oldest first).
     """
     stmt = select(AuditEntry)
     if entity_type is not None:
@@ -106,9 +131,60 @@ async def get_audit_entries(
     if entity_id is not None:
         stmt = stmt.where(AuditEntry.entity_id == entity_id)
     if user_id is not None:
-        stmt = stmt.where(AuditEntry.user_id == uuid.UUID(user_id))
+        try:
+            stmt = stmt.where(AuditEntry.user_id == uuid.UUID(user_id))
+        except (ValueError, AttributeError):
+            # Malformed UUID — return an empty result rather than 500.
+            return []
     if action is not None:
         stmt = stmt.where(AuditEntry.action == action)
-    stmt = stmt.order_by(AuditEntry.created_at.desc()).offset(offset).limit(limit)
+    parsed_from = _parse_iso(date_from)
+    parsed_to = _parse_iso(date_to)
+    if parsed_from is not None:
+        stmt = stmt.where(AuditEntry.created_at >= parsed_from)
+    if parsed_to is not None:
+        stmt = stmt.where(AuditEntry.created_at <= parsed_to)
+    order_col = (
+        AuditEntry.created_at.asc()
+        if sort == "asc"
+        else AuditEntry.created_at.desc()
+    )
+    stmt = stmt.order_by(order_col).offset(offset).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def count_audit_entries(
+    session: AsyncSession,
+    *,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    user_id: str | None = None,
+    action: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> int:
+    """Count audit-log rows matching the same filter set as
+    :func:`get_audit_entries`. Used by the admin UI to render
+    "Showing 1-50 of 318" — the row paginator on the listing page.
+    """
+    stmt = select(func.count(AuditEntry.id))
+    if entity_type is not None:
+        stmt = stmt.where(AuditEntry.entity_type == entity_type)
+    if entity_id is not None:
+        stmt = stmt.where(AuditEntry.entity_id == entity_id)
+    if user_id is not None:
+        try:
+            stmt = stmt.where(AuditEntry.user_id == uuid.UUID(user_id))
+        except (ValueError, AttributeError):
+            return 0
+    if action is not None:
+        stmt = stmt.where(AuditEntry.action == action)
+    parsed_from = _parse_iso(date_from)
+    parsed_to = _parse_iso(date_to)
+    if parsed_from is not None:
+        stmt = stmt.where(AuditEntry.created_at >= parsed_from)
+    if parsed_to is not None:
+        stmt = stmt.where(AuditEntry.created_at <= parsed_to)
+    result = await session.execute(stmt)
+    return int(result.scalar() or 0)

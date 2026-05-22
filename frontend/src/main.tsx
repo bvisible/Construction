@@ -105,14 +105,22 @@ const queryClient = new QueryClient({
         queryClient.invalidateQueries({ queryKey: [key[0]] });
       }
     },
-    onError: (error) => {
+    onError: (error, _variables, _context, mutation) => {
       const message = error instanceof Error ? error.message : 'Operation failed';
       // Auth-related failures redirect via api.ts; surfacing them again
       // produces noisy stack traces in the console for anon flows
       // (login/register) where 401 is the expected branch.
       const status = (error as { status?: number } | null)?.status;
       const isAuthFailure = status === 401 || status === 403 || message.includes('401');
-      if (!isAuthFailure) {
+      // Per-mutation opt-out: mutations that already surface their own
+      // contextual error toast (e.g. PermissionsMatrixPage's "Update
+      // failed") should set ``meta: { suppressGlobalErrorToast: true }``
+      // so the user does not see two stacked toasts for the same failure.
+      const suppress = Boolean(
+        (mutation?.meta as { suppressGlobalErrorToast?: boolean } | undefined)
+          ?.suppressGlobalErrorToast,
+      );
+      if (!isAuthFailure && !suppress) {
         if (import.meta.env.DEV) console.warn('Mutation error:', message);
         useToastStore.getState().addToast({
           type: 'error',

@@ -375,7 +375,7 @@ const navGroups: NavGroup[] = [
   // ── REGIONAL EXCHANGE (setup-only, dynamic) ────────────────────────
   // A visual separator marks the boundary between the project-work
   // surface (Overview … Analytics) and reference/setup surfaces (this
-  // group + Modules + Settings in bottomNav).
+  // group + Modules + Settings in the admin grid below).
   {
     id: 'regional',
     labelKey: 'modules.cat_regional',
@@ -397,30 +397,30 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-const bottomNav: NavItem[] = [
-  { labelKey: 'users.management', to: '/users', icon: Users },
-  // Admin: read-only audit-log timeline. Backend permission is
-  // `audit.view` (MANAGER+); we mirror the gate client-side so the row
-  // never appears for `editor` / `viewer` JWTs. Backend enforcement
-  // remains authoritative — the gate here is purely cosmetic.
+// Admin / setup surfaces — rendered as a 2-column button grid pinned
+// at the bottom of the sidebar (below the scroll area, above the
+// GitHub/version footer). The grid is denser than the main nav list
+// and keeps these always-available shortcuts out of the project-work
+// flow. Role-gated items (audit log, permissions matrix) only render
+// for admin/manager JWTs — backend `RequirePermission` remains
+// authoritative; the client gate just keeps the grid tidy.
+const adminGridItems: NavItem[] = [
+  { labelKey: 'sidebar.admin_grid.users', to: '/users', icon: Users },
   {
-    labelKey: 'nav.audit_log',
+    labelKey: 'sidebar.admin_grid.audit',
     to: '/admin/audit-log',
     icon: ScrollText,
     roleGate: ['admin', 'manager'],
   },
-  // Admin: read-only permissions matrix (roles × modules). Same
-  // `audit.view` backend gate — surfaced next to the audit log so
-  // operators see them as a single admin surface.
   {
-    labelKey: 'nav.permissions_matrix',
+    labelKey: 'sidebar.admin_grid.permissions',
     to: '/admin/permissions',
     icon: ShieldCheck,
     roleGate: ['admin', 'manager'],
   },
-  { labelKey: 'modules.title', to: '/modules', icon: Package },
-  { labelKey: 'nav.settings', to: '/settings', icon: Settings },
-  { labelKey: 'nav.about', to: '/about', icon: Info },
+  { labelKey: 'sidebar.admin_grid.modules', to: '/modules', icon: Package },
+  { labelKey: 'sidebar.admin_grid.settings', to: '/settings', icon: Settings },
+  { labelKey: 'sidebar.admin_grid.about', to: '/about', icon: Info },
 ];
 
 /** Flat lookup of every NavItem in the sidebar, keyed by `to`. The
@@ -430,7 +430,7 @@ const bottomNav: NavItem[] = [
 const ALL_NAV_ITEMS: Record<string, NavItem> = (() => {
   const map: Record<string, NavItem> = {};
   for (const group of navGroups) for (const item of group.items) map[item.to] = item;
-  for (const item of bottomNav) map[item.to] = item;
+  for (const item of adminGridItems) map[item.to] = item;
   return map;
 })();
 
@@ -572,11 +572,11 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   const isRTL = useIsRTL();
   const userRole = useAuthStore((s) => s.userRole);
 
-  // Role-gate the bottom nav. Items without a `roleGate` always show;
+  // Role-gate the admin grid. Items without a `roleGate` always show;
   // gated items only render when the current JWT role matches. The
   // backend `RequirePermission` decorator still enforces real access —
   // this is just to keep the sidebar tidy for non-admin users.
-  const visibleBottomNav = bottomNav.filter(
+  const visibleAdminGridItems = adminGridItems.filter(
     (item) => !item.roleGate || (userRole && (item.roleGate as string[]).includes(userRole)),
   );
 
@@ -664,7 +664,10 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
       if (editable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-      const key = e.key.toLowerCase();
+      // #153 guard — non-printable keys (Dead/Meta combos on certain layouts)
+      // can land with `e.key === undefined`.
+      const key = (e.key ?? '').toLowerCase();
+      if (!key) return;
 
       if (firstKeyRef.current === 'g') {
         const route = KBD_BY_LETTER[key];
@@ -1133,15 +1136,15 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
         </li>
       </nav>
 
-      {/* Bottom navigation — soft hairline separator instead of a hard
-          1px border; subtle paper-tint background. Compact mode: smaller
-          rows, tighter spacing, no pin buttons (pinning Users / Modules /
-          Settings / About has no real value — they're already always
-          available here). */}
+      {/* Admin / setup surfaces — rendered as a 2-column button grid
+          (1-column in icon-only mode). Soft hairline separator + subtle
+          paper-tint background as before. The grid keeps Users / Audit
+          Log / Permissions / Modules / Settings / About visually grouped
+          and out of the project-work nav flow above. */}
       <div
         className={clsx(
-          'relative py-1 bg-black/[0.02] dark:bg-white/[0.02]',
-          iconified ? 'px-2' : 'px-3',
+          'relative py-2 bg-black/[0.02] dark:bg-white/[0.02]',
+          iconified ? 'px-2' : 'px-2',
         )}
       >
         <div
@@ -1150,27 +1153,24 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             iconified ? 'left-2 right-2' : 'left-3 right-3',
           )}
         />
-        <ul className="space-y-px">
-          {visibleBottomNav.map((item) => (
-            <li key={item.to}>
-              <SidebarItem
-                item={item}
-                label={t(item.labelKey)}
-                onClick={onClose}
-                activeRoute={activeRoute}
-                iconified={iconified}
-                compact
-              />
-            </li>
-          ))}
-        </ul>
+        <AdminGrid
+          items={visibleAdminGridItems}
+          activeRoute={activeRoute}
+          iconified={iconified}
+          onNavigate={onClose}
+        />
 
         {/* Update notification — compact clickable card in the sidebar; the
             whole card opens a full-screen modal with highlights + install
             commands when the user clicks it. Hidden in icon-only mode
             because the card is text-heavy; users will still see it after
-            expanding the sidebar. */}
-        {!iconified && <UpdateNotification />}
+            expanding the sidebar. `mt-3` breathes the card away from the
+            admin grid buttons above. */}
+        {!iconified && (
+          <div className="mt-3">
+            <UpdateNotification />
+          </div>
+        )}
 
         {/* Version + AGPL + GitHub link
             Layout: GitHub icon (left) · version · AGPL link.
@@ -1518,6 +1518,108 @@ function SidebarItem({
           </button>
         )}
       </NavLink>
+  );
+}
+
+/** 2-column button grid for admin/setup surfaces (Users, Audit Log,
+ *  Permissions Matrix, Modules, Settings, About). Renders pinned at the
+ *  bottom of the sidebar above the GitHub/version footer.
+ *
+ *  Layout:
+ *    - Expanded sidebar  → grid-cols-2, square-ish tiles with icon
+ *                          stacked above the label.
+ *    - Iconified sidebar → single column, icon-only tiles (same width
+ *                          as the rest of the iconified rail).
+ *
+ *  Active route uses the same translucent oe-blue highlight as the
+ *  iconified branch of `SidebarItem`, so the visual language is
+ *  consistent across the whole sidebar. */
+function AdminGrid({
+  items,
+  activeRoute,
+  iconified,
+  onNavigate,
+}: {
+  items: NavItem[];
+  activeRoute?: string | null;
+  iconified?: boolean;
+  onNavigate?: () => void;
+}) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+
+  if (iconified) {
+    // Icon-only rail — stack as a single column, matching the rest of
+    // the iconified sidebar (each tile is 36×36 like SidebarItem).
+    return (
+      <ul className="flex flex-col items-center gap-1">
+        {items.map((item) => {
+          const Icon = item.icon;
+          const isActive = activeRoute === item.to;
+          const label = t(item.labelKey);
+          return (
+            <li key={item.to}>
+              <NavLink
+                to={item.to}
+                onClick={onNavigate}
+                title={label}
+                aria-label={label}
+                className={() =>
+                  clsx(
+                    'relative flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-fast ease-oe',
+                    isActive
+                      ? 'bg-oe-blue/[0.14] text-oe-blue shadow-[inset_0_0_0_1px_rgba(0,122,255,0.18)] dark:bg-oe-blue/25'
+                      : 'text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
+                  )
+                }
+              >
+                <Icon size={16} strokeWidth={isActive ? 2 : 1.75} aria-hidden />
+              </NavLink>
+            </li>
+          );
+        })}
+      </ul>
+    );
+  }
+
+  // Expanded mode: 2×N grid. Each tile is a real <button> so keyboard
+  // focus + Enter activation Just Work; we navigate imperatively so the
+  // button retains semantics (NavLink renders as <a>, which would
+  // confuse screen readers that expect a button grid).
+  return (
+    <ul className="grid grid-cols-2 gap-1">
+      {items.map((item) => {
+        const Icon = item.icon;
+        const isActive = activeRoute === item.to;
+        const label = t(item.labelKey);
+        return (
+          <li key={item.to}>
+            <button
+              type="button"
+              onClick={() => {
+                navigate(item.to);
+                onNavigate?.();
+              }}
+              aria-label={label}
+              aria-current={isActive ? 'page' : undefined}
+              title={label}
+              className={clsx(
+                'group flex h-8 w-full items-center justify-start gap-1.5 rounded-md border px-2 text-left transition-colors duration-fast ease-oe',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
+                isActive
+                  ? 'border-transparent bg-oe-blue/[0.14] text-oe-blue shadow-[inset_0_0_0_1px_rgba(0,122,255,0.18)] dark:bg-oe-blue/25'
+                  : 'border-border-light/60 bg-surface-primary text-content-secondary hover:bg-surface-secondary hover:text-content-primary hover:border-border-medium',
+              )}
+            >
+              <Icon size={14} strokeWidth={isActive ? 2 : 1.75} aria-hidden className="shrink-0" />
+              <span className="min-w-0 flex-1 text-[11px] font-medium leading-none whitespace-nowrap overflow-hidden text-ellipsis">
+                {label}
+              </span>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

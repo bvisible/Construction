@@ -20659,12 +20659,12 @@ manifest = <span class="tok-fn">ModuleManifest</span>(
             form.outerHTML = msg;
             return;
           }
-          var em = (r.body && r.body.message) || 'Something went wrong. Please email info@openconstructionerp.com directly.';
+          var em = (r.body && r.body.message) || 'Something went wrong. Please email info@datadrivenconstruction.io directly.';
           showErr(form, em);
           if (btn) { btn.disabled = false; btn.innerHTML = origLabel; }
         })
         .catch(function(){
-          showErr(form, 'Network error. Please try again or email info@openconstructionerp.com directly.');
+          showErr(form, 'Network error. Please try again or email info@datadrivenconstruction.io directly.');
           if (btn) { btn.disabled = false; btn.innerHTML = origLabel; }
         });
     });

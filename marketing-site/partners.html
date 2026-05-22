@@ -3970,7 +3970,7 @@
           '</div>';
         return;
       }
-      var msg = (r.body && r.body.message) ? r.body.message : 'Something went wrong. Please email info@openconstructionerp.com directly.';
+      var msg = (r.body && r.body.message) ? r.body.message : 'Something went wrong. Please email info@datadrivenconstruction.io directly.';
       var err = document.createElement('div');
       err.className = 'apply-form-error';
       err.setAttribute('role','alert');
@@ -3984,7 +3984,7 @@
       err.className = 'apply-form-error';
       err.setAttribute('role','alert');
       err.style.cssText = 'margin-top:12px;padding:10px 14px;border-radius:10px;background:#fef2f2;color:#991b1b;border:1px solid #fecaca;font-size:13.5px;';
-      err.textContent = 'Network error. Please try again or email info@openconstructionerp.com directly.';
+      err.textContent = 'Network error. Please try again or email info@datadrivenconstruction.io directly.';
       form.querySelector('.submit-row').appendChild(err);
       if (btn) { btn.disabled = false; btn.innerHTML = origLabel; }
     });

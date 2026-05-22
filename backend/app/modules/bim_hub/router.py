@@ -154,17 +154,21 @@ def _quick_validate_geometry_bytes(blob: bytes, ext: str) -> tuple[bool, str]:
         # We deliberately do NOT do a full XML parse here — we trust
         # the in-memory tax of a 4 KB head scan and let the browser do
         # the heavy lifting once the file is known-good shape.
+        # Accept namespace-prefixed roots like `<ns0:COLLADA>` (Revit /
+        # DDC pipeline) as well as the bare `<COLLADA>` — both are valid
+        # COLLADA per the XML namespace spec. Closes issue #153.
+        import re as _re
+
         head = blob[:4096]
         try:
             head_text = head.decode("utf-8", errors="replace")
         except Exception as exc:  # pragma: no cover — utf-8 with errors='replace' can't raise
             return False, f"DAE head undecodable: {exc}"
-        head_lower = head_text.lower()
-        if "<collada" not in head_lower:
+        if not _re.search(
+            r"<(?:[a-zA-Z_][\w.-]*:)?COLLADA\b", head_text, _re.IGNORECASE
+        ):
             # Surface what we DID find so the user/admin can recognise it
             # (e.g. "<ifcxml", "<gbxml", "<!doctype html").
-            import re as _re
-
             first_tag_match = _re.search(r"<([a-zA-Z_:][\w:.-]{0,40})", head_text)
             first_tag = (
                 f"<{first_tag_match.group(1)}>" if first_tag_match else "no root tag"
@@ -2380,7 +2384,7 @@ async def get_model_geometry(
                     "source itself may be unsupported (2D-only DWG, IFC "
                     "schedule with no geometry, corrupted RVT) — try "
                     "exporting from your CAD tool again, or contact "
-                    "support@openconstructionerp.com and quote the "
+                    "info@datadrivenconstruction.io and quote the "
                     "Request ID shown below."
                 ),
                 "message": (
@@ -2446,7 +2450,7 @@ async def get_model_geometry(
                 "may have crashed the converter), or the file was deleted "
                 "manually from storage. Try re-uploading the source file. "
                 "If the same source file repeatedly produces no geometry, "
-                "contact support@openconstructionerp.com and quote the "
+                "contact info@datadrivenconstruction.io and quote the "
                 "Request ID below."
             ),
         },
