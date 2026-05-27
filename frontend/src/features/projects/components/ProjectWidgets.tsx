@@ -396,7 +396,11 @@ export function HSEIncidentsWidget({ projectId }: { projectId: string }) {
 
   const severityCounts = useMemo(() => {
     const c = { high: 0, medium: 0, low: 0, total: 0 };
-    if (!data) return c;
+    // //// NEOFFICE PATCH — guard non-array payloads. A disabled/unmounted
+    // module endpoint can answer {"detail":"Not Found"}; iterating it throws
+    // "is not iterable" inside this useMemo and the error boundary then takes
+    // down the whole project page. Treat anything non-array as "no data".
+    if (!Array.isArray(data)) return c;
     for (const inv of data) {
       if (inv.status && ['closed', 'archived'].includes(inv.status)) continue;
       c.total++;
@@ -488,7 +492,8 @@ export function VariationsWidget({
   );
 
   const stats = useMemo(() => {
-    if (!data) return { open: 0, disputedValue: 0 };
+    // //// NEOFFICE PATCH — guard non-array payloads (see HSE widget above).
+    if (!Array.isArray(data)) return { open: 0, disputedValue: 0 };
     let open = 0;
     let disputedValue = 0;
     for (const v of data) {
@@ -851,7 +856,8 @@ export function QualityNCRWidget({ projectId }: { projectId: string }) {
 
   const counts = useMemo(() => {
     const c = { open: 0, major: 0, minor: 0 };
-    if (!data) return c;
+    // //// NEOFFICE PATCH — guard non-array payloads (see HSE widget above).
+    if (!Array.isArray(data)) return c;
     for (const n of data) {
       if (!n.status || ['closed', 'verified'].includes(n.status)) continue;
       c.open++;
