@@ -206,10 +206,86 @@
       "suggestion": "Use standard metric units: m, m2, m3, kg, t, 式, etc."
     }
   },
+  "bc3": {
+    "code_required": {
+      "fail": "Position {ordinal} missing FIEBDC-3 concept code",
+      "suggestion": "Assign a FIEBDC-3 code (e.g., E04CM040 or 01.02.01)"
+    },
+    "valid_code": {
+      "fail": "Invalid FIEBDC-3 code '{code}' in position {ordinal}",
+      "suggestion": "Use FIEBDC-3 alphanumeric format (e.g., E04CM040, 01.02.01, CAP01#)"
+    }
+  },
   "pipeline": {
     "side_effecting_requires_gate": {
       "fail": "Side-effecting node(s) without a gate: {nodes}",
       "suggestion": "Add a Validation gate or Human-approval gate on every path from a trigger/AI node to each write node before publishing."
     }
+  },
+  "property_dev": {
+    "escrow_account_required": {
+      "fail": "Development requires an active escrow account for regulator '{regulator}'",
+      "suggestion": "Open an escrow account with the regulator-licensed bank under Compliance → Escrow accounts"
+    },
+    "escrow_iban_valid": {
+      "fail": "Escrow account {account}: IBAN '{iban}' fails ISO 13616 structural check",
+      "suggestion": "Correct the IBAN: country code + length + checksum must match ISO 13616"
+    },
+    "escrow_balance_reconciled": {
+      "fail": "Escrow account {account}: ledger balance {ledger} drifts {drift} from {transactions} transactions sum",
+      "suggestion": "Reconcile the escrow account — investigate unrecorded receipts or missing debits"
+    },
+    "sales_contract_party_ownership_sums_to_100": {
+      "fail": "Contract {contract}: ownership share sums to {total}% (must be exactly 100%)",
+      "suggestion": "Adjust party percentages so they total 100.00%"
+    },
+    "payment_schedule_instalments_sum_to_contract_value": {
+      "fail": "Contract {contract}: instalments total {instalments} differs from contract value {contract_value} (drift {drift})",
+      "suggestion": "Re-balance the payment schedule so instalment amounts add up to the contract total"
+    },
+    "reservation_expiry_in_future": {
+      "fail": "Reservation {reservation}: expires_at {expires} is not in the future",
+      "suggestion": "Extend the reservation or transition it to expired/cancelled"
+    },
+    "broker_commission_rate_within_bounds": {
+      "fail": "Commission agreement {agreement}: {issue}",
+      "suggestion": "Use a percent rate between 0.1% and 15%, a flat amount, or a non-empty ladder of tiers"
+    },
+    "price_matrix_no_negative_modifier": {
+      "fail": "Price matrix {matrix}: rule '{factor}' multiplier {multiplier} outside [-0.50, 2.00]",
+      "suggestion": "Cap modifiers between -50% and +200% to avoid unrealistic plot prices"
+    }
+  },
+  "errors": {
+    "resource_not_found": "Resource not found",
+    "project_not_found": "Project not found",
+    "vendor_not_found": "Vendor not found",
+    "template_not_found": "Template not found",
+    "position_not_found": "Position not found",
+    "session_not_found": "Session not found",
+    "document_not_found": "Document not found",
+    "invitation_not_found": "Invitation not found",
+    "agreement_not_found": "Agreement not found",
+    "rejection_not_found": "Rejection not found",
+    "claim_not_found": "Progress claim not found",
+    "plot_not_found": "Plot not found",
+    "survey_not_found": "Drone survey not found",
+    "diary_video_not_found": "Diary video not found",
+    "diary_photo_not_found": "Diary photo not found",
+    "bidder_not_found": "Bidder not found",
+    "webhook_not_found": "Webhook not found",
+    "submission_not_found": "Submission not found",
+    "measurement_not_found": "Site measurement not found",
+    "salescontract_not_found": "SalesContract not found",
+    "prompt_not_found": "Prompt template not found",
+    "prequalification_not_found": "Prequalification not found",
+    "purchase_requisition_not_found": "PR not found",
+    "purchase_order_not_found": "PO not found",
+    "group_not_found": "Group not found",
+    "final_account_not_found": "Final account not found",
+    "estimate_job_not_found": "Estimate job not found",
+    "escrow_not_found": "EscrowTransaction not found",
+    "commission_accrual_not_found": "CommissionAccrual not found",
+    "baseline_not_found": "Baseline not found"
   }
 }

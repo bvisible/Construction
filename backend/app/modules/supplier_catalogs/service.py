@@ -20,6 +20,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.supplier_catalogs import events as ev
 from app.modules.supplier_catalogs.models import (
     CatalogEntry,
@@ -207,7 +209,7 @@ class SupplierCatalogsService:
     ) -> Vendor:
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         payload = data.model_dump(exclude_unset=True)
         if "categories" in payload:
             payload["categories_json"] = list(payload.pop("categories") or [])
@@ -233,7 +235,7 @@ class SupplierCatalogsService:
     ) -> Vendor:
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         if new_status not in VALID_VENDOR_STATUSES:
             raise HTTPException(
                 status_code=400,
@@ -319,7 +321,7 @@ class SupplierCatalogsService:
             raise HTTPException(status_code=400, detail="Rating must be 1..5")
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         await self.vendors.update(vendor_id, rating=rating)
         await _safe_publish(
             ev.VENDOR_RATED,
@@ -392,7 +394,7 @@ class SupplierCatalogsService:
     ) -> PriceList:
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         pl = PriceList(
             vendor_id=vendor_id,
             name=data.name,
@@ -436,7 +438,7 @@ class SupplierCatalogsService:
         """
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         if isinstance(rows_csv, bytes):
             text = rows_csv.decode("utf-8", errors="replace")
         else:
@@ -586,7 +588,7 @@ class SupplierCatalogsService:
     ) -> PurchaseRequisition:
         pr = await self.prs.get(pr_id)
         if pr is None:
-            raise HTTPException(status_code=404, detail="PR not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_requisition_not_found", locale=get_locale()))
         if pr.status != "draft":
             raise HTTPException(
                 status_code=400,
@@ -615,7 +617,7 @@ class SupplierCatalogsService:
     ) -> PurchaseRequisition:
         pr = await self.prs.get(pr_id)
         if pr is None:
-            raise HTTPException(status_code=404, detail="PR not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_requisition_not_found", locale=get_locale()))
         if pr.status != "approval_pending":
             raise HTTPException(
                 status_code=400,
@@ -659,7 +661,7 @@ class SupplierCatalogsService:
     ) -> PurchaseRequisition:
         pr = await self.prs.get(pr_id)
         if pr is None:
-            raise HTTPException(status_code=404, detail="PR not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_requisition_not_found", locale=get_locale()))
         if pr.status not in ("approval_pending", "draft"):
             raise HTTPException(
                 status_code=400,
@@ -688,7 +690,7 @@ class SupplierCatalogsService:
     ) -> PurchaseOrder:
         pr = await self.prs.get(pr_id)
         if pr is None:
-            raise HTTPException(status_code=404, detail="PR not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_requisition_not_found", locale=get_locale()))
         if pr.status != "approved":
             raise HTTPException(
                 status_code=400,
@@ -696,7 +698,7 @@ class SupplierCatalogsService:
             )
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         if vendor.status != "active":
             raise HTTPException(
                 status_code=400,
@@ -771,7 +773,7 @@ class SupplierCatalogsService:
     ) -> PurchaseOrder:
         vendor = await self.vendors.get(data.vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         if vendor.status != "active":
             raise HTTPException(
                 status_code=400,
@@ -835,7 +837,7 @@ class SupplierCatalogsService:
     ) -> PurchaseOrder:
         po = await self.pos.get(po_id)
         if po is None:
-            raise HTTPException(status_code=404, detail="PO not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_order_not_found", locale=get_locale()))
         if po.status != "draft":
             raise HTTPException(
                 status_code=400,
@@ -860,7 +862,7 @@ class SupplierCatalogsService:
     async def acknowledge_po(self, po_id: uuid.UUID) -> PurchaseOrder:
         po = await self.pos.get(po_id)
         if po is None:
-            raise HTTPException(status_code=404, detail="PO not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_order_not_found", locale=get_locale()))
         if po.status != "sent":
             raise HTTPException(
                 status_code=400,
@@ -878,7 +880,7 @@ class SupplierCatalogsService:
     async def close_po(self, po_id: uuid.UUID) -> PurchaseOrder:
         po = await self.pos.get(po_id)
         if po is None:
-            raise HTTPException(status_code=404, detail="PO not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_order_not_found", locale=get_locale()))
         if po.status in ("closed", "cancelled"):
             raise HTTPException(
                 status_code=400,
@@ -913,7 +915,7 @@ class SupplierCatalogsService:
         """
         po = await self.pos.get(data.po_id)
         if po is None:
-            raise HTTPException(status_code=404, detail="PO not found")
+            raise HTTPException(status_code=404, detail=translate("errors.purchase_order_not_found", locale=get_locale()))
         if po.status not in ("sent", "acknowledged", "partial"):
             raise HTTPException(
                 status_code=400,
@@ -1082,7 +1084,7 @@ class SupplierCatalogsService:
     ) -> VendorInvoice:
         vendor = await self.vendors.get(data.vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         invoice = VendorInvoice(
             number=data.number,
             vendor_id=data.vendor_id,
@@ -1749,7 +1751,7 @@ class SupplierCatalogsService:
     ) -> KYCDocument:
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         valid_types = {
             "w9", "vat_cert", "gst", "trn", "coi", "iso", "other",
         }
@@ -1855,7 +1857,7 @@ class SupplierCatalogsService:
         """
         vendor = await self.vendors.get(vendor_id)
         if vendor is None:
-            raise HTTPException(status_code=404, detail="Vendor not found")
+            raise HTTPException(status_code=404, detail=translate("errors.vendor_not_found", locale=get_locale()))
         if data.period_start > data.period_end:
             raise HTTPException(
                 status_code=400, detail="period_start > period_end",

@@ -382,18 +382,22 @@ cost_item_vector_adapter = CostItemVectorAdapter()
 
 
 def _vector_available() -> bool:
-    """Return True iff the optional vector backend is importable.
+    """Return True iff the configured vector backend is importable.
 
-    Lazy: the import is attempted once per call, but the answer is
-    cached cheaply by Python's import machinery so repeated calls cost
-    nothing.  Used as a guard at the top of every public helper so the
-    cost API path stays fast even on installs without the
-    ``[vector]`` extra.
+    Probes the python package matching ``settings.vector_backend`` — so
+    ``qdrant`` installs (``[semantic]`` extra) need ``qdrant_client``,
+    ``lancedb`` installs (``[vector]`` extra) need ``lancedb``. Older
+    versions hardcoded the lancedb probe, which made every cost upsert
+    silently no-op on the default qdrant backend — see issue #162.
     """
     try:
         import importlib.util  # noqa: PLC0415
 
-        if importlib.util.find_spec("lancedb") is None:
+        from app.config import get_settings  # noqa: PLC0415
+
+        backend = (get_settings().vector_backend or "qdrant").strip().lower()
+        module = "qdrant_client" if backend == "qdrant" else "lancedb"
+        if importlib.util.find_spec(module) is None:
             return False
     except Exception:
         return False

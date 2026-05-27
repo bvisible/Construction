@@ -43,7 +43,8 @@ import { SwissPackPage } from '@/features/swiss-pack';
 import { DatabaseSetupPage } from '@/features/setup';
 import { IntegrationsPage } from '@/features/integrations';
 import { AboutPage } from '@/features/about/AboutPage';
-import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, ErrorBoundary, NotFoundPage, OnboardingTour, OfflineBanner, PWAInstallPrompt } from '@/shared/ui';
+import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, ErrorBoundary, NotFoundPage, ProductTour, OfflineBanner, PWAInstallPrompt } from '@/shared/ui';
+import { AdminOnly } from '@/shared/auth/AdminOnly';
 import GlobalSearchModal from '@/features/search/GlobalSearchModal';
 import { useGlobalSearchStore } from '@/stores/useGlobalSearchStore';
 import { FloatingQueuePanel } from './layout/FloatingQueuePanel';
@@ -203,6 +204,12 @@ const PermissionsMatrixPage = lazy(() =>
     default: m.PermissionsMatrixPage,
   })),
 );
+// Admin: Epic B / B11 — outbound notification webhook targets.
+const WebhookTargetsPage = lazy(() =>
+  import('@/features/admin/WebhookTargetsPage').then((m) => ({
+    default: m.WebhookTargetsPage,
+  })),
+);
 const ArchitectureMapPage = lazy(() =>
   import('@/features/architecture/ArchitectureMapPage').then((m) => ({ default: m.ArchitectureMapPage }))
 );
@@ -223,6 +230,19 @@ const TransmittalLogPage = lazy(() =>
 );
 const SharePage = lazy(() =>
   import('@/features/file-manager/SharePage').then((m) => ({ default: m.SharePage }))
+);
+const BuyerPortalPage = lazy(() =>
+  import('@/features/buyer-portal/BuyerPortalPage').then((m) => ({
+    default: m.BuyerPortalPage,
+  }))
+);
+// Field-worker mobile shell — DESIGN-STAGE SKELETON. See
+// docs/architecture/FIELD_WORKER_MOBILE_DESIGN.md. Lazy-loaded in its
+// own chunk so the desktop bundle is unaffected.
+const FieldShellPage = lazy(() =>
+  import('@/features/field/FieldShellPage').then((m) => ({
+    default: m.FieldShellPage,
+  }))
 );
 const SnapshotsPage = lazy(() =>
   import('@/features/dashboards').then((m) => ({ default: m.SnapshotsPage }))
@@ -268,6 +288,73 @@ const CarbonPage = lazy(() =>
 );
 const PropertyDevPage = lazy(() =>
   import('@/features/property-dev').then((m) => ({ default: m.PropertyDevPage }))
+);
+const PropertyDevInventoryMapPage = lazy(() =>
+  import('@/features/property-dev').then((m) => ({ default: m.InventoryMapPage }))
+);
+const AccommodationListPage = lazy(() =>
+  import('@/features/accommodation').then((m) => ({
+    default: m.AccommodationListPage,
+  })),
+);
+const AccommodationDetailPage = lazy(() =>
+  import('@/features/accommodation').then((m) => ({
+    default: m.AccommodationDetailPage,
+  })),
+);
+const AccommodationCalendarPage = lazy(() =>
+  import('@/features/accommodation').then((m) => ({
+    default: m.AccommodationCalendar,
+  })),
+);
+const PropertyDevHouseTypeSettingsPage = lazy(() =>
+  import('@/features/property-dev').then((m) => ({
+    default: m.HouseTypeSettingsPage,
+  }))
+);
+const ValidationRulesSettingsPage = lazy(() =>
+  import('@/features/property-dev').then((m) => ({
+    default: m.ValidationRulesSettingsPage,
+  })),
+);
+const PropertyDevDocumentTemplatesSettingsPage = lazy(() =>
+  import('@/features/property-dev').then((m) => ({
+    default: m.DocumentTemplatesSettingsPage,
+  })),
+);
+const PropertyDevPricingEnginePage = lazy(() =>
+  import('@/features/property-dev').then((m) => ({
+    default: m.PricingEnginePage,
+  })),
+);
+const PropertyDevBulkOperationsPage = lazy(() =>
+  import('@/features/property-dev').then((m) => ({
+    default: m.BulkOperationsPage,
+  })),
+);
+// ── Geo Hub — Cesium 3D Tiles + cross-module geo. Lazy-loaded because
+// CesiumJS is ~3 MB; this keeps the main bundle untouched.
+const GeoHubAdminPage = lazy(() =>
+  import('@/features/geo-hub/GeoHubAdminPage').then((m) => ({ default: m.GeoHubAdminPage }))
+);
+const GeoHubPage = lazy(() =>
+  import('@/features/geo-hub').then((m) => ({ default: m.GeoHubPage }))
+);
+const ProjectGeoPage = lazy(() =>
+  import('@/features/geo-hub').then((m) => ({ default: m.ProjectGeoPage }))
+);
+const DevelopmentGeoPage = lazy(() =>
+  import('@/features/geo-hub').then((m) => ({ default: m.DevelopmentGeoPage }))
+);
+const PropertyDevDashboardsHub = lazy(() =>
+  import('@/features/property-dev/dashboards').then((m) => ({
+    default: m.DashboardsHub,
+  })),
+);
+const PropertyDevDashboardFullView = lazy(() =>
+  import('@/features/property-dev/dashboards').then((m) => ({
+    default: m.FullViewPage,
+  })),
 );
 const BidManagementPage = lazy(() =>
   import('@/features/bid-management').then((m) => ({ default: m.BidManagementPage }))
@@ -560,6 +647,31 @@ export default function App() {
     void syncCustomUnitsFromServer();
   }, [isAuthenticated]);
 
+  // Onboarding-tour migration (one-shot). The app used to mount two
+  // parallel tour systems — `OnboardingTour` (storage key
+  // `oe_tour_completed`, underscore) and `ProductTour` (storage key
+  // `oe.tour_completed`, dot). A user dismissing one would still see
+  // the other pop on the next page. We've collapsed onto ProductTour
+  // alone; this effect ports the legacy dismissed-flag forward so a
+  // returning user who already saw the old tour doesn't see the new
+  // one again. The legacy key is then deleted so the migration runs
+  // exactly once per browser.
+  useEffect(() => {
+    try {
+      const legacy = localStorage.getItem('oe_tour_completed');
+      if (legacy !== null) {
+        const current = localStorage.getItem('oe.tour_completed');
+        if (current === null) {
+          localStorage.setItem('oe.tour_completed', legacy);
+        }
+        localStorage.removeItem('oe_tour_completed');
+      }
+    } catch {
+      /* localStorage unavailable — non-fatal, ProductTour falls back
+         to server-side tour-state on next mount. */
+    }
+  }, []);
+
   // Dynamic routes from the module registry (lazy-loaded)
   const moduleRoutes = useModuleRouteElements({ Wrapper: P });
 
@@ -567,16 +679,42 @@ export default function App() {
     <Suspense fallback={<LoadingScreen />}>
       <OfflineBanner />
       {isAuthenticated && <GlobalShortcuts />}
-      {/* OnboardingTour mounted once at app top — moving it out of
-          AppLayout was the fix for BUG-UI02-TOUR-PERSISTENT.  When the
-          tour was inside AppLayout (which is recreated per-route by the
-          ``P`` page wrapper), every navigation re-mounted the tour and
-          a click-but-not-completed flow restarted from step 1 on the
-          next page. */}
-      {isAuthenticated && <OnboardingTour />}
+      {/* First-run product tour — 8-step spotlight walk-through. Always
+          mounted (for authenticated users) but renders nothing unless
+          active; auto-starts on the dashboard the first time a user
+          logs in (gated by `oe.tour_completed` in localStorage) and
+          listens for the `oe:start-tour` window event so the
+          WhatsNewCard / Help menu can (re-)launch it on demand.
+
+          UX-audit collapse: the older `OnboardingTour` (storage key
+          `oe_tour_completed`, no dot) used to be mounted here in
+          parallel — dismissing one still let the other pop on the
+          next page. ProductTour now owns the global tour surface;
+          a one-shot legacy-key migration in the effect above
+          forwards a dismissed flag from the old storage key so
+          returning users don't see the tour again. The
+          `OnboardingTour` component still ships for per-feature
+          custom tours (e.g. Pipelines page), but is no longer mounted
+          globally. */}
+      {isAuthenticated && <ProductTour />}
       <Routes>
         {/* Public share-link landing page — no auth required, no app shell */}
         <Route path="/share/:token" element={<SharePage />} />
+
+        {/* Public buyer-portal landing page — magic-link auth only, no app shell */}
+        <Route path="/buyer-portal/:token" element={<BuyerPortalPage />} />
+
+        {/* Field-worker mobile shell — bottom-nav layout, no desktop sidebar.
+            Skeleton route; pilot will add `/field/{token}` PIN entry and the
+            four tab bodies. See docs/architecture/FIELD_WORKER_MOBILE_DESIGN.md */}
+        <Route
+          path="/field"
+          element={
+            <Suspense fallback={<LoadingScreen />}>
+              <FieldShellPage />
+            </Suspense>
+          }
+        />
 
         {/* //// NEOFFICE PATCH — Frappe-embedded auth bypass (4 routes).
             In embedded mode the user is already authenticated by Frappe,
@@ -605,7 +743,18 @@ export default function App() {
         } />
 
         {/* App — all protected, all real pages */}
-        <Route path="/" element={<P title="Dashboard"><DashboardPage /></P>} />
+        {/* BUG-215 — authenticated users hitting `/` land on the dashboard
+            (the canonical post-login surface). Unauthenticated users fall
+            through to <P>, which calls RequireAuth and bounces them to
+            /login (preserving the marketing-flavoured public landing path). */}
+        <Route
+          path="/"
+          element={
+            isAuthenticated
+              ? <Navigate to="/dashboard" replace />
+              : <P title="Dashboard"><DashboardPage /></P>
+          }
+        />
 
         <Route path="/ai-estimate" element={<P title="AI Quick Estimate"><QuickEstimatePage /></P>} />
         <Route path="/ai-agents" element={<P title="AI Agents"><AgentsPage /></P>} />
@@ -727,6 +876,10 @@ export default function App() {
         <Route path="/users" element={<P title="User Management"><UserManagementPage /></P>} />
         <Route path="/admin/audit-log" element={<P title="Audit Log"><AuditLogPage /></P>} />
         <Route path="/admin/permissions" element={<P title="Permissions Matrix"><PermissionsMatrixPage /></P>} />
+        <Route path="/admin/webhook-targets" element={<P title="Webhook Targets"><WebhookTargetsPage /></P>} />
+        <Route path="/admin/validation-rules" element={<P title="Validation Rules"><ValidationRulesSettingsPage /></P>} />
+        {/* Legacy redirect — moved 2026-05-23 from PropDev settings to platform-wide admin. */}
+        <Route path="/property-dev/settings/validation-rules" element={<Navigate to="/admin/validation-rules" replace />} />
         <Route path="/modules" element={<P title="Modules"><ModulesPage /></P>} />
         <Route path="/modules/developer-guide" element={<P title="Module Developer Guide"><ModuleDeveloperGuide /></P>} />
         {/* //// NEOFFICE PATCH — Swiss Pack route */}
@@ -740,14 +893,48 @@ export default function App() {
         <Route path="/integrations" element={<P title="Integrations"><IntegrationsPage /></P>} />
         <Route path="/about" element={<P title="About"><AboutPage /></P>} />
         <Route path="/project-intelligence" element={<P title="Project Intelligence"><ProjectIntelligencePage /></P>} />
-        <Route path="/architecture" element={<P title="Architecture Map"><ArchitectureMapPage /></P>} />
+        {/* Architecture Map — internal tool, admin-only. Surfaces module
+            dependency graph + DDC integrity audit; not for day-to-day use. */}
+        <Route
+          path="/architecture"
+          element={
+            <AdminOnly>
+              <P title="Architecture Map"><ArchitectureMapPage /></P>
+            </AdminOnly>
+          }
+        />
 
-        {/* EAC v2 (RFC 35) — block editor primitives preview, dev-only */}
-        <Route path="/eac/demo" element={<P title="EAC Block Primitives"><EacDemoPage /></P>} />
-        <Route path="/eac/blocks/:eacId" element={<P title="EAC Block Editor"><EACBlockEditorPage /></P>} />
+        {/* EAC v2 (RFC 35) — block editor primitives preview, dev-only.
+            Both the demo page and the orphan block-editor route are
+            gated to admins so a regular customer can't stumble into the
+            unfinished editor by URL. */}
+        <Route
+          path="/eac/demo"
+          element={
+            <AdminOnly>
+              <P title="EAC Block Primitives"><EacDemoPage /></P>
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="/eac/blocks/:eacId"
+          element={
+            <AdminOnly>
+              <P title="EAC Block Editor"><EACBlockEditorPage /></P>
+            </AdminOnly>
+          }
+        />
 
-        {/* Styles Lab — design exploration, internal */}
-        <Route path="/styles-lab" element={<P title="Styles Lab"><StylesLabPage /></P>} />
+        {/* Styles Lab — design exploration, internal; admin-only so the
+            design system playground doesn't bleed into the customer UX. */}
+        <Route
+          path="/styles-lab"
+          element={
+            <AdminOnly>
+              <P title="Styles Lab"><StylesLabPage /></P>
+            </AdminOnly>
+          }
+        />
 
         {/* 18-Modules Wave — Field Operations */}
         <Route path="/service" element={<P title="Service & Maintenance"><ServicePage /></P>} />
@@ -770,7 +957,42 @@ export default function App() {
         <Route path="/projects/:projectId/bid-management" element={<P title="Bid Management"><BidManagementPage /></P>} />
         <Route path="/crm" element={<P title="CRM"><CRMPage /></P>} />
         <Route path="/property-dev" element={<P title="Property Development"><PropertyDevPage /></P>} />
+        <Route path="/property-dev/developments/:devId/geo" element={<P title="Development map"><DevelopmentGeoPage /></P>} />
+        <Route path="/property-dev/developments/:devId/pricing" element={<P title="Pricing Engine"><PropertyDevPricingEnginePage /></P>} />
+        <Route path="/property-dev/developments/:devId/inventory-map" element={<P title="Inventory Map"><PropertyDevInventoryMapPage /></P>} />
+        <Route path="/property-dev/admin/bulk-operations" element={<P title="Bulk Operations"><PropertyDevBulkOperationsPage /></P>} />
+        <Route path="/property-dev/dashboards" element={<P title="Property Development Dashboards"><PropertyDevDashboardsHub /></P>} />
+        <Route
+          path="/property-dev/settings/house-types"
+          element={
+            <P title="House Type Catalogue"><PropertyDevHouseTypeSettingsPage /></P>
+          }
+        />
+        <Route
+          path="/property-dev/settings/document-templates"
+          element={
+            <P title="Document Templates"><PropertyDevDocumentTemplatesSettingsPage /></P>
+          }
+        />
+        <Route
+          path="/property-dev/admin/bulk-operations"
+          element={
+            <P title="Bulk Operations"><PropertyDevBulkOperationsPage /></P>
+          }
+        />
+        <Route path="/property-dev/dashboards/:key" element={<P title="Property Development Dashboard"><PropertyDevDashboardFullView /></P>} />
+        <Route path="/accommodation" element={<P title="Accommodation"><AccommodationListPage /></P>} />
+        <Route path="/accommodation/calendar" element={<P title="Accommodation Calendar"><AccommodationCalendarPage /></P>} />
+        <Route path="/accommodation/:id" element={<P title="Accommodation"><AccommodationDetailPage /></P>} />
         <Route path="/supplier-catalogs" element={<P title="Supplier Catalogs"><SupplierCatalogsPage /></P>} />
+
+        {/* Geo Hub — Cesium 3D Tiles + cross-module geo. */}
+        <Route path="/geo" element={<P title="Geo Hub"><GeoHubPage /></P>} />
+        <Route path="/geo/admin" element={<P title="Geo Hub Admin"><GeoHubAdminPage /></P>} />
+        <Route path="/geo-hub" element={<Navigate to="/geo" replace />} />
+        <Route path="/geo-hub/admin" element={<Navigate to="/geo/admin" replace />} />
+        <Route path="/projects/:projectId/geo" element={<P title="Project map"><ProjectGeoPage /></P>} />
+        <Route path="/projects/:projectId/geo-hub" element={<Navigate to="/geo" replace />} />
 
         {/* 18-Modules Wave — Schedule & Quality */}
         <Route path="/schedule-advanced" element={<P title="Advanced Schedule"><ScheduleAdvancedPage /></P>} />
@@ -785,7 +1007,10 @@ export default function App() {
         <Route path="/projects/:projectId/bi-dashboards" element={<P title="BI Dashboards"><BIDashboardsPage /></P>} />
 
         {/* Convenience route aliases — redirect to canonical paths */}
-        <Route path="/dashboard" element={<Navigate to="/" replace />} />
+        {/* `/dashboard` renders DashboardPage directly. The earlier alias
+            redirected to `/`, but BUG-215 made `/` redirect authed users to
+            `/projects`, leaving DashboardPage unreachable. */}
+        <Route path="/dashboard" element={<P title="Dashboard"><DashboardPage /></P>} />
         <Route path="/change-orders" element={<Navigate to="/changeorders" replace />} />
         <Route path="/punch-list" element={<Navigate to="/punchlist" replace />} />
         {/* Variations (FIDIC/JCT VOs) — distinct from generic change-orders;

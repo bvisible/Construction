@@ -11,6 +11,7 @@ Tables (all prefixed ``oe_qms_``):
     oe_qms_punch_item            — rolling punch list entry
     oe_qms_audit                 — quality audit (ISO 9001 style)
     oe_qms_audit_finding         — finding within an audit
+    oe_qms_audit_log             — append-only FSM transition audit trail
     oe_qms_calibration           — instrument calibration tracking
 
 External entity FKs (``project_id``, ``inspector_user_id``,
@@ -337,6 +338,65 @@ class ITPTemplate(Base):
 
     def __repr__(self) -> str:
         return f"<ITPTemplate {self.csi_division}/{self.work_type} v{self.version}>"
+
+
+class QMSAuditLog(Base):
+    """Append-only audit trail for QMS FSM transitions.
+
+    Every status change on an NCR, inspection, punch item, audit, or ITP
+    plan should land one row here so dispute timelines (FIDIC, ISO 9001
+    §9.3, SCL Protocol) can be reproduced offline. Schema mirrors the
+    older ``oe_activity_log`` (v3033) but is QMS-scoped so a per-tenant
+    GDPR purge can wipe quality records without touching cross-module
+    activity.
+
+    Fields:
+        tenant_id        — caller's tenant for GDPR / multi-tenant scoping
+        entity_type      — "ncr" / "inspection" / "punch" / "audit" /
+                            "itp_plan" / "calibration"
+        entity_id        — UUID of the row that transitioned
+        action           — short verb ("created", "status_change",
+                            "closed", "escalated", "signed", ...)
+        actor_user_id    — caller; may be NULL for system-driven events
+        old_status       — prior status; NULL on first creation
+        new_status       — new status; NULL for non-FSM events (e.g. note)
+        reason           — free-text justification (optional)
+        before_state     — JSON snapshot of changed fields before the hop
+        after_state      — JSON snapshot of the same fields after the hop
+
+    Index strategy:
+        ix_qms_audit_log_entity            (entity_type, entity_id)
+        ix_qms_audit_log_tenant_created    (tenant_id, created_at)
+    """
+
+    __tablename__ = "oe_qms_audit_log"
+
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(), nullable=True, index=True,
+    )
+    entity_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, index=True,
+    )
+    entity_id: Mapped[uuid.UUID] = mapped_column(
+        GUID(), nullable=False, index=True,
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor_user_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
+    old_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    new_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    before_state: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        JSON, nullable=False, default=dict, server_default="{}",
+    )
+    after_state: Mapped[dict] = mapped_column(  # type: ignore[assignment]
+        JSON, nullable=False, default=dict, server_default="{}",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<QMSAuditLog {self.entity_type}/{self.entity_id} "
+            f"{self.old_status or '-'}->{self.new_status or '-'}>"
+        )
 
 
 class QMSCalibration(Base):

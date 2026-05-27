@@ -18,7 +18,8 @@ import {
   Check,
   File,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, DateDisplay, ConfirmDialog, SkeletonTable } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, DateDisplay, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
@@ -177,11 +178,11 @@ function CreateCDEModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-lg animate-fade-in">
-      <div className="w-full max-w-2xl bg-surface-elevated rounded-xl shadow-xl border border-border animate-card-in mx-4 max-h-[90vh] overflow-y-auto" role="dialog" aria-label={t('cde.new_container', { defaultValue: 'New Container‌⁠‍' })}>
+      <div className="w-full max-w-2xl bg-surface-elevated rounded-xl shadow-xl border border-border animate-card-in mx-4 max-h-[90vh] overflow-y-auto" role="dialog" aria-label={t('cde.new_container', { defaultValue: 'New Container' })}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-light">
           <h2 className="text-lg font-semibold text-content-primary">
-            {t('cde.new_container', { defaultValue: 'New Container‌⁠‍' })}
+            {t('cde.new_container', { defaultValue: 'New Container' })}
           </h2>
           <button
             onClick={onClose}
@@ -212,7 +213,7 @@ function CreateCDEModal({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-content-primary mb-1.5">
-                {t('cde.field_code', { defaultValue: 'Container Code‌⁠‍' })}{' '}
+                {t('cde.field_code', { defaultValue: 'Container Code' })}{' '}
                 <span className="text-semantic-error">*</span>
               </label>
               <input
@@ -222,7 +223,7 @@ function CreateCDEModal({
                   setTouched(true);
                 }}
                 placeholder={t('cde.code_placeholder', {
-                  defaultValue: 'e.g. PRJ-ARC-DWG-001‌⁠‍',
+                  defaultValue: 'e.g. PRJ-ARC-DWG-001',
                 })}
                 className={clsx(
                   inputCls,
@@ -233,7 +234,7 @@ function CreateCDEModal({
               />
               {codeError && (
                 <p className="mt-1 text-xs text-semantic-error">
-                  {t('cde.code_required', { defaultValue: 'Container code is required‌⁠‍' })}
+                  {t('cde.code_required', { defaultValue: 'Container code is required' })}
                 </p>
               )}
             </div>
@@ -1008,7 +1009,13 @@ export function CDEPage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: containers = [], isLoading } = useQuery({
+  const {
+    data: containers = [],
+    isLoading,
+    isError: containersError,
+    error: containersErrorValue,
+    refetch: refetchContainers,
+  } = useQuery({
     queryKey: ['cde-containers', projectId, stateFilter],
     queryFn: () =>
       fetchCDEContainers({
@@ -1388,19 +1395,14 @@ export function CDEPage() {
         />
       </div>
 
-      {/* No project selected banner */}
-      {!projectId && (
-        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
-          {t('common.select_project_hint', {
-            defaultValue: 'Select a project from the header to get started.',
-          })}
-        </div>
-      )}
-
       {/* Table */}
       <div>
-        {!projectId ? null : isLoading ? (
+        {!projectId ? (
+          <RequiresProject>{null}</RequiresProject>
+        ) : isLoading ? (
           <SkeletonTable rows={5} columns={5} />
+        ) : containersError ? (
+          <RecoveryCard error={containersErrorValue} onRetry={() => refetchContainers()} />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<Database size={28} strokeWidth={1.5} />}

@@ -17,7 +17,10 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.ai.pricing import estimate_cost_usd
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 
 _logger_ev = __import__("logging").getLogger(__name__ + ".events")
 
@@ -191,6 +194,12 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
             if isinstance(v, str) and v.strip()
         }
 
+    # Read custom base URLs for local providers from metadata_
+    raw_ollama_base_url = meta.get("ollama_base_url") if isinstance(meta, dict) else None
+    raw_vllm_base_url = meta.get("vllm_base_url") if isinstance(meta, dict) else None
+    ollama_base_url = str(raw_ollama_base_url).strip() if isinstance(raw_ollama_base_url, str) and raw_ollama_base_url.strip() else None
+    vllm_base_url = str(raw_vllm_base_url).strip() if isinstance(raw_vllm_base_url, str) and raw_vllm_base_url.strip() else None
+
     return AISettingsResponse(
         id=settings.id,
         user_id=settings.user_id,
@@ -211,6 +220,10 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
         baidu_api_key_set=_usable(getattr(settings, "baidu_api_key", None)),
         yandex_api_key_set=_usable(getattr(settings, "yandex_api_key", None)),
         gigachat_api_key_set=_usable(getattr(settings, "gigachat_api_key", None)),
+        kimi_api_key_set=_usable(getattr(settings, "kimi_api_key", None)),
+        ollama_base_url=ollama_base_url,
+        vllm_base_url=vllm_base_url,
+        # //// NEOFFICE PATCH — surface the NORA-rebranded preferred model.
         preferred_model=preferred_model_override,
         model_overrides=model_overrides,
         default_models=dict(DEFAULT_MODELS),
@@ -222,8 +235,10 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
 
 def _build_job_response(job: AIEstimateJob) -> EstimateJobResponse:
     """Build an EstimateJobResponse from an AIEstimateJob ORM instance."""
+    from decimal import Decimal
+
     items: list[EstimateItem] = []
-    grand_total = 0.0
+    grand_total: Decimal = Decimal("0")
 
     if job.result and isinstance(job.result, list):
         for item_data in job.result:
@@ -234,13 +249,13 @@ def _build_job_response(job: AIEstimateJob) -> EstimateJobResponse:
                 description=str(item_data.get("description", "")),
                 unit=str(item_data.get("unit", "m2")),
                 quantity=float(item_data.get("quantity", 0)),
-                unit_rate=float(item_data.get("unit_rate", 0)),
+                unit_rate=Decimal(str(item_data.get("unit_rate", 0) or 0)),
                 total=float(item_data.get("total", 0)),
                 classification=item_data.get("classification", {}),
                 category=str(item_data.get("category", "General")),
             )
             items.append(ei)
-            grand_total += ei.total
+            grand_total += Decimal(str(ei.total))
 
     return EstimateJobResponse(
         id=job.id,
@@ -255,7 +270,8 @@ def _build_job_response(job: AIEstimateJob) -> EstimateJobResponse:
         model_used=job.model_used,
         tokens_used=job.tokens_used,
         duration_ms=job.duration_ms,
-        grand_total=round(grand_total, 2),
+        cost_usd_estimate=Decimal(str(getattr(job, "cost_usd_estimate", 0.0) or 0.0)),
+        grand_total=grand_total.quantize(Decimal("0.01")),
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -328,6 +344,7 @@ class AIService:
             "baidu_api_key",
             "yandex_api_key",
             "gigachat_api_key",
+            "kimi_api_key",
         ]
 
         from app.core.crypto import encrypt_secret
@@ -357,6 +374,21 @@ class AIService:
             meta["model_overrides"] = overrides
             return meta
 
+        def _merge_base_urls(
+            existing_meta: Any,
+            ollama_url: str | None,
+            vllm_url: str | None,
+        ) -> dict[str, Any]:
+            """Merge custom base URLs for local providers into metadata."""
+            meta: dict[str, Any] = dict(existing_meta) if isinstance(existing_meta, dict) else {}
+            if ollama_url is not None:
+                cleaned = ollama_url.strip()
+                meta["ollama_base_url"] = cleaned if cleaned else None
+            if vllm_url is not None:
+                cleaned = vllm_url.strip()
+                meta["vllm_base_url"] = cleaned if cleaned else None
+            return meta
+
         if settings is None:
             # Create with provided values (encrypt API keys at rest)
             create_kwargs: dict[str, Any] = {"user_id": uid}
@@ -367,6 +399,9 @@ class AIService:
             create_kwargs["preferred_model"] = data.preferred_model or "claude-sonnet"
             if data.model_overrides is not None:
                 create_kwargs["metadata_"] = _merge_overrides({}, data.model_overrides)
+            meta = create_kwargs.get("metadata_", {})
+            if isinstance(meta, dict):
+                create_kwargs["metadata_"] = _merge_base_urls(meta, data.ollama_base_url, data.vllm_base_url)
             settings = AISettings(**create_kwargs)
             settings = await self.settings_repo.create(settings)
         else:
@@ -379,6 +414,9 @@ class AIService:
                 fields["preferred_model"] = data.preferred_model
             if data.model_overrides is not None:
                 fields["metadata_"] = _merge_overrides(settings.metadata_, data.model_overrides)
+            if data.ollama_base_url is not None or data.vllm_base_url is not None:
+                existing_meta = fields.get("metadata_", settings.metadata_)
+                fields["metadata_"] = _merge_base_urls(existing_meta, data.ollama_base_url, data.vllm_base_url)
 
             if fields:
                 await self.settings_repo.update_fields(settings.id, **fields)
@@ -394,6 +432,13 @@ class AIService:
             {"user_id": user_id},
             source_module="oe_ai",
         )
+
+        # Sync custom base URLs for local providers into the global
+        # provider config so all subsequent call_ai() calls across the
+        # entire app (boq, takeoff, erp_chat, etc.) use the user's URL.
+        from app.modules.ai.ai_client import update_provider_config
+
+        update_provider_config(settings.metadata_)
 
         return _build_settings_response(settings)
 
@@ -488,6 +533,7 @@ class AIService:
                     error_message="AI returned no valid work items. Please try a more detailed description.",
                     model_used=provider,
                     tokens_used=tokens,
+                    cost_usd_estimate=float(estimate_cost_usd(provider, int(tokens or 0))),
                     duration_ms=duration_ms,
                 )
                 self.session.expunge(job)
@@ -507,6 +553,7 @@ class AIService:
                 result=items,
                 model_used=provider,
                 tokens_used=tokens,
+                cost_usd_estimate=float(estimate_cost_usd(provider, int(tokens or 0))),
                 duration_ms=duration_ms,
             )
 
@@ -669,6 +716,7 @@ class AIService:
                     error_message="AI could not extract work items from this photo. Please try a clearer image.",
                     model_used=provider,
                     tokens_used=tokens,
+                    cost_usd_estimate=float(estimate_cost_usd(provider, int(tokens or 0))),
                     duration_ms=duration_ms,
                 )
                 self.session.expunge(job)
@@ -687,6 +735,7 @@ class AIService:
                 result=items,
                 model_used=provider,
                 tokens_used=tokens,
+                cost_usd_estimate=float(estimate_cost_usd(provider, int(tokens or 0))),
                 duration_ms=duration_ms,
             )
 
@@ -897,7 +946,7 @@ class AIService:
                     self.session.expunge(job)
                     job = await self.job_repo.get_by_id(job_id)
                     if job is None:
-                        raise HTTPException(status_code=404, detail="Estimate job not found")
+                        raise HTTPException(status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale()))
                     return _build_job_response(job)
 
             elif category == "image":
@@ -919,7 +968,7 @@ class AIService:
             self.session.expunge(job)
             job = await self.job_repo.get_by_id(job_id)
             if job is None:
-                raise HTTPException(status_code=404, detail="Estimate job not found")
+                raise HTTPException(status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale()))
             return _build_job_response(job)
 
         # ── Choose prompt and call AI ──
@@ -984,12 +1033,13 @@ class AIService:
                     error_message="AI returned no valid work items from this file. Try a different file or add more detail.",
                     model_used=provider,
                     tokens_used=tokens,
+                    cost_usd_estimate=float(estimate_cost_usd(provider, int(tokens or 0))),
                     duration_ms=duration_ms,
                 )
                 self.session.expunge(job)
                 job = await self.job_repo.get_by_id(job_id)
                 if job is None:
-                    raise HTTPException(status_code=404, detail="Estimate job not found")
+                    raise HTTPException(status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale()))
                 return _build_job_response(job)
 
             # Store metadata about the file
@@ -1005,6 +1055,7 @@ class AIService:
                 result=items,
                 model_used=provider,
                 tokens_used=tokens,
+                cost_usd_estimate=float(estimate_cost_usd(provider, int(tokens or 0))),
                 duration_ms=duration_ms,
             )
 
@@ -1046,7 +1097,7 @@ class AIService:
         self.session.expunge(job)
         job = await self.job_repo.get_by_id(job_id)
         if job is None:
-            raise HTTPException(status_code=404, detail="Estimate job not found")
+            raise HTTPException(status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale()))
 
         await _safe_publish(
             "ai.estimate.completed",
@@ -1098,17 +1149,23 @@ class AIService:
         uid = uuid.UUID(user_id)
         job = await self.job_repo.get_by_id(job_id)
 
-        if job is None:
+        # R7 audit: collapse "job missing" + "different owner" into the
+        # same 404 surface so the response cannot be used as a job-id
+        # oracle by another tenant.
+        if job is None or str(job.user_id) != str(uid):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Estimate job not found",
+                detail=translate("errors.estimate_job_not_found", locale=get_locale()),
             )
 
-        if str(job.user_id) != str(uid):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You can only create BOQs from your own estimates",
-            )
+        # R7 audit: the caller can supply ANY ``request.project_id``;
+        # without this guard a non-owner could land an AI-generated BOQ
+        # inside a project they don't own (silent BOQ injection that
+        # bypasses the projects-module RBAC). The shared helper returns
+        # 404 on "missing" OR "no access" — identical surface.
+        from app.dependencies import verify_project_access
+
+        await verify_project_access(request.project_id, user_id, self.session)
 
         if job.status != "completed":
             raise HTTPException(

@@ -25,6 +25,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.projects.member_schemas import (
     AddProjectMemberRequest,
     ProjectMemberResponse,
@@ -65,7 +67,8 @@ async def _load_project(session: AsyncSession, project_id: uuid.UUID) -> Project
     ).scalar_one_or_none()
     if project is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
     return project
 

@@ -108,18 +108,18 @@ function WorkflowIntro() {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-content-primary">
             {t('portal.intro_title', {
-              defaultValue: 'Give outsiders exactly what they need — nothing more‌⁠‍',
+              defaultValue: 'Give outsiders exactly what they need — nothing more',
             })}
           </p>
           <p className="mt-1 text-xs leading-relaxed text-content-secondary">
             {t('portal.intro_body', {
               defaultValue:
-                'Invite a client, investor or subcontractor with a magic link, then Grant Access — one rule per resource (a single project, document or invoice) and one permission (view, comment, submit or sign). Every view, download and signature they make is recorded in the audit log with IP and timestamp. Revoke access any time; nothing is visible until you explicitly grant it.‌⁠‍',
+                'Invite a client, investor or subcontractor with a magic link, then Grant Access — one rule per resource (a single project, document or invoice) and one permission (view, comment, submit or sign). Every view, download and signature they make is recorded in the audit log with IP and timestamp. Revoke access any time; nothing is visible until you explicitly grant it.',
             })}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
-              {t('portal.intro_connects', { defaultValue: 'Connects to‌⁠‍' })}
+              {t('portal.intro_connects', { defaultValue: 'Connects to' })}
             </span>
             <button
               type="button"
@@ -127,7 +127,7 @@ function WorkflowIntro() {
               className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
             >
               {t('portal.intro_link_subs', {
-                defaultValue: 'Subcontractors‌⁠‍',
+                defaultValue: 'Subcontractors',
               })}
               <ArrowRight size={11} />
             </button>
@@ -137,7 +137,7 @@ function WorkflowIntro() {
               className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
             >
               {t('portal.intro_link_files', {
-                defaultValue: 'Project documents‌⁠‍',
+                defaultValue: 'Project documents',
               })}
               <ArrowRight size={11} />
             </button>
@@ -359,7 +359,7 @@ export function PortalPage() {
             </option>
             {(['invited', 'active', 'suspended', 'expired'] as PortalUserStatus[]).map((s) => (
               <option key={s} value={s}>
-                {s}
+                {t(`portal.status.${s}`, { defaultValue: s })}
               </option>
             ))}
           </select>
@@ -572,11 +572,13 @@ function UserTable({
                 {u.full_name || '—'}
               </td>
               <td className="px-4 py-2 text-xs">
-                <Badge variant="neutral">{u.portal_role}</Badge>
+                <Badge variant="neutral">
+                  {t(`portal.roles.${u.portal_role}`, { defaultValue: u.portal_role })}
+                </Badge>
               </td>
               <td className="px-4 py-2">
                 <Badge variant={STATUS_VARIANT[u.status] ?? 'neutral'} dot>
-                  {u.status}
+                  {t(`portal.status.${u.status}`, { defaultValue: u.status })}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-xs text-content-secondary">
@@ -670,13 +672,19 @@ function AccessRuleTable({
                   {u?.email ?? r.portal_user_id.slice(0, 8)}
                 </td>
                 <td className="px-4 py-2 text-xs">
-                  <Badge variant="neutral">{r.resource_type}</Badge>
+                  <Badge variant="neutral">
+                    {t(`portal.resource_types.${r.resource_type}`, {
+                      defaultValue: r.resource_type,
+                    })}
+                  </Badge>
                 </td>
                 <td className="px-4 py-2 font-mono text-xs text-content-secondary truncate max-w-[200px]">
                   {r.resource_id}
                 </td>
                 <td className="px-4 py-2">
-                  <Badge variant="blue">{r.permission}</Badge>
+                  <Badge variant="blue">
+                    {t(`portal.permissions.${r.permission}`, { defaultValue: r.permission })}
+                  </Badge>
                 </td>
                 <td className="px-4 py-2 text-xs text-content-secondary">
                   {r.expires_at ? <DateDisplay value={r.expires_at} /> : '—'}
@@ -760,13 +768,19 @@ function AuditLogTable({
                   {u?.email ?? e.portal_user_id.slice(0, 8)}
                 </td>
                 <td className="px-4 py-2 text-xs">
-                  <Badge variant="neutral">{e.document_type}</Badge>
+                  <Badge variant="neutral">
+                    {t(`portal.document_types.${e.document_type}`, {
+                      defaultValue: e.document_type,
+                    })}
+                  </Badge>
                 </td>
                 <td className="px-4 py-2 font-mono text-xs text-content-secondary truncate max-w-[180px]">
                   {e.document_id}
                 </td>
                 <td className="px-4 py-2">
-                  <Badge variant={ACTION_VARIANT[e.action] ?? 'neutral'}>{e.action}</Badge>
+                  <Badge variant={ACTION_VARIANT[e.action] ?? 'neutral'}>
+                    {t(`portal.actions.${e.action}`, { defaultValue: e.action })}
+                  </Badge>
                 </td>
                 <td className="px-4 py-2 font-mono text-xs text-content-secondary">
                   {e.ip_address ?? '—'}
@@ -884,13 +898,17 @@ function UserDrawer({
             />
             <Field
               label={t('portal.role', { defaultValue: 'Role' })}
-              value={<Badge variant="neutral">{user.portal_role}</Badge>}
+              value={
+                <Badge variant="neutral">
+                  {t(`portal.roles.${user.portal_role}`, { defaultValue: user.portal_role })}
+                </Badge>
+              }
             />
             <Field
               label={t('portal.status', { defaultValue: 'Status' })}
               value={
                 <Badge variant={STATUS_VARIANT[user.status] ?? 'neutral'} dot>
-                  {user.status}
+                  {t(`portal.status.${user.status}`, { defaultValue: user.status })}
                 </Badge>
               }
             />
@@ -957,10 +975,12 @@ function UserDrawer({
                 {auditEntries.slice(0, 8).map((e) => (
                   <li key={e.id} className="flex items-center gap-2 text-xs">
                     <Badge variant={ACTION_VARIANT[e.action] ?? 'neutral'} size="sm">
-                      {e.action}
+                      {t(`portal.actions.${e.action}`, { defaultValue: e.action })}
                     </Badge>
                     <span className="font-mono text-content-secondary">
-                      {e.document_type}
+                      {t(`portal.document_types.${e.document_type}`, {
+                        defaultValue: e.document_type,
+                      })}
                     </span>
                     <span className="font-mono text-content-tertiary truncate">
                       {e.document_id.slice(0, 8)}
@@ -1115,7 +1135,7 @@ function InviteModal({
                     : 'border-border bg-surface-primary text-content-secondary hover:border-oe-blue/50',
                 )}
               >
-                {r}
+                {t(`portal.roles.${r}`, { defaultValue: r })}
               </button>
             ))}
           </div>
@@ -1265,8 +1285,12 @@ function GrantAccessModal({
           hint={selectedPortalUser
             ? t('portal.grant_who_hint_selected', {
                 defaultValue: 'Role: {{role}} — {{status}}',
-                role: selectedPortalUser.portal_role,
-                status: selectedPortalUser.status,
+                role: t(`portal.roles.${selectedPortalUser.portal_role}`, {
+                  defaultValue: selectedPortalUser.portal_role,
+                }),
+                status: t(`portal.status.${selectedPortalUser.status}`, {
+                  defaultValue: selectedPortalUser.status,
+                }),
               })
             : t('portal.grant_who_hint', {
                 defaultValue: 'External party that will receive the link.',
@@ -1281,7 +1305,7 @@ function GrantAccessModal({
             <option value="">— {t('common.select', { defaultValue: 'Select' })} —</option>
             {users.map((u) => (
               <option key={u.id} value={u.id}>
-                {u.email} ({u.portal_role})
+                {u.email} ({t(`portal.roles.${u.portal_role}`, { defaultValue: u.portal_role })})
               </option>
             ))}
           </select>
@@ -1331,7 +1355,9 @@ function GrantAccessModal({
             className={inputCls}
           >
             {PERMISSIONS.map((p) => (
-              <option key={p} value={p}>{p}</option>
+              <option key={p} value={p}>
+                {t(`portal.permissions.${p}`, { defaultValue: p })}
+              </option>
             ))}
           </select>
         </WideModalField>

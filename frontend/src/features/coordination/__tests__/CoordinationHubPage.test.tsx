@@ -18,9 +18,20 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 
-vi.mock('@/shared/lib/api', () => ({
-  apiGet: vi.fn(),
-}));
+// Partial mock — keep ``getErrorMessage`` (and any other shared helpers
+// RecoveryCard reaches for) so the error-banner test isn't faking out
+// the entire api module. Without the spread, vi.mock replaced the
+// whole module and RecoveryCard threw "getErrorMessage is not a
+// function" the moment the all-fetch-fail test rendered it.
+vi.mock('@/shared/lib/api', async () => {
+  const actual = await vi.importActual<typeof import('@/shared/lib/api')>(
+    '@/shared/lib/api',
+  );
+  return {
+    ...actual,
+    apiGet: vi.fn(),
+  };
+});
 
 const navigate = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -222,5 +233,47 @@ describe('CoordinationHubPage', () => {
     expect(navigate).toHaveBeenCalledWith(
       '/clash?project=p-1&disciplineA=arch&disciplineB=struct',
     );
+  });
+
+  it('shows the project-missing empty state when every endpoint 404s', async () => {
+    // Simulates a stale ``oe_active_project`` localStorage entry pointing
+    // at a project that was deleted or that the user no longer has access
+    // to. Previously surfaced as a generic "Couldn't load this" — now
+    // routes the user to /projects with a self-explanatory empty state.
+    const stale = Object.assign(new Error('Project not found'), { status: 404 });
+    apiGetMock.mockRejectedValue(stale);
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('coordination-project-missing'),
+      ).toBeInTheDocument();
+    });
+    // The legacy "all-three-error" full-page card MUST NOT render — the
+    // missing-project branch takes precedence so the user sees a CTA
+    // instead of a retry-card dead-end.
+    expect(screen.queryByTestId('coordination-error')).not.toBeInTheDocument();
+  });
+
+  it('renders KPI cards even when only the trade-matrix fetch fails', async () => {
+    // Partial-failure regression test. Pre-fix, a single failing fan-out
+    // would leave the page rendering broken skeletons (matrix was passed
+    // ``data: undefined`` and stayed in its loading state forever). Now
+    // the matrix panel shows its own RecoveryCard and the KPI rollup
+    // renders normally.
+    apiGetMock.mockImplementation((url: string) => {
+      if (url.includes('/dashboard')) return Promise.resolve(DASHBOARD);
+      if (url.includes('/trade-matrix'))
+        return Promise.reject(new Error('matrix down'));
+      if (url.includes('/timeline')) return Promise.resolve(TIMELINE);
+      return Promise.reject(new Error('unexpected url'));
+    });
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId('coordination-kpi-cards')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('coordination-matrix-error')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('coordination-error'),
+    ).not.toBeInTheDocument();
   });
 });

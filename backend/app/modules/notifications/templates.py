@@ -119,6 +119,14 @@ _TEMPLATES: dict[str, str] = {
 
     "notification.document_uploaded_title": "Document uploaded",
     "notification.document_uploaded_body": "{document_name}",
+
+    # ── File comments (Epic B / B1) ──────────────────────────────────
+    "notifications.file_comments.mention.title": "You were mentioned in a comment",
+    "notifications.file_comments.mention.body": "\"{excerpt}\"",
+
+    # ── Digests (Epic B / B3) ────────────────────────────────────────
+    "notifications.digest.title": "Notification digest",
+    "notifications.digest.body": "You have {count} new updates on the {channel} channel.",
 }
 
 
@@ -156,6 +164,9 @@ _TYPE_TO_ICON: dict[str, str] = {
     # Responses — neutral inbound
     "rfi_responded": "info",
     "transmittal_responded": "info",
+
+    # File comment mention (Epic B / B1)
+    "file_comment_mention": "info",
 }
 
 

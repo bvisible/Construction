@@ -67,6 +67,7 @@ import {
   WideModalField,
 } from '@/shared/ui/WideModal';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
+import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { PipelineBanner } from './PipelineBanner';
 import { useToastStore } from '@/stores/useToastStore';
@@ -178,7 +179,10 @@ export function CRMPage() {
   });
   const oppsQ = useQuery({
     queryKey: ['crm', 'opportunities'],
-    queryFn: () => listOpportunities({ limit: 500 }),
+    // Backend caps /v1/crm/opportunities/?limit at 200 (422 above it).
+    // Passing 500 was a 422 every time the CRM page mounted — see user
+    // error log 2026-05-22.
+    queryFn: () => listOpportunities({ limit: 200 }),
     enabled: view === 'pipeline' || view === 'list',
   });
   const leadsQ = useQuery({
@@ -582,10 +586,14 @@ function PipelineBoard({
       <div className="flex gap-3 overflow-x-auto pb-3">
         {stages.map((stage) => {
           const items = byStage[stage.id] ?? [];
-          const total = items.reduce(
-            (acc, o) => acc + toNum(o.estimated_value),
-            0,
-          );
+          // Wave-10 fix: stage rollups no longer sum mixed-currency
+          // opportunities into a single first-seen-code number. The
+          // <MultiCurrencyTotal> grouping below honours per-deal codes
+          // and renders one chip per currency (sum within each).
+          const totalItems = items.map((o) => ({
+            amount: toNum(o.estimated_value),
+            currency: o.currency || null,
+          }));
           const isClosingStage =
             stage.is_final && (stage.is_won || stage.is_lost);
           return (
@@ -593,7 +601,7 @@ function PipelineBoard({
               key={stage.id}
               stage={stage}
               count={items.length}
-              total={total}
+              totalItems={totalItems}
               droppable={!isClosingStage}
             >
               {items.length === 0 ? (
@@ -647,13 +655,16 @@ function PipelineBoard({
 function StageColumn({
   stage,
   count,
-  total,
+  totalItems,
   droppable,
   children,
 }: {
   stage: PipelineStage;
   count: number;
-  total: number;
+  /** Per-deal {amount, currency} pairs for the rollup. Mixed currencies
+   *  render as a chip strip via <MultiCurrencyTotal>; single-currency
+   *  columns degrade to a plain MoneyDisplay (no visual churn). */
+  totalItems: { amount: number; currency: string | null }[];
   droppable: boolean;
   children: React.ReactNode;
 }) {
@@ -673,7 +684,7 @@ function StageColumn({
             {stage.name}
           </p>
           <p className="text-[11px] text-content-tertiary">
-            {count} · <MoneyDisplay amount={total} />
+            {count} · <MultiCurrencyTotal variant="inline" items={totalItems} compact />
           </p>
         </div>
         <span className="ml-2 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-surface-primary px-1.5 text-[11px] font-medium text-content-secondary">

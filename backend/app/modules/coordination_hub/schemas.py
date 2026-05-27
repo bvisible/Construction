@@ -11,10 +11,26 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # ── KPI rollup ─────────────────────────────────────────────────────────────
 
@@ -82,7 +98,12 @@ class CoordinationDashboardResponse(BaseModel):
     rule_packs: RulePackStats = Field(default_factory=RulePackStats)
     smart_views: SmartViewStats = Field(default_factory=SmartViewStats)
     bcf_activity: BCFActivityStats = Field(default_factory=BCFActivityStats)
-    open_cost_impact_total: float = 0.0
+    # v3 §10 — money is Decimal-as-string in JSON.
+    open_cost_impact_total: Decimal = Decimal("0")
+
+    @field_serializer("open_cost_impact_total", when_used="json")
+    def _ser_open_cost_impact_total(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Trade matrix ───────────────────────────────────────────────────────────

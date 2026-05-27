@@ -29,7 +29,9 @@ from app.core.file_signature import (
 from app.core.file_signature import (
     require as require_signature,
 )
+from app.core.i18n import get_locale
 from app.core.rate_limiter import approval_limiter
+from app.core.validation.messages import translate
 from app.dependencies import (
     CurrentUserId,
     RequirePermission,
@@ -491,7 +493,7 @@ async def add_submittal_attachment(
     doc_repo = DocumentRepository(session)
     document = await doc_repo.get_by_id(data.document_id)
     if document is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
 
     submittal = await service.get_submittal(submittal_id)
     await verify_project_access(submittal.project_id, str(user_id), session)

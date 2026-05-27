@@ -22,7 +22,7 @@ export interface CompactProjectCardProps {
   classificationStandard?: string;
   status?: string;
   boqCount?: number;
-  boqTotalValue?: number;
+  boqTotalValue?: number | string | null;
   updatedAt?: string | null;
   createdAt?: string | null;
   style?: React.CSSProperties;
@@ -54,7 +54,9 @@ const currencyFmt = new Intl.NumberFormat(getIntlLocale(), {
   maximumFractionDigits: 0,
 });
 
-function formatCompactValue(value: number): string {
+function formatCompactValue(raw: number | string | null | undefined): string {
+  const value = typeof raw === 'number' ? raw : Number(raw ?? 0);
+  if (!Number.isFinite(value)) return '0';
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(0)}K`;
   return currencyFmt.format(value);
@@ -97,7 +99,7 @@ export function CompactProjectCard({
     <Card
       hoverable
       padding="none"
-      className="group cursor-pointer relative animate-card-in overflow-hidden rounded-2xl bg-gradient-to-b from-surface-elevated to-surface-primary hover:shadow-lg hover:border-oe-blue/40 motion-safe:transition-all"
+      className="group cursor-pointer relative animate-card-in overflow-hidden rounded-xl bg-gradient-to-b from-surface-elevated to-surface-primary hover:shadow-lg hover:border-oe-blue/40 focus-within:ring-2 focus-within:ring-oe-blue/30 motion-safe:transition-all"
       style={style}
       onClick={() => navigate(`/projects/${id}`)}
     >
@@ -110,7 +112,7 @@ export function CompactProjectCard({
           </div>
           {status === 'archived' && (
             <span className="inline-flex items-center rounded-md bg-surface-secondary px-1.5 py-0.5 text-2xs font-medium text-content-tertiary">
-              {t('projects.status_archived', { defaultValue: 'Archived‌⁠‍' })}
+              {t('projects.status_archived', { defaultValue: 'Archived' })}
             </span>
           )}
         </div>
@@ -151,7 +153,7 @@ export function CompactProjectCard({
         <div className="px-3.5 pb-2">
           <div className="rounded-lg border border-border-light bg-gradient-to-br from-oe-blue-subtle/60 via-surface-elevated to-surface-elevated px-3 py-1.5">
             <div className="text-[10px] font-medium uppercase tracking-wider text-content-tertiary">
-              {t('projects.card_total_value', { defaultValue: 'Total value‌⁠‍' })}
+              {t('projects.card_total_value', { defaultValue: 'Total value' })}
             </div>
             <div className="mt-0.5 flex items-baseline gap-1.5">
               <span className="text-base font-bold tabular-nums text-content-primary">

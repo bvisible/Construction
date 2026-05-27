@@ -30,18 +30,8 @@ logger = logging.getLogger(__name__)
 
 
 async def _can_open_isolated_session() -> bool:
-    """‌⁠‍Return True only when we can safely write from a subscriber.
-
-    On SQLite (dev), foreground commits already shipped — re-entering with
-    a new session would race the single writer.
-    """
-    try:
-        async with async_session_factory() as probe:
-            bind = probe.get_bind()
-            dialect = getattr(getattr(bind, "dialect", None), "name", "") or ""
-        return dialect == "postgresql"
-    except Exception:
-        return False
+    """‌⁠‍Always True post-Epic-B — see :mod:`app.modules.notifications.events`."""
+    return True
 
 
 # ── Resources: certification expiry → notification ───────────────────────

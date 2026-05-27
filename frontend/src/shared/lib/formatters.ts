@@ -39,19 +39,23 @@ export function getIntlLocale(): string {
 }
 
 /** Currency-style number formatter (e.g. 1,234.56) using current locale. */
-export function fmtNumber(value: number, decimals = 2): string {
+export function fmtNumber(value: number | string | null | undefined, decimals = 2): string {
+  const n = typeof value === 'number' ? value : Number(value ?? 0);
+  const safe = Number.isFinite(n) ? n : 0;
   return new Intl.NumberFormat(getIntlLocale(), {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  }).format(value);
+  }).format(safe);
 }
 
 /** Compact number formatter (e.g. 1.2M) using current locale. */
-export function fmtCompact(value: number): string {
+export function fmtCompact(value: number | string | null | undefined): string {
+  const n = typeof value === 'number' ? value : Number(value ?? 0);
+  const safe = Number.isFinite(n) ? n : 0;
   return new Intl.NumberFormat(getIntlLocale(), {
     notation: 'compact',
     maximumFractionDigits: 1,
-  }).format(value);
+  }).format(safe);
 }
 
 /**
@@ -67,7 +71,13 @@ export function fmtCompact(value: number): string {
  * Callers that genuinely want a EUR fallback (legacy LanceDB rows
  * that pre-date currency stamping) can still pass ``"EUR"`` explicitly.
  */
-export function fmtCurrency(value: number, currency?: string | null): string {
+export function fmtCurrency(value: number | string | null | undefined, currency?: string | null): string {
+  // Defence-in-depth against the project-wide Decimal-as-string money
+  // contract leaking past TypeScript: coerce here so `.toFixed` in the
+  // catch path can never crash, and so Intl.NumberFormat never sees a
+  // string it might surprise-format.
+  const n = typeof value === 'number' ? value : Number(value ?? 0);
+  const safe = Number.isFinite(n) ? n : 0;
   const trimmed = (currency || '').trim().toUpperCase();
   const isValid = /^[A-Z]{3}$/.test(trimmed);
   if (!isValid) {
@@ -75,16 +85,16 @@ export function fmtCurrency(value: number, currency?: string | null): string {
     // without a currency symbol. Prevents the EUR-on-USD-project bug.
     return new Intl.NumberFormat(getIntlLocale(), {
       maximumFractionDigits: 0,
-    }).format(value);
+    }).format(safe);
   }
   try {
     return new Intl.NumberFormat(getIntlLocale(), {
       style: 'currency',
       currency: trimmed,
       maximumFractionDigits: 0,
-    }).format(value);
+    }).format(safe);
   } catch {
-    return `${value.toFixed(0)} ${trimmed}`;
+    return `${safe.toFixed(0)} ${trimmed}`;
   }
 }
 
@@ -96,4 +106,90 @@ export function fmtDate(dateStr: string, options?: Intl.DateTimeFormatOptions): 
     year: 'numeric',
   };
   return new Date(dateStr).toLocaleDateString(getIntlLocale(), options || defaults);
+}
+
+// ---------------------------------------------------------------------------
+// Wave 24 — unit-system formatters (metric / imperial)
+//
+// Each formatter accepts a base SI value (m, m², m³, kg, °C), a unit system,
+// and an explicit locale (test-friendly — no i18next runtime dependency).
+// Returns '—' for null / undefined / NaN.
+// ---------------------------------------------------------------------------
+
+export type UnitSystem = 'metric' | 'imperial';
+
+const EM_DASH = '—';
+
+function _fmtUnit(
+  value: number | null | undefined,
+  locale: string,
+  unit: string,
+  decimals = 2,
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) return EM_DASH;
+  const num = new Intl.NumberFormat(locale, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: Math.max(decimals, 4),
+  }).format(value);
+  return `${num} ${unit}`;
+}
+
+/** Area (base unit: m²). Imperial → sqft (× 10.7639). */
+export function formatArea(
+  value: number | null | undefined,
+  system: UnitSystem,
+  locale: string,
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value as number)) return EM_DASH;
+  return system === 'imperial'
+    ? _fmtUnit((value as number) * 10.7639, locale, 'sqft')
+    : _fmtUnit(value as number, locale, 'm²');
+}
+
+/** Length (base unit: m). Imperial → ft (× 3.28084). */
+export function formatLength(
+  value: number | null | undefined,
+  system: UnitSystem,
+  locale: string,
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value as number)) return EM_DASH;
+  return system === 'imperial'
+    ? _fmtUnit((value as number) * 3.28084, locale, 'ft')
+    : _fmtUnit(value as number, locale, 'm');
+}
+
+/** Volume (base unit: m³). Imperial → ft³ (× 35.3147). */
+export function formatVolume(
+  value: number | null | undefined,
+  system: UnitSystem,
+  locale: string,
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value as number)) return EM_DASH;
+  return system === 'imperial'
+    ? _fmtUnit((value as number) * 35.3147, locale, 'ft³')
+    : _fmtUnit(value as number, locale, 'm³');
+}
+
+/** Weight (base unit: kg). Imperial → lb (× 2.20462). */
+export function formatWeight(
+  value: number | null | undefined,
+  system: UnitSystem,
+  locale: string,
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value as number)) return EM_DASH;
+  return system === 'imperial'
+    ? _fmtUnit((value as number) * 2.20462, locale, 'lb')
+    : _fmtUnit(value as number, locale, 'kg');
+}
+
+/** Temperature (base unit: °C). Imperial → °F (× 9/5 + 32). */
+export function formatTemperature(
+  value: number | null | undefined,
+  system: UnitSystem,
+  locale: string,
+): string {
+  if (value === null || value === undefined || !Number.isFinite(value as number)) return EM_DASH;
+  return system === 'imperial'
+    ? _fmtUnit((value as number) * 9 / 5 + 32, locale, '°F')
+    : _fmtUnit(value as number, locale, '°C');
 }

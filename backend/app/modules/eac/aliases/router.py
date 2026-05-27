@@ -30,6 +30,59 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import CurrentUserId, SessionDep
 from app.modules.eac.aliases.bulk_resolver import resolve_bulk
 from app.modules.eac.aliases.resolver import resolve_alias
+# R7 audit (Wave 3): magic-byte denylist for alias upload sniffing.
+# Reuse the proven set from property_dev so the denylist stays consistent
+# across modules. CSV has no magic-byte signature so we denylist obvious
+# non-text binaries.
+ALIAS_UPLOAD_BANNED_PREFIXES: tuple[bytes, ...] = (
+    b"MZ",                # Windows PE
+    b"\x7fELF",           # Linux ELF
+    b"\xca\xfe\xba\xbe",  # Mach-O / Java class
+    b"PK\x03\x04",        # ZIP / XLSX / DOCX
+    b"PK\x05\x06",
+    b"\xd0\xcf\x11\xe0",  # OLE compound (legacy XLS)
+    b"%PDF-",
+    b"\x89PNG",
+    b"\xff\xd8\xff",      # JPEG
+    b"GIF8",
+)
+# Hard cap on alias-import body size. Aliases are tiny rows; an 8 MB
+# limit comfortably covers tens of thousands of synonyms while preventing
+# a worker OOM via a multi-GB upload.
+ALIAS_UPLOAD_MAX_BYTES = 8 * 1024 * 1024
+
+
+def validate_alias_upload_bytes(raw: bytes) -> None:
+    """‌⁠‍R7 (Wave 3): gate raw upload bytes before parsing.
+
+    Raises :class:`HTTPException` with status 413 when the payload is
+    larger than :data:`ALIAS_UPLOAD_MAX_BYTES`, or 415 when the first
+    16 bytes match a known binary magic-byte prefix from
+    :data:`ALIAS_UPLOAD_BANNED_PREFIXES`.
+
+    Factored out so unit tests can drive the gate without booting the
+    full FastAPI app (which loads ~110 modules on every test run).
+    """
+    if len(raw) > ALIAS_UPLOAD_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                f"Upload exceeds {ALIAS_UPLOAD_MAX_BYTES // (1024 * 1024)} MB "
+                f"limit (got {len(raw)} bytes)."
+            ),
+        )
+    if not raw:
+        return
+    head = raw[:16]
+    for sig in ALIAS_UPLOAD_BANNED_PREFIXES:
+        if head.startswith(sig):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail=(
+                    "Uploaded file does not look like CSV or JSON "
+                    "(binary signature detected)."
+                ),
+            )
 from app.modules.eac.aliases.schemas import (
     EacAliasBulkResolveRequest,
     EacAliasExportRequest,
@@ -155,11 +208,17 @@ async def list_aliases_route(
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ) -> list[EacParameterAliasRead]:
-    """‌⁠‍List aliases visible to the caller, optionally filtered by scope/text."""
+    """‌⁠‍List aliases visible to the caller, optionally filtered by scope/text.
+
+    R7 audit (Wave 3): tenant scope is now enforced by the service —
+    the result set is the caller's own aliases plus the
+    ``tenant_id IS NULL`` system built-ins.
+    """
     _check_scope(scope)
-    _ = await _resolve_tenant_id(session, user_id)
+    tenant_id = await _resolve_tenant_id(session, user_id)
     aliases = await list_aliases(
         session,
+        tenant_id=tenant_id,
         scope=scope,
         scope_id=scope_id,
         q=q,
@@ -214,10 +273,17 @@ async def get_alias_route(
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> EacParameterAliasRead:
-    """Fetch a single alias by id."""
-    _ = await _resolve_tenant_id(session, user_id)
+    """Fetch a single alias by id.
+
+    R7 audit (Wave 3): IDOR-404 — cross-tenant ``alias_id`` returns
+    the same 404 as a true miss so existence is not leaked.
+    Built-in aliases (``tenant_id IS NULL``) remain visible to all.
+    """
+    tenant_id = await _resolve_tenant_id(session, user_id)
     alias = await session.get(EacParameterAlias, alias_id)
-    if alias is None:
+    if alias is None or (
+        alias.tenant_id is not None and alias.tenant_id != tenant_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alias {alias_id} not found",
@@ -242,10 +308,12 @@ async def update_alias_route(
         for syn in payload.synonyms:
             _check_kind(syn.kind)
             _check_source_filter(syn.source_filter)
-    _ = await _resolve_tenant_id(session, user_id)
+    tenant_id = await _resolve_tenant_id(session, user_id)
     try:
-        alias = await update_alias(session, alias_id, payload)
+        alias = await update_alias(session, alias_id, payload, tenant_id=tenant_id)
     except LookupError as exc:
+        # R7 audit (Wave 3): cross-tenant alias_id surfaces as 404 from
+        # the service layer (same shape as a true miss).
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=str(exc),
@@ -262,10 +330,15 @@ async def delete_alias_route(
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> None:
-    """Hard-delete an alias. Blocks when rules still reference it."""
-    _ = await _resolve_tenant_id(session, user_id)
+    """Hard-delete an alias. Blocks when rules still reference it.
+
+    R7 audit (Wave 3): cross-tenant ``alias_id`` returns 404 (same as
+    a miss); built-in aliases (``tenant_id IS NULL``) cannot be deleted
+    by a regular tenant (the service raises LookupError → 404).
+    """
+    tenant_id = await _resolve_tenant_id(session, user_id)
     try:
-        await delete_alias(session, alias_id)
+        await delete_alias(session, alias_id, tenant_id=tenant_id)
     except LookupError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -296,15 +369,21 @@ async def get_alias_usages_route(
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> EacAliasUsageResponse:
-    """Return every active rule that references this alias."""
-    _ = await _resolve_tenant_id(session, user_id)
+    """Return every active rule that references this alias.
+
+    R7 audit (Wave 3): IDOR-404 + the usage scan is scoped to the
+    caller's tenant so we never inspect another tenant's rule corpus.
+    """
+    tenant_id = await _resolve_tenant_id(session, user_id)
     alias = await session.get(EacParameterAlias, alias_id)
-    if alias is None:
+    if alias is None or (
+        alias.tenant_id is not None and alias.tenant_id != tenant_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alias {alias_id} not found",
         )
-    usages = await find_usages(session, alias_id)
+    usages = await find_usages(session, alias_id, tenant_id=tenant_id)
     return EacAliasUsageResponse(
         usages=usages,
         can_delete=not usages,
@@ -321,11 +400,16 @@ async def test_alias_route(
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> EacAliasTestResponse:
-    """Probe an alias against a synthetic ``{property_name}`` element."""
+    """Probe an alias against a synthetic ``{property_name}`` element.
+
+    R7 audit (Wave 3): cross-tenant ``alias_id`` returns 404.
+    """
     _check_source_filter(payload.source)
-    _ = await _resolve_tenant_id(session, user_id)
+    tenant_id = await _resolve_tenant_id(session, user_id)
     alias = await session.get(EacParameterAlias, alias_id)
-    if alias is None:
+    if alias is None or (
+        alias.tenant_id is not None and alias.tenant_id != tenant_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alias {alias_id} not found",
@@ -360,12 +444,26 @@ async def resolve_aliases_bulk_route(
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> list[EacAliasResolveResponse]:
-    """Resolve multiple aliases against a single element in one round-trip."""
-    _ = await _resolve_tenant_id(session, user_id)
+    """Resolve multiple aliases against a single element in one round-trip.
+
+    R7 audit (Wave 3): every queried alias must belong to the caller's
+    tenant (or be a built-in). Cross-tenant ids are silently dropped
+    from the result set — same shape as a true miss so existence is
+    not leaked.
+    """
+    from sqlalchemy import or_ as _or
+
+    tenant_id = await _resolve_tenant_id(session, user_id)
     if not payload.alias_ids:
         return []
 
-    stmt = select(EacParameterAlias).where(EacParameterAlias.id.in_(payload.alias_ids))
+    stmt = select(EacParameterAlias).where(
+        EacParameterAlias.id.in_(payload.alias_ids),
+        _or(
+            EacParameterAlias.tenant_id == tenant_id,
+            EacParameterAlias.tenant_id.is_(None),
+        ),
+    )
     result = await session.execute(stmt)
     aliases = list(result.scalars().unique().all())
     if not aliases:
@@ -400,10 +498,15 @@ async def resolve_alias_route(
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> EacAliasResolveResponse:
-    """Resolve one alias against ``payload.element``."""
-    _ = await _resolve_tenant_id(session, user_id)
+    """Resolve one alias against ``payload.element``.
+
+    R7 audit (Wave 3): cross-tenant ``alias_id`` returns 404.
+    """
+    tenant_id = await _resolve_tenant_id(session, user_id)
     alias = await session.get(EacParameterAlias, payload.alias_id)
-    if alias is None:
+    if alias is None or (
+        alias.tenant_id is not None and alias.tenant_id != tenant_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Alias {payload.alias_id} not found",
@@ -442,9 +545,11 @@ async def export_aliases_route(
             detail="format must be 'json' or 'csv'",
         )
     _check_scope(payload.scope)
-    _ = await _resolve_tenant_id(session, user_id)
+    tenant_id = await _resolve_tenant_id(session, user_id)
+    # R7 audit (Wave 3): export is tenant-scoped — own rows + built-ins only.
     aliases = await list_aliases(
         session,
+        tenant_id=tenant_id,
         scope=payload.scope,
         scope_id=payload.scope_id,
         q=None,
@@ -517,6 +622,10 @@ async def import_aliases_route(
     tenant_id = await _resolve_tenant_id(session, user_id)
     raw = await file.read()
 
+    # R7 audit (Wave 3): size cap + magic-byte sniff gate before any
+    # parser sees the bytes. See :func:`validate_alias_upload_bytes`.
+    validate_alias_upload_bytes(raw)
+
     summary = EacAliasImportSummary(inserted=0, updated=0, skipped=0, errors=[])
     name = (file.filename or "").lower()
     is_csv = name.endswith(".csv")
@@ -575,10 +684,14 @@ async def import_aliases_route(
                 summary.skipped += 1
                 continue
 
+            # R7 audit (Wave 3): scope the upsert lookup to this tenant so
+            # a tenant-B alias with the same name cannot be hijacked into
+            # tenant A's import set.
             stmt = select(EacParameterAlias).where(
                 EacParameterAlias.scope == scope,
                 EacParameterAlias.scope_id == scope_id,
                 EacParameterAlias.name == alias_name,
+                EacParameterAlias.tenant_id == tenant_id,
             )
             existing = (await session.execute(stmt)).scalar_one_or_none()
 
@@ -603,7 +716,9 @@ async def import_aliases_route(
                     default_unit=item.get("default_unit"),
                     synonyms=synonyms,
                 )
-                await update_alias(session, existing.id, update_payload)
+                await update_alias(
+                    session, existing.id, update_payload, tenant_id=tenant_id,
+                )
                 summary.updated += 1
         except Exception as exc:  # noqa: BLE001
             summary.errors.append(f"Failed to import {item!r}: {exc}")

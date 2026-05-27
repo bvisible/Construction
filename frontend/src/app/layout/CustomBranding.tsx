@@ -84,8 +84,8 @@ export function CustomBranding({ iconified }: CustomBrandingProps) {
           type="button"
           onClick={() => setEditing(true)}
           className="hover:opacity-80 transition-opacity"
-          title={companyName || t('branding.edit', { defaultValue: 'Customise branding‌⁠‍' })}
-          aria-label={t('branding.edit', { defaultValue: 'Customise branding‌⁠‍' })}
+          title={companyName || t('branding.edit', { defaultValue: 'Customise branding' })}
+          aria-label={t('branding.edit', { defaultValue: 'Customise branding' })}
         >
           <img
             src={logoDataUrl}
@@ -127,8 +127,8 @@ export function CustomBranding({ iconified }: CustomBrandingProps) {
               type="button"
               onClick={() => setEditing(true)}
               className="block w-full text-left rounded-lg p-1 -m-1 hover:bg-surface-secondary/40 transition-colors"
-              aria-label={t('branding.edit', { defaultValue: 'Customise branding‌⁠‍' })}
-              title={t('branding.edit', { defaultValue: 'Customise branding‌⁠‍' })}
+              aria-label={t('branding.edit', { defaultValue: 'Customise branding' })}
+              title={t('branding.edit', { defaultValue: 'Customise branding' })}
             >
               {mode === 'logo' && logoDataUrl ? (
                 <img
@@ -209,7 +209,7 @@ export function CustomBranding({ iconified }: CustomBrandingProps) {
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
             'transition-colors',
           )}
-          aria-label={t('branding.edit', { defaultValue: 'Customise branding‌⁠‍' })}
+          aria-label={t('branding.edit', { defaultValue: 'Customise branding' })}
           title={t('branding.edit_tooltip', {
             defaultValue: 'Add your logo or company name',
           })}
@@ -330,7 +330,7 @@ function BrandingEditor({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className="w-full max-w-md rounded-2xl bg-surface-primary border border-border shadow-2xl shadow-black/30 overflow-hidden">
+      <div className="w-full max-w-md rounded-xl bg-surface-primary border border-border shadow-2xl shadow-black/30 overflow-hidden">
         <header className="flex items-center justify-between px-5 py-4 border-b border-border-light">
           <h2
             id="branding-editor-heading"
@@ -342,7 +342,7 @@ function BrandingEditor({
             type="button"
             onClick={onClose}
             className="h-7 w-7 flex items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
-            aria-label={t('common.close', { defaultValue: 'Close' })}
+            aria-label={t('common.close')}
           >
             <X size={16} />
           </button>

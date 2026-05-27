@@ -295,6 +295,28 @@ class StorageBackend(ABC):
         Raises :class:`FileNotFoundError` if ``key`` does not exist.
         """
 
+    async def list_prefix(self, prefix: str) -> list[tuple[str, int]]:
+        """Return ``(key, size_bytes)`` for every blob under ``prefix``.
+
+        This is a **bulk** probe: one round-trip to the storage backend
+        regardless of how many objects sit under ``prefix``.  It's the
+        right primitive when a caller would otherwise issue N parallel
+        ``exists()`` / ``size()`` calls — e.g. list endpoints that need
+        to summarise per-row storage usage across a paginated set.
+
+        The default implementation raises :class:`NotImplementedError`.
+        :class:`LocalStorageBackend` walks the directory tree once;
+        :class:`S3StorageBackend` paginates ``list_objects_v2`` until
+        truncation completes.  Returned keys are full storage keys
+        (POSIX path) — callers slice them by the model_id segment when
+        grouping results.
+        """
+        _ = prefix
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement list_prefix(). "
+            "Callers must fall back to per-object exists()/size() probes."
+        )
+
     async def read_bytes(self, key: str) -> bytes:
         """Return the blob at ``key`` as a single ``bytes`` object.
 
@@ -574,6 +596,43 @@ class LocalStorageBackend(StorageBackend):
             return path.stat().st_size
 
         return await asyncio.to_thread(_size)
+
+    async def list_prefix(self, prefix: str) -> list[tuple[str, int]]:
+        """Walk the directory tree under ``prefix`` once and return every
+        ``(key, size_bytes)`` pair.
+
+        Replaces N parallel ``exists()`` + ``size()`` probes with one
+        ``rglob`` sweep — important for the BIM list endpoint where a
+        50-row page would otherwise issue 150+ individual file stats.
+        """
+        normalised = _normalise_key(prefix) if prefix else ""
+        root = (
+            self.base_dir
+            if not normalised
+            else self.base_dir.joinpath(*normalised.split("/"))
+        )
+
+        def _walk() -> list[tuple[str, int]]:
+            if not root.is_dir():
+                return []
+            out: list[tuple[str, int]] = []
+            base = self.base_dir
+            for child in root.rglob("*"):
+                if not child.is_file():
+                    continue
+                try:
+                    size_bytes = child.stat().st_size
+                except OSError:
+                    continue
+                try:
+                    rel = child.resolve().relative_to(base)
+                except ValueError:
+                    continue
+                key = rel.as_posix()
+                out.append((key, size_bytes))
+            return out
+
+        return await asyncio.to_thread(_walk)
 
     async def open_stream(self, key: str) -> AsyncIterator[bytes]:
         path = self._path_for(key)
@@ -967,6 +1026,40 @@ class S3StorageBackend(StorageBackend):
                     raise FileNotFoundError(f"No blob at key: {key}") from exc
                 raise
             return int(resp["ContentLength"])
+
+    async def list_prefix(self, prefix: str) -> list[tuple[str, int]]:
+        """Paginated ``list_objects_v2`` sweep under ``prefix``.
+
+        Returns every ``(key, size_bytes)`` pair the bucket exposes for
+        the prefix in a single logical operation.  ``list_objects_v2``
+        is cheap (one HTTP call per 1000 keys) compared to N ``head_object``
+        probes, so the BIM list endpoint can sub a single sweep in for
+        what was previously a fan-out of artifact-size + has-original +
+        find-geometry HEAD requests per row.
+        """
+        normalised = _normalise_key(prefix) if prefix else ""
+        out: list[tuple[str, int]] = []
+        async with self._client_ctx() as client:  # type: ignore[attr-defined]
+            continuation: str | None = None
+            while True:
+                kwargs: dict[str, object] = {
+                    "Bucket": self._bucket,
+                    "Prefix": normalised,
+                }
+                if continuation:
+                    kwargs["ContinuationToken"] = continuation
+                resp = await client.list_objects_v2(**kwargs)
+                for obj in resp.get("Contents") or []:
+                    try:
+                        key = str(obj["Key"])
+                        size_bytes = int(obj["Size"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    out.append((key, size_bytes))
+                if not resp.get("IsTruncated"):
+                    break
+                continuation = resp.get("NextContinuationToken")
+        return out
 
     async def open_stream(self, key: str) -> AsyncIterator[bytes]:
         normalised = _normalise_key(key)

@@ -5,6 +5,7 @@ No business logic — pure data access.
 """
 
 import uuid
+from decimal import Decimal
 
 from sqlalchemy import Float, cast, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,8 +55,8 @@ class CatalogResourceRepository:
         category: str | None = None,
         region: str | None = None,
         unit: str | None = None,
-        min_price: float | None = None,
-        max_price: float | None = None,
+        min_price: float | Decimal | None = None,
+        max_price: float | Decimal | None = None,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[list[CatalogResource], int]:
@@ -100,10 +101,10 @@ class CatalogResourceRepository:
             base = base.where(CatalogResource.unit == unit)
 
         if min_price is not None:
-            base = base.where(cast(CatalogResource.base_price, Float) >= min_price)
+            base = base.where(cast(CatalogResource.base_price, Float) >= float(min_price))
 
         if max_price is not None:
-            base = base.where(cast(CatalogResource.base_price, Float) <= max_price)
+            base = base.where(cast(CatalogResource.base_price, Float) <= float(max_price))
 
         # Count
         count_stmt = select(func.count()).select_from(base.subquery())

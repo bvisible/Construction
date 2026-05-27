@@ -11,7 +11,12 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep
+from app.dependencies import (
+    CurrentUserId,
+    RequirePermission,
+    SessionDep,
+    verify_project_access,
+)
 from app.modules.resources.schemas import (
     AssignmentCreate,
     AssignmentProposeRequest,
@@ -403,9 +408,15 @@ async def list_assignments_for_resource(
 async def create_assignment(
     data: AssignmentCreate,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.assign")),
     service: ResourcesService = Depends(_get_service),
 ) -> AssignmentResponse:
+    # Cross-tenant guard: any caller-supplied project_id must belong to the
+    # caller (or admin). Pre-fix, ``AssignmentCreate.project_id`` was trusted
+    # raw and let one tenant assign a resource to another tenant's project.
+    if data.project_id is not None:
+        await verify_project_access(data.project_id, user_id, session)
     assignment = await service.create_assignment(data, user_id=user_id)
     return AssignmentResponse.model_validate(assignment)
 
@@ -418,9 +429,13 @@ async def create_assignment(
 async def propose_assignment(
     data: AssignmentProposeRequest,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.assign")),
     service: ResourcesService = Depends(_get_service),
 ) -> AssignmentResponse:
+    # Cross-tenant guard on body-supplied project_id (same as create_assignment).
+    if data.project_id is not None:
+        await verify_project_access(data.project_id, user_id, session)
     try:
         assignment = await service.propose_assignment(data, user_id=user_id)
     except ResourceConflictError as exc:
@@ -521,6 +536,8 @@ async def cancel_assignment(
 
 @router.get("/requests/", response_model=list[ResourceRequestResponse])
 async def list_requests(
+    user_id: CurrentUserId,
+    session: SessionDep,
     project_id: uuid.UUID = Query(...),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
@@ -528,6 +545,10 @@ async def list_requests(
     _perm: None = Depends(RequirePermission("resources.read")),
     service: ResourcesService = Depends(_get_service),
 ) -> list[ResourceRequestResponse]:
+    # Cross-tenant guard: caller must own the project (or be admin); a 404
+    # is returned otherwise so this endpoint cannot be used as a
+    # project-UUID existence oracle.
+    await verify_project_access(project_id, user_id, session)
     items, _ = await service.list_requests(
         project_id, offset=offset, limit=limit, request_status=status_filter
     )
@@ -538,9 +559,14 @@ async def list_requests(
 async def create_request(
     data: ResourceRequestCreate,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.request")),
     service: ResourcesService = Depends(_get_service),
 ) -> ResourceRequestResponse:
+    # Cross-tenant guard on body-supplied project_id. Pre-fix any user
+    # (even a freshly-registered viewer) could file resource requests
+    # against another tenant's project.
+    await verify_project_access(data.project_id, user_id, session)
     req = await service.request_resource(data, user_id=user_id)
     return ResourceRequestResponse.model_validate(req)
 
@@ -548,10 +574,13 @@ async def create_request(
 @router.get("/requests/{request_id}", response_model=ResourceRequestResponse)
 async def get_request(
     request_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.read")),
     service: ResourcesService = Depends(_get_service),
 ) -> ResourceRequestResponse:
     req = await service.get_request(request_id)
+    await verify_project_access(req.project_id, user_id, session)
     return ResourceRequestResponse.model_validate(req)
 
 
@@ -559,9 +588,13 @@ async def get_request(
 async def update_request(
     request_id: uuid.UUID,
     data: ResourceRequestUpdate,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.update")),
     service: ResourcesService = Depends(_get_service),
 ) -> ResourceRequestResponse:
+    existing = await service.get_request(request_id)
+    await verify_project_access(existing.project_id, user_id, session)
     req = await service.update_request(request_id, data)
     return ResourceRequestResponse.model_validate(req)
 
@@ -569,9 +602,13 @@ async def update_request(
 @router.delete("/requests/{request_id}", status_code=204)
 async def delete_request(
     request_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.delete")),
     service: ResourcesService = Depends(_get_service),
 ) -> None:
+    existing = await service.get_request(request_id)
+    await verify_project_access(existing.project_id, user_id, session)
     await service.delete_request(request_id)
 
 
@@ -584,9 +621,12 @@ async def fulfill_request(
     request_id: uuid.UUID,
     payload: ResourceRequestFulfill,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("resources.fulfill_request")),
     service: ResourcesService = Depends(_get_service),
 ) -> AssignmentResponse:
+    existing = await service.get_request(request_id)
+    await verify_project_access(existing.project_id, user_id, session)
     try:
         assignment = await service.fulfill_request(
             request_id, payload, user_id=user_id
@@ -665,6 +705,8 @@ async def delete_link(
 
 @router.get("/board/", response_model=BoardResponse)
 async def board(
+    user_id: CurrentUserId,
+    session: SessionDep,
     start: datetime = Query(...),
     end: datetime = Query(...),
     project_id: uuid.UUID | None = Query(default=None),
@@ -676,6 +718,11 @@ async def board(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="end must be after start",
         )
+    # When the caller scopes the board to a project, verify access; the
+    # unscoped board (project_id=None) is the org-wide dispatcher view
+    # and is gated by ``resources.read`` only.
+    if project_id is not None:
+        await verify_project_access(project_id, user_id, session)
     entries = await service.board(start, end, project_id=project_id)
     return BoardResponse(
         period_start=start,

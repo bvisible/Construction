@@ -34,9 +34,13 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   SkeletonTable,
   ConfirmDialog,
+  TabBar,
+  tabIds,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import {
   WideModal,
   WideModalSection,
@@ -130,8 +134,12 @@ interface Payment {
   id: string;
   invoice_id: string;
   invoice_number: string;
-  amount: number;
-  currency: string;
+  // Backend serialises Decimal as string ("250000.00") per Wave 8 sweep.
+  // Accept both for back-compat with older fixtures.
+  amount: string | number;
+  // Backend field is `currency_code`; older payloads used `currency`.
+  currency?: string;
+  currency_code?: string;
   payment_date: string;
   method: string;
   reference: string;
@@ -300,6 +308,15 @@ function FinanceSummaryCards({ projectId }: { projectId: string }) {
   // Currency comes from the data (task #217) — never hardcoded. When the
   // backend cannot resolve one (no priced records yet) MoneyDisplay still
   // renders, falling back to the user's preferred currency for the symbol.
+  //
+  // Wave-10 follow-up: backend ``/v1/finance/dashboard/`` collapses mixed
+  // currencies to a single "dominant" code server-side, so we cannot do
+  // a per-currency split here yet (the per-currency totals are not in
+  // the payload). When the backend grows a ``totals_by_currency`` array
+  // — see /v1/property-dev/dashboards/cashflow_waterfall/ for the shape
+  // — switch these cards to <MultiCurrencyTotal variant="kpi">. The
+  // single-currency MoneyDisplay below is preserved as a transitional
+  // fallback. Tracked separately from this PR.
   const currency = dashboard?.currency || undefined;
   const consumedPct = Number(dashboard?.budget_consumed_pct ?? 0);
   const warningLevel = dashboard?.budget_warning_level ?? 'normal';
@@ -316,28 +333,28 @@ function FinanceSummaryCards({ projectId }: { projectId: string }) {
 
   const cards = [
     {
-      label: t('finance.summary_total_budget', { defaultValue: 'Total Budget‌⁠‍' }),
+      label: t('finance.summary_total_budget', { defaultValue: 'Total Budget' }),
       value: totalBudget,
       icon: <Wallet size={18} />,
       color: 'bg-oe-blue/10 text-oe-blue',
       accent: 'bg-oe-blue',
     },
     {
-      label: t('finance.summary_total_invoiced', { defaultValue: 'Total Invoiced (Payable)‌⁠‍' }),
+      label: t('finance.summary_total_invoiced', { defaultValue: 'Total Invoiced (Payable)' }),
       value: totalInvoiced,
       icon: <Receipt size={18} />,
       color: 'bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400',
       accent: 'bg-amber-500',
     },
     {
-      label: t('finance.summary_receivable', { defaultValue: 'Receivable‌⁠‍' }),
+      label: t('finance.summary_receivable', { defaultValue: 'Receivable' }),
       value: totalReceivable,
       icon: <PiggyBank size={18} />,
       color: 'bg-green-50 text-green-600 dark:bg-green-950/40 dark:text-green-400',
       accent: 'bg-green-500',
     },
     {
-      label: t('finance.summary_remaining', { defaultValue: 'Remaining Budget‌⁠‍' }),
+      label: t('finance.summary_remaining', { defaultValue: 'Remaining Budget' }),
       value: remaining,
       icon: <DollarSign size={18} />,
       color: remaining >= 0
@@ -436,7 +453,7 @@ function FinanceModuleLinks({ projectId: _projectId }: { projectId: string }) {
         className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-3 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-oe-blue transition-colors"
       >
         <ExternalLink size={12} />
-        {t('finance.link_to_boq', { defaultValue: 'BOQ Estimate‌⁠‍' })}
+        {t('finance.link_to_boq', { defaultValue: 'BOQ Estimate' })}
       </Link>
       <Link
         to="/5d"
@@ -629,56 +646,43 @@ export function FinancePage() {
       )}
 
       {/* Tab Bar */}
-      <div className="flex items-center gap-1 mb-6 border-b border-border-light">
-        {tabs.map((tab) => (
-          <button
-            key={tab.key}
-            onClick={() => setActiveTab(tab.key)}
-            className={`
-              flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all
-              ${
-                activeTab === tab.key
-                  ? 'border-oe-blue text-oe-blue'
-                  : 'border-transparent text-content-tertiary hover:text-content-primary hover:bg-surface-secondary'
-              }
-            `}
-          >
-            {tab.icon}
-            {tab.label}
-          </button>
-        ))}
-      </div>
+      <TabBar<FinanceTab>
+        ariaLabel={t('finance.tabs_aria', { defaultValue: 'Finance sections' })}
+        idPrefix="finance"
+        className="mb-6"
+        tabs={tabs.map((tab) => ({ id: tab.key, label: tab.label, icon: tab.icon }))}
+        activeId={activeTab}
+        onChange={setActiveTab}
+      />
 
       {/* Tab Content */}
-      {!projectId ? (
-        <EmptyState
-          icon={<Wallet size={28} strokeWidth={1.5} />}
-          title={t('finance.no_project', {
-            defaultValue: 'No project selected',
-          })}
-          description={t('finance.select_project', {
-            defaultValue:
-              'Track invoices, budgets, and payments here. Select a project to view its financial data, or lock a BOQ to auto-generate budget lines.',
-          })}
-        />
-      ) : (
-        <>
-          {activeTab === 'budgets' && <BudgetsTab projectId={projectId} />}
-          {activeTab === 'invoices' && <InvoicesTab projectId={projectId} />}
-          {activeTab === 'payments' && (
+      <RequiresProject
+        emptyHint={t('finance.select_project', {
+          defaultValue:
+            'Track invoices, budgets, and payments here. Select a project to view its financial data, or lock a BOQ to auto-generate budget lines.',
+        })}
+      >
+        <div
+          role="tabpanel"
+          id={tabIds('finance').panelId(activeTab)}
+          aria-labelledby={tabIds('finance').tabId(activeTab)}
+        >
+          {projectId && activeTab === 'budgets' && <BudgetsTab projectId={projectId} />}
+          {projectId && activeTab === 'invoices' && <InvoicesTab projectId={projectId} />}
+          {projectId && activeTab === 'payments' && (
             <PaymentsTab
               projectId={projectId}
               onGoToInvoices={() => setActiveTab('invoices')}
             />
           )}
-          {activeTab === 'evm' && (
+          {projectId && activeTab === 'evm' && (
             <EVMTab
               projectId={projectId}
               onGoToBudgets={() => setActiveTab('budgets')}
             />
           )}
-        </>
-      )}
+        </div>
+      </RequiresProject>
     </div>
   );
 }
@@ -1003,7 +1007,7 @@ function BudgetsTab({ projectId }: { projectId: string }) {
     </WideModal>
   );
 
-  const { data: budgets, isLoading } = useQuery({
+  const budgetsQuery = useQuery({
     queryKey: ['finance-budgets', projectId],
     queryFn: () =>
       apiGet<BudgetLine[]>(
@@ -1011,6 +1015,7 @@ function BudgetsTab({ projectId }: { projectId: string }) {
       ),
     select: (d): BudgetLine[] => normalizeListResponse(d),
   });
+  const { data: budgets, isLoading, isError, error, refetch } = budgetsQuery;
 
   const filtered = useMemo(() => {
     if (!budgets) return [];
@@ -1042,6 +1047,8 @@ function BudgetsTab({ projectId }: { projectId: string }) {
   }, [filtered]);
 
   if (isLoading) return <SkeletonTable rows={6} columns={8} />;
+
+  if (isError) return <RecoveryCard error={error} onRetry={() => refetch()} />;
 
   if (!budgets || budgets.length === 0) {
     return (
@@ -1267,7 +1274,7 @@ function BudgetsTab({ projectId }: { projectId: string }) {
             <tfoot>
               <tr className="bg-surface-secondary/60 font-semibold">
                 <td className="px-4 py-3 text-content-primary" colSpan={2}>
-                  {t('common.total', { defaultValue: 'Total' })}
+                  {t('common.total')}
                 </td>
                 <td className="px-4 py-3 text-right">
                   <MoneyDisplay amount={totals.original} currency={totals.currency} />
@@ -1699,7 +1706,13 @@ function InvoicesTab({ projectId }: { projectId: string }) {
       }),
   });
 
-  const { data: invoices, isLoading } = useQuery({
+  const {
+    data: invoices,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['finance-invoices', projectId, subTab],
     queryFn: () =>
       apiGet<InvoiceWire[]>(
@@ -1872,6 +1885,8 @@ function InvoicesTab({ projectId }: { projectId: string }) {
 
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : isError ? (
+          <RecoveryCard error={error} onRetry={() => refetch()} />
         ) : !filtered.length ? (
           <div className="p-8">
             <EmptyState
@@ -2047,7 +2062,7 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                   <tfoot>
                     <tr className="bg-surface-secondary/60 font-semibold">
                       <td className="px-4 py-3 text-content-primary" colSpan={4}>
-                        {t('common.total', { defaultValue: 'Total' })}
+                        {t('common.total')}
                       </td>
                       <td className="px-4 py-3 text-right">
                         <MoneyDisplay amount={invoiceTotals.totalAmount} currency={invoiceTotals.currency} />
@@ -2405,7 +2420,13 @@ function PaymentsTab({
 }) {
   const { t } = useTranslation();
 
-  const { data: payments, isLoading } = useQuery({
+  const {
+    data: payments,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['finance-payments', projectId],
     queryFn: () =>
       apiGet<Payment[]>(`/v1/finance/payments/?project_id=${projectId}`),
@@ -2417,11 +2438,13 @@ function PaymentsTab({
     const total = payments.reduce((s, p) => s + Number(p.amount ?? 0), 0);
     // Currency from the payment data; undefined → MoneyDisplay uses the
     // user's preferred currency symbol (never hardcode EUR — task #217).
-    const currency = payments[0]?.currency || undefined;
+    const currency = payments[0]?.currency_code || payments[0]?.currency || undefined;
     return { total, currency };
   }, [payments]);
 
   if (isLoading) return <SkeletonTable rows={5} columns={6} />;
+
+  if (isError) return <RecoveryCard error={error} onRetry={() => refetch()} />;
 
   if (!payments || payments.length === 0) {
     return (
@@ -2497,7 +2520,7 @@ function PaymentsTab({
                   <DateDisplay value={p.payment_date} />
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={p.amount} currency={p.currency} />
+                  <MoneyDisplay amount={p.amount} currency={p.currency_code || p.currency} />
                 </td>
                 <td className="px-4 py-3 text-content-secondary capitalize">
                   {p.method}
@@ -2564,7 +2587,13 @@ function EVMTab({
   // sorted by snapshot_date DESC — the most-recent snapshot is items[0].
   // EVM money/index fields ship as Decimal-as-string; coerce to numbers
   // for the KPI cards. Empty list → show the "No EVM data" empty state.
-  const { data: evm, isLoading } = useQuery({
+  const {
+    data: evm,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['finance-evm', projectId],
     queryFn: () =>
       apiGet<{
@@ -2629,6 +2658,8 @@ function EVMTab({
       </div>
     );
   }
+
+  if (isError) return <RecoveryCard error={error} onRetry={() => refetch()} />;
 
   if (!evm) {
     const hasBudget =

@@ -78,6 +78,13 @@ def seed_showcase_from_snapshot(
     ``skipped`` (no artifact / not sqlite — caller should fall back),
     ``error`` (unexpected — caller should fall back).
     """
+    # ``con`` is hoisted so the ``finally`` can always release the SQLite
+    # write lock. If a per-table INSERT trips a NOT NULL/constraint mid-
+    # snapshot (e.g. when a model gained a NOT NULL column whose default
+    # is Python-side only — see #154 / oe_safety_incident.osha_recordable),
+    # leaving the implicit transaction open keeps SQLite write-locked.
+    # Subsequent boot steps then cascade as "database is locked".
+    con: sqlite3.Connection | None = None
     try:
         if not snapshot_path.exists():
             return {"status": "skipped", "reason": "no-snapshot-artifact"}
@@ -102,7 +109,6 @@ def seed_showcase_from_snapshot(
             "AND name='oe_projects_project'"
         ).fetchone()[0]
         if not have_proj:
-            con.close()
             return {"status": "skipped", "reason": "schema-not-initialised"}
 
         qp = ",".join("?" * len(SHOWCASE_PIDS))
@@ -111,7 +117,6 @@ def seed_showcase_from_snapshot(
             SHOWCASE_PIDS,
         ).fetchone()[0]
         if present >= len(SHOWCASE_PIDS) and not force:
-            con.close()
             return {"status": "already", "projects": present}
 
         # user-id remap: snapshot old ids -> this install's demo users
@@ -161,7 +166,20 @@ def seed_showcase_from_snapshot(
                 f"VALUES ({placeholders})"
             )
             batch = [[fix(r[i]) for i in idx] for r in rows]
-            cur.executemany(sql, batch)
+            try:
+                cur.executemany(sql, batch)
+            except sqlite3.IntegrityError as exc:
+                # A single table failing (e.g. a column added post-snapshot
+                # with no server_default) must not abort the whole seed —
+                # skip the table, surface a warning, and keep going. The
+                # outer ``finally`` still rolls back the partial txn for
+                # the bad table because we ``con.rollback()`` here.
+                logger.warning(
+                    "showcase snapshot: table %s integrity error, "
+                    "skipping (%s)", name, exc,
+                )
+                con.rollback()
+                continue
             loaded_tables += 1
             loaded_rows += len(batch)
 
@@ -170,7 +188,6 @@ def seed_showcase_from_snapshot(
             f"SELECT count(*) FROM oe_projects_project WHERE id IN ({qp})",
             SHOWCASE_PIDS,
         ).fetchone()[0]
-        con.close()
         return {
             "status": "ok",
             "projects": final,
@@ -179,7 +196,18 @@ def seed_showcase_from_snapshot(
         }
     except Exception as exc:  # noqa: BLE001 — boot must never break
         logger.warning("showcase snapshot load failed: %s", exc)
+        if con is not None:
+            try:
+                con.rollback()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
         return {"status": "error", "reason": str(exc)[:200]}
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
 
 
 def main() -> int:

@@ -16,6 +16,12 @@ Endpoints:
     PATCH /me/preferences         — Update regional preferences
     GET  /me/module-preferences — Get saved module preferences
     PATCH /me/module-preferences — Save module preferences
+    GET  /me/sidebar-preferences — Get sidebar visibility preferences
+    PUT  /me/sidebar-preferences — Save sidebar visibility preferences
+    GET  /me/dashboard-layout    — Get dashboard widget layout
+    PUT  /me/dashboard-layout    — Save dashboard widget layout
+    GET  /me/tour-state          — Get per-tour dismiss / completion state
+    PUT  /me/tour-state          — Save per-tour dismiss / completion state
     GET  /                      — List users (admin/manager)
     GET  /{id}                  — Get user by ID (admin/manager)
     PATCH /{id}                 — Update user (admin only)
@@ -75,6 +81,61 @@ class CustomUnitsPayload(BaseModel):
     """
 
     units: list[str]
+
+
+class SidebarPreferencesPayload(BaseModel):
+    """Request/response body for the user's sidebar visibility preferences.
+
+    ``hidden_modules`` is the list of NavItem ``to`` routes the user has
+    chosen to hide from the sidebar via the menu editor. Persisted per-user
+    in the ``metadata_`` JSON column so the choice follows the user across
+    browsers and devices, not just a single localStorage bucket.
+    """
+
+    hidden_modules: list[str]
+
+
+class DashboardLayoutPayload(BaseModel):
+    """Request/response body for the user's dashboard widget layout.
+
+    Mirrors the localStorage bucket ``oe.dashboard-layout`` so the
+    customisation follows the user across browsers and devices, not just
+    a single localStorage bucket.
+
+    * ``order`` — widget ids in the user's preferred top-to-bottom order.
+      Unknown ids are dropped client-side at render time via
+      ``reconcileOrder`` so a removed widget never corrupts a saved layout.
+    * ``hidden`` — widget ids the user has hidden via the customise panel.
+    """
+
+    order: list[str]
+    hidden: list[str]
+
+
+class TourStateEntry(BaseModel):
+    """Per-tour persistence record — when a user dismissed / completed a tour.
+
+    Both timestamps are ISO-8601 strings (``datetime.now(UTC).isoformat()``).
+    Either may be ``None`` — Skip writes only ``dismissed_at``; Finish writes
+    both. ProductTour reads the bucket on mount and skips auto-open when
+    either timestamp is set.
+    """
+
+    dismissed_at: str | None = None
+    completed_at: str | None = None
+
+
+class TourStatePayload(BaseModel):
+    """Request/response body for the user's per-tour completion state.
+
+    ``tours`` maps a TourId (``global``, ``boq``, ``bim``, ``geo``,
+    ``propdev``, ``dashboard``, ``accommodation``) to a small persistence
+    record. Mirrors localStorage keys ``oe.tour_completed`` and
+    ``oe.tour_completed.<tourId>`` so the dismissed/completed state follows
+    the user across browsers and devices.
+    """
+
+    tours: dict[str, TourStateEntry]
 
 
 router = APIRouter()
@@ -404,6 +465,237 @@ async def save_module_preferences(
     metadata["module_preferences"] = data.modules
     await service.update_profile(uuid.UUID(user_id), metadata_=metadata)
     return ModulePreferencesPayload(modules=data.modules)
+
+
+# ── Sidebar Preferences ───────────────────────────────────────────────────
+
+
+@router.get("/me/sidebar-preferences/", response_model=SidebarPreferencesPayload)
+async def get_sidebar_preferences(
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> SidebarPreferencesPayload:
+    """Get the current user's sidebar visibility preferences.
+
+    Returns an empty list when the user has never customised the sidebar.
+    """
+    user = await service.get_user(uuid.UUID(user_id))
+    metadata: dict[str, Any] = user.metadata_ or {}
+    raw = metadata.get("sidebar_hidden_modules", [])
+    hidden = [str(r) for r in raw if isinstance(r, str) and r.strip()]
+    return SidebarPreferencesPayload(hidden_modules=hidden)
+
+
+@router.put("/me/sidebar-preferences/", response_model=SidebarPreferencesPayload)
+async def save_sidebar_preferences(
+    data: SidebarPreferencesPayload,
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> SidebarPreferencesPayload:
+    """Upsert sidebar visibility preferences for the current user.
+
+    Stores the hidden-route list in the user's ``metadata_`` JSON column under
+    key ``sidebar_hidden_modules``. Sanitises the payload: trims whitespace,
+    drops empties / duplicates, caps each route at 128 chars and the list at
+    500 entries so a runaway client can't bloat the JSON column.
+    """
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for raw in data.hidden_modules:
+        if not isinstance(raw, str):
+            continue
+        route = raw.strip()[:128]
+        if route and route not in seen:
+            seen.add(route)
+            cleaned.append(route)
+        if len(cleaned) >= 500:
+            break
+
+    user = await service.get_user(uuid.UUID(user_id))
+    metadata: dict[str, Any] = dict(user.metadata_ or {})
+    metadata["sidebar_hidden_modules"] = cleaned
+    await service.update_profile(uuid.UUID(user_id), metadata_=metadata)
+    return SidebarPreferencesPayload(hidden_modules=cleaned)
+
+
+# ── Dashboard Layout ──────────────────────────────────────────────────────
+
+
+def _sanitise_widget_ids(raw_list: object) -> list[str]:
+    """Trim, drop empties / non-strings / duplicates, cap each id at 64 chars.
+
+    The widget registry today has ~22 ids; we cap the list at 200 entries
+    to leave room for future widgets while making sure a runaway client
+    can't bloat the JSON column.
+    """
+    if not isinstance(raw_list, list):
+        return []
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for raw in raw_list:
+        if not isinstance(raw, str):
+            continue
+        wid = raw.strip()[:64]
+        if wid and wid not in seen:
+            seen.add(wid)
+            cleaned.append(wid)
+        if len(cleaned) >= 200:
+            break
+    return cleaned
+
+
+@router.get("/me/dashboard-layout/", response_model=DashboardLayoutPayload)
+async def get_dashboard_layout(
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> DashboardLayoutPayload:
+    """Get the current user's dashboard widget layout.
+
+    Returns ``{order: [], hidden: []}`` (defaults) when the user has never
+    customised the dashboard — the client's ``reconcileOrder`` helper then
+    falls back to the canonical registry order.
+    """
+    user = await service.get_user(uuid.UUID(user_id))
+    metadata: dict[str, Any] = user.metadata_ or {}
+    layout: dict[str, Any] = metadata.get("dashboard_layout") or {}
+    return DashboardLayoutPayload(
+        order=_sanitise_widget_ids(layout.get("order", [])),
+        hidden=_sanitise_widget_ids(layout.get("hidden", [])),
+    )
+
+
+@router.put("/me/dashboard-layout/", response_model=DashboardLayoutPayload)
+async def save_dashboard_layout(
+    data: DashboardLayoutPayload,
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> DashboardLayoutPayload:
+    """Upsert the current user's dashboard widget layout.
+
+    Stores ``{order, hidden}`` in the user's ``metadata_`` JSON column under
+    key ``dashboard_layout``. Sanitises both lists: trims, drops empties /
+    duplicates / non-strings, caps each id at 64 chars and the list at 200
+    entries so a runaway client can't bloat the JSON column.
+
+    Pydantic enforces ``list[str]`` at the schema boundary — non-list bodies
+    or non-string array items 422 before reaching this handler.
+    """
+    cleaned_order = _sanitise_widget_ids(data.order)
+    cleaned_hidden = _sanitise_widget_ids(data.hidden)
+
+    user = await service.get_user(uuid.UUID(user_id))
+    metadata: dict[str, Any] = dict(user.metadata_ or {})
+    metadata["dashboard_layout"] = {
+        "order": cleaned_order,
+        "hidden": cleaned_hidden,
+    }
+    await service.update_profile(uuid.UUID(user_id), metadata_=metadata)
+    return DashboardLayoutPayload(order=cleaned_order, hidden=cleaned_hidden)
+
+
+# ── Tour State ────────────────────────────────────────────────────────────
+
+
+# Mirror of ``TourId`` from frontend/src/shared/ui/ProductTour.tsx. Tours
+# outside this whitelist are silently dropped on PUT so a typo / a
+# malicious client can't pollute the JSON column with arbitrary keys.
+_KNOWN_TOUR_IDS: frozenset[str] = frozenset(
+    {
+        "global",
+        "boq",
+        "accommodation",
+        "bim",
+        "geo",
+        "propdev",
+        "dashboard",
+    },
+)
+
+
+def _sanitise_tour_state(raw: object) -> dict[str, dict[str, str | None]]:
+    """Clean the inbound tour-state map.
+
+    Drops unknown tour ids; trims/caps ISO-8601 strings at 40 chars; coerces
+    bad shapes to ``None``. Returns a plain dict so it can be JSON-serialised
+    directly into ``metadata_``.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, str | None]] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str):
+            continue
+        tour_id = key.strip()[:64]
+        if tour_id not in _KNOWN_TOUR_IDS:
+            continue
+        if not isinstance(value, dict):
+            continue
+        dismissed = value.get("dismissed_at")
+        completed = value.get("completed_at")
+        out[tour_id] = {
+            "dismissed_at": (
+                str(dismissed)[:40] if isinstance(dismissed, str) and dismissed.strip() else None
+            ),
+            "completed_at": (
+                str(completed)[:40] if isinstance(completed, str) and completed.strip() else None
+            ),
+        }
+    return out
+
+
+@router.get("/me/tour-state/", response_model=TourStatePayload)
+async def get_tour_state(
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> TourStatePayload:
+    """Get the current user's per-tour dismiss / completion state.
+
+    Returns ``{"tours": {}}`` (defaults) when the user has never run a tour —
+    ProductTour then falls back to the localStorage flag for first-login auto-
+    open. Tours outside the canonical id set are filtered out on read so an
+    obsolete tour id never leaks back to the client.
+    """
+    user = await service.get_user(uuid.UUID(user_id))
+    metadata: dict[str, Any] = user.metadata_ or {}
+    stored = _sanitise_tour_state(metadata.get("tour_state"))
+    return TourStatePayload(
+        tours={tid: TourStateEntry(**entry) for tid, entry in stored.items()},
+    )
+
+
+@router.put("/me/tour-state/", response_model=TourStatePayload)
+async def save_tour_state(
+    data: TourStatePayload,
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> TourStatePayload:
+    """Upsert tour-state for the current user.
+
+    Stores ``{tour_id: {dismissed_at, completed_at}}`` in the user's
+    ``metadata_`` JSON column under key ``tour_state``. Sanitises the
+    payload: drops unknown tour ids, caps each timestamp at 40 chars so a
+    runaway client can't bloat the JSON column.
+
+    IDOR posture: writes the row keyed by ``CurrentUserId`` only — the body
+    has no ``user_id`` field, so a caller can never write to another user's
+    tour state via this endpoint.
+    """
+    raw_tours = {
+        tid: {
+            "dismissed_at": entry.dismissed_at,
+            "completed_at": entry.completed_at,
+        }
+        for tid, entry in data.tours.items()
+    }
+    cleaned = _sanitise_tour_state(raw_tours)
+
+    user = await service.get_user(uuid.UUID(user_id))
+    metadata: dict[str, Any] = dict(user.metadata_ or {})
+    metadata["tour_state"] = cleaned
+    await service.update_profile(uuid.UUID(user_id), metadata_=metadata)
+    return TourStatePayload(
+        tours={tid: TourStateEntry(**entry) for tid, entry in cleaned.items()},
+    )
 
 
 # ── Custom Units ──────────────────────────────────────────────────────────

@@ -318,6 +318,114 @@ async def compute_artifact_size_bytes(
     return total
 
 
+def project_bim_prefix(project_id: uuid.UUID | str) -> str:
+    """Return the storage prefix holding every BIM model under a project."""
+    return f"{_BIM_PREFIX}/{_stringify(project_id)}"
+
+
+async def bulk_model_storage_summary(
+    project_id: uuid.UUID | str,
+) -> dict[str, dict[str, object]]:
+    """Return per-model storage summary for every model under a project.
+
+    Single storage round-trip via :meth:`StorageBackend.list_prefix`,
+    then bucket the results by ``{project}/{model_id}`` segment in
+    Python.  Each value is a dict with:
+
+    * ``artifact_size_bytes`` — sum of bytes for everything that isn't
+      the raw ``original.*`` upload
+    * ``original_size_bytes`` — sum of bytes for ``original.*`` blobs
+      (``None`` if no raw upload remains — matches the
+      ``keep_original_cad=False`` production default semantics)
+    * ``geometry_exts`` — set of geometry extensions present (``.glb`` /
+      ``.dae`` / ``.gltf``) — empty set means "no geometry on disk"
+
+    Replaces the per-model fan-out of
+    ``compute_artifact_size_bytes`` + ``has_original_cad`` +
+    ``find_geometry_key`` probes that the list endpoint used to issue
+    via ``asyncio.gather`` (50-150 storage round-trips per page →
+    a single one).
+
+    Lookup pattern for callers:
+        summary = await bulk_model_storage_summary(project_id)
+        info = summary.get(str(model_id), {})
+        size_bytes = info.get("artifact_size_bytes", 0)
+        ...
+
+    When ``list_prefix`` isn't implemented by the backend (community
+    backends predating v4.6.1), an empty dict is returned and the
+    caller MUST fall back to per-model probes — :func:`list_prefix_supported`
+    surfaces that capability check.
+    """
+    backend = _backend()
+    prefix = project_bim_prefix(project_id)
+    try:
+        entries = await backend.list_prefix(prefix)
+    except NotImplementedError:
+        logger.debug(
+            "Storage backend %s does not implement list_prefix; "
+            "BIM list endpoint will fall back to per-model probes.",
+            type(backend).__name__,
+        )
+        return {}
+
+    summary: dict[str, dict[str, object]] = {}
+    # Keys are of shape "bim/{project_id}/{model_id}/<filename>" — split
+    # on '/' and group by the model_id segment.
+    prefix_with_slash = prefix.rstrip("/") + "/"
+    for key, size_bytes in entries:
+        if not key.startswith(prefix_with_slash):
+            continue
+        remainder = key[len(prefix_with_slash):]
+        parts = remainder.split("/", 1)
+        if len(parts) != 2:
+            # Stray file directly under the project dir; not a model artifact.
+            continue
+        model_id, filename = parts
+        if not model_id or not filename:
+            continue
+        bucket = summary.setdefault(
+            model_id,
+            {
+                "artifact_size_bytes": 0,
+                "original_size_bytes": 0,
+                "has_original": False,
+                "geometry_exts": set(),
+            },
+        )
+        lower = filename.lower()
+        if lower.startswith("original."):
+            bucket["original_size_bytes"] = int(bucket["original_size_bytes"]) + size_bytes  # type: ignore[operator]
+            bucket["has_original"] = True
+            continue
+        bucket["artifact_size_bytes"] = int(bucket["artifact_size_bytes"]) + size_bytes  # type: ignore[operator]
+        # Detect geometry presence by extension match.
+        for ext in GEOMETRY_EXTENSIONS:
+            if lower == f"geometry{ext}":
+                bucket["geometry_exts"].add(ext)  # type: ignore[union-attr]
+                break
+    return summary
+
+
+def list_prefix_supported() -> bool:
+    """Return True iff the configured backend implements ``list_prefix``.
+
+    Used by the BIM list endpoint to pick between the bulk
+    :func:`bulk_model_storage_summary` path and the per-model probe
+    fallback (community backends that haven't overridden the new
+    abstract base method).
+    """
+    backend = _backend()
+    # Compare the bound method to the abstract base's default to detect
+    # whether the subclass overrode list_prefix.  Both shipped backends
+    # (LocalStorageBackend, S3StorageBackend) override it.
+    from app.core.storage import StorageBackend
+
+    base_impl = StorageBackend.list_prefix
+    bound = type(backend).list_prefix
+    return bound is not base_impl
+
+
 def bim_root_label() -> str:
     """Return a short human-readable label for where BIM blobs live.
 

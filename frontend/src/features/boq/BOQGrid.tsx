@@ -1113,6 +1113,17 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
    * stay frozen at the previous currency. That was the regression
    * reported on multi-currency BOQs (Spanish video, nested HIJO_*
    * sections showing 0.00 in ARS while the grand total updated).
+   *
+   * Bug #220 follow-up: the same caching trap fires when a resource's
+   * currency is edited inline. The `rowData` memo recomputes the new
+   * `_subtotal` (via `resourceAwareTotalInBase`), but AG Grid keeps the
+   * previously-rendered section banner mounted — its React instance
+   * isn't told to re-read `data._subtotal` until the section row is
+   * collapsed/re-expanded. The section subtotal therefore stays stale
+   * (in the old currency / wrong base value) after an inline currency
+   * swap. A second effect (further down, once `rowData` is in scope)
+   * fingerprints the section subtotals and redraws the banners whenever
+   * any of them actually changes.
    */
   useEffect(() => {
     const api = gridApiRef.current;
@@ -1422,6 +1433,41 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     return rows;
   }, [positions, collapsedSections, insertResourceRows, currencyCode, fxRates]);
 
+  /* ── Bug #220: redraw section banners when subtotals change ───────────
+   * Mirror of the displayCurrency effect above, but keyed on the actual
+   * section subtotals so an inline resource-currency swap (which leaves
+   * the position's stored `unit_rate`/`total` untouched and only updates
+   * `metadata.resources[i].currency`) repaints the full-width section
+   * row. Without this, `rowData` carries the freshly rebased subtotal
+   * but the previously-mounted `SectionFullWidthRenderer` instance keeps
+   * the old value on screen until the user collapses + re-expands the
+   * section — the "close + reopen → updates" smoking gun from #220.
+   */
+  const sectionSubtotalFingerprint = useMemo(
+    () =>
+      rowData
+        .filter((r) => Boolean((r as { _isSection?: boolean })._isSection))
+        .map(
+          (r) =>
+            `${(r as { id: string }).id}:${(r as { _subtotal?: number })._subtotal ?? 0}`,
+        )
+        .join('|'),
+    [rowData],
+  );
+
+  useEffect(() => {
+    const api = gridApiRef.current;
+    if (!api) return;
+    const sectionNodes: unknown[] = [];
+    api.forEachNode((node: unknown) => {
+      const data = (node as { data?: { _isSection?: boolean } } | null)?.data;
+      if (data?._isSection) sectionNodes.push(node);
+    });
+    if (sectionNodes.length > 0) {
+      api.redrawRows({ rowNodes: sectionNodes as never[] });
+    }
+  }, [sectionSubtotalFingerprint]);
+
   /* ── Pinned bottom rows (footer) ──────────────────────────────── */
   const pinnedBottomRowData = useMemo(() => footerRows, [footerRows]);
 
@@ -1558,11 +1604,11 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
           addToast({
             type: 'warning',
             title: t('collab_locks.lock_conflict_title', {
-              defaultValue: 'Someone is editing this‌⁠‍',
+              defaultValue: 'Someone is editing this',
             }),
             message: t('collab_locks.lock_conflict_toast', {
               defaultValue:
-                'Locked by {{name}}. Try again in {{seconds}} seconds.‌⁠‍',
+                'Locked by {{name}}. Try again in {{seconds}} seconds.',
               name: result.conflict.current_holder_name,
               seconds: result.conflict.remaining_seconds,
             }),
@@ -2013,7 +2059,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
           addToast(
             {
               type: 'error',
-              title: t('boq.paste_failed', { defaultValue: 'Could not paste — invalid data or read-only cells‌⁠‍' }),
+              title: t('boq.paste_failed', { defaultValue: 'Could not paste — invalid data or read-only cells' }),
             },
             { duration: 3000 },
           );
@@ -2021,7 +2067,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
           addToast(
             {
               type: 'success',
-              title: t('boq.value_pasted', { defaultValue: 'Value pasted‌⁠‍' }),
+              title: t('boq.value_pasted', { defaultValue: 'Value pasted' }),
             },
             { duration: 2000 },
           );
@@ -2090,7 +2136,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
             {
               type: 'success',
               title: t('boq.fill_down_done', {
-                defaultValue: 'Filled down to {{count}} rows‌⁠‍',
+                defaultValue: 'Filled down to {{count}} rows',
                 count: String(filled),
               } as Record<string, string>),
             },
@@ -2131,7 +2177,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
           {
             type: 'success',
             title: t('boq.date_inserted', {
-              defaultValue: 'Inserted today ({{date}})‌⁠‍',
+              defaultValue: 'Inserted today ({{date}})',
               date: today,
             } as Record<string, string>),
           },
@@ -2459,7 +2505,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                 {/* Resources section */}
                 {hasResources && (
                   <CtxItem icon={isExpanded ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
-                    label={isExpanded ? t('boq.collapse_resources', { defaultValue: 'Collapse Resources‌⁠‍' }) : t('boq.expand_resources', { defaultValue: 'Expand Resources' })}
+                    label={isExpanded ? t('boq.collapse_resources', { defaultValue: 'Collapse Resources' }) : t('boq.expand_resources', { defaultValue: 'Expand Resources' })}
                     onClick={() => { toggleResources(d.id as string); closeContextMenu(); }}
                   />
                 )}
@@ -2519,7 +2565,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                     )}
                     {onUnlinkPosition && (
                       <CtxItem icon={<Link2Off size={14}/>}
-                        label={t('boq.unlink_this', { defaultValue: 'Unlink this position‌⁠‍' })}
+                        label={t('boq.unlink_this', { defaultValue: 'Unlink this position' })}
                         onClick={() => { onUnlinkPosition(d.id as string); closeContextMenu(); }}
                       />
                     )}

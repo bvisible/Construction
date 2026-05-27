@@ -2,15 +2,34 @@
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook — wire cross-module event subscribers.
+    """‌⁠‍Module startup hook — wire cross-module event subscribers + dispatchers.
 
-    Without this the notifications module is a passive store: routes
-    work, but no upstream module ever calls ``create_notification()``
-    so the table stays empty.  The subscriber framework consumes a
-    curated set of mutation events from boq / meetings / cde / bim_hub
-    and turns them into per-user notifications.  See ``events.py``
-    for the full list.
+    Three things happen on boot:
+
+    1. ``register_notification_subscribers()`` wires every cross-module
+       mutation event (rfi.assigned, boq.boq.created, …) into the
+       in-app notification service.
+
+    2. ``register_dispatchers()`` (Epic B / B2) attaches the real email
+       + webhook sinks to ``notifications.dispatch.email`` and
+       ``notifications.dispatch.webhook`` — pre-Epic-B these channels
+       silently dropped because nothing subscribed.
+
+    3. ``start_scheduler()`` (Epic B / B4-B5) starts the in-process
+       periodic worker that flushes the digest queue every 5 minutes
+       and cleans up aged notifications every 24 hours.
     """
+    from app.modules.notifications.dispatcher import register_dispatchers
     from app.modules.notifications.events import register_notification_subscribers
+    from app.modules.notifications.notification_worker import start_scheduler
 
     register_notification_subscribers()
+    register_dispatchers()
+    try:
+        start_scheduler()
+    except Exception:  # noqa: BLE001 — worker is best-effort
+        import logging
+
+        logging.getLogger(__name__).debug(
+            "notifications: scheduler failed to start", exc_info=True,
+        )

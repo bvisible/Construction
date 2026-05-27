@@ -5,6 +5,241 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-05-26
+
+**Second stable major.** First release to land community contributor work
+directly on `main` (`@Mourdi59` + `@rjohny55`). Bundles every fix and
+feature since v4.12.0 plus the full v4.12.0 deep-audit wave.
+
+### Added
+- **AI providers**: Kimi (Moonshot AI), Ollama (Local), vLLM (Local) —
+  first-class providers in the Settings → AI panel. Ollama / vLLM accept
+  a custom Server URL so on-prem and self-hosted models work without
+  patching the backend. Alembic `v3141_ai_kimi_api_key` adds the
+  encrypted-secret column for Kimi; Ollama / vLLM base URLs piggyback on
+  the existing metadata JSON column. (#161 by @rjohny55)
+- **BIM viewer `degraded` status**: models with geometry but no quantity
+  extraction are now viewable — element query and `geometryUrl` both
+  treat `degraded` as viewable, status dot is solid amber (distinct from
+  pulsing amber of in-progress and green of ready), label reads
+  *"Imported (no quantities)"*. (#159 by @Mourdi59)
+- **Dashboard Vector DB row** now surfaces the active engine name
+  (e.g. *"Qdrant · 12,400 vectors"*) instead of only the vector count.
+  (#161 by @rjohny55)
+
+### Changed
+- **Sign-up password validation**: in addition to the existing minimum
+  length (8 chars), new accounts now require at least one letter and one
+  digit. Backend FastAPI validation arrays are now flattened to a single
+  string in the error banner. Sign-up only — existing users keep their
+  passwords. (#161 by @rjohny55)
+- **Marketing site**: removed the redundant *"All modules · same as the
+  in-app menu"* grid that duplicated the *"One install. The whole
+  construction stack."* overview placed earlier on the same page. Drops
+  ~86 lines from `marketing-site/index.html`.
+
+### Fixed
+- **BIM COLLADA namespace prefix**: Python ElementTree was serialising
+  the patched DAE root tag as `<ns0:COLLADA xmlns:ns0="...">`, which the
+  frontend's literal `<COLLADA` text-scan rejected with *"Not a COLLADA
+  document"* — viewer rendered blank even after a successful conversion.
+  `_patch_collada_node_names()` now registers the COLLADA namespace as
+  default before `tree.write()`. As a defence-in-depth measure, the
+  frontend regex in `detectGeometryKind()` and `parseDAEBuffer()` now
+  also accepts namespace-prefixed forms. (#159 by @Mourdi59)
+- **Slow-query listener race**: `conn.info.pop("query_start_time", …)`
+  in `_log_slow_query` now guarded against connections closed
+  mid-call by a concurrent coroutine. (#161 by @rjohny55)
+- **Module-presence probe concurrency**: probes sharing an aborted
+  session now catch `InFailedSQLTransactionError` and return `False`
+  instead of bubbling and 500-ing the entire `/api/v1/projects/status`
+  endpoint. (#161 by @rjohny55)
+- **FieldReport activity-rollup**: `FieldReport` has no `title` column,
+  but the dashboard recent-activity SQL was selecting it — pure
+  `AttributeError` waiting to fire. Replaced with
+  `coalesce(work_performed, report_type)`. (#161 by @rjohny55)
+- **Qdrant snapshot restore**: `client.recover_snapshot(location=…)`
+  only accepts URIs the Qdrant server itself can fetch (http://, s3://,
+  or file:// on the server's own disk). Snapshots sitting on the app
+  container were therefore unreachable from a separate Qdrant container.
+  Restore now POSTs the snapshot bytes via the multipart upload
+  endpoint using the existing `qdrant_snapshot_loader`. (#161 by @rjohny55)
+- **Marketing-site i18n entities**: locale JSONs contained raw HTML
+  entities (`&amp;`, `&middot;`, `&rsquo;`, `&ldquo;`, `&rdquo;`,
+  `&ndash;`, `&mdash;`, numeric `&#128170;`) that rendered literally
+  whenever i18next applied them via `textContent` — most visible in
+  workshop testimonials as *"D&amp;S &middot; BIM Manager"* instead of
+  *"D&S · BIM Manager"*. `html.unescape` pass across 513 strings × 20
+  locales fixes every affected role/quote line.
+
+### Contributors
+- **@Mourdi59** — first community PR landed (BIM viewer fixes).
+- **@rjohny55** — multi-area patch set across slow-query guards, module
+  presence concurrency, FieldReport rollup, Qdrant restore, three new
+  AI providers.
+
+Three hunks from #161 were held back for follow-up discussion: the
+hardcoded `SQLITE_URL` Docker path (would break VPS + Windows dev), the
+`CREATE TABLE oe_costs_item` schema duplication, and the
+urllib→requests migration in catalog/router (httpx is the project-wide
+HTTP stack — `requests` would introduce a parallel dependency).
+
+## [4.12.0] - 2026-05-26
+
+20-wave deep audit + control wave on top of v4.11.0. R7 security pattern
+revival across three modules (CRM orphan tests, QMS audit-log infrastructure,
+EAC tenant-scoped hardening), QuickEstimatePage accessibility debt cleared,
+QA browser-screenshot harness parameterized for locale / theme / viewport,
+and the OpenConstructionERP concept paper published as a news article.
+
+### Added
+- `qms`: new `QMSAuditLog` SQLAlchemy model (alembic `v3140_qms_audit_log`)
+  recording entity-scoped state transitions on NCR raise/close and inspection
+  start/complete. Idempotent migration, 5 indexes, all NOT NULL columns
+  carry `server_default` so fresh-install `create_all` works. Repository
+  exposes `append_audit`, `list_audit_log`, `list_audit_for_entity`,
+  `purge_audit_for_tenant`. New GET endpoints honour IDOR→404 and tenant
+  scoping. Magic-byte denylist (PE/ELF/ZIP/PDF/PNG/JPEG) enforced on
+  attachment uploads with 8 MB cap (413). (65ea96b2)
+- `eac.aliases`: tenant-scoped service layer + magic-byte upload denylist +
+  Decimal-as-string serialization (`DecimalStr`) + 12 new R7-pattern tests in
+  `backend/tests/modules/eac/test_eac_r7_audit.py`. (a5fd6964)
+- 5 CRM R7 orphan test files restored (~59 tests, 1,155 lines) — covers
+  GDPR forget, lead dedupe, money decimal, PII redaction, win role gate.
+  These were parked by the v4.7.2 triage and never re-committed. (dd24aa1c)
+- Marketing site: OpenConstructionERP concept paper published as standalone
+  news article at `/news/open-erp-own-your-stack.html` with banner,
+  back-to-news nav, 7 inline images, 3 fonts, and downloadable PDF. Featured
+  card on `/news.html`. (cee9e5f9)
+- 6 workshop attendee testimonials localized across all 20 marketing-site
+  locales (14 i18n keys × 20 locales = 280 new strings). Quotes + roles +
+  read-more/less controls all data-i18n wired. (468bf82b)
+- `qa/screenshots/full-app.spec.ts` patched with three-layer public-demo
+  modal dismissal: sessionStorage seed (`oe_demo_modal_dismissed=1`) +
+  injected CSS hider for `z-[200]` fixed overlays + best-effort click on
+  "I understand, continue". Eliminates the modal interference that blocked
+  prior baseline captures. (c12a4252)
+- `qa/screenshots/full-app.spec.ts` parameterized with `QA_LOCALE` (seeds
+  i18next storage keys), `QA_THEME` (seeds `oe_theme`), and `QA_VIEWPORT`
+  (`WIDTHxHEIGHT` → `test.use({ viewport })`) env-var hooks. Enables
+  locale / dark-mode / mobile sweeps without harness forks. (63fb6f75)
+- `qa/screenshots/axe-sweep.spec.ts` + `axe.config.ts` — new accessibility
+  scan spec using `@axe-core/playwright` against a 29-route subset with
+  aggregated JSON output. (e9b5d38f)
+
+### Changed
+- `frontend/src/features/ai/QuickEstimatePage.tsx` accessibility pass — all
+  10 deferred findings closed (4 P1 + 6 P2): `sr-only` labels via `useId()`,
+  `aria-live` on `LoadingState`, `role="alert"` error banners, focus
+  management with `resultRegionRef` + `tabIndex={-1}`, `aria-describedby` on
+  disabled submit, tablist ARIA wiring, color-only banner `sr-only`
+  prefixes, `aria-hidden` decorative icons, `SaveDialog` focus trap via
+  `useFocusTrap`. 20/20 ai-feature unit tests pass. (97a1ed49)
+
+### Notes
+- Wave 16-DE i18n audit verified: German locale renders cleanly across
+  sidebar, content chrome, and module pages — no `__missing_key__`
+  fallbacks, no layout overflow despite long German compounds.
+- Two QA findings raised for follow-up (not blocking this release):
+  authenticated `/` should redirect to `/dashboard` (currently captures
+  marketing landing), and `/costs` shows DE chrome but Arabic-script data
+  (Middle East seed leaking into DE locale — should auto-pick regional DB).
+
+## [4.9.2] - 2026-05-25
+
+Same-day patch on top of v4.9.1 — BIM Category→TypeName tree no longer explodes
+on showcase / fast-path-converted models with sequential placeholder names.
+
+### Fixed
+- `BIMFilterPanel.getTypeNameKey` now detects the `<element_type> <integer>`
+  placeholder pattern (`"Walls 1"`, `"Walls 2"`, ..., `"Walls 64"`) that the
+  showcase seed and the converted-DAE fast path emit when no real Revit
+  Family/Type can be resolved. Previously those names flowed through to the
+  Category → Type Name hierarchy verbatim — a model with 64 walls rendered
+  64 single-element TypeName rows under the Walls category instead of
+  collapsing into a few real family/types. The placeholder pattern is now
+  treated as no-real-name and routes through to the "Unspecified" bucket like
+  any other unlabeled element. Verified on the showcase model
+  `c8acb9a5-3fff-5719-a2b0-fe7d62a8a21f` (380 elements across 15 Revit
+  categories): zero `"Walls N"` rows left in the tree.
+
+## [4.9.1] - 2026-05-25
+
+Same-day patch on top of v4.9.0 — four follow-up fixes after VPS deploy verification.
+
+### Fixed
+- `accommodation` booking-overlap guard re-applied — `POST /api/v1/accommodation/rooms/{id}/bookings` + `PATCH /api/v1/accommodation/bookings/{id}` were silently double-booking the same room on overlapping dates after the V6 verification wave lost the source fix to an NTFS junction race. New `assert_no_booking_overlap()` helper uses the same half-open interval semantics as the existing list filter, checked only against live statuses (`reserved`, `checked_in`), self-excluded on PATCH. 6 xfailed tests un-xfailed, all pass. (eadc6ff8)
+- `BIMFilterPanel` Category / TypeName / Buckets tree no longer shrinks when filtering by storey. Commit ba1887cb had gated `byType` / `byCategoryThenType` / `byBucket` population behind `matchesStoreyFilter(el)` as part of an attempted facet-UI sweep — side-effect: picking storey L02 collapsed the entire Category sidebar to L02-only categories. The structural navigation panels must stay stable regardless of which axis is filtered. Verified via Playwright probe: 12 category rows before storey pick, 12 after. (756df401)
+
+### Added
+- Three workshop attendee testimonials on the marketing site DDC section: Kai Schmitt (Dimexcon), Philip Becker (Herbert Gruppe), Lukas Fuchs (D&S). CSS grid bumped from a fixed 2-col to a responsive 3/2/1 (≥1080px / ≥720px / mobile) so 5 cards land as 3+2 on desktop. Quotes verbatim, LinkedIn avatars base64-embedded. Generator script committed at `website-marketing/pro/breeze/_screenshots/add_workshop_testimonials.py`, idempotent. (c8c3ba62)
+
+### Changed
+- i18n: 247 new keys present in `en.ts` but missing from `de.ts` backfilled to all 26 other locale files as EN placeholders (project convention). Groups: project layout / widgets (102), audit (18), procurement (18), schedule_advanced (16), bim / rfi / submittals (15 each), tendering (14), geo_hub (11), sidebar (7), queue (6), geo (4), reports (3), property_dev (3). 6,416 key insertions total. (715d9de8)
+
+## [4.9.0] - 2026-05-25
+
+Dashboard / settings / docs / converters wave on top of v4.8.0 — every
+fix the user reported on 2026-05-24 → 2026-05-25 bundled into one release.
+
+### Added
+- `formwork` MVP module — systems catalogue + per-BOQ assignments + reuse-aware unit-cost formula `unit_rate * (1 + waste_pct/100) / reuse_count`. 3 tables (`oe_formwork_system`, `oe_formwork_assignment`, `oe_formwork_schedule_line`), alembic v3132. (7bc95240)
+- `OperationsSnapshotCard` — single consolidated dashboard card replacing 9 separate wave-2 widgets (BOQ summary, validation, clash, critical path, top risks, HSE, procurement, budget variance, change orders). 3×3 compact-tile grid, hardened against undefined payload fields. (bbbbe97f, e9d5fbe8)
+- `/settings?tab=converters` now embeds the BIM-style live health banner — smoke-test health pills (verify=true), one-click Install / Update / Reinstall / Re-check buttons with live install-progress bar, and a top-level "X/Y working — update available" summary chip. Existing all-converters SHA-comparison table stays below. (3a70a0ac)
+- Project Detail page customizer + 7 new widgets (commit ec5aec1e).
+- Geo Hub: instant address-search overlay with fly-to + dismissible pin; Cesium ion default-token warning silenced. (e5ceb89e, d2dd0f49)
+- `subcontractors`, `rfi`, `submittals`, `schedule_advanced`, `contracts`, `procurement`, `tendering`, `reporting`, `hse_advanced` — UX polish + module-specific deep features (status pipelines, overdue indicators, ball-in-court, critical-path, multi-currency rollup, GAEB X83, scorecards, insurance expiry). (ba22d6d2 0e679296 d3c77c7b 969f5a05 4a3f717c 25022188 3c29a1ec 124–130)
+- README hero refreshed with feature-grid layout (ec4a9c16) and all 56 emojis (9 ToC + 47 body) swapped for GitHub Octicons with `<picture>` light/dark variants. (9f631f73, d6535269)
+
+### Changed
+- `SUPPORTED_LOCALES` in `property_dev/document_templates.py` expanded from 6 to 27 locales — matches the frontend locale catalogue. Locales without a dedicated JSON in `data/document_locales/` fall back to `en.json` automatically via `_load_locale`. (cbb186fe)
+- `/settings`: BIM/CAD section title and description now read just "Converters" / "DDC converters" — the legacy BIM/CAD prefix misled users into thinking it was a separate BIM section. Legacy `?tab=bimcad` aliased to `?tab=converters`. (8e248c4f, de571d15)
+- PropDev tabs grouped into Master data / Sales / Operations blocks. (bc2ab951)
+- A11y: shell tokens bumped, app-shell button-name on UploadQueue + RecentFAB + remove-task, design-token contrast to WCAG AA for `text-tertiary` / `text-quaternary`. (a15884a5, 02eddcb9, a27da31b)
+- /files sidebar counts now honour `q` + extension filters. (8caf4156)
+- Catalog: full resource name shown in expanded detail panel; portal-rendered tooltip escapes table overflow clipping. (29883084, 88e8eca2, 8e69f0f3)
+- LoginPage: 31 keys backfilled to 14 locales. (c5dda014)
+
+### Fixed
+- `WhatsNewCard` chip popovers now render via `createPortal(document.body)` with `position: fixed` + `z-[1000]` — the parent card's `backdrop-blur-md` creates a stacking context that trapped the old `absolute z-30` popovers behind dashboard widgets. (0b15df9a)
+- `BIMFilterPanel` chip counts now respect active filters (proper facet-UI: each axis counted against elements passing every OTHER axis but not its own). (ba1887cb)
+- BIM `/bim/:id` grouping restored when filtering by category/type. (9a0051e0)
+- `/coordination` dashboard 404 cascade — root cause: stale active project id rejecting every endpoint. (17cf8390)
+- `/projects/:id/geo` crash "Cannot read properties of undefined (reading 'scene')" — `OverlayLayer` cesium effects now guard against undefined viewer. (882f662e)
+- `/clash` mojibake in CAD-BIM picker strings. (9626c014)
+- Shared money formatters hardened against Decimal-string inputs across DashboardPage / CompactProjectCard / `formatters.ts` / `MoneyDisplay.tsx`. (1aa4aaea, 0680e9be)
+- Kill-switch service worker at `frontend/public/sw.js` — auto-unregisters the stale prod SW that pinned `/assets/index-<hash>.js` from an earlier prod build, so every recent dashboard / catalog / snapshot fix actually reaches the user. (b413be31)
+- 20 latent tsc errors swept (PlotStatus `held`/`blocked`, PropDevDocType 6 new records, InventoryMap MoneyDisplay prop, HSEAdvancedPage select cast, unused imports). (c025e6f0)
+
+### Tests
+- Formwork smoke test (`tests/modules/test_formwork_smoke.py`).
+- A11y axe spec + artefacts for V_DESIGN (a27da31b).
+
+## [4.4.0] - 2026-05-22
+
+PropDev R6 rollup + new Geo Hub module + canonical→3D Tiles pipeline.
+
+### Added
+- Property Development R6 wave: Lead → Reservation → SPA → PaymentSchedule entities with multi-buyer ContractParty (ownership_pct sum=100), Broker + Commission + Escrow + PriceMatrix + Phase/Block hierarchy, ValidationRules + regulator PDF reports (RERA / MAHARERA / 214-FZ / CMA in 6 locales), buyer journey dashboards (heatmap / velocity / cashflow waterfall / inventory ageing / funnel conversion / buyer journey timeline), document templates (SPA / reservation / handover / warranty / NOC, 6 locales, jurisdiction-aware clauses, DRAFT watermark, multi-buyer SPA with ownership_pct), tax engine for 12 jurisdictions (GB/DE/AT/CH/AE/SA/IN/RU/BR/SG/US/AU). Alembic v3103 + v3104 → v3105 merge.
+- `geo_hub` module — Cesium 3D Tiles 1.1 + cross-module geospatial integration: 7 entities, 34 REST endpoints, pure-Python pygltflib tile pipeline (no C++ deps, no IfcOpenShell). Routes `/geo`, `/projects/:id/geo`, `/property-dev/developments/:id/geo`. Sidebar entry under CAD/BIM analytics with NEW badge. Alembic v3106_geo_hub_init.
+- `POST /api/v1/geo-hub/from-canonical/{cad_import_id}` — package a converted CAD/BIM canonical-JSON model as a Cesium 3D Tileset, georeferenced against the project anchor. Optional `heading_deg` for orientation; 5 integration tests pass.
+- "View on map" entry buttons in BIM Hub toolbar (when project scoped) and Property Dev development toolbar (when development selected) — navigates to the matching Geo Hub page. New `geo_hub.view_on_map` i18n key in 27 locales.
+- CesiumJS frontend dependency wired via lazy `import('cesium')` + Vite `vendor-cesium` manualChunk (4.7 MB raw / 1.3 MB gzip, isolated from main bundle). `window.CESIUM_BASE_URL` set before any cesium import resolves; static assets (Workers / Widgets / Assets / ThirdParty) copied to `dist/cesium/` during build.
+
+### Changed
+- `RequestValidationError` handler in `app/main.py` now recursively coerces all non-JSON-native types (Decimal, UUID, datetime, ...) to JSON-safe forms before responding — fixes 500 in 422 responses when Pydantic input echoed a Decimal.
+- `_resolve_doc_type_or_404` in property_dev now returns 404 (matches its name), not 400.
+
+### Fixed
+- R6 `MissingGreenlet` in `convert_lead_to_reservation` and `convert_reservation_to_spa` — surgical `session.expire(obj)` per row instead of session-wide `expire_all()`, and snapshot scalar attrs before `update_fields` so post-write reads don't lazy-load on expired rows.
+- 24 locale files (ar/bg/cs/da/es/fi/fr/hi/hr/id/it/ja/ko/mn/nl/no/pl/pt/ro/sv/th/tr/vi/zh) had a missing comma at line ~5626 before the propdev block (regression from d7431ac1).
+- `/v1/projects/{id}/profile` 404 spam (50/64 errors per user log) — auto-retrofit + CRM/users limit caps + bug_report whitelist + converter install timeout.
+- 6 stale tsc errors in `CesiumViewer.test.tsx` (vi.doMock 3-arg signature), `InventoryAgeing.tsx` (unused `num`), `SalesVelocity.tsx` (unused `SalesVelocityBucket`).
+- Redundant `from fastapi.responses import Response` inside `stream_propdev_document` — already imported at module top.
+
+### Tests
+- 31 ValidationRule tests + 24 geo_hub tile pipeline tests + 5 from-canonical integration tests + R6 lead-to-SPA suite (12/12) pass.
+
 ## [4.3.2] - 2026-05-22
 
 Admin UX hotfix — audit log full rewrite + sidebar polish + developer guide refresh.

@@ -26,7 +26,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from app.core.file_signature import detect as detect_signature
+from app.core.i18n import get_locale
 from app.core.upload_guards import reject_if_xlsx_bomb
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.fieldreports.schemas import (
     FieldReportCreate,
@@ -139,8 +142,18 @@ async def get_calendar(
 
 @router.get("/weather/")
 async def get_current_weather(
-    lat: float = Query(..., description="Latitude"),
-    lon: float = Query(..., description="Longitude"),
+    lat: float = Query(
+        ...,
+        ge=-90.0,
+        le=90.0,
+        description="Latitude in decimal degrees, -90..90",
+    ),
+    lon: float = Query(
+        ...,
+        ge=-180.0,
+        le=180.0,
+        description="Longitude in decimal degrees, -180..180",
+    ),
     _user_id: CurrentUserId = None,  # type: ignore[assignment]
 ) -> JSONResponse:
     """Fetch current weather for a location (optional, requires OPENWEATHERMAP_API_KEY).
@@ -152,9 +165,25 @@ async def get_current_weather(
     surfaces the failure to monitoring + retry layers (the previous
     silent-200 made the dashboard's "weather widget healthy" indicator
     impossible to drive from HTTP status alone).
+
+    ``lat`` / ``lon`` are bound to the valid WGS-84 range — out-of-range
+    or non-finite (``nan`` / ``inf``) coordinates yield a 422 from
+    FastAPI's query-param validator before any upstream call is made.
     """
+    import math
+
     from app.config import get_settings
     from app.modules.fieldreports.weather import fetch_weather
+
+    # FastAPI's float coercion accepts ``nan`` / ``inf`` literals from
+    # the query string even with ``ge`` / ``le`` set — those comparisons
+    # silently evaluate to ``False`` for NaN, so the bounds gate alone
+    # is not enough. Reject explicitly to keep upstream params safe.
+    if not (math.isfinite(lat) and math.isfinite(lon)):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Coordinates must be finite numbers.",
+        )
 
     settings = get_settings()
     api_key = settings.openweathermap_api_key
@@ -480,11 +509,42 @@ async def import_field_reports_file(
             detail="Uploaded file is empty.",
         )
 
+    # Hard cap on body size — the entire upload is read into memory and
+    # then again by openpyxl. 25 MB is well above any legitimate field-
+    # report import (a 10K-row sheet is ~2 MB) and keeps a malicious
+    # caller from forcing arbitrarily large allocations.
+    _IMPORT_MAX_BYTES = 25 * 1024 * 1024
+    if len(content) > _IMPORT_MAX_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum size ({_IMPORT_MAX_BYTES} bytes).",
+        )
+
+    # Magic-byte verification: the filename extension is fully attacker-
+    # controlled (any client can rename a ``.exe`` to ``.xlsx``).
+    # ``.xlsx`` / ``.xls`` are matched against their respective container
+    # signatures so an executable / archive / nested zip-bomb is rejected
+    # before it ever reaches openpyxl. CSV stays best-effort — it has no
+    # magic bytes — but the size cap above still applies.
+    is_excel = filename.endswith((".xlsx", ".xls"))
+    if is_excel:
+        detected = detect_signature(content[:16])
+        # .xlsx is a ZIP container; legacy .xls is an OLE compound doc.
+        allowed = {"zip"} if filename.endswith(".xlsx") else {"ole", "zip"}
+        if detected not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"File content does not match the {filename.rsplit('.', 1)[-1]} "
+                    f"format (detected signature: {detected or 'unknown'})."
+                ),
+            )
+
     # Zip-bomb guard: reject .xlsx whose uncompressed sheets exceed 50 MB.
     reject_if_xlsx_bomb(content)
 
     try:
-        if filename.endswith((".xlsx", ".xls")):
+        if is_excel:
             rows = _parse_report_rows_from_excel(content)
         else:
             rows = _parse_report_rows_from_csv(content)
@@ -989,12 +1049,12 @@ async def update_template(
     try:
         tpl_uuid = uuid.UUID(template_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Template not found") from None
+        raise HTTPException(status_code=404, detail=translate("errors.template_not_found", locale=get_locale())) from None
 
     # IDOR guard: load first, verify the template's project, then mutate.
     existing = await service.repo.get_by_id(tpl_uuid)
     if existing is None or str(existing.project_id) != str(project_id):
-        raise HTTPException(status_code=404, detail="Template not found")
+        raise HTTPException(status_code=404, detail=translate("errors.template_not_found", locale=get_locale()))
     await verify_project_access(existing.project_id, user_id, session)
     tpl = await service.update_template(tpl_uuid, data)
     return _template_to_response(tpl)
@@ -1020,16 +1080,75 @@ async def delete_template(
     try:
         tpl_uuid = uuid.UUID(template_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail="Template not found") from None
+        raise HTTPException(status_code=404, detail=translate("errors.template_not_found", locale=get_locale())) from None
 
     existing = await service.repo.get_by_id(tpl_uuid)
     if existing is None or str(existing.project_id) != str(project_id):
-        raise HTTPException(status_code=404, detail="Template not found")
+        raise HTTPException(status_code=404, detail=translate("errors.template_not_found", locale=get_locale()))
     await verify_project_access(existing.project_id, user_id, session)
     await service.delete_template(tpl_uuid)
 
 
 # ── Site Workforce Log CRUD ────────────────────────────────────────────────
+
+
+async def _verify_report_access(
+    report_id: uuid.UUID,
+    user_id: str,
+    session: "SessionDep",
+    service: FieldReportService,
+) -> "object":
+    """Load the parent report and run ``verify_project_access`` on it.
+
+    Used by the workforce / equipment log endpoints — those route off an
+    unscoped row id and (pre-fix) skipped the project-ownership gate
+    that every report endpoint applies. The function intentionally
+    raises through ``service.get_report`` (HTTP 404 when the report
+    doesn't exist) and ``verify_project_access`` (HTTP 404 when the
+    caller doesn't own the owning project) so a missing UUID and a
+    cross-tenant id both look identical to the attacker.
+    """
+    report = await service.get_report(report_id)
+    await verify_project_access(report.project_id, user_id, session)
+    return report
+
+
+async def _verify_workforce_entry_access(
+    entry_id: uuid.UUID,
+    user_id: str,
+    session: "SessionDep",
+    service: FieldReportService,
+) -> "object":
+    """IDOR guard for ``/workforce/{entry_id}`` endpoints.
+
+    Loads the workforce row, then resolves the parent report's project
+    and gates on it. Cross-tenant access yields 404 to avoid leaking
+    entry-id existence.
+    """
+    from app.modules.fieldreports.models import SiteWorkforceLog
+
+    entry = await session.get(SiteWorkforceLog, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Workforce log entry not found")
+    await _verify_report_access(entry.field_report_id, user_id, session, service)
+    return entry
+
+
+async def _verify_equipment_entry_access(
+    entry_id: uuid.UUID,
+    user_id: str,
+    session: "SessionDep",
+    service: FieldReportService,
+) -> "object":
+    """IDOR guard for ``/equipment/{entry_id}`` endpoints (mirror of
+    :func:`_verify_workforce_entry_access`)."""
+    from app.modules.fieldreports.models import SiteEquipmentLog
+
+    entry = await session.get(SiteEquipmentLog, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Equipment log entry not found")
+    await _verify_report_access(entry.field_report_id, user_id, session, service)
+    return entry
 
 
 @router.post(
@@ -1040,12 +1159,16 @@ async def delete_template(
 async def create_workforce_log(
     report_id: uuid.UUID,
     data: SiteWorkforceLogCreate,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("fieldreports.update")),
+    service: FieldReportService = Depends(_get_service),
 ) -> SiteWorkforceLogResponse:
     """Add a workforce log entry to a field report."""
     from app.modules.fieldreports.models import SiteWorkforceLog
+
+    # IDOR guard: the parent report must belong to a project the caller owns.
+    await _verify_report_access(report_id, user_id, session, service)
 
     entry = SiteWorkforceLog(
         field_report_id=report_id,
@@ -1066,16 +1189,21 @@ async def create_workforce_log(
 @router.get(
     "/reports/{report_id}/workforce/",
     response_model=list[SiteWorkforceLogResponse],
+    dependencies=[Depends(RequirePermission("fieldreports.read"))],
 )
 async def list_workforce_logs(
     report_id: uuid.UUID,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: FieldReportService = Depends(_get_service),
 ) -> list[SiteWorkforceLogResponse]:
     """List all workforce log entries for a field report."""
     from sqlalchemy import select
 
     from app.modules.fieldreports.models import SiteWorkforceLog
+
+    # IDOR guard: the parent report must belong to a project the caller owns.
+    await _verify_report_access(report_id, user_id, session, service)
 
     stmt = select(SiteWorkforceLog).where(SiteWorkforceLog.field_report_id == report_id)
     result = await session.execute(stmt)
@@ -1090,19 +1218,18 @@ async def list_workforce_logs(
 async def update_workforce_log(
     entry_id: uuid.UUID,
     data: SiteWorkforceLogUpdate,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("fieldreports.update")),
+    service: FieldReportService = Depends(_get_service),
 ) -> SiteWorkforceLogResponse:
     """Update a workforce log entry."""
-    from fastapi import HTTPException
     from sqlalchemy import update
 
     from app.modules.fieldreports.models import SiteWorkforceLog
 
-    entry = await session.get(SiteWorkforceLog, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Workforce log entry not found")
+    # IDOR guard: gate on the owning project before any mutation.
+    await _verify_workforce_entry_access(entry_id, user_id, session, service)
 
     updates = data.model_dump(exclude_unset=True)
     if "metadata" in updates:
@@ -1112,25 +1239,21 @@ async def update_workforce_log(
         await session.execute(stmt)
         await session.flush()
         session.expire_all()
-        entry = await session.get(SiteWorkforceLog, entry_id)
+    entry = await session.get(SiteWorkforceLog, entry_id)
     return SiteWorkforceLogResponse.model_validate(entry)
 
 
 @router.delete("/workforce/{entry_id}", status_code=204)
 async def delete_workforce_log(
     entry_id: uuid.UUID,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("fieldreports.delete")),
+    service: FieldReportService = Depends(_get_service),
 ) -> None:
     """Delete a workforce log entry."""
-    from fastapi import HTTPException
-
-    from app.modules.fieldreports.models import SiteWorkforceLog
-
-    entry = await session.get(SiteWorkforceLog, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Workforce log entry not found")
+    # IDOR guard: gate on the owning project before deletion.
+    entry = await _verify_workforce_entry_access(entry_id, user_id, session, service)
     await session.delete(entry)
     await session.flush()
 
@@ -1146,12 +1269,16 @@ async def delete_workforce_log(
 async def create_equipment_log(
     report_id: uuid.UUID,
     data: SiteEquipmentLogCreate,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("fieldreports.update")),
+    service: FieldReportService = Depends(_get_service),
 ) -> SiteEquipmentLogResponse:
     """Add an equipment log entry to a field report."""
     from app.modules.fieldreports.models import SiteEquipmentLog
+
+    # IDOR guard: the parent report must belong to a project the caller owns.
+    await _verify_report_access(report_id, user_id, session, service)
 
     entry = SiteEquipmentLog(
         field_report_id=report_id,
@@ -1171,16 +1298,21 @@ async def create_equipment_log(
 @router.get(
     "/reports/{report_id}/equipment/",
     response_model=list[SiteEquipmentLogResponse],
+    dependencies=[Depends(RequirePermission("fieldreports.read"))],
 )
 async def list_equipment_logs(
     report_id: uuid.UUID,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    service: FieldReportService = Depends(_get_service),
 ) -> list[SiteEquipmentLogResponse]:
     """List all equipment log entries for a field report."""
     from sqlalchemy import select
 
     from app.modules.fieldreports.models import SiteEquipmentLog
+
+    # IDOR guard: the parent report must belong to a project the caller owns.
+    await _verify_report_access(report_id, user_id, session, service)
 
     stmt = select(SiteEquipmentLog).where(SiteEquipmentLog.field_report_id == report_id)
     result = await session.execute(stmt)
@@ -1195,19 +1327,18 @@ async def list_equipment_logs(
 async def update_equipment_log(
     entry_id: uuid.UUID,
     data: SiteEquipmentLogUpdate,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("fieldreports.update")),
+    service: FieldReportService = Depends(_get_service),
 ) -> SiteEquipmentLogResponse:
     """Update an equipment log entry."""
-    from fastapi import HTTPException
     from sqlalchemy import update
 
     from app.modules.fieldreports.models import SiteEquipmentLog
 
-    entry = await session.get(SiteEquipmentLog, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Equipment log entry not found")
+    # IDOR guard: gate on the owning project before any mutation.
+    await _verify_equipment_entry_access(entry_id, user_id, session, service)
 
     updates = data.model_dump(exclude_unset=True)
     if "metadata" in updates:
@@ -1217,24 +1348,20 @@ async def update_equipment_log(
         await session.execute(stmt)
         await session.flush()
         session.expire_all()
-        entry = await session.get(SiteEquipmentLog, entry_id)
+    entry = await session.get(SiteEquipmentLog, entry_id)
     return SiteEquipmentLogResponse.model_validate(entry)
 
 
 @router.delete("/equipment/{entry_id}", status_code=204)
 async def delete_equipment_log(
     entry_id: uuid.UUID,
+    user_id: CurrentUserId,
     session: SessionDep,
-    user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("fieldreports.delete")),
+    service: FieldReportService = Depends(_get_service),
 ) -> None:
     """Delete an equipment log entry."""
-    from fastapi import HTTPException
-
-    from app.modules.fieldreports.models import SiteEquipmentLog
-
-    entry = await session.get(SiteEquipmentLog, entry_id)
-    if entry is None:
-        raise HTTPException(status_code=404, detail="Equipment log entry not found")
+    # IDOR guard: gate on the owning project before deletion.
+    entry = await _verify_equipment_entry_access(entry_id, user_id, session, service)
     await session.delete(entry)
     await session.flush()

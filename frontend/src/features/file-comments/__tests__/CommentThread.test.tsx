@@ -36,6 +36,7 @@ function makeNode(overrides: Partial<ThreadNode> = {}): ThreadNode {
     project_id: 'p-1',
     file_kind: 'document',
     file_id: 'f-1',
+    file_version_id: null,
     file_version_snapshot: null,
     parent_id: null,
     author_id: overrides.author_id ?? '00000000-0000-0000-0000-000000000001',

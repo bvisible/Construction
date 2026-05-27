@@ -18,6 +18,8 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep
 from app.modules.rfq_bidding.schemas import (
     BidCreate,
@@ -59,12 +61,12 @@ async def _verify_project_access(
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
     if str(project.owner_id) != str(user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
 
 

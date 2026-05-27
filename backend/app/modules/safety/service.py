@@ -77,6 +77,8 @@ class SafetyService:
             corrective_actions=corrective_actions,
             reported_to_regulator=data.reported_to_regulator,
             status=data.status,
+            geo_lat=data.geo_lat,
+            geo_lon=data.geo_lon,
             created_by=user_id,
             metadata_=data.metadata,
         )

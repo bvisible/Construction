@@ -30,7 +30,9 @@ import {
   FileText,
   TriangleRight,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -246,7 +248,7 @@ function AddMarkupModal({
     onSuccess: () => {
       addToast({
         type: 'success',
-        title: t('markups.created', { defaultValue: 'Markup created‌⁠‍' }),
+        title: t('markups.created', { defaultValue: 'Markup created' }),
       });
       onCreated();
       onClose();
@@ -288,14 +290,14 @@ function AddMarkupModal({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label={t('markups.add_markup', { defaultValue: 'Add Markup‌⁠‍' })}
+        aria-label={t('markups.add_markup', { defaultValue: 'Add Markup' })}
         className="relative z-10 w-full max-w-lg mx-4 rounded-2xl border border-border-light bg-surface-elevated shadow-xl animate-scale-in"
       >
         {/* Modal Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border-light">
           <h2 className="text-base font-semibold text-content-primary flex items-center gap-2">
             <Plus size={16} className="text-oe-blue" />
-            {t('markups.add_markup', { defaultValue: 'Add Markup‌⁠‍' })}
+            {t('markups.add_markup', { defaultValue: 'Add Markup' })}
           </h2>
           <button
             onClick={onClose}
@@ -340,7 +342,7 @@ function AddMarkupModal({
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="block text-xs font-medium text-content-secondary mb-1.5">
-                {t('markups.document', { defaultValue: 'Document‌⁠‍' })}
+                {t('markups.document', { defaultValue: 'Document' })}
               </label>
               <select
                 value={documentId}
@@ -348,7 +350,7 @@ function AddMarkupModal({
                 className={selectCls + ' w-full'}
               >
                 <option value="">
-                  {t('markups.no_document', { defaultValue: '-- None --‌⁠‍' })}
+                  {t('markups.no_document', { defaultValue: '-- None --' })}
                 </option>
                 {documents.map((d) => (
                   <option key={d.id} value={d.id}>
@@ -886,6 +888,12 @@ export function MarkupsPage() {
   // primary complaint was that the three modules were disconnected —
   // opening this page and seeing only hub markups reinforced that.
   const [scopeTab, setScopeTab] = useState<'unified' | 'hub'>('unified');
+  const onScopeTabKeyDown = useTabKeyboardNav<'unified' | 'hub'>({
+    ids: ['unified', 'hub'] as const,
+    activeId: scopeTab,
+    onChange: setScopeTab,
+    orientation: 'horizontal',
+  });
 
   // Data queries
   const { data: projects = [] } = useQuery({
@@ -914,7 +922,7 @@ export function MarkupsPage() {
   // otherwise both queries fire their own copy of GET /v1/markups/ on
   // every page open.
   const noFilters = !filterType && !filterStatus && !filterDocumentId;
-  const { data: markups = [], isLoading } = useQuery({
+  const { data: markups = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: noFilters
       ? ['unified-markups', projectId, 'hub']
       : ['markups', projectId, filterType, filterStatus, filterDocumentId],
@@ -1175,23 +1183,15 @@ export function MarkupsPage() {
         </div>
       </div>
 
-      {/* ── No project selected ──────────────────────────────────────────── */}
+      {/* Project gate */}
       {!projectId ? (
         <div className="mt-10">
-          <EmptyState
-            icon={<PenTool size={28} strokeWidth={1.5} />}
-            title={t('markups.no_project_title', { defaultValue: 'No project selected' })}
-            description={t('markups.no_project_desc', {
+          <RequiresProject
+            emptyHint={t('markups.no_project_desc', {
               defaultValue:
                 'Select a project from the dropdown to view markups and annotations. You can create markups on document pages, add measurements, and track review status.',
             })}
-            action={{
-              label: t('markups.select_project_btn', { defaultValue: 'Select a Project' }),
-              onClick: () => {
-                /* Focus the project selector */
-              },
-            }}
-          />
+          >{null}</RequiresProject>
         </div>
       ) : (
         <>
@@ -1213,11 +1213,15 @@ export function MarkupsPage() {
             className="mt-3 inline-flex items-center rounded-lg border border-border-light bg-surface-primary p-0.5"
             role="tablist"
             aria-label={t('markups.scope_tabs', { defaultValue: 'Annotation scope' })}
+            onKeyDown={onScopeTabKeyDown}
           >
             <button
               type="button"
               role="tab"
+              id="markups-scope-tab-unified"
               aria-selected={scopeTab === 'unified'}
+              aria-controls="markups-scope-panel-unified"
+              tabIndex={scopeTab === 'unified' ? 0 : -1}
               onClick={() => setScopeTab('unified')}
               data-testid="markups-tab-unified"
               className={clsx(
@@ -1232,7 +1236,10 @@ export function MarkupsPage() {
             <button
               type="button"
               role="tab"
+              id="markups-scope-tab-hub"
               aria-selected={scopeTab === 'hub'}
+              aria-controls="markups-scope-panel-hub"
+              tabIndex={scopeTab === 'hub' ? 0 : -1}
               onClick={() => setScopeTab('hub')}
               data-testid="markups-tab-hub"
               className={clsx(
@@ -1379,9 +1386,9 @@ export function MarkupsPage() {
           {/* ── Main Content ───────────────────────────────────────────────── */}
           <div className="mt-3">
             {isLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" />
-              </div>
+              <SkeletonTable rows={6} columns={4} />
+            ) : isError ? (
+              <RecoveryCard error={error} onRetry={() => refetch()} />
             ) : filteredMarkups.length === 0 ? (
               <EmptyState
                 icon={<PenTool size={28} strokeWidth={1.5} />}

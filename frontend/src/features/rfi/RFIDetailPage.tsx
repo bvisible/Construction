@@ -42,13 +42,39 @@ import {
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { apiGet } from '@/shared/lib/api';
+import { useAuthStore } from '@/stores/useAuthStore';
 import {
   closeRFI,
   getRFI,
   respondToRFI,
   type RespondRFIPayload,
 } from './api';
-import { STATUS_CONFIG, PRIORITY_DOT } from './RFIPage';
+import {
+  BIC_SIDE_CFG,
+  PRIORITY_DOT,
+  STATUS_CONFIG,
+  ballInCourtSide,
+  daysOverdue,
+} from './RFIPage';
+
+/**
+ * Decode the ``sub`` claim from the JWT — duplicated locally so the
+ * detail page does not depend on RFIPage internals (RFIPage re-exports
+ * only the pure helpers, not the token decoder, to keep coupling clean).
+ */
+function decodeUserIdFromTokenLocal(token: string | null): string | null {
+  if (!token) return null;
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    const payload = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+    const json = JSON.parse(atob(padded)) as { sub?: string };
+    return typeof json.sub === 'string' ? json.sub : null;
+  } catch {
+    return null;
+  }
+}
 
 interface UserResult {
   id: string;
@@ -149,15 +175,15 @@ function InlineRespondForm({
         onChange={(e) => setResponse(e.target.value)}
         rows={5}
         placeholder={t('rfi.response_placeholder', {
-          defaultValue: 'Enter your response...‌⁠‍',
+          defaultValue: 'Enter your response...',
         })}
-        aria-label={t('rfi.field_response', { defaultValue: 'Response‌⁠‍' })}
+        aria-label={t('rfi.field_response', { defaultValue: 'Response' })}
         className="w-full rounded-lg border border-border bg-surface-primary px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue resize-none"
         autoFocus
       />
       <div className="flex items-center gap-2 justify-end">
         <Button variant="ghost" size="sm" onClick={onCancel} disabled={isPending}>
-          {t('common.cancel', { defaultValue: 'Cancel‌⁠‍' })}
+          {t('common.cancel', { defaultValue: 'Cancel' })}
         </Button>
         <Button
           variant="primary"
@@ -170,7 +196,7 @@ function InlineRespondForm({
           ) : (
             <MessageSquare size={14} className="mr-1.5" />
           )}
-          {t('rfi.submit_response', { defaultValue: 'Submit Response‌⁠‍' })}
+          {t('rfi.submit_response', { defaultValue: 'Submit Response' })}
         </Button>
       </div>
     </div>
@@ -275,7 +301,7 @@ export function RFIDetailPage() {
       addToast({
         type: 'success',
         title: t('rfi.responded', {
-          defaultValue: 'Response submitted successfully‌⁠‍',
+          defaultValue: 'Response submitted successfully',
         }),
       });
     },
@@ -381,6 +407,15 @@ export function RFIDetailPage() {
       rfi.status === 'open' &&
       new Date(rfi.response_due_date) < new Date()
     );
+  // Compute ball-in-court side relative to the viewer so the hero shows
+  // a "With you / With them / Answered / Closed" pill — matches the row
+  // chip on the list page, helping the operator instantly know whether
+  // they need to take action on this RFI.
+  const accessToken = useAuthStore.getState().accessToken;
+  const viewerId = decodeUserIdFromTokenLocal(accessToken);
+  const bicSide = ballInCourtSide(rfi, viewerId);
+  const bicCfg = BIC_SIDE_CFG[bicSide];
+  const overdueDelta = daysOverdue(rfi.response_due_date);
 
   return (
     <div className="w-full animate-fade-in">
@@ -414,9 +449,25 @@ export function RFIDetailPage() {
             {isOverdue && (
               <Badge variant="error" size="md">
                 <AlertTriangle size={12} className="mr-1 inline" />
-                {t('rfi.overdue', { defaultValue: 'Overdue' })}
+                {overdueDelta !== null && overdueDelta > 0
+                  ? t('rfi.overdue_by_days', {
+                      defaultValue: 'Overdue by {{count}} days',
+                      count: overdueDelta,
+                    })
+                  : t('rfi.overdue', { defaultValue: 'Overdue' })}
               </Badge>
             )}
+            {/* Ball-in-court hero pill — same colour system as the list
+                row badge so the contractor scans both surfaces with the
+                same eye-pattern. */}
+            <span
+              className={clsx(
+                'inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold',
+                bicCfg.cls,
+              )}
+            >
+              {t(bicCfg.key, { defaultValue: bicCfg.fallback })}
+            </span>
           </div>
           <h1 className="text-2xl font-bold text-content-primary break-words">
             {rfi.subject}

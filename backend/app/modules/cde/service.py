@@ -242,18 +242,24 @@ class CDEService:
         gate_meta = _state_machine.get_gate_requirements(current_state, target_state)
         gate_code = gate_meta.get("gate")
 
-        # Gate B — SHARED → PUBLISHED requires an explicit approver signature.
+        # Gate enforcement — Epic H lifted the bespoke Gate-B signature
+        # check into ``app.core.audit_gates.gate_registry`` so additional
+        # transition preconditions can be added declaratively elsewhere.
+        # ``enforce`` raises ``HTTPException(400)`` with the same detail
+        # message the inline check used to emit; the public contract is
+        # byte-identical.
+        from app.core.audit_gates import gate_registry as _gate_registry
+
+        _gate_registry.enforce(gate_code, data)
+
+        # Gate B — SHARED → PUBLISHED also captures the signature in the
+        # container's metadata for the compliance trail.
         updated_metadata: dict[str, Any] | None = None
         is_gate_b = (
             target_state == CDEState.PUBLISHED.value
             and current_state == CDEState.SHARED.value
         )
         if is_gate_b:
-            if not data.approver_signature or not data.approver_signature.strip():
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Gate B (SHARED → PUBLISHED) requires approver_signature",
-                )
             # Merge-in the approval block into metadata_ so it's persisted.
             md = dict(container.metadata_ or {})
             md["last_approval"] = {
@@ -482,6 +488,45 @@ class CDEService:
                     revision_id,
                     doc_id,
                 )
+
+                # Epic C — also register a unified ``oe_file_version``
+                # row so the chain is continuous across modules. Best
+                # effort; failure does not roll back the revision.
+                try:
+                    from app.modules.file_versions.helpers import (
+                        canonical_name_for,
+                    )
+                    from app.modules.file_versions.schemas import (
+                        FileVersionCreate,
+                    )
+                    from app.modules.file_versions.service import (
+                        FileVersionService,
+                    )
+
+                    fv_svc = FileVersionService(self.session)
+                    try:
+                        uploader = (
+                            uuid.UUID(str(user_id)) if user_id else None
+                        )
+                    except (TypeError, ValueError):
+                        uploader = None
+                    fv_payload = FileVersionCreate(
+                        project_id=container.project_id,
+                        file_kind="document",
+                        file_id=str(doc_id),
+                        canonical_name=canonical_name_for("document", doc),
+                        file_size=file_size_int,
+                        notes=data.change_summary,
+                    )
+                    await fv_svc.register_new_version(
+                        fv_payload, uploaded_by_id=uploader
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to register FileVersion for CDE revision (doc=%s)",
+                        doc_id,
+                        exc_info=True,
+                    )
             except Exception:
                 logger.exception(
                     "Failed to cross-link CDE revision to Documents hub (revision=%s)",

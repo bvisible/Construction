@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useMemo, useEffect, lazy, Suspense } from 'react';
+import { useState, useCallback, useRef, useMemo, useEffect, useId, lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
@@ -144,10 +144,19 @@ function SelectDropdown({
   options: { value: string; label: string }[];
   placeholder: string;
 }) {
+  // Stable, label-derived id so axe can match the <label> to the <select>.
+  const selectId = useId();
   return (
     <div className="flex flex-col gap-1.5">
-      <label className="text-sm font-medium text-content-primary">{label}</label>
+      <label
+        htmlFor={selectId}
+        className="text-sm font-medium text-content-primary"
+      >
+        {label}
+      </label>
       <select
+        id={selectId}
+        aria-label={label}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className={clsx(
@@ -288,7 +297,7 @@ function DropZone({
       </div>
       <p className="text-[11px] text-content-tertiary mt-3">
         {t('takeoff.formats_detailed', {
-          defaultValue: 'PDF construction drawings \u00B7 JPG / PNG photos \u00B7 TIFF scans. AI will extract walls, slabs, doors, and other elements with quantities.‌⁠‍',
+          defaultValue: 'PDF construction drawings \u00B7 JPG / PNG photos \u00B7 TIFF scans. AI will extract walls, slabs, doors, and other elements with quantities.',
         })}
       </p>
     </div>
@@ -621,6 +630,7 @@ function QuickMeasurementForm({
   const [description, setDescription] = useState('');
   const [value, setValue] = useState('');
   const [unit, setUnit] = useState<string>('m2');
+  const unitSelectId = useId();
 
   const handleSubmit = useCallback(() => {
     if (!description.trim() || !value.trim()) return;
@@ -665,10 +675,15 @@ function QuickMeasurementForm({
       </div>
       <div className="w-28">
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm font-medium text-content-primary">
+          <label
+            htmlFor={unitSelectId}
+            className="text-sm font-medium text-content-primary"
+          >
             {t('takeoff.unit', 'Unit')}
           </label>
           <select
+            id={unitSelectId}
+            aria-label={t('a11y.takeoff.unit_select', { defaultValue: 'Unit' })}
             value={unit}
             onChange={(e) => setUnit(e.target.value)}
             disabled={disabled}
@@ -734,7 +749,7 @@ function TakeoffDocFilmstrip({
       >
         <Layers size={14} className="text-content-tertiary mr-2 shrink-0" />
         <span className="text-xs font-semibold text-content-primary">
-          {t('takeoff.documents_panel', { defaultValue: 'Documents‌⁠‍' })}
+          {t('takeoff.documents_panel', { defaultValue: 'Documents' })}
         </span>
         <span className="text-[11px] text-content-quaternary ml-1.5">
           ({documents.length})
@@ -842,7 +857,7 @@ function TakeoffDocFilmstrip({
           ) : (
             <span className="text-[11px] text-content-quaternary">
               {t('takeoff.no_documents_filmstrip', {
-                defaultValue: 'No documents uploaded yet‌⁠‍',
+                defaultValue: 'No documents uploaded yet',
               })}
             </span>
           )}
@@ -1449,7 +1464,7 @@ export function TakeoffPage() {
         setUploadErrorToast(
           t(
             'takeoff.doc_not_ready',
-            { defaultValue: 'Document is not ready to open yet.‌⁠‍' },
+            { defaultValue: 'Document is not ready to open yet.' },
           ),
         );
         setTimeout(() => setUploadErrorToast(null), 4000);

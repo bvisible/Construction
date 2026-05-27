@@ -195,7 +195,7 @@ async def schedule_template(
     data: ReportScheduleRequest,
     user_id: CurrentUserId,
     session: SessionDep,
-    _perm: None = Depends(RequirePermission("reporting.create")),
+    _perm: None = Depends(RequirePermission("reporting.distribute")),
     service: ReportingService = Depends(_get_service),
 ) -> ReportTemplateResponse:
     """Attach/replace/clear a cron schedule on an existing template.
@@ -325,7 +325,7 @@ async def delete_report(
     report_id: uuid.UUID,
     session: SessionDep,
     user_id: CurrentUserId,
-    _perm: None = Depends(RequirePermission("reporting.create")),
+    _perm: None = Depends(RequirePermission("reporting.delete")),
     service: ReportingService = Depends(_get_service),
 ) -> None:
     """Hard-delete a generated report. 404 if missing or if caller lacks

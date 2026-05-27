@@ -23,6 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep
 from app.modules.assemblies.schemas import (
     AppliedComponent,
@@ -113,7 +115,7 @@ async def _verify_target_boq_owner(
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(boq.project_id)
     if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale()))
     if str(project.owner_id) != str(user_id):
         # 404 here too — don't let callers probe for valid BOQ ids.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOQ not found")
@@ -479,7 +481,13 @@ async def update_assembly(
 ) -> AssemblyResponse:
     """Update assembly metadata fields."""
     await _verify_assembly_owner(session, assembly_id, user_id, payload)
-    assembly = await service.update_assembly(assembly_id, data)
+    is_admin = bool(payload and payload.get("role") == "admin")
+    assembly = await service.update_assembly(
+        assembly_id,
+        data,
+        caller_user_id=user_id,
+        caller_is_admin=is_admin,
+    )
     return _assembly_to_response(assembly)
 
 
@@ -813,7 +821,8 @@ async def get_template(
     template = await repo.get_by_id(template_id)
     if template is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Template not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.template_not_found", locale=get_locale()),
         )
     return _template_to_response(template)
 
@@ -870,21 +879,24 @@ async def apply_template(
     template = await repo.get_by_id(template_id)
     if template is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Template not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.template_not_found", locale=get_locale()),
         )
 
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(data.project_id)
     if project is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
 
     is_admin = bool(payload and payload.get("role") == "admin")
     if not is_admin and str(project.owner_id) != str(user_id):
         # 404 instead of 403 — don't leak project existence to attackers.
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
 
     region = data.region or getattr(project, "region", None) or None

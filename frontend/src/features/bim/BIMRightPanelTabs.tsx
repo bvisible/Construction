@@ -9,6 +9,7 @@
  *   - Groups: saved element groups
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -247,6 +248,19 @@ export default function BIMRightPanelTabs({
     [modelId, sceneManager],
   );
 
+  // Arrow-key navigation for the BIM right-panel tab strip (WCAG 2.1.1).
+  // The list comes from the static `tabs` declaration below; we need it
+  // here for the hook, so the ids list is extracted into a stable const.
+  const TAB_IDS: BIMRightPanelTab[] = [
+    'properties', 'layers', 'tools', 'trait-lens', 'bundles', 'groups', 'match',
+  ];
+  const onTabKeyDown = useTabKeyboardNav<BIMRightPanelTab>({
+    ids: TAB_IDS,
+    activeId: activeTab,
+    onChange: handleTabClick,
+    orientation: 'horizontal',
+  });
+
   const tabs: {
     id: BIMRightPanelTab;
     label: string;
@@ -254,12 +268,12 @@ export default function BIMRightPanelTabs({
   }[] = [
     {
       id: 'properties',
-      label: t('bim.tab_properties', { defaultValue: 'Properties‌⁠‍' }),
+      label: t('bim.tab_properties', { defaultValue: 'Properties' }),
       icon: ClipboardList,
     },
     {
       id: 'layers',
-      label: t('bim.tab_layers', { defaultValue: 'Layers‌⁠‍' }),
+      label: t('bim.tab_layers', { defaultValue: 'Layers' }),
       icon: Layers,
     },
     {
@@ -279,7 +293,7 @@ export default function BIMRightPanelTabs({
     },
     {
       id: 'groups',
-      label: t('bim.tab_groups', { defaultValue: 'Groups‌⁠‍' }),
+      label: t('bim.tab_groups', { defaultValue: 'Groups' }),
       icon: Folders,
     },
     {
@@ -295,8 +309,9 @@ export default function BIMRightPanelTabs({
       <div
         role="tablist"
         aria-label={t('bim.right_panel_tabs_aria', {
-          defaultValue: 'BIM right panel tabs‌⁠‍',
+          defaultValue: 'BIM right panel tabs',
         })}
+        onKeyDown={onTabKeyDown}
         className="flex items-stretch border-b border-border-light bg-surface-secondary"
       >
         {tabs.map(({ id, label, icon: Icon }) => {
@@ -307,6 +322,9 @@ export default function BIMRightPanelTabs({
               type="button"
               role="tab"
               aria-selected={isActive}
+              aria-controls={`bim-right-panel-${id}`}
+              id={`bim-right-tab-${id}`}
+              tabIndex={isActive ? 0 : -1}
               onClick={() => handleTabClick(id)}
               data-testid={`right-tab-${id}`}
               className={`flex-1 flex items-center justify-center gap-1 px-2 py-2 text-[11px] font-medium transition-colors ${
@@ -323,7 +341,7 @@ export default function BIMRightPanelTabs({
         <button
           type="button"
           onClick={onClose}
-          aria-label={t('bim.right_panel_close', { defaultValue: 'Close panel‌⁠‍' })}
+          aria-label={t('bim.right_panel_close', { defaultValue: 'Close panel' })}
           className="flex items-center justify-center px-2 text-content-tertiary hover:text-content-primary hover:bg-surface-tertiary"
         >
           <X size={14} />
@@ -331,7 +349,12 @@ export default function BIMRightPanelTabs({
       </div>
 
       {/* Tab body */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div
+        className="flex-1 min-h-0 overflow-y-auto"
+        role="tabpanel"
+        id={`bim-right-panel-${activeTab}`}
+        aria-labelledby={`bim-right-tab-${activeTab}`}
+      >
         {activeTab === 'properties' && (
           <PropertiesTabContent
             modelId={modelId}

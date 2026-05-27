@@ -206,10 +206,86 @@
       "suggestion": "Standard-Metrikeinheiten verwenden: m, m2, m3, kg, t, 式 usw."
     }
   },
+  "bc3": {
+    "code_required": {
+      "fail": "Position {ordinal} ohne FIEBDC-3-Konzeptcode",
+      "suggestion": "FIEBDC-3-Code vergeben (z. B. E04CM040 oder 01.02.01)"
+    },
+    "valid_code": {
+      "fail": "Ungültiger FIEBDC-3-Code '{code}' in Position {ordinal}",
+      "suggestion": "FIEBDC-3-Format verwenden: alphanumerisch (z. B. E04CM040, 01.02.01, CAP01#)"
+    }
+  },
   "pipeline": {
     "side_effecting_requires_gate": {
       "fail": "Schreibende Knoten ohne Gate: {nodes}",
       "suggestion": "Füge auf jedem Pfad von einem Trigger-/KI-Knoten zu jedem Schreibknoten ein Validierungs- oder Freigabe-Gate hinzu, bevor du veröffentlichst."
     }
+  },
+  "property_dev": {
+    "escrow_account_required": {
+      "fail": "Bauträgerprojekt benötigt ein aktives Treuhandkonto für Regulator '{regulator}'",
+      "suggestion": "Eröffne ein Treuhandkonto bei der regulator-lizenzierten Bank unter Compliance → Treuhandkonten"
+    },
+    "escrow_iban_valid": {
+      "fail": "Treuhandkonto {account}: IBAN '{iban}' besteht ISO 13616-Strukturprüfung nicht",
+      "suggestion": "IBAN korrigieren: Ländercode + Länge + Prüfsumme müssen ISO 13616 entsprechen"
+    },
+    "escrow_balance_reconciled": {
+      "fail": "Treuhandkonto {account}: Buchsaldo {ledger} weicht um {drift} von der Transaktionssumme ({transactions} Buchungen) ab",
+      "suggestion": "Treuhandkonto abstimmen — unverbuchte Eingänge oder fehlende Lastschriften prüfen"
+    },
+    "sales_contract_party_ownership_sums_to_100": {
+      "fail": "Vertrag {contract}: Eigentumsanteile summieren sich auf {total}% (Soll: exakt 100%)",
+      "suggestion": "Parteienanteile so anpassen, dass die Summe 100,00% ergibt"
+    },
+    "payment_schedule_instalments_sum_to_contract_value": {
+      "fail": "Vertrag {contract}: Ratensumme {instalments} weicht vom Vertragswert {contract_value} ab (Differenz {drift})",
+      "suggestion": "Zahlungsplan neu ausgleichen, damit Ratensumme dem Vertragstotal entspricht"
+    },
+    "reservation_expiry_in_future": {
+      "fail": "Reservierung {reservation}: expires_at {expires} liegt nicht in der Zukunft",
+      "suggestion": "Reservierung verlängern oder in expired/cancelled überführen"
+    },
+    "broker_commission_rate_within_bounds": {
+      "fail": "Provisionsvereinbarung {agreement}: {issue}",
+      "suggestion": "Prozentsatz zwischen 0,1% und 15%, Pauschalbetrag oder nicht-leere Staffelliste verwenden"
+    },
+    "price_matrix_no_negative_modifier": {
+      "fail": "Preismatrix {matrix}: Regel '{factor}' Multiplikator {multiplier} außerhalb [-0,50; 2,00]",
+      "suggestion": "Modifikatoren auf -50% bis +200% begrenzen, um unrealistische Preise zu vermeiden"
+    }
+  },
+  "errors": {
+    "resource_not_found": "Ressource nicht gefunden",
+    "project_not_found": "Projekt nicht gefunden",
+    "vendor_not_found": "Lieferant nicht gefunden",
+    "template_not_found": "Vorlage nicht gefunden",
+    "position_not_found": "Position nicht gefunden",
+    "session_not_found": "Sitzung nicht gefunden",
+    "document_not_found": "Dokument nicht gefunden",
+    "invitation_not_found": "Einladung nicht gefunden",
+    "agreement_not_found": "Vereinbarung nicht gefunden",
+    "rejection_not_found": "Ablehnung nicht gefunden",
+    "claim_not_found": "Abschlagsrechnung nicht gefunden",
+    "plot_not_found": "Grundstück nicht gefunden",
+    "survey_not_found": "Drohnenvermessung nicht gefunden",
+    "diary_video_not_found": "Bautagebuch-Video nicht gefunden",
+    "diary_photo_not_found": "Bautagebuch-Foto nicht gefunden",
+    "bidder_not_found": "Bieter nicht gefunden",
+    "webhook_not_found": "Webhook nicht gefunden",
+    "submission_not_found": "Angebot nicht gefunden",
+    "measurement_not_found": "Aufmaß nicht gefunden",
+    "salescontract_not_found": "Kaufvertrag nicht gefunden",
+    "prompt_not_found": "Prompt-Vorlage nicht gefunden",
+    "prequalification_not_found": "Präqualifikation nicht gefunden",
+    "purchase_requisition_not_found": "Bestellanforderung nicht gefunden",
+    "purchase_order_not_found": "Bestellung nicht gefunden",
+    "group_not_found": "Gruppe nicht gefunden",
+    "final_account_not_found": "Schlussrechnung nicht gefunden",
+    "estimate_job_not_found": "Kalkulationsauftrag nicht gefunden",
+    "escrow_not_found": "Treuhand-Transaktion nicht gefunden",
+    "commission_accrual_not_found": "Provisions-Abgrenzung nicht gefunden",
+    "baseline_not_found": "Baseline nicht gefunden"
   }
 }

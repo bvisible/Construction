@@ -1,5 +1,6 @@
 """‌⁠‍Regional configuration for the United Kingdom."""
 
+from decimal import Decimal
 from typing import Any
 
 PACK_CONFIG: dict[str, Any] = {
@@ -207,5 +208,13 @@ PACK_CONFIG: dict[str, Any] = {
         "volume": "m³",
         "weight": "kg",
         "temperature": "°C",
+    },
+    # ── VAT rates (Wave 25 — HMRC VAT Notice 700) ────────────────────────────
+    "vat_rates": {
+        "GB": {
+            "standard": Decimal("0.20"),
+            "reduced": Decimal("0.05"),
+            "zero": Decimal("0.00"),
+        },
     },
 }

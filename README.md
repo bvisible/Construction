@@ -15,7 +15,7 @@ Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all
 [![Stars](https://img.shields.io/github/stars/datadrivenconstruction/OpenConstructionERP?style=flat&logo=github)](https://github.com/datadrivenconstruction/OpenConstructionERP/stargazers)
 <br/>
 [![Last commit](https://img.shields.io/github/last-commit/datadrivenconstruction/OpenConstructionERP?color=informational)](https://github.com/datadrivenconstruction/OpenConstructionERP/commits/main)
-![Languages](https://img.shields.io/badge/languages-24-orange)
+![Languages](https://img.shields.io/badge/languages-27-orange)
 ![Cost Items](https://img.shields.io/badge/cost_items-55%2C000%2B-red)
 
 <img src="docs/screenshots/hero-overview.jpg" alt="OpenConstructionERP — Dashboard Overview" width="800" />
@@ -24,9 +24,9 @@ Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all
   <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/download/v2.0.0/oce_full_demo.mp4">▶ 1-minute teaser (your browser can't inline this — click for full 12-min walkthrough)</a>
 </video>
 
-<sub>🎬 <b>1-minute teaser above</b> · for the full 12-minute walkthrough → <a href="https://www.youtube.com/watch?v=X06cIaroAeI"><b>watch on YouTube</b></a> · onboarding → BoQ → BIM → DWG → PDF → AI → dashboard</sub>
+<sub><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/device-camera-video-dark.svg"><img src="docs/readme-icons/device-camera-video-light.svg" width="14" align="center" alt=""></picture> <b>1-minute teaser above</b> · for the full 12-minute walkthrough → <a href="https://www.youtube.com/watch?v=X06cIaroAeI"><b>watch on YouTube</b></a> · onboarding → BoQ → BIM → DWG → PDF → AI → dashboard</sub>
 
-*100% open source · 55,000+ cost items · AI estimation · 24 languages · Self-hosted*
+*100% open source · 55,000+ cost items · AI estimation · 27 languages · 111 modules · Self-hosted*
 
 </div>
 
@@ -37,14 +37,14 @@ Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all
 
 <table width="100%">
 <colgroup>
-<col width="33%"/>
-<col width="34%"/>
-<col width="33%"/>
+<col width="33%" />
+<col width="34%" />
+<col width="33%" />
 </colgroup>
 <tr>
 <td valign="top">
 
-**Getting Started**
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/rocket-dark.svg"><img src="docs/readme-icons/rocket-light.svg" width="14" align="center" alt=""></picture> **Get Started**
 - [Why OpenConstructionERP?](#why-openconstructionerp)
 - [See It In Action](#see-it-in-action)
 - [Quick Start](#quick-start)
@@ -53,66 +53,69 @@ Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all
 </td>
 <td valign="top">
 
-**Core Modules**
-- [BOQ Management](#-bill-of-quantities-boq-management)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/credit-card-dark.svg"><img src="docs/readme-icons/credit-card-light.svg" width="14" align="center" alt=""></picture> **Estimating & Costs**
+- [Bill of Quantities](#-bill-of-quantities-boq-management)
 - [Cost Databases & Catalog](#%EF%B8%8F-cost-databases--resource-catalog)
-- [CAD/BIM & AI Estimation](#%EF%B8%8F-cadbim-takeoff--ai-estimation)
+- [CAD/BIM Takeoff & AI](#%EF%B8%8F-cadbim-takeoff--ai-estimation)
 
 </td>
 <td valign="top">
 
-**Planning & Delivery**
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/project-dark.svg"><img src="docs/readme-icons/project-light.svg" width="14" align="center" alt=""></picture> **Project Lifecycle**
 - [4D Scheduling & 5D Cost](#-4d-scheduling--5d-cost-model)
 - [Tendering, Risk & Reports](#-tendering-risk--reporting)
 - [Requirements & Quality](#-requirements--quality-gates)
+- [Property Development](#-property-development)
 
 </td>
 </tr>
 <tr>
 <td valign="top">
 
-**Field Tools**
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> **Visualization & Coordination**
+- [Geo Hub (3D Globe)](#-geo-hub-3d-globe)
+- [Coordination Hub & Clash AI](#-coordination-hub--clash-ai)
 - [PDF Markups & Annotations](#%EF%B8%8F-pdf-markups--annotations)
+
+</td>
+<td valign="top">
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/shield-check-dark.svg"><img src="docs/readme-icons/shield-check-light.svg" width="14" align="center" alt=""></picture> **Field & Quality**
+- [Daily Diary & HSE](#-daily-diary--hse)
 - [Punch List](#-punch-list)
 - [Validation Engine](#%EF%B8%8F-validation--compliance-engine)
 
 </td>
 <td valign="top">
 
-**Standards & Onboarding**
-- [20 Regional Standards](#-20-regional-standards)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/gear-dark.svg"><img src="docs/readme-icons/gear-light.svg" width="14" align="center" alt=""></picture> **Setup & Standards**
+- [30+ Regional Standards](#-30-regional-standards)
 - [Guided Onboarding](#-guided-onboarding)
-- [Key Features Overview](#key-features)
-
-</td>
-<td valign="top">
-
-**Technical**
-- [Tech Stack](#tech-stack)
-- [Architecture](#architecture)
-- [Security](#security)
+- [All Key Features](#key-features)
 
 </td>
 </tr>
 <tr>
 <td valign="top">
 
-**Project & Community**
-- [Support the Project](#support-the-project)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/code-dark.svg"><img src="docs/readme-icons/code-light.svg" width="14" align="center" alt=""></picture> **Technical**
+- [Tech Stack](#tech-stack)
+- [Architecture](#architecture)
+- [Security](#security)
 
 </td>
 <td valign="top">
 
-**Compliance**
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/people-dark.svg"><img src="docs/readme-icons/people-light.svg" width="14" align="center" alt=""></picture> **Community**
+- [Support the Project](#support-the-project)
 - [AI Disclaimer](#ai-disclaimer)
 - [Trademarks](#trademarks)
-- [Export Control](#export-control)
 
 </td>
 <td valign="top">
 
-**Legal & Privacy**
-- [Star History](#star-history)
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/law-dark.svg"><img src="docs/readme-icons/law-light.svg" width="14" align="center" alt=""></picture> **Legal & Privacy**
+- [Export Control](#export-control)
 - [License](#license)
 - [Privacy and Terms](#privacy-and-terms)
 
@@ -134,43 +137,57 @@ Star OpenConstructionERP on GitHub and be instantly notified of new releases.
 
 ---
 
-## ✨ What's New in v4.0.0 — Stable Major
+## <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/sparkle-fill-dark.svg"><img src="docs/readme-icons/sparkle-fill-light.svg" width="14" align="center" alt=""></picture> What's New in v4.6.0 — Floating chat + Accommodation + Geo overlay + 10 dashboard widgets
 
-The **v4.x stable line** — milestone **v4.0.0** marks the platform as production-ready across the full estimation → takeoff → BIM → BOQ → tender → reporting workflow. **103 modules** ship in the box, the `/api/v1/*` surface is now a public contract, and the multi-tenant security pass is complete.
+The **v4.6.0** wave adds a floating ERP-aware chat on every page, a new **Accommodation** module that unifies worker camps / rentals / hotels, **10 new dashboard widgets** with server-synced layout, **DWG/PDF raster overlay** in the Geo Hub globe, and **6 per-module guided tours**. **111 modules** ship in the box; the `/api/v1/*` surface remains the public contract.
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
-**🏗️ 103 modules · full pro-grade depth**
-- **BOQ pro-grade** — bulk multiply rate/qty/classification, per-cell field-history restore, Ctrl+D fill-down, 8-deep hierarchy, reusable/linked positions, FX-correct CSV/Excel exports.
-- **BIM Hub pro-grade** — Site Compass cube, Solo Mode, Trait Lens (color-by-property), Element Bundles, viewpoint state (camera + filter + clip + thumbnail), serve-time magic-byte validation.
-- **Clash Detection** — DBSCAN engine + FP mining, severity/discipline-pair/MTTR KPIs, rule editor with suggestions.
-- **Takeoff** — PDF + DWG measurements, PaddleOCR + YOLO symbol detection, jsPDF/exceljs exports with subtotals.
-- **Match Elements** — 7-stage visible pipeline (Convert → Load → Schema → Filter → Group → Match → Rollup) with per-stage adjust, vector + lexical + resource matchers, currency-aware rollup, catalogue + display-currency picker.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/comment-discussion-dark.svg"><img src="docs/readme-icons/comment-discussion-light.svg" width="14" align="center" alt=""></picture> Floating chat — every page, talks to your ERP DB**
+Bottom-right FAB on every screen opens a panel backed by 17 database tools (projects, BOQ, schedule, validation, risks, CWICR search, BIM elements, semantic search across all modules). Streamed responses with tool-call cards rendered inline.
 
-**🌍 24 languages · 30+ regional catalogues · CWICR 55k positions**
-Multi-currency BOQ with FX-correct exports, vector search via Qdrant for multilingual semantic match.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/home-dark.svg"><img src="docs/readme-icons/home-light.svg" width="14" align="center" alt=""></picture> Accommodation module — worker camps + rentals + hotels**
+- One module for three lodging kinds (`worker_camp` / `rental` / `hotel`) with kind-filter tabs and per-card capacity.
+- **Rooms** with status (available · occupied · maintenance · blocked) and BIM element id linkage.
+- **Bookings** state machine: `reserved → checked_in → checked_out` (or `cancelled` from any non-final state), 409 on bookings into maintenance/blocked rooms.
+- **Charges** (base rent, extras, deposits, refunds) with Decimal precision and per-room currency inheritance.
+- **PropDev bootstrap** — one-click iterate a development block's plots → 1:1 rooms, idempotent.
+- **HR autobook** — suggest lowest-labelled available `worker_camp` room for an employee contact, human-confirmed.
+- BIM `bim_element_id` + Geo `lat/lon` integration; cards show a "Geo" deeplink when coords are set.
+
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/graph-dark.svg"><img src="docs/readme-icons/graph-light.svg" width="14" align="center" alt=""></picture> 10 new dashboard widgets + server-synced customizer**
+BOQ Summary · Critical Path · Top Risks · HSE Scorecard · Procurement Pipeline · Budget Variance · Change Orders · Clash Health · Validation Score · Weather Site. Layout persists server-side via `UserPreference` (no more device-local drift).
 
 </td>
 <td width="50%" valign="top">
 
-**🔒 Public API contract + multi-tenant security**
-- Every `/api/v1/*` endpoint shipped in 3.10.x–3.12.x is now part of the **public contract**; breaking changes go to `/v2`; 4.x patches only add fields and endpoints.
-- Cross-category IDOR sweep closed **~73 endpoints** across Planning / Communication / Procurement / Documents.
-- Every project-scoped route enforces `verify_project_access`; every owner-scoped route enforces inline `owner_user_id` with 404-not-403 on mismatch.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> Geo Hub raster overlay (DWG/PDF on the globe)**
+- Upload a PDF or image, drag four corners onto the globe → raster appears as a draped overlay.
+- **Polygon crop** with vertex drag; degenerate-bbox guard + "Needs corners" CTA when pixel→geo math under-determines the placement.
+- Infinite-loop guard removed (component now stable under repeated re-mounts).
 
-**📊 BI Dashboards · idempotent starter pack**
-5 role-based dashboards (CEO · CFO · PM · Site · Safety), 14 system KPIs with 12-week history, 3 reports, 2 schedules, 4 alert rules — installed in one click via `POST /api/v1/bi-dashboards/install-starter-pack`.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/mortar-board-dark.svg"><img src="docs/readme-icons/mortar-board-light.svg" width="14" align="center" alt=""></picture> 6 per-module guided tours**
+BOQ · BIM · Geo · PropDev · Dashboard · Accommodation each ship a hand-written tour wired through `ModuleHelpButton tourId="…"`. 192 i18n strings translated EN/DE/RU at native quality.
 
-**✅ Validation@Import · GAEB X84 writer**
-DIN 276 + GAEB + NRM + MasterFormat + BOQ-quality + project-completeness rule packs wired into the GAEB / Excel import path; GAEB X84 (Nebenangebot) export writer with round-trip tests.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/bug-dark.svg"><img src="docs/readme-icons/bug-light.svg" width="14" align="center" alt=""></picture> Reliability fixes**
+- Dashboard widget endpoints: **12 4xx → 0** (URL paths were drifting from router prefixes).
+- Marketing-site SMTP: port 465 now correctly uses `SMTP_SSL` (port 587 stays STARTTLS).
+- Geo overlay: fix infinite re-render loop on initial open; degenerate bbox now shows actionable CTA instead of a blank globe.
+
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/lock-dark.svg"><img src="docs/readme-icons/lock-light.svg" width="14" align="center" alt=""></picture> Cumulative since v4.0.0**
+- v4.1–v4.3 Round 4 + Round 5 security: ~73 IDOR closures across 11 modules.
+- BIM Requirements (IDS/COBie), Coordination Hub, Smart Views, Clash AI Triage, BCF 3.0/OpenCDE.
+- PropDev complete Lead → SPA → Handover → Warranty clickflow + Geo Hub Cesium 3D Tiles.
+
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/broadcast-dark.svg"><img src="docs/readme-icons/broadcast-light.svg" width="14" align="center" alt=""></picture> Latest alembic head**: `v3121` (Accommodation + Geo raster overlay) · single-head invariant maintained across every wave.
 
 </td>
 </tr>
 </table>
 
-See the [v4.0.0 release](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/tag/v4.0.0) and the [CHANGELOG](CHANGELOG.md) for the per-release breakdown.
+See the [latest release](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest) and the [CHANGELOG](CHANGELOG.md) for the per-release breakdown.
 
 ---
 
@@ -182,38 +199,52 @@ Construction cost estimation software is expensive, closed-source, and locked to
 |-------------|-------------|
 | **Free forever** | AGPL-3.0 license. No subscriptions, no per-seat fees, no vendor lock-in. |
 | **Your data, your server** | Self-hosted. Everything runs on your machine — nothing leaves your network. |
-| **21 languages** | Full UI translation: English, German, French, Spanish, Portuguese, Russian, Chinese, Arabic, Hindi, Japanese, Korean, and 10 more. |
-| **20 regional standards** | DIN 276, NRM 1/2, CSI MasterFormat, GAEB, ГЭСН, DPGF, GB/T 50500, CPWD, and more. |
+| **27 languages** | Full UI translation: English, German, French, Spanish, Portuguese, Russian, Chinese, Arabic, Hindi, Japanese, Korean, and 16 more. |
+| **30+ regional standards** | DIN 276, NRM 1/2, CSI MasterFormat, GAEB, ГЭСН, DPGF, GB/T 50500, CPWD, ÖNORM, Birim Fiyat, Sekisan, SINAPI, and more. |
 | **AI-powered** | Connect any LLM provider (Anthropic, OpenAI, Gemini, Mistral, Groq, DeepSeek) for smart estimation. |
 | **55,000+ cost items** | CWICR database with 11 regional pricing databases (DACH, UK, US, France, Spain, Brazil, Russia, UAE, China, India, Canada). |
 
 ### How It Compares
 
-<table>
+<table width="100%">
+<colgroup>
+<col width="26%" />
+<col width="20%" />
+<col width="14%" />
+<col width="13%" />
+<col width="14%" />
+<col width="13%" />
+</colgroup>
+<thead>
 <tr>
 <th align="left">Capability</th>
 <th align="center">OpenConstructionERP</th>
-<th align="center">Enterprise BIM Suites</th>
-<th align="center">CAD Takeoff Software</th>
-<th align="center">Legacy Estimating Tools</th>
-<th align="center">PDF Markup Tools</th>
+<th align="center">Enterprise<br/>BIM</th>
+<th align="center">CAD<br/>Takeoff</th>
+<th align="center">Legacy<br/>Estimating</th>
+<th align="center">PDF<br/>Markup</th>
 </tr>
+</thead>
+<tbody>
 <tr><td><b>License</b></td><td align="center">AGPL-3.0 (free)</td><td align="center">Proprietary</td><td align="center">Proprietary</td><td align="center">Proprietary</td><td align="center">Proprietary</td></tr>
 <tr><td><b>Self-hosted / offline</b></td><td align="center">&#10004;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#9888; partial</td><td align="center">&#10006;</td></tr>
 <tr><td><b>Price</b></td><td align="center"><b>Free forever</b></td><td align="center">~&#8364;500/mo</td><td align="center">~&#8364;300/mo</td><td align="center">~&#8364;200/mo</td><td align="center">~&#8364;30/mo</td></tr>
 <tr><td><b>AI estimation</b></td><td align="center">&#10004; 7 LLM providers</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
-<tr><td><b>UI languages</b></td><td align="center"><b>21</b></td><td align="center">5</td><td align="center">3</td><td align="center">2</td><td align="center">8</td></tr>
-<tr><td><b>Regional standards</b></td><td align="center"><b>20</b></td><td align="center">4</td><td align="center">3</td><td align="center">2</td><td align="center">&mdash;</td></tr>
+<tr><td><b>UI languages</b></td><td align="center"><b>27</b></td><td align="center">5</td><td align="center">3</td><td align="center">2</td><td align="center">8</td></tr>
+<tr><td><b>Regional standards</b></td><td align="center"><b>30+</b></td><td align="center">4</td><td align="center">3</td><td align="center">2</td><td align="center">&mdash;</td></tr>
 <tr><td><b>BOQ editor</b></td><td align="center">&#10004;</td><td align="center">&#10004;</td><td align="center">&#10004;</td><td align="center">&#10004;</td><td align="center">&#10006;</td></tr>
-<tr><td><b>CAD/BIM takeoff</b></td><td align="center">&#10004; RVT IFC DWG DGN</td><td align="center">&#10004;</td><td align="center">&#10004;</td><td align="center">&#10006;</td><td align="center">&#10004; PDF only</td></tr>
+<tr><td><b>CAD/BIM takeoff</b></td><td align="center">&#10004; RVT IFC DWG DGN</td><td align="center">&#10004;</td><td align="center">&#10004;</td><td align="center">&#10006;</td><td align="center">PDF only</td></tr>
 <tr><td><b>4D/5D planning</b></td><td align="center">&#10004;</td><td align="center">&#10004;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
-<tr><td><b>Cost database included</b></td><td align="center">&#10004; 55K+ items with rates</td><td align="center">&#10006; extra cost</td><td align="center">&#10006; extra cost</td><td align="center">&#10006; extra cost</td><td align="center">&#10006;</td></tr>
-<tr><td><b>Resource catalog</b></td><td align="center">&#10004; 7K+ with prices</td><td align="center">&#10006; extra cost</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
+<tr><td><b>Cost database included</b></td><td align="center">&#10004; 55K+ rates</td><td align="center">&#10006; extra</td><td align="center">&#10006; extra</td><td align="center">&#10006; extra</td><td align="center">&#10006;</td></tr>
+<tr><td><b>Resource catalog</b></td><td align="center">&#10004; 7K+ priced</td><td align="center">&#10006; extra</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
 <tr><td><b>Validation engine</b></td><td align="center">&#10004; 42 rules</td><td align="center">&#9888; limited</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
-<tr><td><b>REST API</b></td><td align="center">&#10004; full access</td><td align="center">&#9888; limited</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
-<tr><td><b>Real-time collaboration</b></td><td align="center">&#10004; soft locks + presence</td><td align="center">&#10004;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
-<tr><td><b>Open data export</b></td><td align="center">&#10004; GAEB, Excel, CSV, JSON, PDF</td><td align="center">&#9888; limited</td><td align="center">&#9888; limited</td><td align="center">&#9888; limited</td><td align="center">PDF only</td></tr>
-<tr><td><b>BIM requirements (IDS/COBie)</b></td><td align="center">&#10004; import + export</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
+<tr><td><b>REST API</b></td><td align="center">&#10004; full</td><td align="center">&#9888; limited</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
+<tr><td><b>Real-time collab</b></td><td align="center">&#10004; soft locks</td><td align="center">&#10004;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
+<tr><td><b>Open data export</b></td><td align="center">&#10004; GAEB · XLSX · JSON</td><td align="center">&#9888; limited</td><td align="center">&#9888; limited</td><td align="center">&#9888; limited</td><td align="center">PDF only</td></tr>
+<tr><td><b>IDS / COBie requirements</b></td><td align="center">&#10004; import + export</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
+<tr><td><b>Property dev lifecycle</b></td><td align="center">&#10004; Lead → SPA → Handover</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
+<tr><td><b>3D globe / geo-anchor</b></td><td align="center">&#10004; Cesium 3D Tiles</td><td align="center">&#9888; map only</td><td align="center">&#10006;</td><td align="center">&#10006;</td><td align="center">&#10006;</td></tr>
+</tbody>
 </table>
 
 <sub>Comparison reflects typical category capabilities based on publicly available information as of Q1 2026. Pricing is approximate (per-seat, list price) and varies by vendor and region. OpenConstructionERP is an independent open-source project and is not affiliated with any commercial vendor in the categories above.</sub>
@@ -227,72 +258,72 @@ Each block below is a short GIF cut from the full walkthrough above — same ord
 <table>
 <tr>
 <td align="center" width="50%">
-<strong>👤 1 · Role-Based Onboarding</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/person-dark.svg"><img src="docs/readme-icons/person-light.svg" width="14" align="center" alt=""></picture> 1 · Role-Based Onboarding</strong><br/>
 <em>Sign in as Admin / Estimator / Manager — the wizard pre-selects the right 17 of 46 modules for your role</em><br/><br/>
 <img src="docs/gifs/07_Role_Based_Onboarding.gif" alt="Role-Based Onboarding" width="400" />
 </td>
 <td align="center" width="50%">
-<strong>🌍 2 · New Project, Any Region</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> 2 · New Project, Any Region</strong><br/>
 <em>Pick currency, classification standard, regional factor — live map & weather come along for free</em><br/><br/>
 <img src="docs/gifs/08_New_Project_Global.gif" alt="New Project Global" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>⚡ 3 · Build the Bill of Quantities</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/zap-dark.svg"><img src="docs/readme-icons/zap-light.svg" width="14" align="center" alt=""></picture> 3 · Build the Bill of Quantities</strong><br/>
 <em>Keyboard-first editor, 55K+ priced items, AI cost finder & Smart AI — quality score updates live</em><br/><br/>
 <img src="docs/gifs/15_BoQ_Editor.gif" alt="BoQ Editor" width="400" />
 </td>
 <td align="center">
-<strong>🏗️ 4 · BIM → BOQ Bulk Link</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/tools-dark.svg"><img src="docs/readme-icons/tools-light.svg" width="14" align="center" alt=""></picture> 4 · BIM → BOQ Bulk Link</strong><br/>
 <em>Link 100 Revit walls → one BOQ line with aggregated area / volume / length — no IfcOpenShell</em><br/><br/>
 <img src="docs/gifs/09_Bulk_Link_BIM_Group.gif" alt="Bulk Link BIM Group" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>📐 5 · DWG Drawings & Layers</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/workflow-dark.svg"><img src="docs/readme-icons/workflow-light.svg" width="14" align="center" alt=""></picture> 5 · DWG Drawings & Layers</strong><br/>
 <em>636 wall entities across 10 DWG layers — every one linkable to the BOQ, measured in place</em><br/><br/>
 <img src="docs/gifs/10_DWG_Layers.gif" alt="DWG Layers" width="400" />
 </td>
 <td align="center">
-<strong>🖊️ 6 · PDF Takeoff</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/pencil-dark.svg"><img src="docs/readme-icons/pencil-light.svg" width="14" align="center" alt=""></picture> 6 · PDF Takeoff</strong><br/>
 <em>Drop a floorplan, measure distance / area / count, push the numbers straight into the BOQ</em><br/><br/>
 <img src="docs/gifs/16_PDF_Takeoff_v2.gif" alt="PDF Takeoff" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>💵 7 · Complete Estimate — $6.26M</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/credit-card-dark.svg"><img src="docs/readme-icons/credit-card-light.svg" width="14" align="center" alt=""></picture> 7 · Complete Estimate — $6.26M</strong><br/>
 <em>Real Revit project → 215 positions, 88 sections, CWICR-priced, quality score 99</em><br/><br/>
 <img src="docs/gifs/11_Complete_Estimate_6M.gif" alt="Complete Estimate" width="400" />
 </td>
 <td align="center">
-<strong>✅ 8 · Every Module — BIM-Linked Tasks</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/check-circle-fill-dark.svg"><img src="docs/readme-icons/check-circle-fill-light.svg" width="14" align="center" alt=""></picture> 8 · Every Module — BIM-Linked Tasks</strong><br/>
 <em>Issues tied to exact model elements, tracked on a Kanban board alongside schedule, docs & requirements</em><br/><br/>
 <img src="docs/gifs/12_Tasks_Linked_To_BIM.gif" alt="Tasks Linked To BIM" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>📊 9 · Data Explorer — Pivot → BOQ</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/graph-dark.svg"><img src="docs/readme-icons/graph-light.svg" width="14" align="center" alt=""></picture> 9 · Data Explorer — Pivot → BOQ</strong><br/>
 <em>CAD-BIM Explorer pivot becomes 10 BOQ positions in one click — charts, data bars & drill-down included</em><br/><br/>
 <img src="docs/gifs/13_Data_Explorer_Pivot.gif" alt="Data Explorer Pivot" width="400" />
 </td>
 <td align="center">
-<strong>📸 10 · AI Estimate from a Photo</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/device-camera-dark.svg"><img src="docs/readme-icons/device-camera-light.svg" width="14" align="center" alt=""></picture> 10 · AI Estimate from a Photo</strong><br/>
 <em>Upload a construction photo → GPT-4o + YOLO return a scoped BOQ in seconds, confidence-scored</em><br/><br/>
 <img src="docs/gifs/02_AI_Photo_to_Estimate.gif" alt="AI Photo to Estimate" width="400" />
 </td>
 </tr>
 <tr>
 <td align="center">
-<strong>🗺️ 11 · Global Portfolio Dashboard</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> 11 · Global Portfolio Dashboard</strong><br/>
 <em>7 projects, 4 continents, $28.3M in active estimates — one workspace, one map</em><br/><br/>
 <img src="docs/gifs/14_Projects_Dashboard.gif" alt="Projects Dashboard" width="400" />
 </td>
 <td align="center">
-<strong>🔍 Bonus · Instant Search</strong><br/>
+<strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/search-dark.svg"><img src="docs/readme-icons/search-light.svg" width="14" align="center" alt=""></picture> Bonus · Instant Search</strong><br/>
 <em>Find any of 55K+ cost items across 11 regional databases by keyword, unit or classification</em><br/><br/>
 <img src="docs/gifs/05_Instant_Search.gif" alt="Instant Search" width="400" />
 </td>
@@ -301,9 +332,13 @@ Each block below is a short GIF cut from the full walkthrough above — same ord
 
 ---
 
-### Complete Estimation Workflow
+## Key Features
 
-OpenConstructionERP covers the full lifecycle — from first sketch to final tender submission:
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/graph-dark.svg"><img src="docs/readme-icons/graph-light.svg" width="14" align="center" alt=""></picture> Bill of Quantities (BOQ) Management
+
+<img src="docs/screenshots/feature-boq.jpg" alt="BOQ Editor — Create, manage and analyze Bills of Quantities" width="800" />
+
+Build professional cost estimates with a powerful BOQ editor. The full lifecycle — from first sketch to final tender submission:
 
 ```
   Upload              Convert            Validate           Estimate           Tender
@@ -321,16 +356,6 @@ OpenConstructionERP covers the full lifecycle — from first sketch to final ten
                                                          └────────────┘
 ```
 
----
-
-## Key Features
-
-### 📊 Bill of Quantities (BOQ) Management
-
-<img src="docs/screenshots/feature-boq.jpg" alt="BOQ Editor — Create, manage and analyze Bills of Quantities" width="800" />
-
-Build professional cost estimates with a powerful BOQ editor:
-
 - **Hierarchical BOQ structure** — Sections, positions, sub-positions with drag-and-drop reordering
 - **Inline editing** — Click any cell to edit. Tab between fields. Undo/redo with Ctrl+Z
 - **Resources & assemblies** — Link labor, materials, equipment to each position. Build reusable cost recipes
@@ -339,7 +364,7 @@ Build professional cost estimates with a powerful BOQ editor:
 - **Validation** — 42 built-in rules check for missing quantities, zero prices, duplicate items, and compliance with DIN 276, NRM, MasterFormat
 - **Export** — Download as Excel, CSV, PDF report, or GAEB XML (X83)
 
-### 🗄️ Cost Databases & Resource Catalog
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/database-dark.svg"><img src="docs/readme-icons/database-light.svg" width="14" align="center" alt=""></picture> Cost Databases & Resource Catalog
 
 <img src="docs/screenshots/feature-databases.jpg" alt="Cost Database — 55,000+ items across 11 regions" width="800" />
 
@@ -351,11 +376,27 @@ Access the world's construction pricing data:
 - **Regional pricing** — Automatic price adjustment based on project location. Compare rates across regions
 - **Import your data** — Upload your own cost database from Excel, CSV, or connect via API
 
-### 🏗️ CAD/BIM Takeoff & AI Estimation
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/tools-dark.svg"><img src="docs/readme-icons/tools-light.svg" width="14" align="center" alt=""></picture> CAD/BIM Takeoff & AI Estimation
 
 <img src="docs/screenshots/feature-takeoff-ai.jpg" alt="CAD/BIM Takeoff and AI-powered estimation" width="800" />
 
 Extract quantities from any source — drawings, models, text, or photos:
+
+```
+  Source              DDC cad2data         Canonical            Match              BOQ
+ ┌────────┐         ┌──────────────┐    ┌──────────┐       ┌──────────┐      ┌──────────┐
+ │.rvt    │         │ Element      │    │ Elements │       │ Classify │      │ Positions│
+ │.ifc    │────────▶│ extraction   │───▶│ + Quants │──────▶│ (DIN/NRM)│─────▶│ + Linked │
+ │.dwg    │         │ (no IFC OS)  │    │ + Props  │       │ + Costs  │      │ geometry │
+ │.dgn    │         └──────────────┘    └──────────┘       └──────────┘      └──────────┘
+ │.pdf    │                                                                         │
+ │photo   │         ┌──────────────┐                                          ┌─────┴────┐
+ │text    │────────▶│ CV / OCR / AI│──────────────────────────────────────▶  │ BIM Pick │
+ └────────┘         │ (PaddleOCR + │                                          │ area/vol │
+                    │  YOLOv11)    │                                          │ /length  │
+                    └──────────────┘                                          └──────────┘
+```
+
 
 - **CAD/BIM takeoff** — Upload Revit (.rvt), IFC, AutoCAD (.dwg), or MicroStation (.dgn) files. DDC converters extract elements with volumes, areas, and lengths automatically
 - **Interactive QTO** — Choose how to group extracted data: by Category, Type, Level, Family. Format-specific presets for Revit and IFC
@@ -367,7 +408,153 @@ Extract quantities from any source — drawings, models, text, or photos:
 - **AI Cost Advisor** — Ask questions about pricing, materials, or estimation methodology. AI answers using your cost database as context
 - **Cost matching** — After AI generates an estimate, match each item against your CWICR database to replace AI-guessed rates with real market prices
 
-### 📅 4D Scheduling & 5D Cost Model
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> Geo Hub (3D Globe)
+
+Anchor every project on a real spherical earth — Cesium 3D Tiles 1.1 with live HUD and pin layers:
+
+```
+   Anchor              Globe                Mode               Deeplink            Fly-to
+ ┌──────────┐       ┌──────────┐       ┌───────────┐       ┌────────────┐      ┌──────────┐
+ │ Project  │       │ Cesium   │       │  Global   │       │ ?model=…   │      │ BIM scene│
+ │ Plot     │──────▶│ 3D Tiles │──────▶│  Project  │──────▶│ ?plot=…    │─────▶│ PropDev  │
+ │ CAD model│       │ live HUD │       │ Developm. │       │ ?dev_id=…  │      │ Daily Diary│
+ └──────────┘       └──────────┘       └───────────┘       └────────────┘      └──────────┘
+       ▲                  │                                                          │
+       │                  ▼                                                          │
+       │           ┌──────────────┐                                                  │
+       └───────────│ Pin layers   │ ◀────── HSE · Punchlist · Daily Diary ◀──────────┘
+                   └──────────────┘
+```
+
+
+- **Three-mode picker** — Global (planet-wide portfolio), Project (job-site scale), Development (plot-level masterplan)
+- **Live HUD** — Cursor latitude / longitude, terrain altitude, dynamic scale bar, north arrow
+- **Anchored Projects rail** — Floating collapsible overlay showing every geo-anchored project, click to fly-to
+- **Deeplinks** — `?model=`, `?plot=`, `?dev_id=`, `?phase=`, `?block=` survive page reloads and shareable URLs
+- **Pin layers** — HSE incidents, Punchlist items, Daily Diary entries plotted on the globe with category icons
+- **"View on map" CTAs** — One click from BIM viewer, PropDev plot, Daily Diary entry, Project card → globe with that asset selected
+- **DWG / PDF raster overlay** — Upload a site plan or floorplan, drag four corner pins onto the globe → the raster drapes over real terrain; polygon crop with vertex drag for cookie-cutter trimming
+- **Canonical pipeline** — `POST /api/v1/geo-hub/from-canonical/{cad_import_id}` turns any DDC cad2data conversion into glTF 3D Tiles via pure-Python pygltflib (no commercial toolkit needed)
+
+*Example: open a Berlin masterplan in Geo Hub, switch to Development mode, see all 12 plots colored by sale status, click one → reservation pipeline opens with that buyer pre-filtered.*
+
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/organization-dark.svg"><img src="docs/readme-icons/organization-light.svg" width="14" align="center" alt=""></picture> Property Development
+
+End-to-end real-estate developer workflow — from first lead to handover snags to warranty close-out:
+
+```
+   Lead          Reservation         SPA              Handover           Warranty
+ ┌────────┐    ┌──────────┐     ┌──────────┐      ┌───────────┐      ┌──────────┐
+ │ CRM    │───▶│ Hold +   │────▶│ Contract │─────▶│ Snags     │─────▶│ Defects  │
+ │ inbox  │    │ deposit  │     │ + Escrow │      │ + Photos  │      │ liability│
+ │ Broker │    │ schedule │     │ schedule │      │ + Sign-off│      │ + Promote│
+ └────────┘    └──────────┘     └──────────┘      └───────────┘      └──────────┘
+      │              │                │                  │                  │
+      └──────────────┴────────────────┴──── Contact bridge (idempotent tags) ┘
+                                              ▼
+                                     ┌────────────────┐
+                                     │ Price Matrix   │
+                                     │ Phases · Blocks│
+                                     │ House Types    │
+                                     │ Brokers · Plots│
+                                     └────────────────┘
+```
+
+
+- **Lead → Reservation → SPA → Handover → Warranty** — Full lifecycle FSM with auto-creation of ContractParty on SPA conversion, Payment Schedule state machine, idempotent stage transitions
+- **Sub-entity tabs** — Phases · Blocks · Brokers · Price Matrix · Escrow — one screen for every dev operation, no page hops
+- **House Type catalogue** — ISO 3166-1 picker covering 180+ countries plus Custom region; CountryCombobox + HouseTypeEditModal share the same backend taxonomy as catalog & costs
+- **SnagsBlock per handover** — Photo upload, status (Open / Resolved / Disputed), one-click promote-to-warranty when a snag survives the defects-liability period
+- **Contacts ↔ PropDev bridge** — Every Lead and Buyer is idempotently tagged as a Contact via `Contact.module_tags`, so CRM and PropDev stay in sync without duplicates
+- **Price Matrix** — Per-phase × house-type × view-premium grid with currency-aware totals and bulk apply
+- **Escrow** — Per-buyer payment schedule with milestone receipts and outstanding balance roll-up
+- **Bootstrap to Accommodation** — One click on a development block creates a worker-camp / rental inventory in the [Accommodation](#-accommodation) module (1:1 plots → rooms, idempotent)
+
+*Example: import a 240-unit residential masterplan, generate price matrix from house-type × view, push to globe, accept 18 reservations across 3 brokers, convert 11 to SPA, hand over 4, track 7 open snags in the warranty period — all in one app.*
+
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/home-dark.svg"><img src="docs/readme-icons/home-light.svg" width="14" align="center" alt=""></picture> Accommodation
+
+<img src="docs/screenshots/feature-accommodation.jpg" alt="Accommodation module — worker camps, rentals and hotels in one place" width="800" />
+
+One module for three lodging kinds — worker camps for site crews, rentals for staff, hotels for visiting consultants — with rooms, bookings and charges in a unified data model:
+
+```
+   PropDev block         Accommodation         Rooms              Bookings           Charges
+ ┌──────────────┐      ┌──────────────┐    ┌────────────┐    ┌────────────┐    ┌────────────┐
+ │ Plots #1..N  │──1▶──│ Worker camp  │───▶│ available  │───▶│ reserved   │───▶│ base rent  │
+ │ (PropDev)    │ click│ Rental       │    │ occupied   │    │ checked_in │    │ extras     │
+ │              │      │ Hotel        │    │ maintenance│    │ checked_out│    │ deposits   │
+ └──────────────┘      └──────────────┘    │ blocked    │    │ cancelled  │    │ refunds    │
+       ▲                     │             └────────────┘    └────────────┘    └────────────┘
+       │                     ▼                                    ▲
+       │              ┌──────────────┐                            │
+       │              │ HR autobook  │ ◀──── lowest-labelled ─────┘
+       │              │ (suggest+    │       available worker_camp room
+       │              │  confirm)    │
+       │              └──────────────┘
+       │
+   "Bootstrap to Accommodation" CTA
+```
+
+- **Three kinds, one module** — `worker_camp` · `rental` · `hotel`, with tab filter and per-kind capacity counters on every card
+- **Rooms with status** — `available` · `occupied` · `maintenance` · `blocked`; 409 prevents booking into a blocked or maintenance room
+- **Booking state machine** — `reserved → checked_in → checked_out` with `cancelled` from any non-final state; idempotent same-state updates; final states locked
+- **Charges with Decimal precision** — Base rent, extras, deposits, refunds, all in the room's inherited currency (no hardcoded EUR)
+- **PropDev bootstrap** — One click on a development block iterates its plots and creates rooms 1:1, idempotent (running twice creates nothing extra)
+- **HR autobook (suggest-confirm)** — Pick an employee Contact → suggest the lowest-labelled available `worker_camp` room → human confirms with a real booking POST
+- **BIM + Geo aware** — `bim_element_id` carries through from PropDev plots; cards with `geo_lat/geo_lon` get a "Geo" deeplink to the globe
+- **IDOR-hardened** — Every helper returns 404 (never 403) on cross-tenant access; tested in `backend/tests/modules/accommodation/`
+
+*Example: 240-plot worker camp on a remote site — bootstrap from the PropDev block, HR autobooks 187 crew members from the Contacts directory over three weeks, base-rent charges roll up to the project P&L automatically.*
+
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/comment-discussion-dark.svg"><img src="docs/readme-icons/comment-discussion-light.svg" width="14" align="center" alt=""></picture> Floating Chat with the ERP Database
+
+Bottom-right floating chat on every page — talks to the entire ERP database through 17 typed tools (projects, BOQ items, schedule, validation, risks, CWICR search, BIM elements, full semantic search):
+
+```
+  Any page          Floating button       Panel + 17 tools     Streamed
+ ┌────────┐        ┌──────────────┐     ┌──────────────┐     ┌──────────┐
+ │/projects│       │  bottom-right │     │ get_projects │     │ tool card│
+ │/boq    │──FAB──▶│   ◯ Message  │────▶│ search_cwicr │────▶│ rendered │
+ │/geo    │        │   (badge: 3) │     │ create_boq   │     │ in chat  │
+ └────────┘        └──────────────┘     └──────────────┘     └──────────┘
+```
+
+- **Always-on** — Mounted in `AppLayout`, available on every route (Dashboard, BOQ, BIM, Geo, PropDev, Accommodation, all 111 modules)
+- **Real ERP access** — Reads/writes through tools, not LLM guesswork: `get_all_projects`, `get_project_summary`, `get_boq_items`, `get_schedule`, `get_validation_results`, `get_risk_register`, `search_cwicr_database`, `get_cost_model`, `compare_projects`, `run_validation`, `create_boq_item`, `search_boq_positions`, `search_documents`, `search_tasks`, `search_risks`, `search_bim_elements`, `search_anything`
+- **Streamed responses** — Tool-call cards (risk register table, BOQ summary, etc.) render inline as the model produces them
+- **Provider-agnostic** — Anthropic / OpenAI / Gemini / Mistral / Groq / DeepSeek behind the same tool interface
+
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/heart-dark.svg"><img src="docs/readme-icons/heart-light.svg" width="14" align="center" alt=""></picture> Coordination Hub & Clash AI
+
+Multi-disciplinary BIM coordination with AI-assisted issue triage:
+
+```
+  Federation         Raw clashes        Smart Issues       AI Triage         BCF 3.0
+ ┌──────────┐      ┌────────────┐     ┌────────────┐    ┌────────────┐    ┌──────────┐
+ │ ARC ·STR │      │ thousands  │     │ clustered  │    │ severity   │    │ Solibri  │
+ │ MEP ·HSE │─────▶│ raw pairs  │────▶│ by zone +  │───▶│ rework $   │───▶│ Navisw.  │
+ │ models   │      │ + distance │     │ disciplines│    │ confidence │    │ BIMcollab│
+ └──────────┘      └────────────┘     └────────────┘    └────────────┘    └──────────┘
+                                            │                                  ▲
+                                            ▼                                  │
+                                    ┌─────────────┐                            │
+                                    │ Smart Views │  IDS + COBie owner drops ──┘
+                                    │ RFI · Tasks │
+                                    │ Cost Impact │
+                                    └─────────────┘
+```
+
+
+- **Coordination Hub** — Single dashboard fusing clashes, RFIs, submittals, action items per model federation
+- **Smart Views v1** — Saved filters across the federation (e.g. "MEP-vs-STR clashes > 50mm in Level 03")
+- **Clash Smart Issues** — Auto-group thousands of raw clash results into prioritized issue clusters by location + discipline pair
+- **AI Triage** — LLM ranks new clashes by severity / rework cost / location criticality with confidence scores
+- **Cost Impact rollup** — Per-issue rework estimate driven by your cost database, surfaced on the dashboard
+- **BCF 3.0 / OpenCDE export** — Round-trip with Solibri, Navisworks, BIMcollab via the open BIM standard
+- **BIM Requirements** — IDS (Information Delivery Specification) and COBie import / export for owner-side data drops
+
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/calendar-dark.svg"><img src="docs/readme-icons/calendar-light.svg" width="14" align="center" alt=""></picture> 4D Scheduling & 5D Cost Model
 
 Plan your project timeline and track costs over time:
 
@@ -377,9 +564,25 @@ Plan your project timeline and track costs over time:
 - **Budget tracking** — Set baselines, compare snapshots, run what-if scenarios
 - **Monte Carlo simulation** — Risk-adjusted schedule analysis with probability distributions
 
-### 📋 Tendering, Risk & Reporting
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/paste-dark.svg"><img src="docs/readme-icons/paste-light.svg" width="14" align="center" alt=""></picture> Tendering, Risk & Reporting
 
 Complete your estimation workflow:
+
+```
+   BOQ           Bid Package        Distribute         Compare           Award
+ ┌────────┐    ┌────────────┐    ┌────────────┐    ┌────────────┐    ┌──────────┐
+ │ priced │───▶│ subset +   │───▶│ Subs (mail │───▶│ side-by-   │───▶│ winner   │
+ │ sections    │ instructions    │ + portal)  │    │ side mirror│    │ + change │
+ │        │    │ + scope    │    │            │    │ + anomalies│    │   orders │
+ └────────┘    └────────────┘    └────────────┘    └────────────┘    └──────────┘
+                                                          │                │
+                                                          ▼                ▼
+                                                   ┌─────────────────────────┐
+                                                   │ Reports · GAEB X83      │
+                                                   │ Risk Register · EAC     │
+                                                   └─────────────────────────┘
+```
+
 
 - **Tendering** — Create bid packages, distribute to subcontractors, collect and compare bids with side-by-side price mirror
 - **Change orders** — Track scope changes with cost and schedule impact analysis
@@ -387,7 +590,7 @@ Complete your estimation workflow:
 - **Reports** — Generate professional PDF reports, Excel exports, GAEB XML. 12 built-in templates
 - **Documents** — Centralized file management with version tracking and drag-and-drop upload
 
-### 📝 Requirements & Quality Gates
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/note-dark.svg"><img src="docs/readme-icons/note-light.svg" width="14" align="center" alt=""></picture> Requirements & Quality Gates
 
 Track and validate construction requirements with the EAC (Entity-Attribute-Constraint) system:
 
@@ -397,7 +600,7 @@ Track and validate construction requirements with the EAC (Entity-Attribute-Cons
 - **Bulk Import** — Import requirements from structured text (pipe-delimited format)
 - **Categories** — Structural, fire safety, thermal, acoustic, waterproofing, electrical, mechanical, architectural
 
-### ✏️ PDF Markups & Annotations
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/pencil-dark.svg"><img src="docs/readme-icons/pencil-light.svg" width="14" align="center" alt=""></picture> PDF Markups & Annotations
 
 Annotate construction drawings and documents directly in the browser:
 
@@ -407,7 +610,7 @@ Annotate construction drawings and documents directly in the browser:
 - **Markups List** — Table view of all annotations with filters, search, and CSV export
 - **BOQ Integration** — Link measurements directly to BOQ positions (quantity = measured value)
 
-### ✅ Punch List
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/check-circle-fill-dark.svg"><img src="docs/readme-icons/check-circle-fill-light.svg" width="14" align="center" alt=""></picture> Punch List
 
 Track construction deficiencies from discovery to resolution:
 
@@ -419,7 +622,17 @@ Track construction deficiencies from discovery to resolution:
 - **PDF Export** — Generate punch list reports for stakeholder review
 - **Verification control** — Different user must verify (not the resolver)
 
-### 🌍 20 Regional Standards
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/book-dark.svg"><img src="docs/readme-icons/book-light.svg" width="14" align="center" alt=""></picture> Daily Diary & HSE
+
+Field-level reporting and safety tracking that holds up in court:
+
+- **Daily Diary** — Weather-aware entries (auto-pulled from project geo-coordinates), crew on site, equipment used, deliveries, delays, photos
+- **HSE Incidents** — Near-miss → first-aid → recordable → lost-time taxonomy with mandatory root-cause and corrective-action fields
+- **OSHA-recordable flag** — Server-side default backing for compliant regulatory exports (300 / 300A / 301)
+- **Photo capture with EXIF / GPS** — Field photos preserve location and timestamp metadata; magic-byte upload validation for defence-in-depth
+- **Geo-anchored pins** — Daily Diary and HSE pins surface on the Geo Hub globe layer for portfolio-level safety dashboards
+
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> 30+ Regional Standards
 
 | Standard | Region | Format |
 |----------|--------|--------|
@@ -444,7 +657,7 @@ Track construction deficiencies from discovery to resolution:
 | FIDIC | UAE / GCC | Excel, CSV |
 | PBC / Base de Precios | Spain | Excel, CSV |
 
-### 🛡️ Validation & Compliance Engine
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/shield-dark.svg"><img src="docs/readme-icons/shield-light.svg" width="14" align="center" alt=""></picture> Validation & Compliance Engine
 
 Ensure your estimates meet regulatory standards before submission:
 
@@ -454,11 +667,11 @@ Ensure your estimates meet regulatory standards before submission:
 - **Drill-down** — Click any finding to jump directly to the affected BOQ position and fix it
 - **Custom rules** — Define project-specific validation rules via the rule builder or Python scripting
 
-### 🚀 Guided Onboarding
+### <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/rocket-dark.svg"><img src="docs/readme-icons/rocket-light.svg" width="14" align="center" alt=""></picture> Guided Onboarding
 
 Get productive in under 10 minutes:
 
-1. **Choose language** — Select from 21 languages. The entire UI switches instantly
+1. **Choose language** — Select from 27 languages. The entire UI switches instantly
 2. **Select region** — Determines default cost database, currency, and classification standard
 3. **Load cost database** — One-click import of CWICR pricing data for your region (55,000+ items)
 4. **Import resource catalog** — Materials, labor, equipment, and pre-built assemblies
@@ -469,7 +682,7 @@ Get productive in under 10 minutes:
 
 ## Quick Start
 
-> 👀 **Prefer to see it first?** [▶ Watch the 12-minute walkthrough on YouTube](https://www.youtube.com/watch?v=X06cIaroAeI) — onboarding → BoQ → BIM → DWG → PDF → AI → dashboard.
+> <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/eye-dark.svg"><img src="docs/readme-icons/eye-light.svg" width="14" align="center" alt=""></picture> **Prefer to see it first?** [▶ Watch the 12-minute walkthrough on YouTube](https://www.youtube.com/watch?v=X06cIaroAeI) — onboarding → BoQ → BIM → DWG → PDF → AI → dashboard.
 
 > **Requires Python 3.12+** (any path below). Check with `python --version`.
 
@@ -536,13 +749,29 @@ Open **http://localhost:5173** — for hacking on the codebase. Requires Python 
 
 ### Demo Accounts
 
-Three demo accounts are created automatically on first start. The default password is `DemoPass1234!` for all three — override with `DEMO_ADMIN_PASSWORD` / `DEMO_ESTIMATOR_PASSWORD` / `DEMO_MANAGER_PASSWORD` env vars before the first boot if you need a custom one (e.g. for any internet-exposed deployment).
+Three demo accounts are created automatically on first start. Each
+password is **generated per installation** (via `secrets.token_urlsafe`)
+and printed to the backend startup log so you see it immediately, e.g.:
+
+```
+[seed] Demo user created: demo@openestimator.io / xK7p_Q2nR8sT4uV6wX9yZ
+[seed] Pre-set DEMO_USER_PASSWORD env to skip random generation
+```
+
+The same passwords are also persisted to
+`~/.openestimator/.demo_credentials.json` (chmod 600) so you can recover
+them later. To pin known passwords (e.g. for a team demo or CI), set the
+env vars **before the first boot**:
+
+- `DEMO_USER_PASSWORD` — admin (`demo@openestimator.io`)
+- `DEMO_ESTIMATOR_PASSWORD` — estimator (`estimator@openestimator.io`)
+- `DEMO_MANAGER_PASSWORD` — manager (`manager@openestimator.io`)
 
 | Account | Email | Password | Role |
 |---------|-------|----------|------|
-| Admin | `demo@openestimator.io` | `DemoPass1234!` | Full access |
-| Estimator | `estimator@openestimator.io` | `DemoPass1234!` | Estimator |
-| Manager | `manager@openestimator.io` | `DemoPass1234!` | Manager |
+| Admin | `demo@openestimator.io` | _see startup log or `.demo_credentials.json`_ | Full access |
+| Estimator | `estimator@openestimator.io` | _see startup log or `.demo_credentials.json`_ | Estimator |
+| Manager | `manager@openestimator.io` | _see startup log or `.demo_credentials.json`_ | Manager |
 
 > Demo accounts include 5 pre-loaded projects from Berlin, London, New York, Paris, and Dubai with complete BOQs, schedules, and cost models.
 >
@@ -558,13 +787,13 @@ Three demo accounts are created automatically on first start. The default passwo
 | Layer | Technology | Purpose |
 |-------|-----------|---------|
 | Backend | Python 3.12+ / FastAPI | Async API, Pydantic v2 validation, modular architecture |
-| Frontend | React 18 / TypeScript / Vite | SPA with code splitting, 21 language bundles |
+| Frontend | React 18 / TypeScript / Vite | SPA with code splitting, 27 language bundles |
 | Database | PostgreSQL 16+ / SQLite (dev) | OLTP with JSON columns, zero-config SQLite for development |
 | UI | Tailwind CSS / AG Grid | Professional data grid, responsive design, dark mode |
 | AI | Any LLM via REST API | Anthropic, OpenAI, Gemini, Mistral, Groq, DeepSeek |
 | Vector Search | LanceDB (embedded) / Qdrant | Semantic cost item search, 384d or 3072d embeddings |
 | CAD/BIM | [DDC cad2data](https://github.com/datadrivenconstruction) | RVT, IFC, DWG, DGN → structured quantities |
-| i18n | i18next + 21 language packs | Full RTL support (Arabic), locale-aware formatting |
+| i18n | i18next + 27 language packs | Full RTL support (Arabic), locale-aware formatting |
 
 ## Architecture
 
@@ -582,7 +811,7 @@ OpenConstructionERP is built around **seven cooperating pipelines** that turn cl
 6. **Project-specific data (4D/5D/6D)** — derive scheduling, cost, hours, ordering and environmental footprint per group. Handled by `scheduling`, `advanced_schedule`, `5d_planner`, `risk`, `carbon`, `hse`.
 7. **Saving data & Machine Learning** — persist project history into the database, data lake and ML models so each new project starts further ahead. Handled by `analytics`, `bi_dashboards`, `ai_chat`, `cost_intelligence`, and the rule-learning loop in `clash` (Wave A4) and `match-elements`.
 
-The right-hand side of the diagram is the **automatic data retrieval** layer that every UI surface (Dashboard, BOQ editor, /clash, /match-elements, /files, /scheduling) consumes: dashboards, calculations, reports, tables, charts, geometries, and ERP-ready exports — all driven from the same canonical store. The Machine-Learning column on the far right is where the platform progressively automates classification, parameterisation, recognition and marking, replacing manual steps (🔧) with automatic steps (⚡) over time.
+The right-hand side of the diagram is the **automatic data retrieval** layer that every UI surface (Dashboard, BOQ editor, /clash, /match-elements, /files, /scheduling) consumes: dashboards, calculations, reports, tables, charts, geometries, and ERP-ready exports — all driven from the same canonical store. The Machine-Learning column on the far right is where the platform progressively automates classification, parameterisation, recognition and marking, replacing manual steps (<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/tools-dark.svg"><img src="docs/readme-icons/tools-light.svg" width="14" align="center" alt=""></picture>) with automatic steps (<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/zap-dark.svg"><img src="docs/readme-icons/zap-light.svg" width="14" align="center" alt=""></picture>) over time.
 
 This pipeline is the reason OpenConstructionERP can replace several commercial point-solutions with a single self-hosted stack — every module reads from and writes to the same canonical data layer.
 
@@ -592,7 +821,7 @@ This pipeline is the reason OpenConstructionERP can replace several commercial p
 flowchart TB
     UI["Frontend SPA<br>React 18, TypeScript, Vite<br>AG Grid, Tailwind, PDF.js"]
 
-    subgraph Backend ["FastAPI Backend, 88 modules"]
+    subgraph Backend ["FastAPI Backend, 111 modules"]
         CORE["Core<br>Module loader, Event bus, Hooks, RBAC<br>Validation, FSM + audit log"]
         ESTIM["Estimating<br>BOQ, Costs, Catalog, Assemblies<br>Takeoff, BIM Hub, Match-Elements, 5D"]
         FIELD["Field Operations<br>Service, Equipment, Daily Diary<br>Portal, Resources & Crew"]
@@ -645,11 +874,13 @@ flowchart TB
                    │ REST + SSE
 ┌──────────────────┴───────────────────────────────┐
 │  Backend (FastAPI)                               │
-│  60+ auto-discovered modules · Plugin system     │
+│  111 auto-discovered modules · Plugin system     │
 ├──────────────────────────────────────────────────┤
 │  BOQ · Costs · Schedule · 5D · Validation · AI   │
 │  Takeoff · Tendering · Risk · Reports · Catalog  │
 │  Requirements · Markups · Punch List · BIM Hub   │
+│  PropDev · Geo Hub · Coordination · Clash AI     │
+│  Accommodation · Floating Chat · 10 widgets      │
 ├──────────────────────────────────────────────────┤
 │  Database (PostgreSQL / SQLite)                  │
 │  Vector DB (LanceDB / Qdrant)                    │
@@ -667,9 +898,9 @@ flowchart TB
 OpenConstructionERP is built and maintained by the community. If you find it useful:
 
 - ⭐ **[Star this repo](https://github.com/datadrivenconstruction/OpenConstructionERP)** — helps others discover the project
-- 💬 **[Join Discussions](https://t.me/datadrivenconstruction)** — ask questions, share ideas, help others
-- 🐛 **[Report issues](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)** — help us improve
-- 💼 **[Professional consulting](https://datadrivenconstruction.io/contact-support/)** — custom deployment, training, enterprise support
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/comment-discussion-dark.svg"><img src="docs/readme-icons/comment-discussion-light.svg" width="14" align="center" alt=""></picture> **[Join Discussions](https://t.me/datadrivenconstruction)** — ask questions, share ideas, help others
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/bug-dark.svg"><img src="docs/readme-icons/bug-light.svg" width="14" align="center" alt=""></picture> **[Report issues](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)** — help us improve
+- <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/briefcase-dark.svg"><img src="docs/readme-icons/briefcase-light.svg" width="14" align="center" alt=""></picture> **[Professional consulting](https://datadrivenconstruction.io/contact-support/)** — custom deployment, training, enterprise support
 
 ## Security
 
@@ -762,5 +993,5 @@ For **commercial licensing** without AGPL obligations, see
   <br>
    <b>   Unlock the Power of Data in Construction</b>
    <br>
-     🚀 Move to full-cycle data management  where only unified <br /> structured data & processes remain and where  🔓 your data is yours
+     <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/rocket-dark.svg"><img src="docs/readme-icons/rocket-light.svg" width="14" align="center" alt=""></picture> Move to full-cycle data management  where only unified <br /> structured data & processes remain and where  <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/unlock-dark.svg"><img src="docs/readme-icons/unlock-light.svg" width="14" align="center" alt=""></picture> your data is yours
 </p>

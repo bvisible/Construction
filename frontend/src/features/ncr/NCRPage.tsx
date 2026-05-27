@@ -25,7 +25,8 @@ import {
   ListChecks,
   Link2,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, SkeletonTable } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { SectionIntro } from '@/features/validation';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
@@ -182,17 +183,17 @@ function CreateNCRModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-lg animate-fade-in">
-      <div className="w-full max-w-2xl bg-surface-elevated rounded-xl shadow-xl border border-border animate-card-in mx-4 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-label={t('ncr.new_ncr', { defaultValue: 'New NCR‌⁠‍' })}>
+      <div className="w-full max-w-2xl bg-surface-elevated rounded-xl shadow-xl border border-border animate-card-in mx-4 max-h-[90vh] overflow-y-auto" role="dialog" aria-modal="true" aria-label={t('ncr.new_ncr', { defaultValue: 'New NCR' })}>
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-light">
           <div>
             <h2 className="text-lg font-semibold text-content-primary">
-              {t('ncr.new_ncr', { defaultValue: 'New NCR‌⁠‍' })}
+              {t('ncr.new_ncr', { defaultValue: 'New NCR' })}
             </h2>
             {projectName && (
               <p className="text-xs text-content-tertiary mt-0.5">
                 {t('common.creating_in_project', {
-                  defaultValue: 'In {{project}}‌⁠‍',
+                  defaultValue: 'In {{project}}',
                   project: projectName,
                 })}
               </p>
@@ -212,7 +213,7 @@ function CreateNCRModal({
           {/* ── NCR Type ── */}
           <div>
             <label className="block text-sm font-medium text-content-primary mb-2">
-              {t('ncr.field_type', { defaultValue: 'Non-Conformance Type‌⁠‍' })}
+              {t('ncr.field_type', { defaultValue: 'Non-Conformance Type' })}
             </label>
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
               {NCR_TYPES.map((nt) => {
@@ -246,7 +247,7 @@ function CreateNCRModal({
           {/* ── Severity ── */}
           <div>
             <label className="block text-sm font-medium text-content-primary mb-2">
-              {t('ncr.field_severity', { defaultValue: 'Severity‌⁠‍' })}
+              {t('ncr.field_severity', { defaultValue: 'Severity' })}
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               {NCR_SEVERITIES.map((sev) => {
@@ -697,7 +698,13 @@ export function NCRPage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: ncrs = [], isLoading } = useQuery({
+  const {
+    data: ncrs = [],
+    isLoading,
+    isError: ncrsError,
+    error: ncrsErrorValue,
+    refetch: refetchNcrs,
+  } = useQuery({
     queryKey: ['ncrs', projectId, statusFilter],
     queryFn: () =>
       fetchNCRs({
@@ -912,17 +919,6 @@ export function NCRPage() {
         })}
       </SectionIntro>
 
-      {/* No-project warning */}
-      {!projectId && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3">
-          <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">{t('common.no_project_selected', { defaultValue: 'No project selected' })}</p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">{t('common.select_project_hint', { defaultValue: 'Select a project from the header to view and manage items.' })}</p>
-          </div>
-        </div>
-      )}
-
       {projectId ? (
       <>
       {/* Stats */}
@@ -1010,6 +1006,8 @@ export function NCRPage() {
       <div>
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : ncrsError ? (
+          <RecoveryCard error={ncrsErrorValue} onRetry={() => refetchNcrs()} />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<AlertOctagon size={28} strokeWidth={1.5} />}
@@ -1076,11 +1074,9 @@ export function NCRPage() {
       </div>
       </>
       ) : (
-        <EmptyState
-          icon={<AlertOctagon size={28} strokeWidth={1.5} />}
-          title={t('ncr.no_project', { defaultValue: 'No project selected' })}
-          description={t('ncr.select_project', { defaultValue: 'Open a project first to view and manage NCRs.' })}
-        />
+        <RequiresProject
+          emptyHint={t('ncr.select_project', { defaultValue: 'Open a project first to view and manage NCRs.' })}
+        >{null}</RequiresProject>
       )}
 
       {/* Create Modal */}

@@ -15,7 +15,7 @@ import {
   Loader2,
   Trash2,
   Pencil,
-  AlertTriangle,
+  Send,
 } from 'lucide-react';
 import {
   Button,
@@ -23,9 +23,11 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   SkeletonTable,
   InfoHint,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { ContactSearchInput } from '@/shared/ui/ContactSearchInput';
@@ -35,6 +37,8 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { getPOMatchStatus, type POLineMatchTag } from './api';
 import { SupplierScorecardModal } from './SupplierScorecardModal';
+import { POStatusPipeline } from './POStatusPipeline';
+import { DeliveryCountdownBadge } from './DeliveryCountdownBadge';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -165,12 +169,12 @@ export function ProcurementPage() {
   const tabs: { key: ProcurementTab; label: string; icon: React.ReactNode }[] = [
     {
       key: 'purchase-orders',
-      label: t('procurement.purchase_orders', { defaultValue: 'Purchase Orders‌⁠‍' }),
+      label: t('procurement.purchase_orders', { defaultValue: 'Purchase Orders' }),
       icon: <Package size={15} />,
     },
     {
       key: 'goods-receipts',
-      label: t('procurement.goods_receipts', { defaultValue: 'Goods Receipts‌⁠‍' }),
+      label: t('procurement.goods_receipts', { defaultValue: 'Goods Receipts' }),
       icon: <ClipboardCheck size={15} />,
     },
   ];
@@ -183,7 +187,7 @@ export function ProcurementPage() {
           ...(projectName
             ? [{ label: projectName, to: `/projects/${projectId}` }]
             : []),
-          { label: t('procurement.title', { defaultValue: 'Procurement‌⁠‍' }) },
+          { label: t('procurement.title', { defaultValue: 'Procurement' }) },
         ]}
         className="mb-4"
       />
@@ -191,11 +195,11 @@ export function ProcurementPage() {
       {/* Header */}
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-content-primary">
-          {t('procurement.title', { defaultValue: 'Procurement‌⁠‍' })}
+          {t('procurement.title', { defaultValue: 'Procurement' })}
         </h1>
         <p className="mt-1 text-sm text-content-secondary">
           {t('procurement.subtitle', {
-            defaultValue: 'Purchase orders and goods receipts‌⁠‍',
+            defaultValue: 'Purchase orders and goods receipts',
           })}
         </p>
       </div>
@@ -251,16 +255,12 @@ export function ProcurementPage() {
 
       {/* Tab Content */}
       {!projectId ? (
-        <EmptyState
-          icon={<Package size={28} strokeWidth={1.5} />}
-          title={t('procurement.no_project', {
-            defaultValue: 'No project selected',
-          })}
-          description={t('procurement.select_project', {
+        <RequiresProject
+          emptyHint={t('procurement.select_project', {
             defaultValue:
               'Open a project first to view its procurement data',
           })}
-        />
+        >{null}</RequiresProject>
       ) : (
         <>
           {activeTab === 'purchase-orders' && (
@@ -517,6 +517,32 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
       addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: e.message }),
   });
 
+  /* ── PO issue ──
+     Transitions a draft PO to `issued`. The backend enforces the FSM
+     (only draft→issued; see _PO_STATUS_TRANSITIONS in service.py) and
+     audit-logs the transition. After success we re-run the PO list query
+     so the status pipeline and Issue/Invoice button visibility update
+     in place. */
+  const issuePOMut = useMutation({
+    mutationFn: (poId: string) =>
+      apiPost(`/v1/procurement/${poId}/issue/`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['procurement-po', projectId] });
+      addToast({
+        type: 'success',
+        title: t('procurement.po_issued_toast', {
+          defaultValue: 'Purchase order issued',
+        }),
+      });
+    },
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: e.message,
+      }),
+  });
+
   const createInvoiceMut = useMutation({
     mutationFn: (poId: string) =>
       apiPost<{ invoice_id: string; invoice_number: string; po_number: string }>(
@@ -538,7 +564,7 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
       }),
   });
 
-  const { data: orders, isLoading, isError, refetch } = useQuery({
+  const { data: orders, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['procurement-po', projectId],
     queryFn: () =>
       apiGet<{ items: Array<PurchaseOrder & { vendor_contact_id?: string | null }>; total: number }>(
@@ -567,17 +593,7 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('procurement.po_load_error', {
-            defaultValue: 'Failed to load purchase orders. Please try again.',
-          })}
-          action={{
-            label: t('common.retry', { defaultValue: 'Retry' }),
-            onClick: () => refetch(),
-          }}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -992,30 +1008,43 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
                   <DateDisplay value={po.issue_date} />
                 </td>
                 <td className="px-4 py-3 text-content-secondary">
-                  <DateDisplay value={po.delivery_date} />
+                  <div className="flex flex-col items-start gap-1">
+                    <DateDisplay value={po.delivery_date} />
+                    <DeliveryCountdownBadge
+                      deliveryDate={po.delivery_date}
+                      status={po.status}
+                    />
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-right">
                   <MoneyDisplay amount={po.total_amount} currency={po.currency} />
                 </td>
                 <td className="px-4 py-3 text-center">
-                  <div className="flex items-center justify-center gap-1.5">
-                    <Badge
-                      variant={PO_STATUS_COLORS[po.status] ?? 'neutral'}
-                      size="sm"
-                    >
-                      {t(`procurement.po_status_${po.status}`, {
-                        defaultValue: po.status,
-                      })}
-                    </Badge>
-                    <MatchStatusBadge
-                      poId={po.id}
-                      active={Boolean(matchActive[po.id])}
-                    />
+                  <div className="flex flex-col items-center gap-1">
+                    <div className="flex items-center justify-center gap-1.5">
+                      <Badge
+                        variant={PO_STATUS_COLORS[po.status] ?? 'neutral'}
+                        size="sm"
+                      >
+                        {t(`procurement.po_status_${po.status}`, {
+                          defaultValue: po.status,
+                        })}
+                      </Badge>
+                      <MatchStatusBadge
+                        poId={po.id}
+                        active={Boolean(matchActive[po.id])}
+                      />
+                    </div>
+                    {/* Visual life-cycle pipeline — collapses to a red bar
+                        when cancelled, otherwise shows the four-stage dot
+                        progression (draft → issued → partial → completed).
+                        Mirrors backend _PO_STATUS_TRANSITIONS in service.py. */}
+                    <POStatusPipeline status={po.status} />
                   </div>
                 </td>
                 <td className="px-4 py-3 text-right">
                   {isManager && (
-                  <div className="flex items-center justify-end gap-1">
+                  <div className="flex items-center justify-end gap-1 flex-wrap">
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1030,6 +1059,26 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
                         <Pencil size={14} />
                       )}
                     </Button>
+                    {/* Mobile-friendly Issue button — only shown while the PO
+                        is in draft (matches backend FSM allowlist). On phones
+                        the row stacks; the Issue chip stays tappable at 44x32. */}
+                    {po.status === 'draft' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => issuePOMut.mutate(po.id)}
+                        disabled={issuePOMut.isPending}
+                        title={t('procurement.action_issue', { defaultValue: 'Issue PO' })}
+                        aria-label={t('procurement.action_issue', { defaultValue: 'Issue PO' })}
+                      >
+                        {issuePOMut.isPending && issuePOMut.variables === po.id ? (
+                          <Loader2 size={14} className="animate-spin mr-1" />
+                        ) : (
+                          <Send size={14} className="mr-1" />
+                        )}
+                        {t('procurement.action_issue_short', { defaultValue: 'Issue' })}
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -1096,9 +1145,20 @@ function MatchStatusBadge({ poId, active }: { poId: string; active: boolean }) {
   }
 
   const tag = data.overall_status;
+  // Explicit defaults keep the badge readable when a brand-new locale
+  // ships before its `procurement.match_*` entries land.
+  const MATCH_LABEL_DEFAULTS: Record<POLineMatchTag, string> = {
+    ok: 'Matched',
+    partial: 'Partial match',
+    unmatched: 'Not matched',
+    over_received: 'Over-received',
+    over_invoiced: 'Over-invoiced',
+  };
   return (
     <Badge variant={MATCH_BADGE_VARIANT[tag] ?? 'neutral'} size="sm" dot>
-      {t(`procurement.match_${tag}`, { defaultValue: tag.replace('_', ' ') })}
+      {t(`procurement.match_${tag}`, {
+        defaultValue: MATCH_LABEL_DEFAULTS[tag] ?? tag.replace('_', ' '),
+      })}
     </Badge>
   );
 }
@@ -1115,7 +1175,7 @@ function GoodsReceiptsTab({
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
 
-  const { data: receipts, isLoading, isError, refetch } = useQuery({
+  const { data: receipts, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['procurement-gr', projectId],
     queryFn: () =>
       apiGet<{ items: GoodsReceipt[]; total: number }>(
@@ -1139,17 +1199,7 @@ function GoodsReceiptsTab({
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('procurement.gr_load_error', {
-            defaultValue: 'Failed to load goods receipts. Please try again.',
-          })}
-          action={{
-            label: t('common.retry', { defaultValue: 'Retry' }),
-            onClick: () => refetch(),
-          }}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }

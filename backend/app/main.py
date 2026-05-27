@@ -629,21 +629,32 @@ async def _seed_demo_account() -> None:
             # Persist generated passwords + print once. Operators who set
             # env vars never see this banner; new installs get a one-time
             # log line with the location.
+            #
+            # IMPORTANT: log each generated credential as a self-contained
+            # ``[seed]`` line so a new developer sees the password
+            # immediately at first-boot time without having to know about
+            # ``~/.openestimator/.demo_credentials.json``. This was the #1
+            # cause of "why won't login work" debug sessions on fresh
+            # installs (see docs/qa/FRESH_INSTALL_RESULTS.md Issue 3).
             if generated_creds:
                 creds_path = _persist_demo_credentials(generated_creds)
+                # Email -> env-var-name lookup so each per-account banner
+                # can name the exact variable that suppresses random
+                # generation for that account.
+                env_var_for_email = {
+                    spec["email"]: spec["env_var"] for spec in demo_account_specs
+                }
+                for email, pw in generated_creds.items():
+                    env_var = env_var_for_email.get(email, "DEMO_USER_PASSWORD")
+                    logger.warning("[seed] Demo user created: %s / %s", email, pw)
+                    logger.warning(
+                        "[seed] Pre-set %s env to skip random generation", env_var
+                    )
                 logger.warning(
-                    "Demo credentials generated for %d account(s). "
-                    "Saved to %s — recover the passwords from there or "
-                    "set DEMO_USER_PASSWORD / DEMO_ESTIMATOR_PASSWORD / "
-                    "DEMO_MANAGER_PASSWORD before next boot to override.",
+                    "[seed] %d demo credential(s) also saved to %s",
                     len(generated_creds),
                     creds_path or "(persistence failed — check logs)",
                 )
-                # Log each generated password ONCE so a fresh log capture
-                # can reconstruct them. Subsequent boots find the user
-                # row already present and skip this branch entirely.
-                for email, pw in generated_creds.items():
-                    logger.warning("  %s: %s", email, pw)
 
             # 2. Capture the demo user ids while the session is open.
             estimator_user = (
@@ -958,6 +969,18 @@ def create_app() -> FastAPI:
     # lines carry the ID via the RequestIDLogFilter context) ───────────────
     from app.middleware.request_id import RequestIDMiddleware
 
+    # ── Universal audit capture context (Epic H) ──────────────────────────
+    # Sets the per-request AuditContext ContextVar so :func:`log_activity`
+    # can persist the peer IP, User-Agent, and correlation ID without
+    # service-layer callers having to thread the values manually.
+    # Starlette runs middleware in REVERSE registration order — the
+    # ``add_middleware(RequestIDMiddleware)`` call below must come AFTER
+    # this one so the request-id ContextVar is set BEFORE
+    # ActorContextMiddleware reads it via ``get_request_id()``.
+    from app.middleware.actor_context import ActorContextMiddleware
+
+    app.add_middleware(ActorContextMiddleware)
+
     app.add_middleware(RequestIDMiddleware)
 
     # ── Slow request logger (warns on > 500ms responses) ──────────────────
@@ -1032,16 +1055,17 @@ def create_app() -> FastAPI:
         # entries — not JSON-serialisable — so always coerce to ``str``
         # before emitting (regression seen with custom ``field_validator``
         # raises in BUG-MATH03 unit-catalogue checks).
+        def _json_safe(v: object) -> object:
+            if isinstance(v, (str, int, float, bool, type(None))):
+                return v
+            if isinstance(v, (list, tuple)):
+                return [_json_safe(x) for x in v]
+            if isinstance(v, dict):
+                return {str(k): _json_safe(x) for k, x in v.items()}
+            return str(v)
+
         def _scrub(err: dict) -> dict:
-            out = dict(err)
-            ctx = out.get("ctx")
-            if isinstance(ctx, dict) and "error" in ctx and not isinstance(
-                ctx["error"], (str, int, float, bool, type(None))
-            ):
-                ctx = dict(ctx)
-                ctx["error"] = str(ctx["error"])
-                out["ctx"] = ctx
-            return out
+            return _json_safe(dict(err))
 
         if settings.app_debug:
             safe_errors = [_scrub(e) for e in errors]
@@ -2042,6 +2066,33 @@ def create_app() -> FastAPI:
             logger.exception(
                 "Regional indices seed failed — /v1/costs/regional-adjust will "
                 "passthrough until an operator imports a feed"
+            )
+
+        # Property-dev house-type catalogue presets. Mirrors migration
+        # v3114_propdev_house_type_catalogue's bulk_insert so fresh-blank-DB
+        # installs (which take the env.py create_all+stamp shortcut and
+        # never run the migration's upgrade()) still end up with the ~60
+        # country presets populated. Idempotent — skips when any preset
+        # row exists.
+        try:
+            from app.database import async_session_factory as _ht_session_factory
+            from app.modules.property_dev.seed_house_type_catalogue import (
+                seed_house_type_catalogue_presets,
+            )
+
+            async with _ht_session_factory() as _ht_session:
+                inserted = await seed_house_type_catalogue_presets(_ht_session)
+                await _ht_session.commit()
+                if inserted:
+                    logger.info(
+                        "Property-dev house-type catalogue seed: %d preset rows",
+                        inserted,
+                    )
+        except Exception:
+            logger.exception(
+                "Property-dev house-type catalogue preset seed failed — "
+                "/property-dev/house-type-catalogue will return an empty list "
+                "until an operator re-runs alembic or restarts the app"
             )
 
         # Initialize vector database (LanceDB embedded, no Docker)

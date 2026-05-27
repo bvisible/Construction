@@ -49,12 +49,12 @@ export function CreateBOQModal({ open, onClose, defaultProjectId }: CreateBOQMod
     onSuccess: (boq) => {
       queryClient.invalidateQueries({ queryKey: ['boqs', selectedProjectId] });
       queryClient.invalidateQueries({ queryKey: ['all-boqs'] });
-      addToast({ type: 'success', title: t('toasts.boq_created', { defaultValue: 'Bill of Quantities created successfully‌⁠‍' }) });
+      addToast({ type: 'success', title: t('toasts.boq_created', { defaultValue: 'Bill of Quantities created successfully' }) });
       onClose();
       navigate(`/boq/${boq.id}`);
     },
     onError: (error: Error) => {
-      addToast({ type: 'error', title: t('toasts.boq_create_failed', { defaultValue: 'Failed to create Bill of Quantities‌⁠‍' }), message: error.message });
+      addToast({ type: 'error', title: t('toasts.boq_create_failed', { defaultValue: 'Failed to create Bill of Quantities' }), message: error.message });
     },
   });
 
@@ -84,10 +84,10 @@ export function CreateBOQModal({ open, onClose, defaultProjectId }: CreateBOQMod
             </div>
             <div>
               <h2 className="text-lg font-semibold text-content-primary">
-                {t('projects.new_boq', { defaultValue: 'New BOQ‌⁠‍' })}
+                {t('projects.new_boq', { defaultValue: 'New BOQ' })}
               </h2>
               <p className="text-xs text-content-tertiary">
-                {t('boq.create_subtitle', { defaultValue: 'Create a new bill of quantities‌⁠‍' })}
+                {t('boq.create_subtitle', { defaultValue: 'Create a new bill of quantities' })}
               </p>
             </div>
           </div>
@@ -104,14 +104,14 @@ export function CreateBOQModal({ open, onClose, defaultProjectId }: CreateBOQMod
           {/* Project selector */}
           <div>
             <label className="text-sm font-medium text-content-primary block mb-1.5">
-              {t('common.project', { defaultValue: 'Project‌⁠‍' })}
+              {t('common.project')}
             </label>
             <div className="relative">
               <select
                 value={selectedProjectId}
                 onChange={(e) => setSelectedProjectId(e.target.value)}
                 className="w-full h-10 appearance-none rounded-lg border border-border px-3 pr-9 text-sm text-content-primary bg-surface-primary focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent transition-all duration-fast ease-oe hover:border-content-tertiary"
-                required
+                required aria-required="true"
               >
                 <option value="" disabled>
                   {t('boq.select_project', { defaultValue: 'Select Project' })}
@@ -130,14 +130,14 @@ export function CreateBOQModal({ open, onClose, defaultProjectId }: CreateBOQMod
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Main Building — Structural Works"
-            required
+            required aria-required="true"
             autoFocus
           />
 
           {/* Description */}
           <div>
             <label className="text-sm font-medium text-content-primary block mb-1.5">
-              {t('common.description', { defaultValue: 'Description' })}
+              {t('common.description')}
             </label>
             <textarea
               value={description}

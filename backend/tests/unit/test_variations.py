@@ -528,7 +528,28 @@ async def test_convert_vr_to_vo_creates_vo_and_flips_status() -> None:
         final_schedule_days=5,
         currency="EUR",
     )
-    with patch("app.modules.variations.service.event_bus.publish_detached") as pub:
+    # R7 audit: convert_vr_to_vo now atomically mirrors the VO into a
+    # draft ChangeOrder via ChangeOrderService. The unit-test stub repo
+    # set can't satisfy the CO repository contract (real SQLA execute
+    # path), so patch the CO service to a no-op shim that returns a
+    # plausible CO row. The R7-specific atomicity guarantee is pinned
+    # in tests/modules/variations/test_r7_security.py.
+    class _FakeCO:
+        id = uuid.uuid4()
+
+    class _FakeCOService:
+        def __init__(self, _session: Any) -> None:
+            pass
+
+        async def create_order(self, _payload: Any) -> Any:
+            return _FakeCO()
+
+    with patch(
+        "app.modules.variations.service.event_bus.publish_detached",
+    ) as pub, patch(
+        "app.modules.changeorders.service.ChangeOrderService",
+        _FakeCOService,
+    ):
         vo = await svc.convert_vr_to_vo(vr.id, vo_payload, user_id="u1")
 
     assert vo.variation_request_id == vr.id
@@ -536,7 +557,10 @@ async def test_convert_vr_to_vo_creates_vo_and_flips_status() -> None:
     assert refreshed_vr.status == "converted_to_vo"
     names = [c.args[0] for c in pub.call_args_list]
     assert "variations.vo.issued" in names
-    assert "variations.change_order.requested" in names
+    # R7 audit: event renamed from ``variations.change_order.requested``
+    # (fire-and-forget) to ``variations.change_order.created`` because the
+    # row now exists synchronously when this event fires.
+    assert "variations.change_order.created" in names
 
 
 @pytest.mark.asyncio

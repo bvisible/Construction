@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
 
 from app.modules.eac.models import (
     ALIAS_SCOPES,
@@ -21,6 +21,15 @@ from app.modules.eac.models import (
     ALIAS_SYNONYM_KINDS,
     ALIAS_VALUE_TYPE_HINTS,
 )
+
+# R7 audit (Wave 3): precision-critical Decimal fields are exchanged as
+# strings on the wire so a JSON float bridge never silently rounds.
+# ``unit_multiplier`` scales every downstream QTO value — a 0.001 →
+# 0.0009999... round-trip would skew area / volume aggregates.
+DecimalStr = Annotated[
+    Decimal,
+    PlainSerializer(lambda v: str(v) if v is not None else None, return_type=str),
+]
 
 _ALIAS_SCOPE_VALUES = ALIAS_SCOPES
 _ALIAS_VTH_VALUES = ALIAS_VALUE_TYPE_HINTS
@@ -49,7 +58,7 @@ class EacAliasSynonymCreate(BaseModel):
         default="any",
         description="any | instance | type | pset | external_classification",
     )
-    unit_multiplier: Decimal = Field(default=Decimal("1"))
+    unit_multiplier: DecimalStr = Field(default=Decimal("1"))
 
 
 class EacAliasSynonymRead(_ApiBase):
@@ -63,7 +72,7 @@ class EacAliasSynonymRead(_ApiBase):
     priority: int
     pset_filter: str | None = None
     source_filter: str
-    unit_multiplier: Decimal
+    unit_multiplier: DecimalStr
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

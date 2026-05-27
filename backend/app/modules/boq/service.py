@@ -29,6 +29,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 
 # ── CWICR variant snapshot helpers ───────────────────────────────────────
 #
@@ -997,19 +999,21 @@ def _quantize_money_str(value: str | int | float | Decimal | None) -> str:
 _CURRENCY_QUANTUM = Decimal("0.01")
 
 
-def _round_currency(value: Decimal | float | int | str | None) -> float:
+def _round_currency(value: Decimal | float | int | str | None) -> Decimal:
     """Quantise an aggregate monetary value to 2dp, ROUND_HALF_UP.
 
-    Returns a float (the response schemas type these as ``float``).
-    Non-finite / unparseable input collapses to ``0.0`` so a corrupt
-    intermediate never serialises as ``NaN``/``Infinity``.
+    v3 §10 — returns a ``Decimal`` so downstream Pydantic schemas
+    typed as ``Decimal`` don't round-trip through float and re-introduce
+    precision drift. Non-finite / unparseable input collapses to
+    ``Decimal('0.00')`` so a corrupt intermediate never serialises as
+    ``NaN`` / ``Infinity``.
     """
     from decimal import ROUND_HALF_UP
 
     d = value if isinstance(value, Decimal) else _to_decimal(value)
     if not d.is_finite():
-        return 0.0
-    return float(d.quantize(_CURRENCY_QUANTUM, rounding=ROUND_HALF_UP))
+        return Decimal("0.00")
+    return d.quantize(_CURRENCY_QUANTUM, rounding=ROUND_HALF_UP)
 
 
 def _coerce_audit_value(value: Any) -> Any:
@@ -2176,7 +2180,7 @@ class BOQService:
 
         result = await self.session.execute(select(Project.id).where(Project.id == data.project_id))
         if result.scalar_one_or_none() is None:
-            raise HTTPException(status_code=404, detail="Project not found")
+            raise HTTPException(status_code=404, detail=translate("errors.project_not_found", locale=get_locale()))
 
         default_display_columns = ["ordinal", "description", "unit", "quantity", "unit_rate", "total"]
         boq = BOQ(
@@ -3033,7 +3037,7 @@ class BOQService:
         if position is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Position not found",
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
         await self._ensure_not_locked(position.boq_id)
 
@@ -4203,7 +4207,7 @@ class BOQService:
         if position is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Position not found",
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
         await self._ensure_not_locked(position.boq_id)
 
@@ -4335,7 +4339,7 @@ class BOQService:
         if position is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Position not found",
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
         await self._ensure_not_locked(position.boq_id)
 
@@ -4570,7 +4574,7 @@ class BOQService:
         if position is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Position not found",
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
         await self._ensure_not_locked(position.boq_id)
 
@@ -5213,7 +5217,7 @@ class BOQService:
         if source is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Position not found",
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
 
         # Issue #127: a duplicate is a one-time clone — UNLINKED, with its
@@ -5287,7 +5291,7 @@ class BOQService:
         if position is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Position not found",
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
         await self._ensure_not_locked(position.boq_id)
 
@@ -5406,7 +5410,7 @@ class BOQService:
         if position is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Position not found",
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
 
         ref_code = getattr(position, "reference_code", None)
@@ -7039,7 +7043,8 @@ class BOQService:
         position = await self.position_repo.get_by_id(position_id)
         if position is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Position not found"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=translate("errors.position_not_found", locale=get_locale()),
             )
         boq = await self.get_boq(position.boq_id)
 

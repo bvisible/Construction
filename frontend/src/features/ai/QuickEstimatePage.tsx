@@ -2,10 +2,11 @@
 // CWICR AI Estimation Engine
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 // DDC-CWICR-OE-2026
-import React, { useState, useCallback, useRef, useEffect, useMemo, type FormEvent } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useId, useMemo, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams, useLocation, Link } from 'react-router-dom';
+import { useFocusTrap } from '@/shared/hooks/useFocusTrap';
 import {
   Sparkles,
   ArrowRight,
@@ -211,27 +212,37 @@ function LoadingState({ isCad, fileName, fileSizeMB }: { isCad?: boolean; fileNa
   const remaining = estimatedTotal > 0 ? Math.max(0, Math.round(estimatedTotal - elapsed)) : 0;
 
   const title = isCad
-    ? t('ai.converting_cad', { defaultValue: 'Converting CAD file...‌⁠‍' })
-    : t('ai.analyzing', { defaultValue: 'AI is analyzing your input...‌⁠‍' });
+    ? t('ai.converting_cad', { defaultValue: 'Converting CAD file...' })
+    : t('ai.analyzing', { defaultValue: 'AI is analyzing your input...' });
   const subtitle = isCad && estimatedTotal > 0
     ? remaining > 0
-      ? t('ai.cad_progress_hint', { defaultValue: '~{{remaining}}s remaining — extracting elements and detecting columns‌⁠‍', remaining })
-      : t('ai.cad_finalizing', { defaultValue: 'Finalizing extraction...‌⁠‍' })
+      ? t('ai.cad_progress_hint', { defaultValue: '~{{remaining}}s remaining — extracting elements and detecting columns', remaining })
+      : t('ai.cad_finalizing', { defaultValue: 'Finalizing extraction...' })
     : isCad
-      ? t('ai.cad_processing_hint', { defaultValue: 'Extracting elements, detecting columns. This may take 30-60 seconds for large files.‌⁠‍' })
+      ? t('ai.cad_processing_hint', { defaultValue: 'Extracting elements, detecting columns. This may take 30-60 seconds for large files.' })
       : t('ai.generating', { defaultValue: 'Generating cost breakdown and quantities' });
 
+  // a11y: aria-live="polite" so SR users hear the loading transition
+  // without interrupting the user; aria-busy reinforces "in progress" for
+  // assistive tech; the decorative gradient + sparkle icon stay hidden
+  // from screen readers.
   return (
     <div className="animate-card-in" style={{ animationDelay: '100ms' }}>
-      <section className="relative overflow-hidden rounded-2xl border border-white/40 bg-white/60 backdrop-blur-xl shadow-lg shadow-slate-900/[0.04] dark:border-white/5 dark:bg-slate-900/40 dark:shadow-slate-950/30">
+      <section
+        role="status"
+        aria-live="polite"
+        aria-busy="true"
+        aria-label={title}
+        className="relative overflow-hidden rounded-2xl border border-white/40 bg-white/60 backdrop-blur-xl shadow-lg shadow-slate-900/[0.04] dark:border-white/5 dark:bg-slate-900/40 dark:shadow-slate-950/30"
+      >
         <div
-          aria-hidden
+          aria-hidden="true"
           className="pointer-events-none absolute -top-20 -right-20 h-48 w-48 rounded-full bg-gradient-radial from-sky-500/20 to-transparent blur-3xl"
         />
         <div className="relative px-6 pt-6 pb-2">
           <div className="flex items-center gap-3 mb-4">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 text-white shadow-md shadow-sky-500/25">
-              <Sparkles size={18} className="animate-pulse" />
+              <Sparkles size={18} className="animate-pulse" aria-hidden="true" />
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-content-primary">{title}</p>
@@ -270,10 +281,10 @@ function LoadingState({ isCad, fileName, fileSizeMB }: { isCad?: boolean; fileNa
                   {t('boq.unit', { defaultValue: 'Unit' })}
                 </th>
                 <th className="px-4 py-3 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right">
-                  {t('boq.quantity', { defaultValue: 'Qty' })}
+                  {t('common.quantity')}
                 </th>
                 <th className="px-4 py-3 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right">
-                  {t('boq.unit_rate', { defaultValue: 'Rate' })}
+                  {t('common.rate')}
                 </th>
                 <th className="px-4 py-3 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right">
                   {t('boq.total', { defaultValue: 'Total' })}
@@ -311,6 +322,14 @@ function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
   const [selectedProject, setSelectedProject] = useState('');
   const [boqName, setBOQName] = useState('AI Quick Estimate');
 
+  // a11y: stable ids let <label htmlFor> wire to inputs; useFocusTrap +
+  // Escape handler + body-scroll-lock complete the modal contract
+  // (matches WideModal). Initial focus goes to the first focusable input.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const titleId = useId();
+  const projectSelectId = useId();
+  const boqNameId = useId();
+
   const { data: projects } = useQuery({
     queryKey: ['projects-list-simple'],
     queryFn: () => apiGet<ProjectSummary[]>('/v1/projects/?page_size=100'),
@@ -318,22 +337,73 @@ function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
     staleTime: 5 * 60_000,
   });
 
+  useFocusTrap(panelRef, open);
+
+  // Escape closes the dialog unless a save is in flight.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !saving) {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handler, { capture: true });
+    return () => document.removeEventListener('keydown', handler, { capture: true });
+  }, [open, onClose, saving]);
+
+  // Body-scroll lock while the dialog is open.
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [open]);
+
+  // Move initial focus into the first focusable form control on open.
+  useEffect(() => {
+    if (!open) return;
+    const node = panelRef.current;
+    if (!node) return;
+    const first = node.querySelector<HTMLElement>(
+      'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])',
+    );
+    first?.focus();
+  }, [open]);
+
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-lg" aria-hidden="true" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-labelledby="save-boq-dialog-title" className="relative w-full max-w-md animate-card-in rounded-2xl border border-border-light bg-surface-elevated p-6 shadow-xl">
-        <h3 id="save-boq-dialog-title" className="text-lg font-semibold text-content-primary mb-4">
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-lg"
+        aria-hidden="true"
+        onClick={() => !saving && onClose()}
+      />
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="relative w-full max-w-md animate-card-in rounded-2xl border border-border-light bg-surface-elevated p-6 shadow-xl"
+      >
+        <h3 id={titleId} className="text-lg font-semibold text-content-primary mb-4">
           {t('ai.save_to_boq', { defaultValue: 'Save as BOQ' })}
         </h3>
 
         <div className="space-y-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-content-primary">
+            <label
+              htmlFor={projectSelectId}
+              className="text-sm font-medium text-content-primary"
+            >
               {t('ai.select_project', { defaultValue: 'Select Project' })}
             </label>
             <select
+              id={projectSelectId}
               value={selectedProject}
               onChange={(e) => setSelectedProject(e.target.value)}
               className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm text-content-primary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent hover:border-content-tertiary cursor-pointer appearance-none"
@@ -350,10 +420,14 @@ function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium text-content-primary">
+            <label
+              htmlFor={boqNameId}
+              className="text-sm font-medium text-content-primary"
+            >
               {t('ai.boq_name', { defaultValue: 'BOQ Name' })}
             </label>
             <input
+              id={boqNameId}
               type="text"
               value={boqName}
               onChange={(e) => setBOQName(e.target.value)}
@@ -413,7 +487,7 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
               {t('ai.col_unit', { defaultValue: 'Unit' })}
             </th>
             <th className="px-4 py-3 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right w-24">
-              {t('ai.col_qty', { defaultValue: 'Qty' })}
+              {t('common.quantity')}
             </th>
             <th className="px-4 py-3 text-xs font-semibold text-content-tertiary uppercase tracking-wide text-right w-28">
               {t('ai.col_rate', { defaultValue: 'Unit Rate' })}
@@ -607,7 +681,7 @@ function QuantityTablesResult({ data }: { data: CadExtractResponse }) {
                   <thead>
                     <tr className="border-b border-border-light/50 text-left">
                       <th className="px-4 py-2 text-xs font-semibold text-content-tertiary uppercase tracking-wide">
-                        {t('ai.cad_col_type', { defaultValue: 'Type' })}
+                        {t('common.type')}
                       </th>
                       <th className="px-4 py-2 text-xs font-semibold text-content-tertiary uppercase tracking-wide">
                         {t('ai.cad_col_material', { defaultValue: 'Material' })}
@@ -844,6 +918,12 @@ function CompactOptions({
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
+  // a11y: useId per field so labels wire to controls via htmlFor.
+  // Multiple instances of CompactOptions render across tabs — hard-coded
+  // ids would collide and break SR / form associations.
+  const locationId = useId();
+  const currencyId = useId();
+  const standardId = useId();
   const selectClass =
     'h-9 w-full rounded-lg border border-border bg-surface-primary px-2.5 text-sm text-content-primary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue hover:border-content-tertiary cursor-pointer appearance-none';
   const inputClass =
@@ -852,10 +932,14 @@ function CompactOptions({
   return (
     <div className="mt-4 grid grid-cols-3 gap-3">
       <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
+        <label
+          htmlFor={locationId}
+          className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+        >
           {t('ai.location', { defaultValue: 'Location' })}
         </label>
         <input
+          id={locationId}
           type="text"
           value={location}
           onChange={(e) => setLocation(e.target.value)}
@@ -865,10 +949,14 @@ function CompactOptions({
         />
       </div>
       <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
-          {t('ai.currency_label', { defaultValue: 'Currency' })}
+        <label
+          htmlFor={currencyId}
+          className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+        >
+          {t('common.currency')}
         </label>
         <select
+          id={currencyId}
           value={currency}
           onChange={(e) => setCurrency(e.target.value)}
           className={selectClass}
@@ -882,10 +970,14 @@ function CompactOptions({
         </select>
       </div>
       <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
+        <label
+          htmlFor={standardId}
+          className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+        >
           {t('ai.standard_label', { defaultValue: 'Standard' })}
         </label>
         <select
+          id={standardId}
           value={standard}
           onChange={(e) => setStandard(e.target.value)}
           className={selectClass}
@@ -1197,6 +1289,17 @@ export function QuickEstimatePage() {
   const [enrichResult, setEnrichResult] = useState<EnrichResult | null>(null);
   const [enriching, setEnriching] = useState(false);
 
+  // a11y refs / ids — used by the textarea label, the disabled-submit
+  // hint (aria-describedby), the tablist (role=tab + aria-controls), and
+  // the post-submit focus target so SR users land on the result region.
+  const descriptionId = useId();
+  const pasteTextId = useId();
+  const buildingTypeId = useId();
+  const areaM2Id = useId();
+  const submitHelpId = useId();
+  const tablistId = useId();
+  const resultRegionRef = useRef<HTMLDivElement>(null);
+
   // CAD BOQ creation state
   const globalProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [cadBOQProjectId, setCadBOQProjectId] = useState(globalProjectId || '');
@@ -1259,7 +1362,22 @@ export function QuickEstimatePage() {
     setInstallResult(null);
     setInstallError(null);
     try {
-      const data = await apiPost<{ message: string }>(`/v1/takeoff/converters/${c.id}/install/`);
+      // 120 s explicit timeout — converter install (RVT especially) can
+      // run 60-90 s; the user error log for v4.3.2 caught AbortErrors
+      // on this exact path.
+      const signal: AbortSignal | undefined =
+        typeof AbortSignal !== 'undefined' &&
+        typeof (AbortSignal as { timeout?: (ms: number) => AbortSignal }).timeout ===
+          'function'
+          ? (AbortSignal as unknown as { timeout: (ms: number) => AbortSignal }).timeout(
+              120_000,
+            )
+          : undefined;
+      const data = await apiPost<{ message: string }>(
+        `/v1/takeoff/converters/${c.id}/install/`,
+        undefined,
+        signal ? { signal } : undefined,
+      );
       setInstallResult(data);
       addToast({ type: 'success', title: `${c.name} installed`, message: data.message });
       queryClient.invalidateQueries({ queryKey: ['takeoff', 'converters'] });
@@ -1514,6 +1632,18 @@ export function QuickEstimatePage() {
       setEnriching(false);
     }
   }, [result?.id, enrichRegion, currency, addToast, t]);
+
+  // a11y — focus the result region as soon as new content arrives so
+  // keyboard / SR users land on the freshly generated estimate rather
+  // than having to Tab past the form to find it. tabIndex={-1} on the
+  // wrapper makes the div focusable programmatically only.
+  useEffect(() => {
+    if (!result && !cadResult && !cadGroupResult) return;
+    const id = requestAnimationFrame(() => {
+      resultRegionRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [result, cadResult, cadGroupResult]);
 
   // ── Determine if any mutation is pending ──────────────────────────────
 
@@ -2001,15 +2131,15 @@ export function QuickEstimatePage() {
     >
       {/* Page-level gradient backdrop (sky → white → emerald) */}
       <div
-        aria-hidden
+        aria-hidden="true"
         className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-br from-sky-50 via-white to-emerald-50/40 dark:from-slate-950 dark:via-slate-900 dark:to-slate-950"
       />
       <div
-        aria-hidden
+        aria-hidden="true"
         className="pointer-events-none absolute -top-40 -left-40 -z-10 h-96 w-96 rounded-full bg-gradient-radial from-sky-400/15 to-transparent blur-3xl"
       />
       <div
-        aria-hidden
+        aria-hidden="true"
         className="pointer-events-none absolute -bottom-40 -right-40 -z-10 h-96 w-96 rounded-full bg-gradient-radial from-emerald-400/15 to-transparent blur-3xl"
       />
 
@@ -2020,16 +2150,19 @@ export function QuickEstimatePage() {
         style={{ animationDelay: '0ms' }}
       >
         <div
-          aria-hidden
+          aria-hidden="true"
           className="pointer-events-none absolute -top-16 right-1/4 h-40 w-40 rounded-full bg-gradient-radial from-violet-400/20 to-transparent blur-3xl"
         />
         <div
-          aria-hidden
+          aria-hidden="true"
           className="pointer-events-none absolute -bottom-16 -left-10 h-40 w-40 rounded-full bg-gradient-radial from-sky-400/15 to-transparent blur-3xl"
         />
         <div className="relative flex flex-wrap items-start justify-between gap-3">
           <div className="flex items-start gap-3">
-            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-blue-500 to-sky-500 text-white shadow-md shadow-violet-500/25">
+            <div
+              aria-hidden="true"
+              className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-violet-500 via-blue-500 to-sky-500 text-white shadow-md shadow-violet-500/25"
+            >
               <BrainCircuit size={22} />
             </div>
             <div>
@@ -2131,16 +2264,25 @@ export function QuickEstimatePage() {
           </div>
         )
       ) : aiSettings && isConfigured ? (
-        /* ── CONFIGURED — green status bar ─── */
+        /* ── CONFIGURED — green status bar. Status icon + explicit
+            "Status:" sr-only prefix so meaning does not rely on green
+            colour alone (WCAG 1.4.1). */
         <div
           className="animate-card-in flex items-center gap-3 rounded-xl bg-semantic-success-bg/60 border border-semantic-success/20 px-4 py-2.5"
           style={{ animationDelay: '50ms' }}
+          role="status"
         >
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-semantic-success/20">
-            <div className="h-2.5 w-2.5 rounded-full bg-semantic-success animate-pulse" />
+          <div
+            aria-hidden="true"
+            className="flex h-7 w-7 items-center justify-center rounded-full bg-semantic-success/20"
+          >
+            <CheckCircle2 size={14} className="text-semantic-success" />
           </div>
           <div className="flex-1 flex items-center gap-3">
             <span className="text-sm font-medium text-semantic-success">
+              <span className="sr-only">
+                {t('ai.status_prefix', { defaultValue: 'Status: ' })}
+              </span>
               {t('ai.connected', { defaultValue: 'AI Connected' })}
             </span>
             <span className="text-xs text-semantic-success/70">
@@ -2205,16 +2347,31 @@ export function QuickEstimatePage() {
         </div>
       )}
 
-      {/* Source type selector (hidden on /data-explorer) */}
+      {/* Source type selector (hidden on /data-explorer) — proper
+          WAI-ARIA tablist semantics so AT users understand the grid of
+          buttons is a single-select tab control. */}
       {!isCadRoute && (
       <div className="animate-card-in" style={{ animationDelay: '100ms' }}>
         {/* Horizontal tab pills — single row, glass treatment */}
-        <div className="grid grid-cols-5 gap-2">
+        <div
+          role="tablist"
+          id={tablistId}
+          aria-label={t('ai.input_source_label', { defaultValue: 'Input source' })}
+          className="grid grid-cols-5 gap-2"
+        >
           {TABS.map((tab) => {
             const isActive = activeTab === tab.id;
+            const tabPanelId = `${tablistId}-panel-${tab.id}`;
+            const tabId = `${tablistId}-tab-${tab.id}`;
             return (
               <button
                 key={tab.id}
+                id={tabId}
+                role="tab"
+                type="button"
+                aria-selected={isActive}
+                aria-controls={tabPanelId}
+                tabIndex={isActive ? 0 : -1}
                 onClick={() => handleTabChange(tab.id)}
                 disabled={isPending}
                 className={clsx(
@@ -2226,6 +2383,7 @@ export function QuickEstimatePage() {
                 )}
               >
                 <div
+                  aria-hidden="true"
                   className={clsx(
                     'flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-all',
                     isActive
@@ -2253,11 +2411,16 @@ export function QuickEstimatePage() {
       {/* Input area for selected source — glass panel */}
       <section
         data-testid="ai-quick-estimate-input"
+        {...(!isCadRoute && {
+          role: 'tabpanel',
+          id: `${tablistId}-panel-${activeTab}`,
+          'aria-labelledby': `${tablistId}-tab-${activeTab}`,
+        })}
         className="animate-card-in relative overflow-hidden rounded-2xl border border-white/40 bg-white/60 backdrop-blur-xl shadow-lg shadow-slate-900/[0.04] dark:border-white/5 dark:bg-slate-900/40 dark:shadow-slate-950/30"
         style={{ animationDelay: '200ms' }}
       >
         <div
-          aria-hidden
+          aria-hidden="true"
           className="pointer-events-none absolute -top-24 -right-24 h-56 w-56 rounded-full bg-gradient-radial from-sky-500/15 to-transparent blur-3xl"
         />
         {/* Coloured section accent bar */}
@@ -2295,7 +2458,14 @@ export function QuickEstimatePage() {
             {activeTab === 'text' && (
               <div className="space-y-4">
                 <div className="relative">
+                  {/* a11y: visually-hidden label associates the textarea
+                      with a programmatic name. Placeholder text alone
+                      is not a label (it disappears once typing starts). */}
+                  <label htmlFor={descriptionId} className="sr-only">
+                    {t('ai.describe_label', { defaultValue: 'Project description' })}
+                  </label>
                   <textarea
+                    id={descriptionId}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
                     placeholder={t('ai.describe_placeholder', {
@@ -2376,13 +2546,18 @@ export function QuickEstimatePage() {
                   </div>
                 )}
 
-                {/* Full options row for text tab */}
+                {/* Full options row for text tab — every input wired to
+                    its label via htmlFor so SR users can name them. */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
+                    <label
+                      htmlFor={`${descriptionId}-location`}
+                      className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+                    >
                       {t('ai.location', { defaultValue: 'Location' })}
                     </label>
                     <input
+                      id={`${descriptionId}-location`}
                       type="text"
                       value={location}
                       onChange={(e) => setLocation(e.target.value)}
@@ -2393,10 +2568,14 @@ export function QuickEstimatePage() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
-                      {t('ai.currency_label', { defaultValue: 'Currency' })}
+                    <label
+                      htmlFor={`${descriptionId}-currency`}
+                      className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+                    >
+                      {t('common.currency')}
                     </label>
                     <select
+                      id={`${descriptionId}-currency`}
                       value={currency}
                       onChange={(e) => setCurrency(e.target.value)}
                       className="h-9 w-full rounded-lg border border-border bg-surface-primary px-2.5 text-sm text-content-primary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue hover:border-content-tertiary cursor-pointer appearance-none"
@@ -2411,10 +2590,14 @@ export function QuickEstimatePage() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
+                    <label
+                      htmlFor={`${descriptionId}-standard`}
+                      className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+                    >
                       {t('ai.standard_label', { defaultValue: 'Standard' })}
                     </label>
                     <select
+                      id={`${descriptionId}-standard`}
                       value={standard}
                       onChange={(e) => setStandard(e.target.value)}
                       className="h-9 w-full rounded-lg border border-border bg-surface-primary px-2.5 text-sm text-content-primary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue hover:border-content-tertiary cursor-pointer appearance-none"
@@ -2429,10 +2612,14 @@ export function QuickEstimatePage() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
+                    <label
+                      htmlFor={buildingTypeId}
+                      className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+                    >
                       {t('ai.building_type', { defaultValue: 'Building Type' })}
                     </label>
                     <select
+                      id={buildingTypeId}
                       value={buildingType}
                       onChange={(e) => setBuildingType(e.target.value)}
                       className="h-9 w-full rounded-lg border border-border bg-surface-primary px-2.5 text-sm text-content-primary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue hover:border-content-tertiary cursor-pointer appearance-none"
@@ -2447,10 +2634,14 @@ export function QuickEstimatePage() {
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs font-medium text-content-tertiary uppercase tracking-wide">
+                    <label
+                      htmlFor={areaM2Id}
+                      className="text-xs font-medium text-content-tertiary uppercase tracking-wide"
+                    >
                       {t('ai.area', { defaultValue: 'Area (m\u00b2)' })}
                     </label>
                     <input
+                      id={areaM2Id}
                       type="number"
                       min="0"
                       step="1"
@@ -2690,7 +2881,11 @@ export function QuickEstimatePage() {
             {activeTab === 'paste' && (
               <div>
                 <div className="relative">
+                  <label htmlFor={pasteTextId} className="sr-only">
+                    {t('ai.paste_label', { defaultValue: 'Paste BOQ or table data' })}
+                  </label>
                   <textarea
+                    id={pasteTextId}
                     value={pasteText}
                     onChange={(e) => setPasteText(e.target.value)}
                     placeholder={t('ai.paste_placeholder', {
@@ -2737,57 +2932,81 @@ export function QuickEstimatePage() {
                 )}
               </div>
               <div className="flex flex-col items-end gap-2">
-                {isCadRoute ? (
-                  /* CAD route: two prominent buttons */
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      size="lg"
-                      loading={isPending}
-                      disabled={!canSubmit}
-                      icon={<Layers size={18} />}
-                      className="px-6"
-                    >
-                      {submitLabel}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="lg"
-                      disabled={!canSubmit}
-                      icon={<Database size={18} />}
-                      className="px-6"
-                      onClick={() => {
-                        if (selectedFile) {
-                          // Upload via Data Explorer page
-                          navigate('/data-explorer');
-                        }
-                      }}
-                    >
-                      {t('ai.open_explorer', { defaultValue: 'Data Explorer' })}
-                    </Button>
-                  </div>
-                ) : (
-                  <Button
-                    type="submit"
-                    variant="primary"
-                    size="lg"
-                    loading={isPending}
-                    disabled={!canSubmit}
-                    icon={<Sparkles size={18} />}
-                  >
-                    {submitLabel}
-                  </Button>
-                )}
-                {!canSubmit && !isPending && (
-                  <span className="text-2xs text-content-tertiary">
-                    {activeTab === 'text'
+                {(() => {
+                  // a11y: explain WHY the submit is disabled, both
+                  // visually (text hint below the button) and to screen
+                  // readers via aria-describedby. Without this, an SR
+                  // user pressing the disabled button gets no feedback
+                  // about the missing input.
+                  const disabledReason = !canSubmit && !isPending
+                    ? activeTab === 'text'
                       ? t('ai.hint_enter_description', { defaultValue: 'Enter a project description to continue' })
-                      : t('ai.hint_select_file', { defaultValue: 'Select a file to continue' })
-                    }
-                  </span>
-                )}
+                      : activeTab === 'paste'
+                        ? t('ai.hint_enter_paste', { defaultValue: 'Paste some BOQ or table data to continue' })
+                        : t('ai.hint_select_file', { defaultValue: 'Select a file to continue' })
+                    : '';
+                  return (
+                    <>
+                      {isCadRoute ? (
+                        /* CAD route: two prominent buttons */
+                        <div className="flex items-center gap-2">
+                          <Button
+                            type="submit"
+                            variant="primary"
+                            size="lg"
+                            loading={isPending}
+                            disabled={!canSubmit}
+                            icon={<Layers size={18} aria-hidden="true" />}
+                            className="px-6"
+                            aria-describedby={!canSubmit ? submitHelpId : undefined}
+                          >
+                            {submitLabel}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="lg"
+                            disabled={!canSubmit}
+                            icon={<Database size={18} aria-hidden="true" />}
+                            className="px-6"
+                            onClick={() => {
+                              if (selectedFile) {
+                                // Upload via Data Explorer page
+                                navigate('/data-explorer');
+                              }
+                            }}
+                          >
+                            {t('ai.open_explorer', { defaultValue: 'Data Explorer' })}
+                          </Button>
+                        </div>
+                      ) : (
+                        <Button
+                          type="submit"
+                          variant="primary"
+                          size="lg"
+                          loading={isPending}
+                          disabled={!canSubmit}
+                          icon={<Sparkles size={18} aria-hidden="true" />}
+                          aria-describedby={!canSubmit ? submitHelpId : undefined}
+                        >
+                          {submitLabel}
+                        </Button>
+                      )}
+                      {/* Always render the help span so the id stays
+                          stable — hide it visually when nothing to say
+                          so layout does not jump. */}
+                      <span
+                        id={submitHelpId}
+                        className={clsx(
+                          'text-2xs text-content-tertiary',
+                          !disabledReason && 'sr-only',
+                        )}
+                      >
+                        {disabledReason || t('ai.submit_ready', { defaultValue: 'Ready to submit' })}
+                      </span>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </div>
@@ -2797,17 +3016,22 @@ export function QuickEstimatePage() {
       {/* Loading state */}
       {isPending && <LoadingState isCad={isCadRoute} fileName={selectedFile?.name} fileSizeMB={selectedFile ? selectedFile.size / (1024 * 1024) : undefined} />}
 
-      {/* Error state */}
+      {/* Error state — role="alert" so AT announces it immediately;
+          the AlertCircle icon + explicit "Error:" prefix avoid relying
+          on colour alone (WCAG 1.4.1). */}
       {isError && (
-        <div className="animate-card-in">
+        <div className="animate-card-in" role="alert">
           <Card className="border-semantic-error/20">
             <CardContent className="!mt-0">
               <div className="flex items-start gap-3">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-semantic-error-bg">
-                  <AlertCircle size={18} className="text-semantic-error" />
+                  <AlertCircle size={18} className="text-semantic-error" aria-hidden="true" />
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-semantic-error">
+                    <span className="sr-only">
+                      {t('ai.error_prefix', { defaultValue: 'Error: ' })}
+                    </span>
                     {t('ai.generation_failed', { defaultValue: 'Estimate generation failed' })}
                   </p>
                   <p className="mt-1 text-sm text-content-secondary">
@@ -2821,7 +3045,7 @@ export function QuickEstimatePage() {
                     size="sm"
                     className="mt-3"
                     onClick={resetMutationErrors}
-                    icon={<RotateCcw size={14} />}
+                    icon={<RotateCcw size={14} aria-hidden="true" />}
                   >
                     {t('ai.dismiss', { defaultValue: 'Dismiss' })}
                   </Button>
@@ -3053,9 +3277,18 @@ export function QuickEstimatePage() {
         </div>
       )}
 
-      {/* CAD Dynamic Group Result (step 2 of interactive grouping) */}
+      {/* CAD Dynamic Group Result (step 2 of interactive grouping).
+          Same focus-target pattern as AI results so SR users land here
+          when the grouping completes. */}
       {cadGroupResult && !isPending && (
-        <div className="space-y-4 animate-card-in" style={{ animationDelay: '50ms' }}>
+        <div
+          ref={resultRegionRef}
+          tabIndex={-1}
+          role="region"
+          aria-label={t('ai.cad_grouped_results', { defaultValue: 'Grouped Results' })}
+          className="space-y-4 animate-card-in focus:outline-none"
+          style={{ animationDelay: '50ms' }}
+        >
           {/* Header */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -3486,7 +3719,14 @@ export function QuickEstimatePage() {
 
       {/* CAD Quantity Tables Result */}
       {cadResult && !isPending && (
-        <div className="space-y-4 animate-card-in" style={{ animationDelay: '50ms' }}>
+        <div
+          ref={resultRegionRef}
+          tabIndex={-1}
+          role="region"
+          aria-label={t('ai.cad_quantity_tables', { defaultValue: 'Quantity Tables' })}
+          className="space-y-4 animate-card-in focus:outline-none"
+          style={{ animationDelay: '50ms' }}
+        >
           {/* Header */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -3532,17 +3772,28 @@ export function QuickEstimatePage() {
         </div>
       )}
 
-      {/* AI Estimate Results — failed status */}
+      {/* AI Estimate Results — failed status. role="alert" so SRs
+          announce the failure immediately; "Error:" sr-only prefix +
+          icon means the failure does not rely on red colour alone. */}
       {result && !isPending && result.status === 'failed' && result.error_message && (
-        <div className="animate-card-in" style={{ animationDelay: '50ms' }}>
+        <div
+          ref={resultRegionRef}
+          tabIndex={-1}
+          role="alert"
+          className="animate-card-in focus:outline-none"
+          style={{ animationDelay: '50ms' }}
+        >
           <Card>
             <CardContent>
               <div className="flex items-start gap-3">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-50 dark:bg-red-500/10">
-                  <AlertCircle size={16} className="text-red-500" />
+                  <AlertCircle size={16} className="text-red-500" aria-hidden="true" />
                 </div>
                 <div>
                   <p className="text-sm font-semibold text-content-primary">
+                    <span className="sr-only">
+                      {t('ai.error_prefix', { defaultValue: 'Error: ' })}
+                    </span>
                     {t('ai.estimate_failed', { defaultValue: 'Estimation failed' })}
                   </p>
                   <p className="mt-1 text-sm text-content-secondary">
@@ -3553,7 +3804,7 @@ export function QuickEstimatePage() {
                     size="sm"
                     className="mt-3"
                     onClick={handleReset}
-                    icon={<RotateCcw size={14} />}
+                    icon={<RotateCcw size={14} aria-hidden="true" />}
                   >
                     {t('ai.try_again', { defaultValue: 'Try again' })}
                   </Button>
@@ -3564,9 +3815,18 @@ export function QuickEstimatePage() {
         </div>
       )}
 
-      {/* AI Estimate Results — success */}
+      {/* AI Estimate Results — success. tabIndex={-1} + ref means the
+          useEffect above can programmatically move focus here once the
+          result lands, so SR users land on the new content. */}
       {result && !isPending && result.status === 'completed' && result.items.length > 0 && (
-        <div className="space-y-4 animate-card-in" style={{ animationDelay: '50ms' }}>
+        <div
+          ref={resultRegionRef}
+          tabIndex={-1}
+          role="region"
+          aria-label={t('ai.results', { defaultValue: 'Estimate Results' })}
+          className="space-y-4 animate-card-in focus:outline-none"
+          style={{ animationDelay: '50ms' }}
+        >
           {/* Results header */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">

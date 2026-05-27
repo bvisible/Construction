@@ -20,6 +20,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.bid_management.models import (
     BidAward,
     BidComparison,
@@ -808,7 +810,7 @@ class BidManagementService:
     async def update_bidder(self, bidder_id: uuid.UUID, data: BidderUpdate) -> Bidder:
         bidder = await self.bidder_repo.get_by_id(bidder_id)
         if bidder is None:
-            raise HTTPException(status_code=404, detail="Bidder not found")
+            raise HTTPException(status_code=404, detail=translate("errors.bidder_not_found", locale=get_locale()))
         fields = data.model_dump(exclude_unset=True)
         if not fields:
             return bidder
@@ -822,7 +824,7 @@ class BidManagementService:
     async def disqualify_bidder(self, bidder_id: uuid.UUID, reason: str) -> Bidder:
         bidder = await self.bidder_repo.get_by_id(bidder_id)
         if bidder is None:
-            raise HTTPException(status_code=404, detail="Bidder not found")
+            raise HTTPException(status_code=404, detail=translate("errors.bidder_not_found", locale=get_locale()))
         bidder.status = "disqualified"
         bidder.disqualification_reason = reason
         await self.session.flush()
@@ -879,7 +881,7 @@ class BidManagementService:
     ) -> BidInvitation:
         inv = await self.invitation_repo.get_by_id(invitation_id)
         if inv is None:
-            raise HTTPException(status_code=404, detail="Invitation not found")
+            raise HTTPException(status_code=404, detail=translate("errors.invitation_not_found", locale=get_locale()))
         fields = data.model_dump(exclude_unset=True)
         new_status = fields.get("status")
         if new_status is not None and new_status != inv.status:
@@ -897,7 +899,7 @@ class BidManagementService:
     async def mark_invitation_opened(self, invitation_id: uuid.UUID) -> BidInvitation:
         inv = await self.invitation_repo.get_by_id(invitation_id)
         if inv is None:
-            raise HTTPException(status_code=404, detail="Invitation not found")
+            raise HTTPException(status_code=404, detail=translate("errors.invitation_not_found", locale=get_locale()))
         if "opened" not in allowed_invitation_transitions(inv.status):
             # No-op when already in a terminal state.
             return inv
@@ -911,7 +913,7 @@ class BidManagementService:
     ) -> BidInvitation:
         inv = await self.invitation_repo.get_by_id(invitation_id)
         if inv is None:
-            raise HTTPException(status_code=404, detail="Invitation not found")
+            raise HTTPException(status_code=404, detail=translate("errors.invitation_not_found", locale=get_locale()))
         if "declined" not in allowed_invitation_transitions(inv.status):
             raise HTTPException(
                 status_code=409, detail=f"Cannot decline from '{inv.status}'"
@@ -925,7 +927,7 @@ class BidManagementService:
     async def resend_invitation(self, invitation_id: uuid.UUID) -> BidInvitation:
         inv = await self.invitation_repo.get_by_id(invitation_id)
         if inv is None:
-            raise HTTPException(status_code=404, detail="Invitation not found")
+            raise HTTPException(status_code=404, detail=translate("errors.invitation_not_found", locale=get_locale()))
         inv.sent_at = _now_iso()
         inv.status = "sent" if inv.status == "pending" else inv.status
         await self.session.flush()
@@ -942,6 +944,21 @@ class BidManagementService:
         if existing is not None:
             raise HTTPException(
                 status_code=409, detail="Submission already exists for this invitation"
+            )
+        # Bidder-impersonation guard: the bidder row referenced by the
+        # submission MUST belong to the same package as the invitation. A
+        # caller with manager access on project A who knows a bidder UUID
+        # on project B's package could otherwise forge a submission row
+        # linking project-A invitation -> project-B bidder snapshot. Use a
+        # 404 (not 403) for the leak-safe policy mandated by R5/R6.
+        inv_for_bidder = await self.invitation_repo.get_by_id(data.invitation_id)
+        if inv_for_bidder is None:
+            raise HTTPException(status_code=404, detail="Invitation not found")
+        bidder_row = await self.bidder_repo.get_by_id(data.bidder_id)
+        if bidder_row is None or bidder_row.package_id != inv_for_bidder.package_id:
+            raise HTTPException(
+                status_code=404,
+                detail="Bidder not found for this invitation's package",
             )
         sub = BidSubmission(
             invitation_id=data.invitation_id,
@@ -1011,7 +1028,7 @@ class BidManagementService:
     ) -> BidSubmission:
         sub = await self.submission_repo.get_by_id(submission_id)
         if sub is None:
-            raise HTTPException(status_code=404, detail="Submission not found")
+            raise HTTPException(status_code=404, detail=translate("errors.submission_not_found", locale=get_locale()))
         await self._assert_submission_mutable(submission_id)
         fields = data.model_dump(exclude_unset=True)
         if "total_amount" in fields and fields["total_amount"] is not None:
@@ -1025,7 +1042,7 @@ class BidManagementService:
     async def withdraw_submission(self, submission_id: uuid.UUID) -> BidSubmission:
         sub = await self.submission_repo.get_by_id(submission_id)
         if sub is None:
-            raise HTTPException(status_code=404, detail="Submission not found")
+            raise HTTPException(status_code=404, detail=translate("errors.submission_not_found", locale=get_locale()))
         sub.is_valid = False
         envelope = dict(sub.envelope_payload or {})
         envelope["withdrawn"] = True
@@ -1043,6 +1060,19 @@ class BidManagementService:
         self, data: BidSubmissionLineCreate
     ) -> BidSubmissionLine:
         await self._assert_submission_mutable(data.submission_id)
+        # Cross-package line-item guard: the line_item must belong to the
+        # same package as the submission. Otherwise a caller could price
+        # a project-B line_item against a project-A submission row,
+        # cross-polluting the leveling matrix.
+        sub_pkg = await self._package_for_submission(data.submission_id)
+        if sub_pkg is None:
+            raise HTTPException(status_code=404, detail="Submission not found")
+        line_item = await self.line_repo.get_by_id(data.line_item_id)
+        if line_item is None or line_item.package_id != sub_pkg.id:
+            raise HTTPException(
+                status_code=404,
+                detail="Line item not found for this submission's package",
+            )
         total_price = (_to_decimal(data.unit_price) * _to_decimal(data.quantity_priced))
         line = BidSubmissionLine(
             submission_id=data.submission_id,
@@ -1118,6 +1148,17 @@ class BidManagementService:
 
     async def create_qa(self, data: BidQACreate) -> BidQA:
         await self.get_package(data.package_id)
+        # Bidder consistency: when the Q&A is attributed to a bidder, that
+        # bidder row MUST belong to the same package — otherwise the Q&A
+        # board would attribute questions from project-B's bidder to
+        # project-A's package, breaking the audit trail.
+        if data.bidder_id is not None:
+            bidder_row = await self.bidder_repo.get_by_id(data.bidder_id)
+            if bidder_row is None or bidder_row.package_id != data.package_id:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Bidder not found for this package",
+                )
         qa = BidQA(
             package_id=data.package_id,
             bidder_id=data.bidder_id,
@@ -1303,6 +1344,16 @@ class BidManagementService:
 
     async def create_rejection(self, data: BidRejectionCreate) -> BidRejection:
         await self.get_package(data.package_id)
+        # Bidder-impersonation guard: the bidder being rejected must
+        # belong to the same package as the rejection. Without this, a
+        # manager on project A could file a rejection record naming a
+        # project-B bidder, polluting cross-tenant audit history.
+        bidder_row = await self.bidder_repo.get_by_id(data.bidder_id)
+        if bidder_row is None or bidder_row.package_id != data.package_id:
+            raise HTTPException(
+                status_code=404,
+                detail="Bidder not found for this package",
+            )
         rejection = BidRejection(
             package_id=data.package_id,
             bidder_id=data.bidder_id,
@@ -1327,7 +1378,7 @@ class BidManagementService:
     ) -> BidRejection:
         rejection = await self.rejection_repo.get_by_id(rejection_id)
         if rejection is None:
-            raise HTTPException(status_code=404, detail="Rejection not found")
+            raise HTTPException(status_code=404, detail=translate("errors.rejection_not_found", locale=get_locale()))
         fields = data.model_dump(exclude_unset=True)
         if not fields:
             return rejection
@@ -1338,7 +1389,7 @@ class BidManagementService:
     async def notify_rejection(self, rejection_id: uuid.UUID) -> BidRejection:
         rejection = await self.rejection_repo.get_by_id(rejection_id)
         if rejection is None:
-            raise HTTPException(status_code=404, detail="Rejection not found")
+            raise HTTPException(status_code=404, detail=translate("errors.rejection_not_found", locale=get_locale()))
         rejection.notified_at = _now_iso()
         await self.session.flush()
         return rejection
@@ -1722,6 +1773,16 @@ class BidManagementService:
         module can update the long-term bidder rating in its own table.
         """
         package = await self.get_package(package_id)
+        # Bidder-impersonation guard: the bidder being scored must belong
+        # to this package — otherwise a manager on project A could plant
+        # a score against project-B's subcontractor in project-A's
+        # metadata trail.
+        bidder_row = await self.bidder_repo.get_by_id(bidder_id)
+        if bidder_row is None or bidder_row.package_id != package_id:
+            raise HTTPException(
+                status_code=404,
+                detail="Bidder not found for this package",
+            )
         # The scorecard ranges 0..100 per pillar; the composite is the
         # straight average. Anything outside [0, 100] is clamped, then
         # quantized to 2 dp for deterministic persistence.

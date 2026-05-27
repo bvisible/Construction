@@ -23,6 +23,9 @@ import {
   Users,
 } from 'lucide-react';
 
+import { useConfirm } from '@/shared/hooks/useConfirm';
+import { ConfirmDialog } from '@/shared/ui/ConfirmDialog';
+
 import {
   useApplyView,
   useDeleteView,
@@ -58,6 +61,7 @@ export function SavedViewsRail({ projectId, onApply, compact = false }: SavedVie
 
   const [expanded, setExpanded] = useState(true);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const { confirm, ...confirmProps } = useConfirm();
 
   const views = useMemo<SavedViewResponse[]>(() => data?.items ?? [], [data]);
   const targetView = useMemo<SavedViewResponse | null>(
@@ -109,12 +113,17 @@ export function SavedViewsRail({ projectId, onApply, compact = false }: SavedVie
   };
 
   const handleDelete = async (view: SavedViewResponse) => {
-    const confirmed = window.confirm(
-      t('files.views.delete_confirm', {
+    const confirmed = await confirm({
+      title: t('files.views.delete_title', {
+        defaultValue: 'Delete saved view?',
+      }),
+      message: t('files.views.delete_confirm', {
         defaultValue: 'Delete saved view "{{name}}"?',
         name: view.name,
       }),
-    );
+      confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+      variant: 'danger',
+    });
     if (!confirmed) return;
     await deleteMut.mutateAsync(view.id);
     closeMenu();
@@ -252,6 +261,7 @@ export function SavedViewsRail({ projectId, onApply, compact = false }: SavedVie
           />
         </div>
       )}
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

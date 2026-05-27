@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { Card, Badge, Button, Input, InfoHint, Breadcrumb, ConfirmDialog } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useModuleStore } from '@/stores/useModuleStore';
@@ -82,7 +83,8 @@ interface CompanyPresetAPI {
 
 /* ── Tab definitions ───────────────────────────────────────────────────── */
 
-type TabKey = 'profiles' | 'data-packages' | 'system';
+const MODULE_TAB_IDS = ['profiles', 'data-packages', 'system'] as const;
+type TabKey = (typeof MODULE_TAB_IDS)[number];
 
 const TABS: { key: TabKey; labelKey: string; defaultLabel: string; icon: LucideIcon }[] = [
   { key: 'profiles', labelKey: 'modules.tab_profiles', defaultLabel: 'Company Profiles', icon: Users },
@@ -207,6 +209,12 @@ function getPresetIcon(iconName: string): LucideIcon {
 export function ModulesPage() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabKey>('profiles');
+  const onTabKeyDown = useTabKeyboardNav<TabKey>({
+    ids: MODULE_TAB_IDS,
+    activeId: activeTab,
+    onChange: setActiveTab,
+    orientation: 'horizontal',
+  });
 
   return (
     <div className="w-full animate-fade-in">
@@ -222,11 +230,11 @@ export function ModulesPage() {
       <div className="mb-6 animate-card-in flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-content-primary">
-            {t('modules.page_title', { defaultValue: 'Modules & Marketplace‌⁠‍' })}
+            {t('modules.page_title', { defaultValue: 'Modules & Marketplace' })}
           </h1>
           <p className="mt-1 text-sm text-content-secondary">
             {t('modules.page_subtitle', {
-              defaultValue: 'Manage your company profile, data packages, and system modules.‌⁠‍',
+              defaultValue: 'Manage your company profile, data packages, and system modules.',
             })}
           </p>
         </div>
@@ -234,16 +242,22 @@ export function ModulesPage() {
           to="/modules/developer-guide"
           className="inline-flex items-center gap-2 h-9 px-3 rounded-lg border border-oe-blue/30 bg-oe-blue/5 text-xs font-medium text-oe-blue hover:bg-oe-blue/10 hover:border-oe-blue/50 transition-colors shrink-0"
           title={t('modules.dev_guide_hint', {
-            defaultValue: 'Learn how to build your own module‌⁠‍',
+            defaultValue: 'Learn how to build your own module',
           })}
         >
           <Info size={14} />
-          {t('modules.dev_guide', { defaultValue: 'Build a module — developer guide‌⁠‍' })}
+          {t('modules.dev_guide', { defaultValue: 'Build a module — developer guide' })}
         </Link>
       </div>
 
       {/* Tab bar */}
-      <div className="mb-6 flex gap-1 rounded-lg bg-surface-secondary p-1 animate-card-in" role="tablist" aria-label={t('modules.tabs', { defaultValue: 'Module sections‌⁠‍' })} style={{ animationDelay: '30ms' }}>
+      <div
+        className="mb-6 flex gap-1 rounded-lg bg-surface-secondary p-1 animate-card-in"
+        role="tablist"
+        aria-label={t('modules.tabs', { defaultValue: 'Module sections' })}
+        onKeyDown={onTabKeyDown}
+        style={{ animationDelay: '30ms' }}
+      >
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.key;
@@ -252,7 +266,10 @@ export function ModulesPage() {
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
               role="tab"
+              id={`modules-tab-${tab.key}`}
               aria-selected={isActive}
+              aria-controls={`modules-panel-${tab.key}`}
+              tabIndex={isActive ? 0 : -1}
               className={clsx(
                 'flex-1 inline-flex items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-all duration-fast',
                 isActive
@@ -268,9 +285,15 @@ export function ModulesPage() {
       </div>
 
       {/* Tab content */}
-      {activeTab === 'profiles' && <CompanyProfilesTab />}
-      {activeTab === 'data-packages' && <DataPackagesTab />}
-      {activeTab === 'system' && <SystemModulesTab />}
+      <div
+        role="tabpanel"
+        id={`modules-panel-${activeTab}`}
+        aria-labelledby={`modules-tab-${activeTab}`}
+      >
+        {activeTab === 'profiles' && <CompanyProfilesTab />}
+        {activeTab === 'data-packages' && <DataPackagesTab />}
+        {activeTab === 'system' && <SystemModulesTab />}
+      </div>
     </div>
   );
 }

@@ -78,6 +78,7 @@ def _to_response(
         file_kind=comment.file_kind,
         file_id=comment.file_id,
         file_version_snapshot=comment.file_version_snapshot,
+        file_version_id=comment.file_version_id,
         parent_id=comment.parent_id,
         author_id=comment.author_id,
         body=comment.body,
@@ -238,11 +239,45 @@ async def create_comment(
                 "Parent comment belongs to a different file"
             )
 
+    # Epic C — default ``file_version_id`` to the chain head when the
+    # caller hasn't pinned one explicitly. Best-effort: a missing chain
+    # head leaves the FK NULL (legacy behaviour, treated as "current"
+    # in the viewer).
+    file_version_id = payload.file_version_id
+    if file_version_id is None:
+        try:
+            from app.modules.file_versions.repository import FileVersionRepository
+
+            # Reuse the seed-lookup helper to find the chain via
+            # (file_id, file_kind) so we don't need the canonical_name
+            # at the comment site. The newest current row in that
+            # chain is the right pin.
+            repo = FileVersionRepository(session)
+            seeds = await repo.list_for_file_id(payload.file_id, payload.file_kind)
+            if seeds:
+                # ``list_chain`` is the authoritative lookup — it
+                # follows the canonical_name even if the seed id
+                # itself is not the current row.
+                chain = await repo.list_chain(
+                    project_id=seeds[0].project_id,
+                    file_kind=seeds[0].file_kind,
+                    canonical_name=seeds[0].canonical_name,
+                )
+                current = next((r for r in chain if r.is_current), None)
+                if current is not None:
+                    file_version_id = current.id
+        except Exception:
+            logger.debug(
+                "Failed to default file_version_id for new comment; leaving NULL",
+                exc_info=True,
+            )
+
     comment = FileComment(
         project_id=payload.project_id,
         file_kind=payload.file_kind,
         file_id=payload.file_id,
         file_version_snapshot=payload.file_version_snapshot,
+        file_version_id=file_version_id,
         parent_id=payload.parent_id,
         author_id=author_id,
         body=payload.body,
@@ -254,7 +289,32 @@ async def create_comment(
     await session.flush()
 
     mentions = await _extract_and_persist_mentions(
-        session, comment.id, comment.body, exclude_user_id=author_id
+        session,
+        comment.id,
+        comment.body,
+        exclude_user_id=author_id,
+        comment=comment,
+    )
+
+    # Epic H — universal audit trail.
+    from app.core.audit_log import log_activity as _log_activity
+
+    await _log_activity(
+        session,
+        actor_id=str(author_id),
+        entity_type="file_comment",
+        entity_id=str(comment.id),
+        action="created",
+        metadata={
+            "file_kind": payload.file_kind,
+            "file_id": str(payload.file_id),
+            "mention_count": len(mentions),
+            "is_reply": payload.parent_id is not None,
+        },
+        module="file_comments",
+        parent_entity_type="project",
+        parent_entity_id=str(payload.project_id),
+        after_state={"body_len": len(payload.body or "")},
     )
     return comment, mentions
 
@@ -265,11 +325,19 @@ async def _extract_and_persist_mentions(
     body: str,
     *,
     exclude_user_id: uuid.UUID | None = None,
+    comment: FileComment | None = None,
 ) -> list[FileCommentMention]:
     """Find ``@handle`` tokens, resolve them, write mention rows.
 
     Self-mentions are dropped so the author does not see their own
     note in the unread-mentions inbox.
+
+    Epic B / B1: after persisting mention rows we publish a detached
+    ``file_comments.mention.created`` event per resolved user so the
+    Notifications module can fan an in-app / email / webhook
+    notification out to the mentioned user.  Publishing is detached
+    (asyncio.create_task) so a misbehaving subscriber never blocks the
+    upstream comment insert.
     """
     handles_raw = _MENTION_RE.findall(body)
     if not handles_raw:
@@ -310,6 +378,41 @@ async def _extract_and_persist_mentions(
         rows.append(row)
     if rows:
         await session.flush()
+
+    # Best-effort bridge to the Notifications module (Epic B / B1).
+    # We publish detached so the comment insert is never blocked by a
+    # downstream subscriber, and the comment context lookup is cheap
+    # because the row is already in scope.
+    if rows:
+        try:
+            from app.core.events import event_bus
+
+            ctx_comment = comment
+            if ctx_comment is None:
+                ctx_comment = (
+                    await session.execute(
+                        select(FileComment).where(FileComment.id == comment_id)
+                    )
+                ).scalar_one_or_none()
+            for row in rows:
+                event_bus.publish_detached(
+                    "file_comments.mention.created",
+                    {
+                        "comment_id": str(comment_id),
+                        "mention_id": str(row.id),
+                        "mentioned_user_id": str(row.mentioned_user_id),
+                        "author_id": str(exclude_user_id) if exclude_user_id else None,
+                        "project_id": (
+                            str(ctx_comment.project_id) if ctx_comment else None
+                        ),
+                        "file_kind": ctx_comment.file_kind if ctx_comment else None,
+                        "file_id": ctx_comment.file_id if ctx_comment else None,
+                        "body_excerpt": (body or "")[:160],
+                    },
+                    source_module="oe_file_comments",
+                )
+        except Exception:  # noqa: BLE001 — event publish must never break the comment insert
+            logger.debug("file_comments: mention event publish failed", exc_info=True)
     return rows
 
 
@@ -366,6 +469,7 @@ async def update_comment(
             comment_id,
             comment.body,
             exclude_user_id=comment.author_id,
+            comment=comment,
         )
 
     mention_stmt = select(FileCommentMention).where(
@@ -403,6 +507,21 @@ async def soft_delete_comment(
         )
     )
     await session.flush()
+
+    # Epic H — universal audit trail.
+    from app.core.audit_log import log_activity as _log_activity
+
+    await _log_activity(
+        session,
+        actor_id=str(actor_id),
+        entity_type="file_comment",
+        entity_id=str(comment_id),
+        action="deleted",
+        reason="Soft delete by author",
+        module="file_comments",
+        parent_entity_type="project",
+        parent_entity_id=str(comment.project_id),
+    )
     return True
 
 

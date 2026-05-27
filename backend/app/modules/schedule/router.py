@@ -34,6 +34,8 @@ from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep, verify_project_access
 from app.modules.schedule.schemas import (
     ActivityBimLinkRequest,
@@ -78,19 +80,16 @@ async def _verify_schedule_project_owner(
     session: SessionDep,
     project_id: uuid.UUID,
     user_id: str,
-    payload: dict | None = None,
+    payload: dict | None = None,  # noqa: ARG001 — kept for API compat; verify_project_access reads role from DB
 ) -> None:
-    """‌⁠‍Verify the current user owns the project. Admins bypass."""
-    if payload and payload.get("role") == "admin":
-        return
-    from app.modules.projects.repository import ProjectRepository
+    """‌⁠‍Verify the current user owns the project. Admins bypass.
 
-    project_repo = ProjectRepository(session)
-    project = await project_repo.get_by_id(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if str(project.owner_id) != user_id:
-        raise HTTPException(status_code=403, detail="You do not have access to this project")
+    Returns HTTP 404 on both "project missing" and "access denied" so the
+    endpoint can't be turned into a UUID-existence oracle — matches the
+    convention used by ``verify_project_access`` everywhere else in the
+    codebase.
+    """
+    await verify_project_access(project_id, user_id, session)
 
 
 async def _verify_schedule_owner(
@@ -98,20 +97,16 @@ async def _verify_schedule_owner(
     session: SessionDep,
     schedule_id: uuid.UUID,
     user_id: str,
-    payload: dict | None = None,
+    payload: dict | None = None,  # noqa: ARG001 — kept for API compat
 ) -> object:
-    """‌⁠‍Load a schedule and verify the user owns its project. Admins bypass."""
-    if payload and payload.get("role") == "admin":
-        return await service.get_schedule(schedule_id)
-    schedule = await service.get_schedule(schedule_id)
-    from app.modules.projects.repository import ProjectRepository
+    """‌⁠‍Load a schedule and verify the user owns its project. Admins bypass.
 
-    project_repo = ProjectRepository(session)
-    project = await project_repo.get_by_id(schedule.project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if str(project.owner_id) != user_id:
-        raise HTTPException(status_code=403, detail="You do not have access to this schedule")
+    Returns HTTP 404 on cross-tenant access (existence-oracle safe) so the
+    schedule_id can't be enumerated by a foreign tenant. Matches the
+    platform-wide convention enforced by ``verify_project_access``.
+    """
+    schedule = await service.get_schedule(schedule_id)
+    await verify_project_access(schedule.project_id, user_id, session)
     return schedule
 
 
@@ -788,15 +783,41 @@ async def list_relationships(
     _user_id: CurrentUserId,
     payload: CurrentUserPayload,
     service: ScheduleService = Depends(_get_service),
+    limit: int = Query(
+        default=200,
+        ge=1,
+        le=500,
+        description=(
+            "Maximum number of relationships to return. Default 200 covers "
+            "the vast majority of project schedules; the hard cap of 500 "
+            "protects the request from blowing memory + serialisation cost "
+            "on pathological imports (some MPP files carry 5k+ dependency "
+            "rows). For full CPM analysis use ``/cpm`` which intentionally "
+            "fetches every relationship server-side without sending them "
+            "over the wire."
+        ),
+    ),
 ) -> list[RelationshipResponse]:
-    """List all CPM relationships for a schedule."""
+    """List CPM relationships for a schedule (capped, paginated by limit).
+
+    Previously fetched every relationship without bound — a schedule with
+    a few thousand dependency rows (typical from large MS Project / P6
+    imports) would dump 10+ MB JSON on a UI grid that only renders the
+    first hundred. Capped at ``limit`` (default 200, max 500) and
+    deterministically ordered by ``created_at`` so pagination is stable.
+    Callers that need the full set should iterate via the dedicated
+    ``/cpm`` endpoint which keeps the data server-side.
+    """
     await _verify_schedule_owner(service, session, schedule_id, _user_id, payload)
     from sqlalchemy import select
 
     from app.modules.schedule.models import ScheduleRelationship
 
-    stmt = select(ScheduleRelationship).where(
-        ScheduleRelationship.schedule_id == schedule_id
+    stmt = (
+        select(ScheduleRelationship)
+        .where(ScheduleRelationship.schedule_id == schedule_id)
+        .order_by(ScheduleRelationship.created_at.asc(), ScheduleRelationship.id.asc())
+        .limit(limit)
     )
     result = await session.execute(stmt)
     rels = list(result.scalars().all())
@@ -1084,7 +1105,7 @@ async def get_baseline(
 
     baseline = await session.get(ScheduleBaseline, baseline_id)
     if baseline is None:
-        raise HTTPException(status_code=404, detail="Baseline not found")
+        raise HTTPException(status_code=404, detail=translate("errors.baseline_not_found", locale=get_locale()))
     await verify_project_access(baseline.project_id, _user_id, session)
     return BaselineResponse.model_validate(baseline)
 
@@ -1116,7 +1137,7 @@ async def update_baseline(
 
     baseline = await session.get(ScheduleBaseline, baseline_id)
     if baseline is None:
-        raise HTTPException(status_code=404, detail="Baseline not found")
+        raise HTTPException(status_code=404, detail=translate("errors.baseline_not_found", locale=get_locale()))
     await verify_project_access(baseline.project_id, _user_id, session)
 
     updates = data.model_dump(exclude_unset=True)
@@ -1149,7 +1170,7 @@ async def delete_baseline(
 
     baseline = await session.get(ScheduleBaseline, baseline_id)
     if baseline is None:
-        raise HTTPException(status_code=404, detail="Baseline not found")
+        raise HTTPException(status_code=404, detail=translate("errors.baseline_not_found", locale=get_locale()))
     await verify_project_access(baseline.project_id, _user_id, session)
     await session.delete(baseline)
     await session.flush()
@@ -2078,10 +2099,28 @@ async def critical_path_activities(
         select(Activity)
         .where(Activity.schedule_id.in_(schedule_ids))
         .where(Activity.is_critical == True)  # noqa: E712
-        .order_by(Activity.early_start, Activity.sort_order)
+        .order_by(Activity.sort_order)
     )
     act_result = await session.execute(act_stmt)
     activities = list(act_result.scalars().all())
+
+    # ``Activity.early_start`` is a ``String(20)`` column populated by the CPM
+    # engine with integer day-offsets stringified (``"0"``, ``"1"``, ``"10"``,
+    # ``"2"`` …). A plain SQL ``ORDER BY early_start`` does a lexicographic
+    # sort and would produce ``"0" < "1" < "10" < "2"`` — wrong for any
+    # project with >9 critical activities. Sort in Python with safe integer
+    # coercion (legacy rows may also hold ISO dates or empty strings; both
+    # fall through to a large sentinel so they sort last but remain stable).
+    def _es_key(a: Activity) -> tuple[int, int]:
+        raw = getattr(a, "early_start", None)
+        try:
+            return (int(str(raw)), int(getattr(a, "sort_order", 0) or 0))
+        except (TypeError, ValueError):
+            # Non-numeric (ISO date string, None, ""): push to the end while
+            # preserving sort_order tiebreak.
+            return (2**31 - 1, int(getattr(a, "sort_order", 0) or 0))
+
+    activities.sort(key=_es_key)
 
     return [_activity_to_response(a) for a in activities]
 

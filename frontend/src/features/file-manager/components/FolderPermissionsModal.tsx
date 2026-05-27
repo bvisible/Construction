@@ -24,6 +24,8 @@ import {
 import clsx from 'clsx';
 import { useToastStore } from '@/stores/useToastStore';
 import { apiGet } from '@/shared/lib/api';
+import { useConfirm } from '@/shared/hooks/useConfirm';
+import { ConfirmDialog } from '@/shared/ui/ConfirmDialog';
 import {
   grantFolderPermission,
   listFolderPermissions,
@@ -88,6 +90,7 @@ export function FolderPermissionsModal({
   const [granting, setGranting] = useState(false);
   const [grantError, setGrantError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const { confirm, ...confirmProps } = useConfirm();
 
   // Permissions for this exact (kind, path).
   const { data: grants = [], isLoading: grantsLoading } = useQuery<
@@ -175,7 +178,7 @@ export function FolderPermissionsModal({
       invalidate();
       addToast({
         type: 'success',
-        title: t('files.permissions.grant', { defaultValue: 'Grant access‌⁠‍' }),
+        title: t('files.permissions.grant', { defaultValue: 'Grant access' }),
       });
     } catch (e) {
       const msg = (e as Error).message;
@@ -183,10 +186,10 @@ export function FolderPermissionsModal({
       const isDuplicate = /409|already/i.test(msg);
       const friendly = isDuplicate
         ? t('files.permissions.error_duplicate', {
-            defaultValue: 'This member already has access at this level.‌⁠‍',
+            defaultValue: 'This member already has access at this level.',
           })
         : t('files.permissions.error_grant', {
-            defaultValue: 'Could not grant access.‌⁠‍',
+            defaultValue: 'Could not grant access.',
           });
       setGrantError(friendly);
     } finally {
@@ -197,13 +200,18 @@ export function FolderPermissionsModal({
   async function handleRevoke(row: FolderPermissionRow) {
     if (!projectId) return;
     const name = row.user_full_name || row.user_email || row.user_id;
-    const confirm = window.confirm(
-      t('files.permissions.revoke_confirm', {
-        defaultValue: 'Revoke access for {{name}}?‌⁠‍',
+    const ok = await confirm({
+      title: t('files.permissions.revoke_title', {
+        defaultValue: 'Revoke access?',
+      }),
+      message: t('files.permissions.revoke_confirm', {
+        defaultValue: 'Revoke access for {{name}}?',
         name,
       }),
-    );
-    if (!confirm) return;
+      confirmLabel: t('files.permissions.revoke', { defaultValue: 'Revoke' }),
+      variant: 'danger',
+    });
+    if (!ok) return;
     setRevokingId(row.id);
     try {
       await revokeFolderPermission(projectId, row.id);
@@ -212,7 +220,7 @@ export function FolderPermissionsModal({
       addToast({
         type: 'error',
         title: t('files.permissions.error_revoke', {
-          defaultValue: 'Could not revoke access.‌⁠‍',
+          defaultValue: 'Could not revoke access.',
         }),
       });
     } finally {
@@ -233,7 +241,7 @@ export function FolderPermissionsModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-2xl bg-surface-elevated shadow-2xl border border-border-light"
+        className="w-full max-w-lg rounded-xl bg-surface-elevated shadow-2xl border border-border-light"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-3 border-b border-border-light px-6 py-4">
@@ -406,6 +414,7 @@ export function FolderPermissionsModal({
           </section>
         </div>
       </div>
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

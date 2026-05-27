@@ -19,6 +19,7 @@ import {
   XCircle,
   AlertTriangle,
   Clock,
+  Globe2,
 } from 'lucide-react';
 import {
   Button,
@@ -26,11 +27,14 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   ConfirmDialog,
   WideModal,
   WideModalSection,
   WideModalField,
+  SkeletonTable,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { SectionIntro } from '@/features/validation';
 import { apiGet } from '@/shared/lib/api';
@@ -160,22 +164,22 @@ function StatsCards({ summary }: { summary: PunchSummary | undefined }) {
       cls: 'text-semantic-error',
     },
     {
-      label: t('punch.stat_in_progress', { defaultValue: 'In Progress‌⁠‍' }),
+      label: t('punch.stat_in_progress', { defaultValue: 'In Progress' }),
       value: byStatus['in_progress'] ?? 0,
       cls: 'text-amber-700 dark:text-amber-400',
     },
     {
-      label: t('punch.stat_resolved', { defaultValue: 'Resolved‌⁠‍' }),
+      label: t('punch.stat_resolved', { defaultValue: 'Resolved' }),
       value: byStatus['resolved'] ?? 0,
       cls: 'text-oe-blue',
     },
     {
-      label: t('punch.stat_overdue', { defaultValue: 'Overdue‌⁠‍' }),
+      label: t('punch.stat_overdue', { defaultValue: 'Overdue' }),
       value: overdue,
       cls: overdue > 0 ? 'text-semantic-error' : 'text-content-primary',
     },
     {
-      label: t('punch.stat_avg_close', { defaultValue: 'Avg Days to Close‌⁠‍' }),
+      label: t('punch.stat_avg_close', { defaultValue: 'Avg Days to Close' }),
       value: avgDays != null ? `${avgDays}d` : '-',
       cls: 'text-content-primary',
     },
@@ -659,7 +663,7 @@ export function PunchListPage() {
 
   const projectId = activeProjectId || projects[0]?.id || '';
 
-  const { data: punchItems = [], isLoading } = useQuery({
+  const { data: punchItems = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['punchlist', projectId, filterPriority, filterStatus, filterCategory, filterAssignee],
     queryFn: () =>
       fetchPunchItems(projectId, {
@@ -905,6 +909,19 @@ export function PunchListPage() {
               ))}
             </select>
           )}
+          {projectId && (
+            <button
+              type="button"
+              onClick={() => navigate(`/projects/${projectId}/geo`)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border-light bg-surface-primary px-2.5 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-oe-blue focus:outline-none focus:ring-2 focus:ring-oe-blue/40 shrink-0 whitespace-nowrap"
+              title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+              aria-label={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+              data-testid="punchlist-view-on-map"
+            >
+              <Globe2 size={13} />
+              {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+            </button>
+          )}
           <Button variant="primary" size="sm" onClick={() => setShowAddModal(true)} disabled={!projectId} className="shrink-0 whitespace-nowrap" icon={<Plus size={14} />}>
             {t('punch.new_item', { defaultValue: 'New Item' })}
           </Button>
@@ -1092,18 +1109,16 @@ export function PunchListPage() {
       {/* Content */}
       <div className="mt-6">
         {!projectId ? (
-          <EmptyState
-            icon={<ListChecks size={28} strokeWidth={1.5} />}
-            title={t('punch.no_project_title', { defaultValue: 'No project selected' })}
-            description={t('punch.no_project_desc', {
+          <RequiresProject
+            emptyHint={t('punch.no_project_desc', {
               defaultValue:
                 'Select a project from the dropdown above to view and manage punch list items.',
             })}
-          />
+          >{null}</RequiresProject>
         ) : isLoading ? (
-          <div className="flex items-center justify-center py-16">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" />
-          </div>
+          <SkeletonTable rows={6} columns={5} />
+        ) : isError ? (
+          <RecoveryCard error={error} onRetry={() => refetch()} />
         ) : filteredItems.length === 0 ? (
           <EmptyState
             icon={<ListChecks size={28} strokeWidth={1.5} />}

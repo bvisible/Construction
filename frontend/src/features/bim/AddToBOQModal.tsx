@@ -299,9 +299,9 @@ export default function AddToBOQModal({
     onSuccess: (count) => {
       addToast({
         type: 'success',
-        title: t('bim.link_success_title', { defaultValue: 'Linked‌⁠‍' }),
+        title: t('bim.link_success_title', { defaultValue: 'Linked' }),
         message: t('bim.link_success', {
-          defaultValue: 'Linked {{count}} element(s) to BOQ position‌⁠‍',
+          defaultValue: 'Linked {{count}} element(s) to BOQ position',
           count,
         }),
       });
@@ -312,7 +312,7 @@ export default function AddToBOQModal({
     onError: (err: Error) => {
       addToast({
         type: 'error',
-        title: t('common.error', { defaultValue: 'Error' }),
+        title: t('common.error'),
         message: err.message || String(err),
       });
     },
@@ -358,9 +358,9 @@ export default function AddToBOQModal({
     onSuccess: ({ linkCount }) => {
       addToast({
         type: 'success',
-        title: t('bim.link_created_new_title', { defaultValue: 'Position created‌⁠‍' }),
+        title: t('bim.link_created_new_title', { defaultValue: 'Position created' }),
         message: t('bim.link_created_new', {
-          defaultValue: 'Created BOQ position and linked {{count}} element(s)‌⁠‍',
+          defaultValue: 'Created BOQ position and linked {{count}} element(s)',
           count: linkCount,
         }),
       });
@@ -373,7 +373,7 @@ export default function AddToBOQModal({
     onError: (err: Error) => {
       addToast({
         type: 'error',
-        title: t('common.error', { defaultValue: 'Error' }),
+        title: t('common.error'),
         message: err.message || String(err),
       });
     },
@@ -397,7 +397,7 @@ export default function AddToBOQModal({
           <div className="flex items-center gap-2">
             <Link2 size={16} className="text-oe-blue" />
             <h2 className="text-sm font-semibold text-content-primary">
-              {t('bim.add_to_boq_title', { defaultValue: 'Add to BOQ‌⁠‍' })}
+              {t('bim.add_to_boq_title', { defaultValue: 'Add to BOQ' })}
             </h2>
             <span className="text-[11px] text-content-tertiary">
               {elements.length === 1
@@ -547,7 +547,7 @@ export default function AddToBOQModal({
 
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <Label>{t('bim.form_ordinal', { defaultValue: 'Ordinal' })}</Label>
+                  <Label>{t('common.ordinal')}</Label>
                   <input
                     type="text"
                     value={ordinal}

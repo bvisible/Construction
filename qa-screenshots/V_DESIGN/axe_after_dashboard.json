@@ -1,0 +1,106 @@
+{
+  "route": "/dashboard",
+  "totalViolations": 17,
+  "buttonName": 0,
+  "colorContrast": 17,
+  "bySeverity": {
+    "critical": 0,
+    "serious": 17,
+    "moderate": 0,
+    "minor": 0
+  },
+  "ruleSummary": [
+    {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodeCount": 17
+    }
+  ],
+  "colorContrastNodes": [
+    {
+      "target": ".from-surface-elevated.rounded-2xl.bg-gradient-to-b:nth-child(1) > .p-3\\.5 > .mt-2.flex-wrap.gap-1 > .border-oe-blue\\/20.bg-oe-blue-subtle.py-0\\.5",
+      "html": "<span class=\"inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-1.5 py-0.5 text-2xs font-medium text-oe-blue\">",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".from-surface-elevated.rounded-2xl.bg-gradient-to-b:nth-child(2) > .p-3\\.5 > .mt-2.flex-wrap.gap-1 > .border-oe-blue\\/20.bg-oe-blue-subtle.py-0\\.5",
+      "html": "<span class=\"inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-1.5 py-0.5 text-2xs font-medium text-oe-blue\">",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".from-surface-elevated.rounded-2xl.bg-gradient-to-b:nth-child(3) > .p-3\\.5 > .mt-2.flex-wrap.gap-1 > .border-oe-blue\\/20.bg-oe-blue-subtle.py-0\\.5",
+      "html": "<span class=\"inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-1.5 py-0.5 text-2xs font-medium text-oe-blue\">",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".from-surface-elevated.rounded-2xl.bg-gradient-to-b:nth-child(4) > .p-3\\.5 > .mt-2.flex-wrap.gap-1 > .border-oe-blue\\/20.bg-oe-blue-subtle.py-0\\.5",
+      "html": "<span class=\"inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-1.5 py-0.5 text-2xs font-medium text-oe-blue\">",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".from-surface-elevated.rounded-2xl.bg-gradient-to-b:nth-child(5) > .p-3\\.5 > .mt-2.flex-wrap.gap-1 > .border-oe-blue\\/20.bg-oe-blue-subtle.py-0\\.5",
+      "html": "<span class=\"inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-1.5 py-0.5 text-2xs font-medium text-oe-blue\">",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".from-surface-elevated.rounded-2xl.bg-gradient-to-b:nth-child(6) > .p-3\\.5 > .mt-2.flex-wrap.gap-1 > .border-oe-blue\\/20.bg-oe-blue-subtle.py-0\\.5",
+      "html": "<span class=\"inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-1.5 py-0.5 text-2xs font-medium text-oe-blue\">",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".from-surface-elevated.rounded-2xl.bg-gradient-to-b:nth-child(7) > .p-3\\.5 > .mt-2.flex-wrap.gap-1 > .border-oe-blue\\/20.bg-oe-blue-subtle.py-0\\.5",
+      "html": "<span class=\"inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-1.5 py-0.5 text-2xs font-medium text-oe-blue\">",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".py-5 > .flex-1.min-w-0 > .text-sm.font-semibold.text-content-primary",
+      "html": "<div class=\"text-sm font-semibold text-content-primary\">Drop files here</div>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.46 (foreground color: #777779, background color: #ffffff, font size: 9.8pt (13px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".line-clamp-1.mt-0\\.5",
+      "html": "<p class=\"mt-0.5 text-xs text-content-tertiary line-clamp-1\">Select an active project to upload files.</p>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.43 (foreground color: #a3a6ae, background color: #ffffff, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".gap-3.flex.items-center > .animate-scale-in.bg-oe-blue-subtle.h-5",
+      "html": "<span class=\"inline-flex items-center rounded-full font-medium whitespace-nowrap animate-scale-in transition-colors duration-fast ease-oe bg-oe-blue-subtle text",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 4.15 (foreground color: #0071e3, background color: #e8f2fe, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".animate-card-in:nth-child(1) > .opacity-75.hover\\:border-border.hover\\:-translate-y-0\\.5 > .p-5.flex-col.flex-1 > .mt-1\\.5.leading-relaxed.flex-1",
+      "html": "<p class=\"mt-1.5 flex-1 text-xs leading-relaxed text-content-tertiary\">Import regional pricing data with 55,000+ items</p>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.19 (foreground color: #8c909a, background color: #ffffff, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".animate-card-in:nth-child(4) > .opacity-75.hover\\:border-border.hover\\:-translate-y-0\\.5 > .p-5.flex-col.flex-1 > .mt-1\\.5.leading-relaxed.flex-1",
+      "html": "<p class=\"mt-1.5 flex-1 text-xs leading-relaxed text-content-tertiary\">Start your first construction estimation project</p>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.19 (foreground color: #8c909a, background color: #ffffff, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".animate-card-in:nth-child(5) > .opacity-75.hover\\:border-border.hover\\:-translate-y-0\\.5 > .p-5.flex-col.flex-1 > .mt-1\\.5.leading-relaxed.flex-1",
+      "html": "<p class=\"mt-1.5 flex-1 text-xs leading-relaxed text-content-tertiary\">Create a Bill of Quantities with AI assistance</p>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.19 (foreground color: #8c909a, background color: #ffffff, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".animate-card-in:nth-child(6) > .opacity-75.hover\\:border-border.hover\\:-translate-y-0\\.5 > .p-5.flex-col.flex-1 > .mt-1\\.5.leading-relaxed.flex-1",
+      "html": "<p class=\"mt-1.5 flex-1 text-xs leading-relaxed text-content-tertiary\">Add quantities and unit rates to your BOQ positions</p>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.19 (foreground color: #8c909a, background color: #ffffff, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".py-2:nth-child(1) > .bg-semantic-error-bg.text-semantic-error.animate-scale-in",
+      "html": "<span class=\"inline-flex items-center rounded-full font-medium whitespace-nowrap animate-scale-in transition-colors duration-fast ease-oe bg-semantic-error-bg t",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.24 (foreground color: #ff3b30, background color: #fef2f2, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".py-2:nth-child(2) > .bg-semantic-error-bg.text-semantic-error.animate-scale-in",
+      "html": "<span class=\"inline-flex items-center rounded-full font-medium whitespace-nowrap animate-scale-in transition-colors duration-fast ease-oe bg-semantic-error-bg t",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.24 (foreground color: #ff3b30, background color: #fef2f2, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".py-2:nth-child(3) > .bg-semantic-error-bg.text-semantic-error.animate-scale-in",
+      "html": "<span class=\"inline-flex items-center rounded-full font-medium whitespace-nowrap animate-scale-in transition-colors duration-fast ease-oe bg-semantic-error-bg t",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.24 (foreground color: #ff3b30, background color: #fef2f2, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    }
+  ]
+}

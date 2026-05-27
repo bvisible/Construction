@@ -206,7 +206,8 @@ async def test_dashboard_returns_200_with_zero_when_empty(
     assert body["federations"]["count"] == 0
     assert body["clashes"]["open_count"] == 0
     assert body["clashes"]["resolved_count"] == 0
-    assert body["open_cost_impact_total"] == 0.0
+    # v3 §10 — money is Decimal-as-string on the JSON wire.
+    assert body["open_cost_impact_total"] == "0"
 
 
 @pytest.mark.asyncio

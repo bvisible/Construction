@@ -157,6 +157,12 @@ class _StubPhotoRepo(_BaseStubRepo):
         rows = [r for r in self.rows.values() if r.project_id == project_id]
         return rows[offset: offset + limit], len(rows)
 
+    async def photos_for_diary(self, diary_id: uuid.UUID) -> list[Any]:
+        return [
+            r for r in self.rows.values()
+            if getattr(r, "diary_id", None) == diary_id
+        ]
+
 
 class _StubSignatureRepo(_BaseStubRepo):
     async def signatures_for_diary(self, diary_id: uuid.UUID) -> list[Any]:
@@ -648,6 +654,53 @@ async def test_create_today_diary_allowed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_immutable_hash_scoped_to_diary_photos_only() -> None:
+    """Photos belonging to a SIBLING diary in the same project must NOT
+    influence the immutable hash of the diary under inspection.
+
+    Regression: previously the service loaded every photo in the entire
+    project and filtered by ``diary_id`` in Python — fine for correctness
+    but expensive at scale. The new code path uses an indexed
+    ``photos_for_diary`` repo method; this test confirms the scoping is
+    preserved.
+    """
+    svc = _make_service()
+    diary_a = await svc.create_diary(
+        _diary_payload(diary_date="2026-04-09"), user_id="u",
+    )
+    diary_b = await svc.create_diary(
+        _diary_payload(diary_date="2026-04-10"), user_id="u",
+    )
+
+    # Attach one photo to each diary; both share the same project.
+    photo_a = SimpleNamespace(
+        id=uuid.uuid4(),
+        project_id=PROJECT_ID,
+        diary_id=diary_a.id,
+        taken_at=datetime(2026, 4, 9, 12, tzinfo=UTC),
+        lat=52.0, lng=13.0,
+        file_url="http://x/a.jpg", mime_type="image/jpeg",
+        is_360=False, is_drone=False,
+    )
+    photo_b = SimpleNamespace(
+        id=uuid.uuid4(),
+        project_id=PROJECT_ID,
+        diary_id=diary_b.id,
+        taken_at=datetime(2026, 4, 10, 12, tzinfo=UTC),
+        lat=52.0, lng=13.0,
+        file_url="http://x/b.jpg", mime_type="image/jpeg",
+        is_360=False, is_drone=False,
+    )
+    svc.photo_repo.rows[photo_a.id] = photo_a
+    svc.photo_repo.rows[photo_b.id] = photo_b
+
+    hash_b = await svc.immutable_payload_hash(diary_b.id)
+    assert hash_b["payload_preview"]["photos_count"] == 1, (
+        "diary B's hash must include only its own photo, not photo A"
+    )
+
+
+@pytest.mark.asyncio
 async def test_archive_unsigned_diary_rejected() -> None:
     """Archiving must require a signed diary so the snapshot is sealed."""
     svc = _make_service()
@@ -1056,6 +1109,225 @@ def test_extract_exif_gps_non_image_returns_none() -> None:
     assert extract_exif_gps(b"not an image, just text") is None
 
 
+# ── Photo / video MIME and size enforcement ──────────────────────────────
+
+
+def test_photo_create_rejects_svg_mime() -> None:
+    """SVG is renderable as inline HTML — must never reach diary photos."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DiaryPhotoCreate(
+            project_id=PROJECT_ID,
+            taken_at=datetime(2026, 4, 10, 12, tzinfo=UTC),
+            file_url="http://x/a.svg",
+            mime_type="image/svg+xml",
+        )
+
+
+def test_photo_create_rejects_text_html_mime() -> None:
+    """Client-declared text/html MUST be rejected at the schema layer."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DiaryPhotoCreate(
+            project_id=PROJECT_ID,
+            taken_at=datetime(2026, 4, 10, 12, tzinfo=UTC),
+            file_url="http://x/a.html",
+            mime_type="text/html",
+        )
+
+
+def test_photo_create_rejects_oversize_file_bytes() -> None:
+    """A 5 GB photo is nonsense — cap is 200 MB."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DiaryPhotoCreate(
+            project_id=PROJECT_ID,
+            taken_at=datetime(2026, 4, 10, 12, tzinfo=UTC),
+            file_url="http://x/a.jpg",
+            file_size_bytes=5 * 1024 * 1024 * 1024,  # 5 GB
+        )
+
+
+def test_video_create_rejects_non_video_mime() -> None:
+    """A claimed ``text/html`` video MUST be rejected at the schema layer."""
+    from pydantic import ValidationError
+
+    from app.modules.daily_diary.schemas import DiaryVideoCreate
+
+    with pytest.raises(ValidationError):
+        DiaryVideoCreate(
+            project_id=PROJECT_ID,
+            recorded_at=datetime(2026, 4, 10, 12, tzinfo=UTC),
+            file_url="http://x/a.mp4",
+            mime_type="text/html",  # not a video MIME
+        )
+
+
+def test_video_create_accepts_mp4_mime() -> None:
+    """Sanity-check the video allow-list."""
+    from app.modules.daily_diary.schemas import DiaryVideoCreate
+
+    obj = DiaryVideoCreate(
+        project_id=PROJECT_ID,
+        recorded_at=datetime(2026, 4, 10, 12, tzinfo=UTC),
+        file_url="http://x/a.mp4",
+        mime_type="video/mp4",
+    )
+    assert obj.mime_type == "video/mp4"
+
+
+def test_video_create_rejects_implausible_duration() -> None:
+    """30-day duration is almost certainly a unit-conversion mistake."""
+    from pydantic import ValidationError
+
+    from app.modules.daily_diary.schemas import DiaryVideoCreate
+
+    with pytest.raises(ValidationError):
+        DiaryVideoCreate(
+            project_id=PROJECT_ID,
+            recorded_at=datetime(2026, 4, 10, 12, tzinfo=UTC),
+            file_url="http://x/a.mp4",
+            duration_seconds=30 * 24 * 3600,
+        )
+
+
+def test_exif_gps_endpoint_magic_byte_rejects_svg() -> None:
+    """``/photos/extract-gps`` is base64-only; verify the magic-byte gate
+    rejects an SVG payload (raw text starting with ``<svg``).
+
+    The endpoint MUST reject before passing bytes into Pillow / EXIF
+    machinery — that's the whole point of the gate. This is a contract
+    test on the underlying ``require`` helper that the router wires in.
+    """
+    from app.core.file_signature import (
+        ALLOWED_PHOTO_TYPES,
+        FileSignatureMismatch,
+    )
+    from app.core.file_signature import require as require_signature
+
+    svg = b'<svg xmlns="http://www.w3.org/2000/svg"><script/></svg>'
+    with pytest.raises(FileSignatureMismatch):
+        require_signature(svg[:16], ALLOWED_PHOTO_TYPES)
+
+
+def test_exif_gps_endpoint_magic_byte_accepts_jpeg_head() -> None:
+    """A valid JPEG header passes the magic-byte gate."""
+    from app.core.file_signature import ALLOWED_PHOTO_TYPES
+    from app.core.file_signature import require as require_signature
+
+    jpeg = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00"
+    detected = require_signature(jpeg[:16], ALLOWED_PHOTO_TYPES)
+    assert detected == "jpeg"
+
+
+# ── Labour count / equipment count bounds ────────────────────────────────
+
+
+def test_diary_create_rejects_implausible_labour_count() -> None:
+    """Labour count must be ≤ MAX_LABOUR_COUNT (10 000)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DailyDiaryCreate(
+            project_id=PROJECT_ID,
+            diary_date="2026-04-10",
+            labour_count=999_999_999,
+        )
+
+
+def test_diary_create_rejects_negative_labour_count() -> None:
+    """Labour count must be ≥ 0."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DailyDiaryCreate(
+            project_id=PROJECT_ID,
+            diary_date="2026-04-10",
+            labour_count=-1,
+        )
+
+
+def test_diary_create_rejects_implausible_equipment_count() -> None:
+    """Equipment count must be ≤ MAX_EQUIPMENT_COUNT (5 000)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DailyDiaryCreate(
+            project_id=PROJECT_ID,
+            diary_date="2026-04-10",
+            equipment_count=10_000_000,
+        )
+
+
+# ── Drone elevation invariant ────────────────────────────────────────────
+
+
+def test_drone_create_rejects_min_above_max_elevation() -> None:
+    """``elevation_min_m`` must be ≤ ``elevation_max_m``."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DroneSurveyCreate(
+            project_id=PROJECT_ID,
+            flown_at=datetime(2026, 4, 10, 11, tzinfo=UTC),
+            elevation_min_m=Decimal("500"),
+            elevation_max_m=Decimal("200"),
+        )
+
+
+def test_drone_create_accepts_equal_min_max_elevation() -> None:
+    """Flat-terrain edge case — min == max is valid."""
+    obj = DroneSurveyCreate(
+        project_id=PROJECT_ID,
+        flown_at=datetime(2026, 4, 10, 11, tzinfo=UTC),
+        elevation_min_m=Decimal("100"),
+        elevation_max_m=Decimal("100"),
+    )
+    assert obj.elevation_min_m == obj.elevation_max_m
+
+
+def test_drone_create_rejects_implausible_area() -> None:
+    """100 km² (100 000 000 m²) is the cap — a stray "billion m²" is junk."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        DroneSurveyCreate(
+            project_id=PROJECT_ID,
+            flown_at=datetime(2026, 4, 10, 11, tzinfo=UTC),
+            area_m2=Decimal("1000000000"),  # 1 000 km²
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_drone_survey_rejects_partial_inversion() -> None:
+    """PATCH that would create an inverted range against the stored row.
+
+    Stored: elevation_min=100, elevation_max=200. PATCH bumps min to 300
+    without touching max — the resulting row would have min(300) > max(200).
+    """
+    svc = _make_service()
+    survey = await svc.attach_drone_survey(
+        DroneSurveyCreate(
+            project_id=PROJECT_ID,
+            flown_at=datetime(2026, 4, 10, 11, tzinfo=UTC),
+            elevation_min_m=Decimal("100"),
+            elevation_max_m=Decimal("200"),
+        ),
+    )
+    from fastapi import HTTPException
+
+    from app.modules.daily_diary.schemas import DroneSurveyUpdate
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_drone_survey(
+            survey.id,
+            DroneSurveyUpdate(elevation_min_m=Decimal("300")),
+        )
+    assert exc.value.status_code == 422
+
+
 # ── Workforce summary cross-module event ─────────────────────────────────
 
 
@@ -1089,6 +1361,38 @@ async def test_workforce_summary_aggregates_entries() -> None:
     # Diary base = 4 equipment, entries add 2 → 6
     assert summary["equipment_count"] == 6
     assert summary["by_company"] == {"Alpha": 8, "Beta": 5}
+
+
+@pytest.mark.asyncio
+async def test_workforce_summary_stable_after_close() -> None:
+    """Regression: `close_diary` used to mutate ``diary.labour_count`` by
+    folding entries' metadata onto it. A later call to
+    ``workforce_summary_for_diary`` then re-counted the same entries on
+    top of the inflated base, double-counting them.
+
+    The summary must be idempotent across the close transition.
+    """
+    svc = _make_service()
+    diary = await svc.create_diary(_diary_payload(), user_id="u")
+    # Pre-existing entry that carries a labour count.
+    entry = SimpleNamespace(
+        id=uuid.uuid4(), diary_id=diary.id, entry_type="visitor",
+        entry_time=datetime(2026, 4, 10, 9, tzinfo=UTC),
+        title="Crew", description=None,
+        source_module=None, source_ref=None, author_id=None,
+        photo_ids=[], metadata_={"labour_count": 4, "company": "Alpha"},
+    )
+    svc.entry_repo.rows[entry.id] = entry
+
+    before = await svc.workforce_summary_for_diary(diary.id)
+    with patch("app.modules.daily_diary.service.event_bus.publish_detached"):
+        await svc.close_diary(diary.id, user_id="u")
+    after = await svc.workforce_summary_for_diary(diary.id)
+
+    assert before["labour_count"] == after["labour_count"], (
+        "workforce summary must not change just because the diary was closed"
+    )
+    assert before["equipment_count"] == after["equipment_count"]
 
 
 @pytest.mark.asyncio

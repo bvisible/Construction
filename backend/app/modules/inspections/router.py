@@ -227,6 +227,12 @@ async def create_defect_from_inspection(
     details for failed items.
     """
     inspection = await service.get_inspection(inspection_id)
+    # Cross-tenant guard: resolve the inspection's project, then run the
+    # standard ownership check. ``verify_project_access`` raises 404 on
+    # both "missing project" and "not yours" so this endpoint cannot be
+    # used as an inspection-UUID enumeration oracle.
+    await verify_project_access(inspection.project_id, str(user_id), session)
+
     if inspection.result not in ("fail", "partial"):
         from fastapi import HTTPException
 
@@ -337,6 +343,10 @@ async def create_ncr_from_inspection(
     re-inspection therefore needs the prior NCR closed first.
     """
     inspection = await service.get_inspection(inspection_id)
+    # Cross-tenant guard — must precede any business-logic branch that
+    # could mutate (or leak) the inspection's parent project.
+    await verify_project_access(inspection.project_id, str(user_id), session)
+
     if inspection.result not in ("fail", "partial"):
         from fastapi import HTTPException
 
@@ -452,12 +462,24 @@ async def create_ncr_from_inspection(
 @router.post("/{inspection_id}/complete/", response_model=InspectionResponse)
 async def complete_inspection(
     inspection_id: uuid.UUID,
+    session: SessionDep,
     body: CompleteInspectionRequest | None = None,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("inspections.update")),
     service: InspectionService = Depends(_get_service),
 ) -> InspectionResponse:
-    """Mark an inspection as completed with a pass/fail/partial result."""
+    """Mark an inspection as completed with a pass/fail/partial result.
+
+    Cross-tenant guard: resolves the inspection's parent project before
+    flipping any state so one tenant cannot mutate another tenant's
+    inspection. Returns 404 (via ``verify_project_access``) on a UUID
+    that exists but belongs to a project the caller does not own.
+    """
+    # Look the inspection up first to get the project_id, then enforce
+    # the project-ownership gate BEFORE service.complete mutates state.
+    existing = await service.get_inspection(inspection_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
+
     result = body.result if body else "pass"
     inspection = await service.complete_inspection(inspection_id, result=result)
     return _to_response(inspection)

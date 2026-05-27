@@ -10,7 +10,7 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -21,7 +21,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.erp_chat.models import ChatMessage, ChatSession, ChatTurnFeedback
 from app.modules.erp_chat.prompts import SYSTEM_PROMPT
 from app.modules.erp_chat.schemas import StreamChatRequest
-from app.modules.erp_chat.tools import TOOL_DEFINITIONS, TOOL_HANDLER_MAP
+from app.modules.erp_chat.tools import (
+    TOOL_DEFINITIONS,
+    TOOL_HANDLER_MAP,
+    TOOL_PERMISSIONS,
+    ToolAuthError,
+    ToolPermissionDenied,
+    _auth_error,
+    _extract_project_id,
+    _require_project_access,
+    check_tool_permission,
+    manager_permission_error_result,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -343,15 +354,65 @@ class ERPChatService:
 
                     handler = TOOL_HANDLER_MAP.get(tool_name)
                     if handler:
-                        try:
-                            tool_result = await handler(self.session, tool_args, user_id)
-                        except Exception as exc:
-                            logger.exception("Tool handler %s failed", tool_name)
-                            tool_result = {
-                                "renderer": "error",
-                                "data": {"error": str(exc)},
-                                "summary": f"Tool error: {exc}",
-                            }
+                        # RBAC gate: write tools require manager+ on the
+                        # referenced project. IDOR posture must be
+                        # preserved — non-existent / inaccessible projects
+                        # ALWAYS surface as 404-style (handler's
+                        # ``_require_project_access`` does this) so we
+                        # never leak project existence by returning the
+                        # role-denied card to a non-tenant. Order:
+                        #   1. IDOR check (project exists + accessible).
+                        #   2. Role check (manager+ for write tools).
+                        # 1 fails → handler's 404-shaped error result.
+                        # 2 fails → manager_permission_required card.
+                        tool_result = None
+                        is_write = TOOL_PERMISSIONS.get(tool_name, "read") == "write"
+
+                        if is_write:
+                            project_id = _extract_project_id(tool_name, tool_args)
+                            if project_id is not None:
+                                try:
+                                    await _require_project_access(
+                                        self.session, project_id, user_id,
+                                    )
+                                except ToolAuthError as _te:
+                                    # 404 posture — never reach the role check.
+                                    tool_result = _auth_error(str(_te))
+                                except Exception:
+                                    logger.exception(
+                                        "IDOR check failed for %s", tool_name,
+                                    )
+                            if tool_result is None:
+                                # Project accessible (or no project_id —
+                                # then the role gate alone applies). Check
+                                # manager+.
+                                try:
+                                    await check_tool_permission(
+                                        self.session, tool_name, tool_args, user_id,
+                                    )
+                                except ToolPermissionDenied:
+                                    tool_result = manager_permission_error_result()
+                                except Exception:
+                                    logger.exception(
+                                        "check_tool_permission failed for %s",
+                                        tool_name,
+                                    )
+                                    # Fail-closed on lookup error to avoid
+                                    # accidentally elevating a denied call.
+                                    tool_result = manager_permission_error_result()
+
+                        if tool_result is None:
+                            try:
+                                tool_result = await handler(
+                                    self.session, tool_args, user_id,
+                                )
+                            except Exception as exc:
+                                logger.exception("Tool handler %s failed", tool_name)
+                                tool_result = {
+                                    "renderer": "error",
+                                    "data": {"error": str(exc)},
+                                    "summary": f"Tool error: {exc}",
+                                }
                     else:
                         tool_result = {
                             "renderer": "error",
@@ -505,7 +566,7 @@ class ERPChatService:
             uid = uuid.UUID(user_id)
         except (TypeError, ValueError):
             return True, 0
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        cutoff = datetime.now(UTC) - timedelta(hours=24)
         stmt = (
             select(func.coalesce(func.sum(ChatMessage.tokens_used), 0))
             .join(ChatSession, ChatMessage.session_id == ChatSession.id)
@@ -932,7 +993,7 @@ class ERPChatService:
         skew the denominator to zero.
         """
         window = max(1, int(window_days))
-        cutoff = datetime.now(timezone.utc) - timedelta(days=window)
+        cutoff = datetime.now(UTC) - timedelta(days=window)
 
         # ── Aggregate counts ────────────────────────────────────────────
         assistant_q = select(func.count(ChatMessage.id)).where(
@@ -1062,7 +1123,7 @@ class ERPChatService:
         # seed every day in the window so the chart isn't gappy
         for offset in range(window):
             day = (
-                datetime.now(timezone.utc) - timedelta(days=window - 1 - offset)
+                datetime.now(UTC) - timedelta(days=window - 1 - offset)
             ).date().isoformat()
             daily[day] = {
                 "messages": 0,

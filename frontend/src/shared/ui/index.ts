@@ -16,6 +16,9 @@ export { Card, CardHeader, CardContent, CardFooter } from './Card';
 export { EmptyState } from './EmptyState';
 export type { EmptyStateProps } from './EmptyState';
 
+export { RecoveryCard } from './RecoveryCard';
+export type { RecoveryCardProps } from './RecoveryCard';
+
 export { AuthImage } from './AuthImage';
 export type { AuthImageProps } from './AuthImage';
 
@@ -55,6 +58,14 @@ export { BOQPicker } from './BOQPicker';
 export { ConfirmDialog } from './ConfirmDialog';
 export type { ConfirmDialogProps } from './ConfirmDialog';
 
+export { TabBar, tabIds } from './TabBar';
+export type {
+  TabBarTab,
+  TabBarProps,
+  TabBarVariant,
+  TabBarSize,
+} from './TabBar';
+
 export { WideModal, WideModalSection, WideModalField } from './WideModal';
 export type {
   WideModalProps,
@@ -62,6 +73,9 @@ export type {
   WideModalFieldProps,
   WideModalSize,
 } from './WideModal';
+
+export { SideDrawer } from './SideDrawer';
+export type { SideDrawerProps } from './SideDrawer';
 
 export { Breadcrumb } from './Breadcrumb';
 
@@ -77,8 +91,25 @@ export { NotFoundPage } from './NotFoundPage';
 
 export { CountryFlag } from './CountryFlag';
 
+export { CountryCombobox, CUSTOM_SENTINEL } from './CountryCombobox';
+export type { CountryComboboxProps } from './CountryCombobox';
+
 export { OnboardingTour, DEFAULT_TOUR_STEPS, ONBOARDING_STORAGE_KEY } from './OnboardingTour';
 export type { TourStep } from './OnboardingTour';
+
+export {
+  ProductTour,
+  DEFAULT_PRODUCT_TOUR_STEPS,
+  BOQ_TOUR_STEPS,
+  ACCOMMODATION_TOUR_STEPS,
+  TOUR_REGISTRY,
+  TOUR_COMPLETED_KEY,
+  TOUR_START_EVENT,
+} from './ProductTour';
+export type { ProductTourStep, ProductTourProps, TourId } from './ProductTour';
+
+export { ModuleHelpButton } from './ModuleHelpButton';
+export type { ModuleHelpButtonProps } from './ModuleHelpButton';
 
 export { GlobalProgress, useProgressStore } from './GlobalProgress';
 

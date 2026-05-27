@@ -9,6 +9,8 @@ Pure functions:
     * compare_alternatives
     * compute_carbon_intensity
     * is_target_met
+    * validate_epd_file_magic       (R7 deep-improve: EPD upload gate)
+    * ingest_epd_document            (R7 deep-improve: high-level wrapper)
 
 Orchestration (DB-touching):
     * CarbonService — wraps repositories, emits events, generates reports
@@ -16,6 +18,7 @@ Orchestration (DB-touching):
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import UTC, date, datetime
@@ -72,6 +75,111 @@ from app.modules.carbon.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ── EPD upload magic-byte gate (R7 deep-improve) ──────────────────────────
+# EPD documents must be one of: PDF (binary), XML (ILCD+EPD / EN 15804),
+# or JSON (EC3 / BuildingTransparency API). Any other binary content is
+# rejected at the boundary with HTTP 415, never 500. This is a defence-
+# in-depth gate alongside the MIME-type sniff in the router — the magic
+# byte check is authoritative.
+ALLOWED_EPD_MIME_TYPES: frozenset[str] = frozenset(
+    {
+        "application/pdf",
+        "text/xml",
+        "application/xml",
+        "application/json",
+    },
+)
+
+# Maps detected format → tuple of byte signatures that begin a valid file
+# of that format. Order does not matter; first match wins in the scan.
+EPD_MAGIC_BYTES: dict[str, tuple[bytes, ...]] = {
+    "pdf": (b"%PDF-",),
+    # XML may start with declaration (<?xml) or a bare root tag we know.
+    # ILCD wrapper roots, EPD top-level tags, and ECO Platform variants.
+    "xml": (
+        b"<?xml",
+        b"<EPD",
+        b"<epd",
+        b"<processDataSet",
+        b"<ProcessDataSet",
+    ),
+    # JSON EPDs must be objects (EC3 / BuildingTransparency payloads).
+    # Bare arrays / scalars are not valid EPD documents.
+    "json": (b"{",),
+}
+
+# Minimum bytes required to even attempt magic-byte detection.
+_EPD_MAGIC_MIN_BYTES: int = 4
+
+
+def validate_epd_file_magic(payload: bytes) -> str:
+    """Detect the EPD file format from its magic bytes.
+
+    Returns the format name ("pdf" | "xml" | "json") on success.
+    Raises ``ValueError`` whose message contains ``"415"`` when the payload
+    is empty, too short, or does not match any allowed signature. The
+    router wraps this in an HTTPException(415, ...).
+    """
+    if not payload:
+        raise ValueError("415: empty upload")
+    if len(payload) < _EPD_MAGIC_MIN_BYTES:
+        raise ValueError("415: payload too short for magic-byte detection")
+    # Strip a leading UTF-8 BOM so it doesn't shift the signature.
+    head = payload.lstrip(b"\xef\xbb\xbf").lstrip()
+    if not head:
+        raise ValueError("415: payload empty after BOM/whitespace strip")
+    for fmt, signatures in EPD_MAGIC_BYTES.items():
+        for sig in signatures:
+            if head.startswith(sig):
+                # JSON: extra guard — must be parsable AND an object
+                # (arrays / scalars are not valid EPD documents).
+                if fmt == "json":
+                    try:
+                        decoded = json.loads(head.decode("utf-8", "strict"))
+                    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                        raise ValueError(
+                            f"415: JSON payload is not parsable ({exc})",
+                        ) from None
+                    if not isinstance(decoded, dict):
+                        raise ValueError(
+                            "415: JSON payload must be an object (EPD record)",
+                        )
+                return fmt
+    raise ValueError(
+        "415: unsupported EPD file format (expected PDF, XML or JSON)",
+    )
+
+
+async def ingest_epd_document(
+    *,
+    service: Any,
+    file_bytes: bytes,
+    identifier: str,
+    gwp_a1a3: Decimal,
+    product_name: str,
+    material_class: str,
+) -> Any:
+    """Service-level EPD ingest gate that validates magic bytes first.
+
+    Raises ``HTTPException(415)`` if the payload is not a valid EPD file.
+    On success delegates to ``service.ingest_epd_by_identifier`` and
+    returns the created record.
+    """
+    try:
+        validate_epd_file_magic(file_bytes)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=str(exc),
+        ) from None
+    return await service.ingest_epd_by_identifier(
+        identifier=identifier,
+        gwp_a1a3=gwp_a1a3,
+        product_name=product_name,
+        material_class=material_class,
+    )
 
 
 # ── Errors ────────────────────────────────────────────────────────────────

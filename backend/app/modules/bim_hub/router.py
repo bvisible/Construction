@@ -68,7 +68,9 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.i18n import get_locale
 from app.core.rate_limiter import upload_limiter
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.bim_hub import file_storage as bim_file_storage
 from app.modules.bim_hub.schemas import (
@@ -257,7 +259,7 @@ async def _verify_project_access(
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
 
     # Admin bypass — admins can touch any project regardless of ownership.
@@ -274,7 +276,7 @@ async def _verify_project_access(
     if str(project.owner_id) != str(user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
 
 
@@ -1038,6 +1040,85 @@ _NEEDS_CONVERTER_EXTS = {".rvt", ".dwg", ".dgn"}
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+# Module-level counter for Parquet sidecar write failures. No prometheus
+# framework is wired into the backend yet (see task #155), so we expose
+# the count via a structured log event AND a process-local counter that
+# the future /metrics surface can poll without re-instrumenting.
+_PARQUET_FAILURE_COUNTER: dict[str, int] = {}
+
+
+def _record_parquet_attempt_init() -> tuple[str, str | None]:
+    """Return the default (status, error) tuple before a Parquet attempt.
+
+    "skipped" is the conservative default: if the path that mutates these
+    values is never reached (raw_elements empty, exception before the
+    try/except, etc.) the UI still gets a sane value rather than ``None``.
+    """
+    return "skipped", None
+
+
+def _surface_parquet_failure(
+    *,
+    exc: BaseException,
+    project_id: str,
+    model_id: str,
+    model_format: str,
+    row_count: int,
+) -> tuple[str, str]:
+    """Emit structured diagnostics for a failed Parquet sidecar write.
+
+    Logs at ERROR level (degraded state — even if non-fatal for the user's
+    current upload, operators should see how often this fires), bumps a
+    process-local counter, and returns the ``(status, error)`` pair the
+    caller stamps onto ``model.metadata_``.
+
+    The structured payload travels in ``logger.error``'s ``extra`` dict so
+    log-aggregation systems (ELK / Loki / Datadog) can pick the fields up
+    individually rather than parsing the message string.
+    """
+    import traceback as _tb
+
+    exc_type = type(exc).__name__
+    exc_msg = str(exc) or "<no message>"
+    # Truncate traceback to ~2KB so we don't blow up log lines or the
+    # metadata JSON column for pathological deep stacks.
+    tb_text = "".join(_tb.format_exception(type(exc), exc, exc.__traceback__))
+    if len(tb_text) > 2048:
+        tb_text = tb_text[:2048] + "...[truncated]"
+
+    fmt_key = (model_format or "unknown").lower().lstrip(".")
+    _PARQUET_FAILURE_COUNTER[fmt_key] = _PARQUET_FAILURE_COUNTER.get(fmt_key, 0) + 1
+
+    logger.error(
+        "bim_parquet_write_failed model=%s project=%s format=%s rows=%d "
+        "exc=%s msg=%s",
+        model_id,
+        project_id,
+        fmt_key,
+        row_count,
+        exc_type,
+        exc_msg,
+        extra={
+            "event": "bim_parquet_write_failed",
+            "project_id": project_id,
+            "model_id": model_id,
+            "model_format": fmt_key,
+            "row_count": row_count,
+            "exception_type": exc_type,
+            "exception_message": exc_msg,
+            "traceback": tb_text,
+            "metric": "bim_parquet_write_failed_total",
+            "metric_labels": {"model_format": fmt_key},
+        },
+    )
+
+    # The error string stamped onto the model row stays short — the full
+    # traceback is in the log event. The UI only needs enough to render
+    # "ParquetWriteError: disk full" without exposing the whole stack.
+    short_error = f"{exc_type}: {exc_msg}"[:500]
+    return "failed", short_error
+
+
 async def _process_cad_in_background(
     *,
     project_id: str,
@@ -1194,6 +1275,7 @@ async def _process_cad_in_background(
                     )
 
             raw_elements = result.get("raw_elements", [])
+            parquet_status, parquet_error = _record_parquet_attempt_init()
             if raw_elements:
                 try:
                     from app.modules.bim_hub.dataframe_store import write_dataframe
@@ -1204,8 +1286,20 @@ async def _process_cad_in_background(
                         model_id=model_id,
                         rows=raw_elements,
                     )
+                    parquet_status = "ok"
                 except Exception as exc:
-                    logger.warning("Parquet write failed (non-fatal): %s", exc)
+                    parquet_status, parquet_error = _surface_parquet_failure(
+                        exc=exc,
+                        project_id=project_id,
+                        model_id=model_id,
+                        model_format=ext.lstrip("."),
+                        row_count=len(raw_elements),
+                    )
+            else:
+                # No rows means we never tried — keep "skipped" so the UI
+                # can distinguish "ingest produced nothing" from a real
+                # write failure that needs operator attention.
+                parquet_status = "skipped"
 
         async with async_session_factory() as session:
             # Defensive: the upload endpoint commits before scheduling us, but
@@ -1310,6 +1404,25 @@ async def _process_cad_in_background(
                         if result.get("converter_source")
                         else {}
                     ),
+                    # Honesty signal — set when the import only succeeded
+                    # because the runtime stripped modern CLI args (or
+                    # retried without them) to accommodate an older DDC
+                    # binary.  Drives the post-success "converter
+                    # outdated" nudge in the BIM viewer.  Conversion
+                    # itself is fine; the warning is informational only.
+                    **(
+                        {"converter_cli_outdated": True}
+                        if result.get("converter_cli_outdated")
+                        else {}
+                    ),
+                    # Parquet sidecar status — non-fatal for the model
+                    # itself, but operators want to know how often the
+                    # sidecar write fails so the analytics surface
+                    # (/dataframe/* endpoints) doesn't silently return
+                    # empty data. Task #155 surfaces this in the API.
+                    "parquet_status": parquet_status,
+                    "parquet_error": parquet_error,
+                    "parquet_attempted_at": _dt.now(_UTC).isoformat(),
                 }
 
                 # BUG-V320-DDC-01 / D-TKC-NEW-01 — non-destructive honesty
@@ -1403,6 +1516,7 @@ async def _process_cad_in_background(
                 rvt_app = rvt_info.get("app_name")  # e.g. "Revit 2024"
                 conv_version = conv_info.get("version")  # e.g. "18.0.0.0"
                 stderr_tail = (ddc_failure.get("stderr") or "").strip()
+                cause = ddc_failure.get("cause") or "unknown"
 
                 if ext == ".rvt":
                     model.status = "needs_converter"
@@ -1411,6 +1525,15 @@ async def _process_cad_in_background(
                     # only when its underlying datum is non-empty so we never
                     # ship "File saved with Revit None".
                     parts: list[str] = []
+                    if cause == "converter_outdated":
+                        # Lead with the specific, actionable diagnosis so
+                        # the user sees the fix before the surrounding
+                        # diagnostics.  The full stderr line still goes
+                        # into metadata_ below for the support panel.
+                        parts.append(
+                            "Your installed converter is older than the "
+                            "platform expects."
+                        )
                     if rvt_app:
                         parts.append(
                             f"File saved with {rvt_app}"
@@ -1418,25 +1541,37 @@ async def _process_cad_in_background(
                         )
                     if conv_version:
                         parts.append(f"Installed RVT converter: {conv_version}.")
-                    parts.append(
-                        "The converter produced no elements from this file. "
-                        "Most common causes: the RVT was saved with a Revit "
-                        "version newer than the converter supports, the file "
-                        "is corrupt, or a converter dependency is missing."
-                    )
+                    if cause == "converter_outdated":
+                        parts.append(
+                            "Open Settings → BIM Converters and click "
+                            "Reinstall to fetch the latest version."
+                        )
+                    else:
+                        parts.append(
+                            "The converter produced no elements from this file. "
+                            "Most common causes: the RVT was saved with a Revit "
+                            "version newer than the converter supports, the file "
+                            "is corrupt, or a converter dependency is missing."
+                        )
                     if stderr_tail:
                         # Trim to a single line for the headline message;
                         # the full stderr tail goes into metadata_ below.
                         first_line = stderr_tail.splitlines()[0][:200]
                         if first_line:
                             parts.append(f"Converter said: {first_line}")
-                    parts.append(
-                        "Try updating the RVT converter (Settings → BIM "
-                        "Converters → Reinstall) and clicking Retry."
-                    )
+                    if cause != "converter_outdated":
+                        parts.append(
+                            "Try updating the RVT converter (Settings → BIM "
+                            "Converters → Reinstall) and clicking Retry."
+                        )
                     model.error_message = " ".join(parts)
 
-                    meta["error_code"] = "ddc_failed"
+                    meta["error_code"] = (
+                        "converter_outdated"
+                        if cause == "converter_outdated"
+                        else "ddc_failed"
+                    )
+                    meta["cause"] = cause
                     meta["converter_id"] = "rvt"
                     meta["install_endpoint"] = (
                         "/api/v1/takeoff/converters/rvt/install/"
@@ -1447,6 +1582,7 @@ async def _process_cad_in_background(
                         "rvt_info": rvt_info,
                         "converter_info": conv_info,
                         "reason": ddc_failure.get("reason"),
+                        "cause": cause,
                         "exit_code": ddc_failure.get("exit_code"),
                         "stderr_tail": stderr_tail,
                     }
@@ -2088,6 +2224,122 @@ async def retry_model_processing(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Parquet sidecar status & retry (Task #155)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/models/{model_id}/parquet-status/")
+async def get_parquet_status(
+    model_id: uuid.UUID,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("bim.read")),
+    service: BIMHubService = Depends(_get_service),
+) -> dict[str, Any]:
+    """Return the last-known Parquet sidecar status for *model_id*.
+
+    Surfaces the silent-failure state stamped onto ``model.metadata_`` by
+    the background ingester so the UI can show a "Parquet sidecar failed —
+    retry?" affordance instead of silently serving an empty dataframe.
+    """
+    model = await _verify_model_access(service, model_id, user_id or "")
+    meta = model.metadata_ or {}
+    return {
+        "model_id": str(model_id),
+        "status": meta.get("parquet_status"),
+        "error": meta.get("parquet_error"),
+        "attempted_at": meta.get("parquet_attempted_at"),
+        "retry_endpoint": f"/api/v1/bim-hub/models/{model_id}/parquet/retry/",
+    }
+
+
+@router.post("/models/{model_id}/parquet/retry/", status_code=202)
+async def retry_parquet_write(
+    model_id: uuid.UUID,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("bim.update")),
+    service: BIMHubService = Depends(_get_service),
+) -> dict[str, Any]:
+    """Re-run the Parquet sidecar write from existing element rows in the DB.
+
+    Cheap recovery for the case where the original DDC conversion succeeded
+    (elements landed in ``oe_bim_element``) but the Parquet write failed
+    (disk full, permission denied, pyarrow crash). Does NOT re-run DDC.
+    """
+    from app.modules.bim_hub.dataframe_store import write_dataframe
+    from app.modules.bim_hub.models import BIMElement
+
+    model = await _verify_model_access(service, model_id, user_id or "")
+
+    # Pull the rows back out of the DB — same projection the converter
+    # would have produced for the Parquet write (one dict per element).
+    rows_q = await service.session.execute(
+        select(BIMElement).where(BIMElement.model_id == model_id)
+    )
+    elements = rows_q.scalars().all()
+    if not elements:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Model has no elements in the database — cannot retry "
+                "Parquet write. Re-upload the model instead."
+            ),
+        )
+
+    rows: list[dict[str, Any]] = []
+    for el in elements:
+        row: dict[str, Any] = {
+            "stable_id": el.stable_id,
+            "element_type": el.element_type,
+            "name": el.name,
+            "storey": el.storey,
+            "discipline": el.discipline,
+        }
+        # Flatten properties + quantities into the row dict so the Parquet
+        # column set matches the original DDC shape closely enough for the
+        # dataframe endpoints to work.
+        if isinstance(el.properties, dict):
+            row.update(el.properties)
+        if isinstance(el.quantities, dict):
+            row.update(el.quantities)
+        rows.append(row)
+
+    import asyncio as _asyncio
+    from datetime import UTC as _UTC
+    from datetime import datetime as _dt
+
+    try:
+        await _asyncio.to_thread(
+            write_dataframe,
+            project_id=str(model.project_id),
+            model_id=str(model_id),
+            rows=rows,
+        )
+        new_status, new_error = "ok", None
+    except Exception as exc:
+        new_status, new_error = _surface_parquet_failure(
+            exc=exc,
+            project_id=str(model.project_id),
+            model_id=str(model_id),
+            model_format=model.model_format or "",
+            row_count=len(rows),
+        )
+
+    meta = dict(model.metadata_ or {})
+    meta["parquet_status"] = new_status
+    meta["parquet_error"] = new_error
+    meta["parquet_attempted_at"] = _dt.now(_UTC).isoformat()
+    model.metadata_ = meta
+    await service.session.commit()
+
+    return {
+        "model_id": str(model_id),
+        "status": new_status,
+        "error": new_error,
+        "rows_attempted": len(rows),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Geometry file serving
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2489,12 +2741,30 @@ async def list_models(
     await _verify_project_access(service.session, project_id, user_id or "")
     items, total = await service.list_models(project_id, offset=offset, limit=limit)
 
-    # Probe storage once per model in parallel to fill in artifact size +
-    # has_original.  Failures degrade gracefully: a failed probe leaves the
-    # field as ``None`` and the row still loads in the UI.
-    import asyncio as _asyncio
+    # Batched storage probe: ONE list_prefix sweep against the backend
+    # collects artifact/original/geometry info for every model in the
+    # page. Replaces the previous asyncio.gather fan-out which issued
+    # 3+ probes per model (50 models → 150+ HEAD/stat round-trips per
+    # list call — classic N+1 against storage).  When the backend
+    # doesn't support list_prefix (community backends predating v4.6.1),
+    # fall back to the per-model probe loop so behaviour is unchanged.
+    storage_summary: dict[str, dict[str, object]] = {}
+    use_bulk = bim_file_storage.list_prefix_supported()
+    if use_bulk:
+        try:
+            storage_summary = await bim_file_storage.bulk_model_storage_summary(
+                project_id,
+            )
+        except Exception:  # noqa: BLE001  # never break listing on storage hiccups
+            logger.exception(
+                "bulk_model_storage_summary failed for project=%s; "
+                "falling back to per-model probes.",
+                project_id,
+            )
+            use_bulk = False
 
-    async def _enrich(model_obj):  # type: ignore[no-untyped-def]
+    async def _enrich_per_model(model_obj):  # type: ignore[no-untyped-def]
+        """Per-model probe fallback (community backends without list_prefix)."""
         size_bytes = 0
         has_orig = False
         has_geom = bool(model_obj.canonical_file_path)
@@ -2512,11 +2782,6 @@ async def list_models(
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("has_original probe failed for model=%s", model_obj.id)
-        # Tie-break for historical rows where canonical_file_path was
-        # missed but the GLB/DAE is still on disk. Without this probe
-        # the frontend's 3D-viewer mount condition is wrong for 30+ of
-        # 36 successful models (issue surfaced by 57-file bench
-        # 2026-05-14).
         if not has_geom:
             try:
                 has_geom = (
@@ -2529,7 +2794,29 @@ async def list_models(
                 logger.exception("has_geometry probe failed for model=%s", model_obj.id)
         return size_bytes, has_orig, has_geom
 
-    enriched = await _asyncio.gather(*[_enrich(m) for m in items], return_exceptions=False)
+    def _enrich_from_summary(model_obj):  # type: ignore[no-untyped-def]
+        """Fast bulk-summary-driven enrich (no I/O)."""
+        info = storage_summary.get(str(model_obj.id), {})
+        size_bytes = int(info.get("artifact_size_bytes", 0) or 0)
+        # ``has_original`` historically reflected the existence of a blob
+        # at original.{ext} where ext == model_format.  The bulk sweep
+        # uses the same "filename starts with original." rule, so the
+        # two definitions match for every realistic model row.
+        has_orig = bool(info.get("has_original", False))
+        has_geom = bool(model_obj.canonical_file_path) or bool(
+            info.get("geometry_exts") or (),
+        )
+        return size_bytes, has_orig, has_geom
+
+    if use_bulk:
+        enriched = [_enrich_from_summary(m) for m in items]
+    else:
+        import asyncio as _asyncio
+
+        enriched = await _asyncio.gather(
+            *[_enrich_per_model(m) for m in items],
+            return_exceptions=False,
+        )
 
     item_responses: list[BIMModelResponse] = []
     total_artifact_bytes = 0
@@ -2546,11 +2833,14 @@ async def list_models(
                 resp.error_code = err_code
         total_artifact_bytes += size_bytes
         if has_orig:
-            # Best-effort original-blob size — only inspected when the
-            # blob is still around (avoids a useless storage probe on the
-            # production ``keep_original_cad=False`` path).
+            # Original-blob size: pulled from the bulk summary when
+            # available (zero extra round-trips), or from a single
+            # per-model size() probe on the fallback path.
             ext_raw = (model_obj.model_format or "").lstrip(".")
-            if ext_raw:
+            if use_bulk:
+                info = storage_summary.get(str(model_obj.id), {})
+                total_original_bytes += int(info.get("original_size_bytes", 0) or 0)
+            elif ext_raw:
                 try:
                     backend = bim_file_storage._backend()
                     key = bim_file_storage.original_cad_key(

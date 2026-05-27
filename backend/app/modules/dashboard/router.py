@@ -1,0 +1,131 @@
+"""Dashboard rollup router.
+
+Mounted by the module loader at ``/api/v1/dashboard/``.
+
+Endpoints:
+    GET /rollup/ — return all (or filtered) widget payloads in one shot.
+
+IDOR posture: project IDs the caller doesn't own are silently dropped
+from the rollup — never 403. Empty / unaccessible scope returns 200 with
+empty per-widget data (frontend renders the "no projects" empty state).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, Header, Query, Response
+
+from app.dependencies import CurrentUserId, SessionDep
+from app.modules.dashboard.schemas import RollupResponse  # noqa: F401 — re-exported in OpenAPI
+from app.modules.dashboard.service import (
+    KNOWN_WIDGETS,
+    accessible_projects,
+    compute_rollup,
+)
+
+router = APIRouter()
+
+
+def _parse_csv_list(raw: str | None) -> list[str]:
+    """Split a comma-separated query param into a clean list."""
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _parse_uuid_list(raw: str | None) -> list[uuid.UUID] | None:
+    """Parse a CSV of UUIDs; return None when the param is absent.
+
+    Malformed UUIDs are silently dropped — the caller gets whatever
+    well-formed ones survive (still IDOR-checked downstream).
+    """
+    if raw is None:
+        return None
+    out: list[uuid.UUID] = []
+    for item in _parse_csv_list(raw):
+        try:
+            out.append(uuid.UUID(item))
+        except ValueError:
+            continue
+    return out
+
+
+@router.get(
+    "/rollup/",
+    response_model=RollupResponse,
+    response_model_exclude_none=True,
+    summary="Dashboard rollup — all widgets in one call",
+    description=(
+        "Aggregates the requested wave-2 dashboard widget payloads in a "
+        "single round-trip. Replaces the per-project ``Promise.all`` fan-out "
+        "the frontend previously did (50 projects = 50 HTTP calls per "
+        "widget). Returns 200 with empty per-widget data when no projects "
+        "are accessible. Money fields are Decimal-as-string. Cached for "
+        "60 seconds (ETag + ``Cache-Control: max-age=60``)."
+    ),
+)
+async def get_rollup(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    widgets: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated widget IDs to include. Omit for all 10. "
+            "Unknown ids are silently ignored."
+        ),
+    ),
+    project_ids: str | None = Query(
+        default=None,
+        description=(
+            "Comma-separated project UUIDs to scope the rollup. Omit for "
+            "all accessible projects. IDs the caller can't access are "
+            "silently dropped (IDOR-safe)."
+        ),
+    ),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> Response:
+    requested_widgets = _parse_csv_list(widgets) or sorted(KNOWN_WIDGETS)
+    # Drop unknowns now so the ETag doesn't depend on garbage input.
+    requested_widgets = [w for w in requested_widgets if w in KNOWN_WIDGETS]
+
+    project_id_filter = _parse_uuid_list(project_ids)
+    projects = await accessible_projects(
+        session,
+        user_id,
+        requested_ids=project_id_filter,
+    )
+
+    payload = await compute_rollup(session, projects, requested_widgets)
+
+    # Compute the ETag over data + request shape ONLY — never over the
+    # generated_at timestamp, otherwise every request gets a fresh ETag
+    # and the 304 short-circuit never fires.
+    etag_basis = json.dumps(
+        {"u": user_id, "w": requested_widgets, "p": payload},
+        sort_keys=True, default=str,
+    )
+    etag = '"' + hashlib.sha256(etag_basis.encode("utf-8")).hexdigest()[:16] + '"'
+
+    cache_headers = {
+        "ETag": etag,
+        "Cache-Control": "private, max-age=60",
+    }
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304, headers=cache_headers)
+
+    body = {
+        **payload,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "widgets_requested": requested_widgets,
+        "project_count": len(projects),
+    }
+    serialized = json.dumps(body, sort_keys=True, default=str)
+    return Response(
+        content=serialized,
+        media_type="application/json",
+        headers=cache_headers,
+    )

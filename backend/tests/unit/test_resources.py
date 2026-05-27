@@ -1913,3 +1913,37 @@ async def test_find_candidates_delegates_to_repository() -> None:
     assert captured["end"] == end
     assert captured["exclude_ids"] == [sentinel.id]
     assert captured["limit"] == 5
+
+
+# ── propose_assignment cost_rate snapshot ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_propose_assignment_explicit_zero_cost_rate_is_preserved() -> None:
+    """An intentional ``cost_rate=0`` must NOT be silently overwritten by
+    the resource's default. Pre-fix, ``data.cost_rate or default`` treated
+    a real ``Decimal('0')`` as falsy and substituted the catalogue default,
+    quietly inflating costed assignments for assets whose marginal cost is
+    legitimately zero (donated equipment, internal staff loaned at no
+    charge, etc.). This is a rate-history correctness bug — once frozen,
+    the value should be exactly what the caller supplied.
+    """
+    svc = _make_service()
+    # Resource has a non-zero catalogue rate that must NOT bleed through.
+    r = _make_resource(svc)  # default_cost_rate=Decimal("50"), currency="EUR"
+    with patch("app.modules.resources.service.event_bus.publish_detached"):
+        req = AssignmentProposeRequest(
+            resource_id=r.id,
+            project_id=PROJECT_ID,
+            start_at=datetime(2026, 5, 10, 8, 0, tzinfo=UTC),
+            end_at=datetime(2026, 5, 10, 17, 0, tzinfo=UTC),
+            allocation_percent=100,
+            required_skills=[],
+            cost_rate=Decimal("0"),
+            currency="EUR",
+        )
+        assignment = await svc.propose_assignment(req, user_id="u1")
+    assert assignment.cost_rate == Decimal("0"), (
+        f"explicit zero cost_rate was overwritten with {assignment.cost_rate!r} — "
+        f"the resource catalogue default leaked through `or`-coalesce"
+    )

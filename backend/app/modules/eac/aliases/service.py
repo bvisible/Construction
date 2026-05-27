@@ -102,15 +102,22 @@ async def create_alias(
     """Create an alias and its synonyms in one transaction-flushed step.
 
     Raises :class:`AliasConflictError` when an alias with the same
-    ``(scope, scope_id, name)`` already exists — the
-    ``uq_eac_parameter_alias_scope_name`` unique constraint would
-    otherwise surface as an opaque 500.
+    ``(scope, scope_id, name)`` already exists *within the same tenant*
+    — the ``uq_eac_parameter_alias_scope_name`` unique constraint
+    would otherwise surface as an opaque 500.
+
+    R7 audit (Wave 3): the dup-check is scoped to ``tenant_id`` so
+    tenant A creating an alias named ``X`` is not blocked because
+    tenant B already has one. (Pre-R7 the check was cross-tenant and
+    produced false 409s.)
     """
     dup_stmt = select(EacParameterAlias.id).where(
         EacParameterAlias.scope == payload.scope,
         EacParameterAlias.scope_id == payload.scope_id,
         EacParameterAlias.name == payload.name,
     )
+    if tenant_id is not None:
+        dup_stmt = dup_stmt.where(EacParameterAlias.tenant_id == tenant_id)
     if (await session.execute(dup_stmt)).first() is not None:
         raise AliasConflictError(payload.scope, payload.scope_id, payload.name)
 
@@ -149,10 +156,20 @@ async def update_alias(
     session: AsyncSession,
     alias_id: uuid.UUID,
     payload: EacParameterAliasUpdate,
+    *,
+    tenant_id: uuid.UUID | None = None,
 ) -> EacParameterAlias:
-    """Update an alias's metadata (and optionally replace its synonyms)."""
+    """Update an alias's metadata (and optionally replace its synonyms).
+
+    R7 audit (Wave 3): when ``tenant_id`` is supplied, a cross-tenant
+    ``alias_id`` raises :class:`LookupError` (router maps to 404) so
+    the caller cannot mutate another tenant's row.
+    """
     alias = await session.get(EacParameterAlias, alias_id)
     if alias is None:
+        raise LookupError(f"Alias {alias_id} not found")
+    if tenant_id is not None and alias.tenant_id != tenant_id:
+        # Hide existence — same 404 surface as a true miss.
         raise LookupError(f"Alias {alias_id} not found")
 
     data = payload.model_dump(exclude_unset=True)
@@ -183,13 +200,21 @@ async def update_alias(
 async def delete_alias(
     session: AsyncSession,
     alias_id: uuid.UUID,
+    *,
+    tenant_id: uuid.UUID | None = None,
 ) -> None:
-    """Hard-delete the alias, blocking when rules still reference it."""
+    """Hard-delete the alias, blocking when rules still reference it.
+
+    R7 audit (Wave 3): cross-tenant ``alias_id`` raises
+    :class:`LookupError` (router maps to 404).
+    """
     alias = await session.get(EacParameterAlias, alias_id)
     if alias is None:
         raise LookupError(f"Alias {alias_id} not found")
+    if tenant_id is not None and alias.tenant_id != tenant_id:
+        raise LookupError(f"Alias {alias_id} not found")
 
-    usages = await find_usages(session, alias_id)
+    usages = await find_usages(session, alias_id, tenant_id=tenant_id)
     if usages:
         raise AliasInUseError(alias_id, usages)
     await session.delete(alias)
@@ -202,6 +227,7 @@ async def delete_alias(
 async def list_aliases(
     session: AsyncSession,
     *,
+    tenant_id: uuid.UUID | None = None,
     scope: str | None = None,
     scope_id: uuid.UUID | None = None,
     q: str | None = None,
@@ -210,13 +236,27 @@ async def list_aliases(
 ) -> list[EacParameterAlias]:
     """List aliases for a scope, optionally narrowed by a free-text query.
 
+    R7 audit (Wave 3): when ``tenant_id`` is supplied, the query is
+    scoped to that tenant so a list call from tenant A never leaks
+    tenant B's rows. Built-in (system) aliases (``tenant_id IS NULL``)
+    remain visible to every tenant — they ship with the platform.
+
     The free-text query matches against the alias name OR any of its
     synonym patterns. We do the synonym filter in Python rather than
     write a portable JSON containment expression — the result set per
     org/project is bounded (RFC 35 §6 ships with 40 built-ins; user
     sets rarely exceed a few hundred).
     """
+    from sqlalchemy import or_ as _or
+
     stmt = select(EacParameterAlias)
+    if tenant_id is not None:
+        stmt = stmt.where(
+            _or(
+                EacParameterAlias.tenant_id == tenant_id,
+                EacParameterAlias.tenant_id.is_(None),
+            )
+        )
     if scope is not None:
         stmt = stmt.where(EacParameterAlias.scope == scope)
     if scope_id is not None:
@@ -255,6 +295,13 @@ async def list_aliases(
                 .join(EacAliasSynonym, EacAliasSynonym.alias_id == EacParameterAlias.id)
                 .where(EacAliasSynonym.pattern.ilike(like))
             )
+            if tenant_id is not None:
+                extra_stmt = extra_stmt.where(
+                    _or(
+                        EacParameterAlias.tenant_id == tenant_id,
+                        EacParameterAlias.tenant_id.is_(None),
+                    )
+                )
             if scope is not None:
                 extra_stmt = extra_stmt.where(EacParameterAlias.scope == scope)
             if scope_id is not None:
@@ -287,8 +334,13 @@ def _find_alias_id_refs(node: Any, alias_id_str: str, hits: list[None]) -> None:
 async def find_usages(
     session: AsyncSession,
     alias_id: uuid.UUID,
+    *,
+    tenant_id: uuid.UUID | None = None,
 ) -> list[EacAliasUsageRow]:
     """Find every active rule whose ``definition_json`` references this alias.
+
+    R7 audit (Wave 3): the rule scan is scoped to ``tenant_id`` so an
+    alias-in-use check never inspects another tenant's rule corpus.
 
     Implementation note: PostgreSQL has ``->>`` operators we could use,
     but to stay portable across SQLite-backed tests we walk the JSON in
@@ -296,6 +348,8 @@ async def find_usages(
     """
     alias_id_str = str(alias_id)
     stmt = select(EacRule).where(EacRule.is_active.is_(True))
+    if tenant_id is not None:
+        stmt = stmt.where(EacRule.tenant_id == tenant_id)
     result = await session.execute(stmt)
     rules = list(result.scalars().unique().all())
 
@@ -324,14 +378,24 @@ async def take_snapshot(
     *,
     scope: str,
     scope_id: uuid.UUID | None,
+    tenant_id: uuid.UUID | None = None,
 ) -> EacAliasSnapshot:
     """Capture every alias for the given scope into an immutable row.
 
     Used by :class:`EacRun` so a replay sees the exact alias set the
     original execution worked with — even if the user renames or
     deletes aliases later.
+
+    R7 audit (Wave 3): when ``tenant_id`` is supplied, the snapshot
+    only contains aliases visible to that tenant (own rows + built-ins).
     """
-    aliases = await list_aliases(session, scope=scope, scope_id=scope_id, limit=10_000)
+    aliases = await list_aliases(
+        session,
+        tenant_id=tenant_id,
+        scope=scope,
+        scope_id=scope_id,
+        limit=10_000,
+    )
     payload: dict[str, dict[str, Any]] = {}
     for alias in aliases:
         payload[alias.name] = {

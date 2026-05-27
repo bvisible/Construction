@@ -8,7 +8,17 @@ business logic for a downstream 3D configurator + portal frontend.
 
 
 async def on_startup() -> None:
-    """‌⁠‍Module startup hook — register permissions."""
+    """‌⁠‍Module startup hook — register permissions + event subscribers."""
+    from app.modules.property_dev.events import (
+        register_property_dev_event_subscribers,
+        register_subscribers,
+        register_task_139_subscribers,
+        register_warranty_bridge_subscribers,
+    )
     from app.modules.property_dev.permissions import register_property_dev_permissions
 
     register_property_dev_permissions()
+    register_property_dev_event_subscribers()
+    register_subscribers()
+    register_task_139_subscribers()
+    register_warranty_bridge_subscribers()

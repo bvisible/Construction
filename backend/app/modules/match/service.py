@@ -16,6 +16,7 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.i18n import get_locale
 from app.core.match_service import (
     ElementEnvelope,
     MatchCandidate,
@@ -24,6 +25,7 @@ from app.core.match_service import (
     match_envelope,
     record_feedback,
 )
+from app.core.validation.messages import translate
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,7 @@ async def _verify_project_access(
     if project is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Project not found",
+            detail=translate("errors.project_not_found", locale=get_locale()),
         )
     if role == "admin":
         return

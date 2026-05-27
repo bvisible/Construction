@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.fieldreports.builtin_templates import (
     BUILTIN_TEMPLATES,
     get_builtin,
@@ -324,6 +326,7 @@ class FieldReportService:
                 detail=f"Cannot approve report with status '{report.status}' — must be submitted",
             )
 
+        prior_status = report.status
         now = datetime.now(UTC)
         await self.repo.update_fields(
             report_id,
@@ -332,6 +335,26 @@ class FieldReportService:
             approved_at=now,
         )
         await self.session.refresh(report)
+
+        # Epic H — universal audit trail.
+        from app.core.audit_log import log_activity as _log_activity
+
+        await _log_activity(
+            self.session,
+            actor_id=user_id,
+            entity_type="field_report",
+            entity_id=str(report_id),
+            action="status_changed",
+            from_status=prior_status,
+            to_status="approved",
+            reason="Field report approved",
+            module="fieldreports",
+            parent_entity_type="project",
+            parent_entity_id=str(report.project_id),
+            before_state={"status": prior_status},
+            after_state={"status": "approved"},
+        )
+
         logger.info("Field report approved: %s by %s", report_id, user_id)
         return report
 
@@ -563,7 +586,7 @@ class FieldReportTemplateService:
             if tpl is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Template not found",
+                    detail=translate("errors.template_not_found", locale=get_locale()),
                 )
             return self._builtin_to_dict_one(tpl)
 
@@ -572,13 +595,13 @@ class FieldReportTemplateService:
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Template not found",
+                detail=translate("errors.template_not_found", locale=get_locale()),
             ) from None
         row = await self.repo.get_by_id(tpl_uuid)
         if row is None or str(row.project_id) != str(project_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Template not found",
+                detail=translate("errors.template_not_found", locale=get_locale()),
             )
         return row
 
@@ -631,7 +654,7 @@ class FieldReportTemplateService:
         if template is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Template not found",
+                detail=translate("errors.template_not_found", locale=get_locale()),
             )
 
         fields = data.model_dump(exclude_unset=True)
@@ -656,7 +679,7 @@ class FieldReportTemplateService:
         if template is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Template not found",
+                detail=translate("errors.template_not_found", locale=get_locale()),
             )
         await self.repo.delete(template_id)
         logger.info("Field report template deleted: %s", template_id)

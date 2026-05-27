@@ -17,7 +17,7 @@ export function ShowAllProjectsCard({ totalCount, hiddenCount, style }: ShowAllP
     <Card
       hoverable
       padding="none"
-      className="group cursor-pointer relative animate-card-in overflow-hidden rounded-2xl border-2 border-dashed border-border-light/80 bg-gradient-to-b from-surface-secondary/40 to-surface-primary hover:border-oe-blue/50 hover:shadow-lg motion-safe:transition-all"
+      className="group cursor-pointer relative animate-card-in overflow-hidden rounded-xl border-2 border-dashed border-border-light/80 bg-gradient-to-b from-surface-secondary/40 to-surface-primary hover:border-oe-blue/50 hover:shadow-lg focus-within:ring-2 focus-within:ring-oe-blue/30 motion-safe:transition-all"
       style={style}
       onClick={() => navigate('/projects')}
     >
@@ -26,19 +26,19 @@ export function ShowAllProjectsCard({ totalCount, hiddenCount, style }: ShowAllP
           <Layers size={18} strokeWidth={1.75} />
         </div>
         <div className="text-sm font-semibold text-content-primary">
-          {t('dashboard.show_all_projects', { defaultValue: 'View all projects‌⁠‍' })}
+          {t('dashboard.show_all_projects', { defaultValue: 'View all projects' })}
         </div>
         {hiddenCount > 0 && (
           <div className="text-2xs text-content-tertiary">
             {t('dashboard.show_all_more', {
-              defaultValue: '+{{count}} more‌⁠‍',
+              defaultValue: '+{{count}} more',
               count: hiddenCount,
             })}
           </div>
         )}
         <div className="text-2xs text-content-quaternary tabular-nums">
           {t('dashboard.show_all_total', {
-            defaultValue: '{{count}} total‌⁠‍',
+            defaultValue: '{{count}} total',
             count: totalCount,
           })}
         </div>

@@ -18,7 +18,6 @@ import {
   X,
   Pencil,
   Trash2,
-  AlertTriangle,
   Send,
   HelpCircle,
   Link2,
@@ -30,6 +29,7 @@ import {
   EmptyState,
   Breadcrumb,
   DateDisplay,
+  RecoveryCard,
   SkeletonTable,
   ConfirmDialog,
   WideModal,
@@ -179,7 +179,7 @@ function CreateCorrespondenceModal({
       title={
         isEdit
           ? t('correspondence.edit_entry', { defaultValue: 'Edit Entry' })
-          : t('correspondence.new_entry', { defaultValue: 'New Entry‌⁠‍' })
+          : t('correspondence.new_entry', { defaultValue: 'New Entry' })
       }
       footer={
         <>
@@ -203,11 +203,11 @@ function CreateCorrespondenceModal({
     >
       {/* Direction + Type pickers, side-by-side */}
       <WideModalSection columns={2}>
-        <WideModalField label={t('correspondence.field_direction', { defaultValue: 'Direction‌⁠‍' })}>
+        <WideModalField label={t('correspondence.field_direction', { defaultValue: 'Direction' })}>
           <div
             className="grid grid-cols-2 gap-3"
             role="radiogroup"
-            aria-label={t('correspondence.field_direction', { defaultValue: 'Direction‌⁠‍' })}
+            aria-label={t('correspondence.field_direction', { defaultValue: 'Direction' })}
           >
             {(['incoming', 'outgoing'] as CorrespondenceDirection[]).map((dir) => {
               const cfg = DIRECTION_CARD_CONFIG[dir];
@@ -276,11 +276,11 @@ function CreateCorrespondenceModal({
 
       {/* Details section — full-width subject */}
       <WideModalSection
-        title={t('correspondence.section_details', { defaultValue: 'Correspondence Details‌⁠‍' })}
+        title={t('correspondence.section_details', { defaultValue: 'Correspondence Details' })}
         columns={2}
       >
         <WideModalField
-          label={t('correspondence.field_subject', { defaultValue: 'Subject‌⁠‍' })}
+          label={t('correspondence.field_subject', { defaultValue: 'Subject' })}
           required
           span={2}
           htmlFor="corr-subject"
@@ -1106,24 +1106,7 @@ export function CorrespondencePage() {
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
         ) : isError ? (
-          <EmptyState
-            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-            title={t('correspondence.load_failed', {
-              defaultValue: 'Could not load correspondence',
-            })}
-            description={
-              error instanceof Error
-                ? error.message
-                : t('correspondence.load_failed_hint', {
-                    defaultValue:
-                      'Something went wrong fetching the correspondence log. Please try again.',
-                  })
-            }
-            action={{
-              label: t('common.retry', { defaultValue: 'Retry' }),
-              onClick: () => refetch(),
-            }}
-          />
+          <RecoveryCard error={error} onRetry={() => refetch()} />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<Mail size={28} strokeWidth={1.5} />}

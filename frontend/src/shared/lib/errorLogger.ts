@@ -57,6 +57,190 @@ const MAX_STORAGE_ENTRIES = 64;
 const STORAGE_KEY = 'oe_error_log';
 
 // ---------------------------------------------------------------------------
+// Recording whitelist (suppress benign noise from the bug-report buffer)
+// ---------------------------------------------------------------------------
+
+/**
+ * A predicate that matches a captured event we want to *exclude* from the
+ * bug-report buffer. All fields are AND-combined; an omitted field is a
+ * wildcard. ``path`` is matched against the captured URL/endpoint; status
+ * matches API errors; errorName matches the JS Error.name field.
+ *
+ * Triggered by the user error log openconstructionerp-log-2026-05-22.json
+ * where 50 of 64 captured errors were identical handled 404s on
+ * /projects/{id}/profile and converter-install AbortErrors that the UI
+ * already shows a toast for — pure noise in a bug report.
+ */
+export interface RecordingFilter {
+  path?: RegExp;
+  status?: number;
+  errorName?: string;
+}
+
+/**
+ * Whitelist of events that must NOT be recorded by the bug-report logger.
+ *
+ * Each entry is a strict predicate so unrelated errors on the same path
+ * still get through (e.g. a 500 on /profile is real and must be captured).
+ *
+ * Exported for testability — keep entries terse and add a comment per row.
+ */
+export const RECORDING_WHITELIST: readonly RecordingFilter[] = [
+  // 1) /projects/{uuid}/profile 404 — backend now auto-retrofits, but older
+  // SPA bundles may briefly see one 404 before the new build lands.
+  {
+    path: /\/v1\/projects\/[0-9a-f-]+\/profile(?:\/?$|\?)/i,
+    status: 404,
+  },
+  // 2) /bim_hub/* 404 when the user navigates to a deleted model. The
+  // /bim/<uuid> route catches this and shows a friendly message; the 404
+  // is not actionable.
+  {
+    path: /\/v1\/bim_hub\//i,
+    status: 404,
+  },
+  // 3) Converter-install AbortError — the install genuinely takes 60-90s
+  // and the AbortController timeout fires from time to time. The user
+  // sees a "still installing — try again in a minute" toast; we don't
+  // need it in the bug report. Matches both the takeoff route (current)
+  // and the integrations route (older builds the user log reported).
+  {
+    path: /\/v1\/(?:takeoff|integrations)\/converters\/[^/]+\/install/i,
+    errorName: 'AbortError',
+  },
+  // 4) Safety-net for 422s the frontend itself caused with stale defaults
+  // (now fixed: CRM limit 500→200, Users limit 200→100). Keep the catch
+  // so a stale tab can't spam the buffer if redeployed mid-session.
+  {
+    path: /\/v1\/crm\/opportunities\/?\?[^#]*\blimit=(?:[3-9]\d{2,}|\d{4,})\b/i,
+    status: 422,
+  },
+  {
+    path: /\/v1\/users\/?\?[^#]*\blimit=(?:1[1-9]\d|[2-9]\d{2,}|\d{4,})\b/i,
+    status: 422,
+  },
+];
+
+/**
+ * Internal: return true if the event matches any whitelist entry and
+ * therefore must NOT be recorded.
+ *
+ * Strict matcher: an entry with both ``path`` and ``status`` requires
+ * BOTH to match. An entry with only ``path`` matches any status (use
+ * sparingly — prefer narrower predicates).
+ */
+export function shouldSuppress(args: {
+  path?: string;
+  status?: number;
+  errorName?: string;
+}): boolean {
+  for (const f of RECORDING_WHITELIST) {
+    if (f.path !== undefined) {
+      if (args.path === undefined) continue;
+      if (!f.path.test(args.path)) continue;
+    }
+    if (f.status !== undefined) {
+      if (args.status !== f.status) continue;
+    }
+    if (f.errorName !== undefined) {
+      if (args.errorName !== f.errorName) continue;
+    }
+    // A predicate must constrain at least one field to be meaningful.
+    if (f.path === undefined && f.status === undefined && f.errorName === undefined) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Network-error noise filter
+// ---------------------------------------------------------------------------
+
+/**
+ * Network/transport-level error fingerprints that should NEVER drive
+ * the "Last error captured" payload of an auto-bug-report.
+ *
+ * These are not code defects — they happen when the backend is
+ * unreachable (offline, dev server down, restart in flight, captive-
+ * portal, CORS preflight refused, request aborted by navigation,
+ * upstream 502/503/504 etc.).
+ *
+ * Triggered by GitHub issue #155: a "Failed to fetch" TypeError from a
+ * SettingsPage React Query function (backend was simply not running)
+ * was filed as an actionable bug.
+ *
+ * NOTE: Each entry must be a substring or full RegExp match against
+ * either the Error.message or the `<endpoint> returned <status>`
+ * `api_error` message we synthesise in ``logApiError``.
+ */
+const NETWORK_ERROR_PATTERNS: readonly RegExp[] = [
+  // Chrome / Edge — generic offline / DNS / TLS failure
+  /TypeError:\s*Failed to fetch/i,
+  /^Failed to fetch$/i,
+  // Firefox
+  /TypeError:\s*NetworkError when attempting to fetch resource/i,
+  /^NetworkError when attempting to fetch resource\.?$/i,
+  // Safari
+  /TypeError:\s*Load failed/i,
+  /^Load failed$/i,
+  // Generic / WebKit when the browser is offline
+  /TypeError:\s*The Internet connection appears to be offline/i,
+  // AbortController-driven (navigation, query cancellation, retry tear-down)
+  /AbortError:\s*signal is aborted without reason/i,
+  /AbortError:\s*The user aborted a request/i,
+  /AbortError:\s*The operation was aborted/i,
+  /^The operation was aborted\.?$/i,
+];
+
+/**
+ * Transient backend status codes that should not block the bug-report
+ * picker — these are infrastructure hiccups, not application defects.
+ *
+ *  - 0   : XHR/fetch resolved with `status: 0` (CORS-preflight failure,
+ *          network unreachable, captive portal, DNS).
+ *  - 502 : Bad Gateway (LB upstream not ready).
+ *  - 503 : Service Unavailable (deploying, draining, rate-limited).
+ *  - 504 : Gateway Timeout (slow upstream).
+ *
+ * A real defect on these endpoints will surface as 4xx/5xx after the
+ * blip resolves, so the buffer still sees actionable errors when the
+ * connection recovers.
+ */
+const TRANSIENT_HTTP_STATUSES: readonly number[] = [0, 502, 503, 504];
+
+/** Return true if the message looks like a transport/network error. */
+export function isNetworkErrorMessage(message: string | undefined | null): boolean {
+  if (!message) return false;
+  return NETWORK_ERROR_PATTERNS.some((re) => re.test(message));
+}
+
+/** Return true if the status code is a transient infrastructure blip. */
+export function isTransientHttpStatus(status: number | undefined | null): boolean {
+  if (status === undefined || status === null) return false;
+  return TRANSIENT_HTTP_STATUSES.includes(status);
+}
+
+/**
+ * Return true if the entry represents a benign network/transport blip
+ * that should not be used as the "Last error captured" payload of a
+ * bug report. The entry is still recorded in the buffer (so the user
+ * can see the full session log) but it is skipped when picking the
+ * representative error.
+ */
+export function isNetworkBlip(entry: ErrorLogEntry): boolean {
+  if (isNetworkErrorMessage(entry.message)) return true;
+  // api_error entries carry the HTTP status in context.status.
+  const statusStr = entry.context?.status;
+  if (statusStr !== undefined) {
+    const status = Number.parseInt(statusStr, 10);
+    if (!Number.isNaN(status) && isTransientHttpStatus(status)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Internal state
 // ---------------------------------------------------------------------------
 
@@ -272,6 +456,17 @@ export function logError(
   const message = isError ? error.message : String(error);
   const stack = isError ? error.stack : undefined;
 
+  // Drop matches against the recording whitelist (handled noise that
+  // would otherwise spam the bug-report buffer).
+  const errorName = isError ? error.name : undefined;
+  const contextPath =
+    context && typeof context === 'object' && 'url' in context
+      ? String((context as Record<string, unknown>).url ?? '')
+      : undefined;
+  if (shouldSuppress({ path: contextPath, errorName })) {
+    return;
+  }
+
   const anonymizedContext: Record<string, string> | undefined = context
     ? Object.fromEntries(
         Object.entries(context).map(([k, v]) => [k, anonymize(String(v))]),
@@ -306,6 +501,14 @@ export function logApiError(
   status: number,
   message: string,
 ): void {
+  // Drop matches against the recording whitelist (handled 4xx/5xx noise
+  // that would otherwise spam the bug-report buffer). Whitelist runs on
+  // the *raw* URL because anonymisation collapses UUIDs and other tokens
+  // a path regex may want to see.
+  if (shouldSuppress({ path: url, status })) {
+    return;
+  }
+
   const anonymizedUrl = anonymize(url);
   const anonymizedMessage = anonymize(message);
 
@@ -347,15 +550,23 @@ export function getErrorCount(): number {
 /**
  * Return the most recent *meaningful* captured error for bug reports.
  *
- * Prefers level=error entries over warnings, because warning-level entries are
- * dominated by benign 404s the UI already handled gracefully (e.g. /bim/<stale-id>
- * auto-detect, optional polling endpoints). Without this filter the issue
- * template would attach a noise 404 as the "last error captured", and users
- * would file false-positive bugs (cf. GitHub issue #115).
+ * Selection rules, in order:
+ *   1) prefer the most recent level=error entry that is NOT a network blip
+ *      (Failed to fetch / AbortError / 502/503/504 etc — see
+ *      ``isNetworkBlip``). Real frontend exceptions (ReferenceError,
+ *      undefined-property TypeError, JSON parse failures, runtime panics)
+ *      still bubble up — only transport noise is skipped.
+ *   2) fall back to the most recent level=error entry (even if it is a
+ *      network blip) so users with backend-down sessions still see
+ *      something representative.
+ *   3) fall back to the most recent entry of any level (preserves prior
+ *      behaviour for warning-only sessions; cf. GitHub issue #115).
  *
- * Lookup window: scans the most recent 32 entries for an error-level match;
- * if none, falls back to the most recent entry (preserving prior behaviour
- * for sessions that genuinely only produced warnings).
+ * Background: GitHub issues #115 and #155. #115 filtered handled 404s.
+ * #155 filed a "Failed to fetch" TypeError from React Query while the
+ * backend was simply not running — a network blip, not a code defect.
+ *
+ * Lookup window: scans the most recent 32 entries.
  *
  * The stack is capped at ~2KB so the returned payload stays URL-safe even
  * when concatenated into a GitHub issue body.
@@ -367,14 +578,28 @@ export function getLastError(): {
 } | null {
   if (memoryBuffer.length === 0) return null;
   const window = memoryBuffer.slice(-32);
+  // Pass 1: the most recent meaningful (non-blip) error.
   let pick: ErrorLogEntry | undefined;
   for (let i = window.length - 1; i >= 0; i--) {
     const e = window[i];
-    if (e && e.level === 'error') {
+    if (e && e.level === 'error' && !isNetworkBlip(e)) {
       pick = e;
       break;
     }
   }
+  // Pass 2: the most recent error of any kind (lets sessions whose only
+  // failures are network blips still produce a non-null payload — the UI
+  // layer warns the user with ``isLastErrorNetworkOnly()``).
+  if (!pick) {
+    for (let i = window.length - 1; i >= 0; i--) {
+      const e = window[i];
+      if (e && e.level === 'error') {
+        pick = e;
+        break;
+      }
+    }
+  }
+  // Pass 3: any most-recent entry (preserves the warning-only contract).
   if (!pick) pick = memoryBuffer[memoryBuffer.length - 1];
   if (!pick) return null;
   const stack = pick.stack ?? '';
@@ -384,6 +609,27 @@ export function getLastError(): {
     stack: cappedStack,
     at: pick.timestamp,
   };
+}
+
+/**
+ * Return ``true`` when every level=error entry in the recent window is a
+ * network blip (or no errors exist at all). This is the signal the
+ * bug-report dialog uses to show a "looks like a network issue, not a
+ * bug" banner before letting the user file anyway.
+ *
+ * Mirrors ``getLastError`` window (32) so the two stay in sync.
+ */
+export function isLastErrorNetworkOnly(): boolean {
+  if (memoryBuffer.length === 0) return false;
+  const window = memoryBuffer.slice(-32);
+  let sawError = false;
+  for (let i = window.length - 1; i >= 0; i--) {
+    const e = window[i];
+    if (!e || e.level !== 'error') continue;
+    sawError = true;
+    if (!isNetworkBlip(e)) return false;
+  }
+  return sawError;
 }
 
 /**

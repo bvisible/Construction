@@ -34,6 +34,7 @@ import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { PipelineBanner } from './PipelineBanner';
 import { getErrorMessage, apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import {
   listVendors,
   listCatalogItems,
@@ -155,16 +156,16 @@ export function SupplierCatalogsPage() {
 
   return (
     <div className="space-y-5">
-      <Breadcrumb items={[{ label: t('supplier_catalogs.title', { defaultValue: 'Supplier Catalogs‌⁠‍' }) }]} />
+      <Breadcrumb items={[{ label: t('supplier_catalogs.title', { defaultValue: 'Supplier Catalogs' }) }]} />
 
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-content-primary">
-            {t('supplier_catalogs.title', { defaultValue: 'Supplier Catalogs‌⁠‍' })}
+            {t('supplier_catalogs.title', { defaultValue: 'Supplier Catalogs' })}
           </h1>
           <p className="mt-1 text-sm text-content-secondary">
             {t('supplier_catalogs.subtitle', {
-              defaultValue: 'Vendors, item catalogs, price comparison, requisitions, POs and warehouses.‌⁠‍',
+              defaultValue: 'Vendors, item catalogs, price comparison, requisitions, POs and warehouses.',
             })}
           </p>
         </div>
@@ -176,12 +177,12 @@ export function SupplierCatalogsPage() {
       <PipelineBanner
         intro={t('supplier_catalogs.pipeline_intro', {
           defaultValue:
-            'The buying chain: register vendors and their priced catalogs, raise a requisition, convert it to a purchase order, then three-way match the invoice on receipt. Catalog prices feed the cost database.‌⁠‍',
+            'The buying chain: register vendors and their priced catalogs, raise a requisition, convert it to a purchase order, then three-way match the invoice on receipt. Catalog prices feed the cost database.',
         })}
         steps={[
           {
             label: t('supplier_catalogs.step_costs', {
-              defaultValue: 'Cost Database‌⁠‍',
+              defaultValue: 'Cost Database',
             }),
             to: '/costs',
           },
@@ -571,6 +572,10 @@ function WarehousePanel({
   onAction: () => void;
 }) {
   const { t } = useTranslation();
+  // StockBalance carries no currency field; warehouses themselves are
+  // currency-agnostic. Fall back to the user's preferred currency so
+  // the column shows a unit instead of a post-Wave2 em-dash.
+  const prefCurrency = usePreferencesStore((s) => s.currency);
   if (warehouses.length === 0) {
     return (
       <EmptyState
@@ -634,7 +639,7 @@ function WarehousePanel({
                   <td className="px-4 py-2 text-right text-xs tabular-nums">{String(b.quantity_on_hand)}</td>
                   <td className="px-4 py-2 text-right text-xs tabular-nums">{String(b.quantity_reserved)}</td>
                   <td className="px-4 py-2 text-right text-xs tabular-nums">
-                    <MoneyDisplay amount={Number(b.unit_cost_avg) || 0} />
+                    <MoneyDisplay amount={Number(b.unit_cost_avg) || 0} currency={prefCurrency} />
                   </td>
                   <td className="px-4 py-2 text-xs text-content-secondary">
                     {b.last_movement_at ? <DateDisplay value={b.last_movement_at} /> : '—'}
@@ -684,10 +689,7 @@ function PriceComparisonModal({
     >
       <div>
         {q.isLoading ? (
-          <div className="py-8 text-center text-sm text-content-tertiary">
-            <Loader2 className="inline animate-spin mr-2" size={14} />
-            {t('common.loading', { defaultValue: 'Loading…' })}
-          </div>
+          <SkeletonTable rows={5} columns={4} />
         ) : q.isError ? (
           <EmptyState
             icon={<AlertOctagon size={20} />}

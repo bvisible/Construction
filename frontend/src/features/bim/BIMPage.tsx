@@ -30,6 +30,7 @@ import {
   CheckCircle2,
   AlertCircle,
   ChevronUp,
+  ChevronDown,
   CalendarDays,
   Trash2,
   RotateCcw,
@@ -53,7 +54,7 @@ import {
   Package,
   GitCompare,
 } from 'lucide-react';
-import { Badge, EmptyState, Breadcrumb, ConfirmDialog } from '@/shared/ui';
+import { Badge, EmptyState, Breadcrumb, ConfirmDialog, ModuleHelpButton } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { BIMViewer } from '@/shared/ui/BIMViewer';
 import type { BIMElementData, BIMModelData } from '@/shared/ui/BIMViewer';
@@ -153,6 +154,44 @@ function ModelFilmstrip({ models, isLoading, activeModelId, onSelectModel, onDel
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
 
+  // Fully-collapsed state: the entire filmstrip shrinks to a slim tab
+  // pinned to the centre of the bottom edge with a single chevron, mirroring
+  // the left-panel collapse pattern. The tab stays clickable so users can
+  // re-expand without hunting through a hamburger menu.
+  if (!expanded) {
+    return (
+      <div className="shrink-0 bg-transparent">
+        <div className="flex justify-center">
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            aria-expanded={false}
+            aria-label={t('bim.expand_models_filmstrip', {
+              defaultValue: 'Show models filmstrip',
+            })}
+            data-testid="bim-filmstrip-expand"
+            className="group flex items-center gap-1.5 px-3 py-1 rounded-t-md bg-surface-primary/95 backdrop-blur border border-b-0 border-border-light shadow-sm hover:bg-surface-secondary/60 transition-colors"
+            title={t('bim.expand_models_filmstrip', {
+              defaultValue: 'Show models filmstrip',
+            })}
+          >
+            <ChevronUp
+              size={14}
+              className="text-content-tertiary group-hover:text-content-secondary transition-colors"
+            />
+            <Layers size={12} className="text-content-tertiary shrink-0" />
+            <span className="text-[10px] font-medium text-content-secondary">
+              {t('bim.models_label', { defaultValue: 'Models' })}
+            </span>
+            <span className="text-[10px] text-content-tertiary tabular-nums">
+              ({models.length})
+            </span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="shrink-0 bg-surface-primary border-t border-border-light">
       {/* Header — always visible with drag handle, title, and count */}
@@ -160,7 +199,8 @@ function ModelFilmstrip({ models, isLoading, activeModelId, onSelectModel, onDel
         type="button"
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        aria-label={t('bim.toggle_models_filmstrip', { defaultValue: 'Toggle models filmstrip‌⁠‍' })}
+        aria-label={t('bim.toggle_models_filmstrip', { defaultValue: 'Toggle models filmstrip' })}
+        data-testid="bim-filmstrip-toggle"
         className="flex items-center w-full px-4 py-2 cursor-pointer group hover:bg-surface-secondary/30 transition-colors"
       >
         {/* Drag handle icon */}
@@ -175,23 +215,24 @@ function ModelFilmstrip({ models, isLoading, activeModelId, onSelectModel, onDel
 
         {/* Title */}
         <span className="text-xs font-semibold text-content-primary">
-          {t('bim.models_label', { defaultValue: 'Models‌⁠‍' })}
+          {t('bim.models_label', { defaultValue: 'Models' })}
         </span>
         <span className="text-[11px] text-content-tertiary ml-1.5">({models.length})</span>
 
-        {/* Expand/collapse chevron */}
-        <svg
-          className={`ml-auto w-4 h-4 text-content-tertiary transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
-        </svg>
+        {/* Collapse chevron — chevron-down icon rotates so the visual cue
+            (arrow points DOWN to collapse, UP to expand) matches the
+            left-panel collapse pattern.  The previous variant rotated a
+            chevron-up which felt backwards to repeated users. */}
+        <ChevronDown
+          size={16}
+          className="ml-auto text-content-tertiary transition-transform duration-200"
+        />
       </button>
 
       {/* Collapsible model cards */}
       <div
         className="overflow-hidden transition-all duration-300 ease-in-out"
-        style={{ maxHeight: expanded ? '120px' : '0px', opacity: expanded ? 1 : 0 }}
+        style={{ maxHeight: '120px', opacity: 1 }}
       >
         <div className="flex items-center gap-3 px-4 pb-2 overflow-x-auto">
           {isLoading ? (
@@ -204,15 +245,15 @@ function ModelFilmstrip({ models, isLoading, activeModelId, onSelectModel, onDel
             ))
           ) : (
             <span className="text-[11px] text-content-quaternary">
-              {t('bim.no_models_yet', { defaultValue: 'No models uploaded yet‌⁠‍' })}
+              {t('bim.no_models_yet', { defaultValue: 'No models uploaded yet' })}
             </span>
           )}
           {/* Add model button */}
           <button
             onClick={onUpload}
             className="flex items-center justify-center shrink-0 w-16 h-16 rounded-xl border-2 border-dashed border-border-medium hover:border-oe-blue/50 hover:bg-oe-blue/5 transition-all group"
-            title={t('bim.upload_model', { defaultValue: 'Upload model‌⁠‍' })}
-            aria-label={t('bim.upload_model', { defaultValue: 'Upload model‌⁠‍' })}
+            title={t('bim.upload_model', { defaultValue: 'Upload model' })}
+            aria-label={t('bim.upload_model', { defaultValue: 'Upload model' })}
           >
             <Plus size={20} className="text-content-quaternary group-hover:text-oe-blue transition-colors" />
           </button>
@@ -232,21 +273,25 @@ function ModelCard({ model, isActive, onClick, onDelete }: {
 
   const statusDot = model.status === 'ready'
     ? 'bg-emerald-500'
-    : isProcessing
-      ? 'bg-amber-400 animate-pulse'
-      : isError
-        ? 'bg-red-400'
-        : 'bg-gray-400';
+    : model.status === 'degraded'
+      ? 'bg-amber-500'
+      : isProcessing
+        ? 'bg-amber-400 animate-pulse'
+        : isError
+          ? 'bg-red-400'
+          : 'bg-gray-400';
 
   const statusLabel = model.status === 'ready'
     ? t('bim.status_ready', { defaultValue: 'Ready' })
-    : model.status === 'needs_converter'
-      ? t('bim.status_needs_converter', { defaultValue: 'Needs Converter' })
-      : model.status === 'processing'
-        ? t('bim.status_processing', { defaultValue: 'Processing' })
-        : model.status === 'error'
-          ? t('bim.status_error', { defaultValue: 'Error' })
-          : model.status;
+    : model.status === 'degraded'
+      ? t('bim.status_degraded', { defaultValue: 'Imported (no quantities)' })
+      : model.status === 'needs_converter'
+        ? t('bim.status_needs_converter', { defaultValue: 'Needs Converter' })
+        : model.status === 'processing'
+          ? t('bim.status_processing', { defaultValue: 'Processing' })
+          : model.status === 'error'
+            ? t('bim.status_error', { defaultValue: 'Error' })
+            : model.status;
 
   // The card itself acts as a button (click selects the model). We render
   // it as a <div role="button"> so the inner delete button can stay a real
@@ -921,17 +966,57 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
     finally { setIsInstalling(false); }
   };
 
-  // Show install button when the failure is "converter missing"; otherwise
-  // show retry. Either way the user has a one-click path forward.
-  const showInstallButton = !isProcessing && errorCode === 'ddc_not_found' && !!converterId;
+  // Show install button when the failure is "converter missing" OR the
+  // installed binary is older than the platform expects (the v4.6.2 RVT
+  // CLI mismatch). In both cases a reinstall is the actionable fix; for
+  // outdated CLI we also override the headline copy so the user sees
+  // *why* they should reinstall instead of the generic guidance.
+  const isOutdatedConverter =
+    !isProcessing && errorCode === 'converter_outdated' && !!converterId;
+  const showInstallButton =
+    !isProcessing
+    && (errorCode === 'ddc_not_found' || isOutdatedConverter)
+    && !!converterId;
   const showRetryButton = !isProcessing && !showInstallButton;
+
+  // Localised override for the converter_outdated branch — when the
+  // backend ships ``cause="converter_outdated"`` (i.e. exit-15 from an
+  // old DDC CLI), we replace the generic title with one that names the
+  // specific problem and the specific fix. The body keeps the backend's
+  // composed message because it already includes the file's RVT format,
+  // the installed converter version and a single-line stderr excerpt —
+  // none of which the frontend can synthesise on its own.
+  const headlineTitle = isOutdatedConverter
+    ? t('bim.overlay_converter_outdated_title', {
+        defaultValue: 'Converter is out of date',
+      })
+    : c.title;
+  const installButtonLabel = isOutdatedConverter
+    ? isInstalling
+      ? t('bim.overlay_reinstall_in_progress', { defaultValue: 'Reinstalling…' })
+      : t('bim.overlay_reinstall_converter_btn', {
+          defaultValue: 'Reinstall converter',
+        })
+    : isInstalling
+      ? t('bim.overlay_install_in_progress', { defaultValue: 'Installing…' })
+      : t('bim.overlay_install_converter_btn', {
+          defaultValue: 'Install converter',
+        });
 
   return (
     <div className="flex flex-col items-center justify-center h-full bg-surface-secondary" role={isProcessing ? 'status' : 'alert'}>
       <div className="text-center max-w-md px-6 w-full">
         <div className={`mx-auto w-20 h-20 rounded-2xl ${c.bg} border flex items-center justify-center mb-5`}>{c.icon}</div>
-        <h2 className="text-lg font-bold text-content-primary mb-2">{c.title}</h2>
+        <h2 className="text-lg font-bold text-content-primary mb-2">{headlineTitle}</h2>
         <p className="text-sm text-content-secondary mb-2 whitespace-pre-line">{description}</p>
+        {isOutdatedConverter && (
+          <p className="text-[11px] text-amber-700 dark:text-amber-300 mb-3 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 inline-block">
+            {t('bim.overlay_converter_outdated_hint', {
+              defaultValue:
+                'Reinstall fetches the latest converter from GitHub and retries your upload automatically.',
+            })}
+          </p>
+        )}
         <p className="text-[11px] text-content-quaternary mb-6">{model.name}{model.file_size ? ` · ${formatFileSize(model.file_size)}` : ''}</p>
 
         {isProcessing && (
@@ -962,13 +1047,11 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
               <button
                 onClick={handleInstall}
                 disabled={isInstalling}
-                aria-label={t('bim.overlay_install_converter_btn', { defaultValue: 'Install converter' })}
+                aria-label={installButtonLabel}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600 transition-colors shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 {isInstalling ? <Loader2 size={15} className="animate-spin" /> : <DownloadCloud size={15} />}
-                {isInstalling
-                  ? t('bim.overlay_install_in_progress', { defaultValue: 'Installing…' })
-                  : t('bim.overlay_install_converter_btn', { defaultValue: 'Install converter' })}
+                {installButtonLabel}
               </button>
             )}
             {showRetryButton && (
@@ -1486,9 +1569,10 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
             {(landingModels ?? []).map((m) => {
               const fmt = (m.model_format || m.format || '').toUpperCase();
               const isReady = m.status === 'ready';
+              const isDegraded = m.status === 'degraded';
               const isProcessing = m.status === 'processing';
               const isError = m.status === 'error' || m.status === 'needs_converter';
-              const statusDot = isReady ? 'bg-emerald-500' : isProcessing ? 'bg-amber-400 animate-pulse' : isError ? 'bg-red-400' : 'bg-gray-400';
+              const statusDot = isReady ? 'bg-emerald-500' : isDegraded ? 'bg-amber-500' : isProcessing ? 'bg-amber-400 animate-pulse' : isError ? 'bg-red-400' : 'bg-gray-400';
 
               return (
                 <button
@@ -1518,7 +1602,7 @@ function LandingPage({ projectId, onUploadComplete: _onUploadComplete, breadcrum
                     <div className="flex items-center gap-2 text-[10px] text-content-quaternary">
                       <span className="flex items-center gap-1">
                         <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
-                        {isReady ? t('bim.status_ready', { defaultValue: 'Ready' }) : isProcessing ? t('bim.status_processing', { defaultValue: 'Processing' }) : m.status}
+                        {isReady ? t('bim.status_ready', { defaultValue: 'Ready' }) : isDegraded ? t('bim.status_degraded', { defaultValue: 'Imported (no quantities)' }) : isProcessing ? t('bim.status_processing', { defaultValue: 'Processing' }) : m.status}
                       </span>
                       {(m.element_count ?? 0) > 0 && (
                         <>
@@ -1871,7 +1955,10 @@ export function BIMPage() {
     // an upload) used to surface a misleading "Failed to load model elements"
     // toast — the inline NonReadyOverlay now drives the UI for non-ready
     // states and the elements query waits its turn.
-    enabled: !!activeModelId && activeModel?.status === 'ready',
+    // 'degraded' models have geometry + elements in the DB (imported but DDC
+    // converter absent or no quantities extracted) — show them in the viewer
+    // with the existing converter-absent warning banner.
+    enabled: !!activeModelId && (activeModel?.status === 'ready' || activeModel?.status === 'degraded'),
   });
   const elements: BIMElementData[] = elementsQuery.data?.items ?? [];
   const elementsTotal: number = elementsQuery.data?.total ?? 0;
@@ -1987,9 +2074,11 @@ export function BIMPage() {
   // The ?token= param authenticates the request (Three.js can't set headers).
   // Cache-bust with model updated_at to ensure fresh geometry after re-upload.
   const geometryUrl = useMemo(() => {
+    const modelIsViewable =
+      activeModel?.status === 'ready' || activeModel?.status === 'degraded';
     if (
       !activeModelId ||
-      activeModel?.status !== 'ready' ||
+      !modelIsViewable ||
       ((activeModel?.element_count ?? 0) === 0 && !elements.some((el) => !!el.mesh_ref))
     ) {
       return null;
@@ -2648,6 +2737,7 @@ export function BIMPage() {
                 title={t('bim.filter_toggle', { defaultValue: 'Toggle filter panel' })}
                 aria-label={t('bim.filter_toggle', { defaultValue: 'Toggle filter panel' })}
                 aria-pressed={filterPanelOpen}
+                data-testid="bim-tour-filter-button"
               >
                 <Filter size={13} />
                 {t('bim.filter_button', { defaultValue: 'Filter' })}
@@ -2748,6 +2838,52 @@ export function BIMPage() {
                 </button>
               )}
 
+              {projectId && (
+                <button
+                  onClick={() => {
+                    // Carry the currently-loaded BIM model id forward so
+                    // the geo page can flyTo() the matching tileset
+                    // instead of leaving the camera at the project anchor.
+                    const url = activeModelId
+                      ? `/projects/${projectId}/geo?model=${encodeURIComponent(activeModelId)}`
+                      : `/projects/${projectId}/geo`;
+                    navigate(url);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border text-content-secondary bg-surface-secondary border-border-light hover:bg-surface-tertiary"
+                  title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+                  aria-label={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+                  data-testid="bim-view-on-map"
+                >
+                  <Globe2 size={13} />
+                  {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+                </button>
+              )}
+
+              {/* Round-trip with /data-explorer. The `?bimModel=<id>` deeplink
+                  is already handled by CadDataExplorerPage which calls
+                  `sessionFromBimModel` server-side (idempotent — reuses an
+                  existing session for the same model). */}
+              {activeModelId && (
+                <button
+                  onClick={() => {
+                    navigate(`/data-explorer?bimModel=${encodeURIComponent(activeModelId)}`);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border text-content-secondary bg-surface-secondary border-border-light hover:bg-surface-tertiary"
+                  title={t('bim.open_in_data_explorer_title', {
+                    defaultValue: 'Explore extracted data tables',
+                  })}
+                  aria-label={t('bim.open_in_data_explorer', {
+                    defaultValue: 'Open in Data Explorer',
+                  })}
+                  data-testid="bim-open-in-data-explorer"
+                >
+                  <Database size={13} />
+                  {t('bim.open_in_data_explorer', {
+                    defaultValue: 'Open in Data Explorer',
+                  })}
+                </button>
+              )}
+
               <button
                 onClick={() => setAssetCardEnabled(!assetCardEnabled)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border ${
@@ -2784,6 +2920,7 @@ export function BIMPage() {
                 title={t('bim.linked_boq_toggle', { defaultValue: 'Toggle linked BOQ panel' })}
                 aria-label={t('bim.linked_boq_toggle', { defaultValue: 'Toggle linked BOQ panel' })}
                 aria-pressed={boqPanelOpen}
+                data-testid="bim-tour-linked-boq-button"
               >
                 <ClipboardList size={13} />
                 {t('bim.linked_boq_button', { defaultValue: 'Linked BOQ' })}
@@ -2913,6 +3050,10 @@ export function BIMPage() {
           <button onClick={() => setUploadOpen((p) => !p)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-oe-blue text-white hover:bg-oe-blue-dark transition-colors shadow-sm">
             <Plus size={13} /> {t('bim.add_model', { defaultValue: 'Add Model' })}
           </button>
+          {/* Per-module Tour CTA — launches the BIM-specific guided tour
+              via the registered TOUR_REGISTRY entry, independent of any
+              global / first-login tour state. */}
+          <ModuleHelpButton tourId="bim" />
         </div>
       </div>
 

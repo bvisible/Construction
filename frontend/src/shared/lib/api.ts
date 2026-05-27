@@ -30,9 +30,26 @@ const BASE_URL =
     : '/api';
 // //// END NEOFFICE PATCH
 
+/**
+ * Public API base path — exported for callers that need to bypass the
+ * JSON helpers (e.g. multipart uploads via raw fetch). Mirrors the
+ * private ``BASE_URL`` constant; keep them in lock-step.
+ */
+export const API_BASE = BASE_URL;
+
 /** Retrieve the stored JWT token from the auth store. */
 function getToken(): string | null {
   return useAuthStore.getState().accessToken;
+}
+
+/**
+ * Public alias of :func:`getToken` for callers (multipart upload
+ * helpers, file pickers, etc.) that need to assemble their own
+ * ``Authorization: Bearer …`` header. Returns ``null`` when the user
+ * is not authenticated.
+ */
+export function getAuthToken(): string | null {
+  return getToken();
 }
 
 /** Build common headers for every request. */
@@ -141,15 +158,15 @@ function statusFallbackMessage(status: number): string {
   const t = i18next.t.bind(i18next);
   switch (status) {
     case 400:
-      return t('errors.bad_request', { defaultValue: "The request couldn't be processed. Please check your input.‌⁠‍" });
+      return t('errors.bad_request', { defaultValue: "The request couldn't be processed. Please check your input." });
     case 401:
-      return t('errors.unauthorized', { defaultValue: 'Your session has expired. Please sign in again.‌⁠‍' });
+      return t('errors.unauthorized', { defaultValue: 'Your session has expired. Please sign in again.' });
     case 403:
-      return t('errors.forbidden', { defaultValue: "You don't have permission to perform this action.‌⁠‍" });
+      return t('errors.forbidden', { defaultValue: "You don't have permission to perform this action." });
     case 404:
-      return t('errors.not_found', { defaultValue: 'The requested item could not be found.‌⁠‍' });
+      return t('errors.not_found', { defaultValue: 'The requested item could not be found.' });
     case 409:
-      return t('errors.conflict', { defaultValue: 'This conflicts with existing data — refresh and try again.‌⁠‍' });
+      return t('errors.conflict', { defaultValue: 'This conflicts with existing data — refresh and try again.' });
     case 413:
       return t('errors.payload_too_large', { defaultValue: 'The file is too large. Please try a smaller one.' });
     case 422:

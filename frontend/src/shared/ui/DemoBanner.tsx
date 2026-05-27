@@ -53,20 +53,20 @@ export function DemoBanner() {
       {/* Persistent thin strip at the very top */}
       <div
         role="alert"
-        className="sticky top-0 z-50 flex items-center justify-center gap-2 px-4 py-1.5 text-xs font-medium text-amber-950 bg-gradient-to-r from-amber-300 via-amber-200 to-amber-300 border-b border-amber-500/40 shadow-sm"
+        className="sticky top-0 z-50 flex items-center justify-center gap-2 px-4 py-1.5 text-xs font-medium text-amber-950 bg-gradient-to-r from-amber-300 via-amber-200 to-amber-300 border-b border-amber-500/40 shadow-sm dark:text-amber-100 dark:from-amber-900/40 dark:via-amber-800/40 dark:to-amber-900/40 dark:border-amber-500/30"
       >
         <AlertTriangle size={13} className="shrink-0" />
         <span className="truncate">
           Public demo — do not upload real data. For production use, install
           locally:
         </span>
-        <code className="px-1.5 py-0.5 rounded bg-amber-900/15 text-amber-950 font-mono text-[11px]">
+        <code className="px-1.5 py-0.5 rounded bg-amber-900/15 text-amber-950 font-mono text-[11px] dark:bg-amber-100/10 dark:text-amber-100">
           pip install openconstructionerp
         </code>
         <button
           type="button"
           onClick={() => setModalOpen(true)}
-          className="ml-1 underline underline-offset-2 hover:text-amber-900"
+          className="ml-1 underline underline-offset-2 hover:text-amber-900 dark:hover:text-amber-50"
         >
           Why?
         </button>

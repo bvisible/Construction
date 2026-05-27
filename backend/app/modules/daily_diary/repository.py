@@ -219,6 +219,25 @@ class DiaryPhotoRepository(_BaseRepository):
         result = await self.session.execute(stmt)
         return list(result.scalars().all()), total
 
+    async def photos_for_diary(
+        self,
+        diary_id: uuid.UUID,
+    ) -> list[DiaryPhoto]:
+        """Return all photos linked to a specific diary.
+
+        Used by the sign / immutable-payload-hash paths. Previously these
+        callers loaded every photo in the entire project (limit=10 000)
+        and filtered in Python — wasteful and a P2 latency hit on large
+        projects. A single indexed ``WHERE diary_id = ?`` is enough.
+        """
+        stmt = (
+            select(DiaryPhoto)
+            .where(DiaryPhoto.diary_id == diary_id)
+            .order_by(DiaryPhoto.taken_at.asc())
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
 
 class DiaryVideoRepository(_BaseRepository):
     """Data access for DiaryVideo."""

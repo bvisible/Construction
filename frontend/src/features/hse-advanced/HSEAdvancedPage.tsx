@@ -1,14 +1,13 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   ShieldAlert,
   ClipboardList,
   HardHat,
   FileCheck,
-  Award,
   Wrench,
   Users,
   X,
@@ -25,14 +24,17 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   SkeletonTable,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { SectionIntro } from '@/features/validation';
 import { normalizeListResponse } from '@/shared/lib/apiHelpers';
 import { getErrorMessage } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import {
   fetchInvestigations,
   fetchJSAs,
@@ -67,7 +69,10 @@ import {
   type FiveWhys,
 } from './api';
 
-type HSETab = 'incidents' | 'jsa' | 'permits' | 'toolbox' | 'ppe' | 'audits' | 'capa';
+const HSE_TAB_IDS = [
+  'incidents', 'jsa', 'permits', 'toolbox', 'ppe', 'audits', 'capa',
+] as const;
+type HSETab = (typeof HSE_TAB_IDS)[number];
 
 type BadgeVariant = 'neutral' | 'blue' | 'success' | 'warning' | 'error';
 
@@ -113,11 +118,17 @@ export function HSEAdvancedPage() {
   const projectId = routeProjectId || activeProjectId || '';
 
   const [tab, setTab] = useState<HSETab>('incidents');
+  const onTabKeyDown = useTabKeyboardNav<HSETab>({
+    ids: HSE_TAB_IDS,
+    activeId: tab,
+    onChange: setTab,
+    orientation: 'horizontal',
+  });
 
   const tabs: { key: HSETab; label: string; icon: React.ReactNode }[] = [
     {
       key: 'incidents',
-      label: t('hse_advanced.tab_incidents', { defaultValue: 'Incidents‌⁠‍' }),
+      label: t('hse_advanced.tab_incidents', { defaultValue: 'Incidents' }),
       icon: <ShieldAlert size={15} />,
     },
     {
@@ -127,12 +138,12 @@ export function HSEAdvancedPage() {
     },
     {
       key: 'permits',
-      label: t('hse_advanced.tab_permits', { defaultValue: 'Permits‌⁠‍' }),
+      label: t('hse_advanced.tab_permits', { defaultValue: 'Permits' }),
       icon: <FileCheck size={15} />,
     },
     {
       key: 'toolbox',
-      label: t('hse_advanced.tab_toolbox', { defaultValue: 'Toolbox‌⁠‍' }),
+      label: t('hse_advanced.tab_toolbox', { defaultValue: 'Toolbox' }),
       icon: <Users size={15} />,
     },
     {
@@ -142,7 +153,7 @@ export function HSEAdvancedPage() {
     },
     {
       key: 'audits',
-      label: t('hse_advanced.tab_audits', { defaultValue: 'Audits‌⁠‍' }),
+      label: t('hse_advanced.tab_audits', { defaultValue: 'Audits' }),
       icon: <ShieldCheck size={15} />,
     },
     {
@@ -156,7 +167,7 @@ export function HSEAdvancedPage() {
     <div className="w-full animate-fade-in">
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard‌⁠‍' }), to: '/' },
+          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
           ...(projectName ? [{ label: projectName, to: `/projects/${projectId}` }] : []),
           { label: t('hse_advanced.title', { defaultValue: 'HSE Advanced' }) },
         ]}
@@ -196,31 +207,35 @@ export function HSEAdvancedPage() {
         })}
       </SectionIntro>
 
-      {!projectId && (
-        <EmptyState
-          icon={<Award size={28} strokeWidth={1.5} />}
-          title={t('hse_advanced.no_project', { defaultValue: 'No project selected' })}
-          description={t('hse_advanced.no_project_desc', {
-            defaultValue:
-              'Pick a project from the header to manage advanced HSE records: investigations, permits, audits and corrective actions.',
-          })}
-        />
-      )}
+      {projectId && <HSEKpiStrip projectId={projectId} />}
 
-      {projectId && (
-        <>
-          <div
-            className="flex items-center gap-1 mb-6 border-b border-border-light overflow-x-auto"
-            role="tablist"
-          >
-            {tabs.map((tb) => (
+      <RequiresProject
+        emptyHint={t('hse_advanced.no_project_desc', {
+          defaultValue:
+            'Pick a project from the header to manage advanced HSE records: investigations, permits, audits and corrective actions.',
+        })}
+      >
+        <div
+          className="flex items-center gap-1 mb-6 border-b border-border-light overflow-x-auto"
+          role="tablist"
+          aria-label={t('hse_advanced.tabs_aria', {
+            defaultValue: 'HSE advanced sections',
+          })}
+          onKeyDown={onTabKeyDown}
+        >
+          {tabs.map((tb) => {
+            const isActive = tab === tb.key;
+            return (
               <button
                 key={tb.key}
                 role="tab"
-                aria-selected={tab === tb.key}
+                id={`hse-tab-${tb.key}`}
+                aria-selected={isActive}
+                aria-controls={`hse-panel-${tb.key}`}
+                tabIndex={isActive ? 0 : -1}
                 onClick={() => setTab(tb.key)}
                 className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all whitespace-nowrap ${
-                  tab === tb.key
+                  isActive
                     ? 'border-oe-blue text-oe-blue'
                     : 'border-transparent text-content-tertiary hover:text-content-primary hover:bg-surface-secondary'
                 }`}
@@ -228,9 +243,15 @@ export function HSEAdvancedPage() {
                 {tb.icon}
                 {tb.label}
               </button>
-            ))}
-          </div>
+            );
+          })}
+        </div>
 
+        <div
+          role="tabpanel"
+          id={`hse-panel-${tab}`}
+          aria-labelledby={`hse-tab-${tab}`}
+        >
           {tab === 'incidents' && <IncidentsTab projectId={projectId} />}
           {tab === 'jsa' && <JSATab projectId={projectId} />}
           {tab === 'permits' && <PermitsTab projectId={projectId} />}
@@ -238,8 +259,8 @@ export function HSEAdvancedPage() {
           {tab === 'ppe' && <PPETab projectId={projectId} />}
           {tab === 'audits' && <AuditsTab projectId={projectId} />}
           {tab === 'capa' && <CAPATab projectId={projectId} />}
-        </>
-      )}
+        </div>
+      </RequiresProject>
     </div>
   );
 }
@@ -392,6 +413,212 @@ function Osha300Download({ projectId }: { projectId: string }) {
   );
 }
 
+/* ── HSE KPI Strip ────────────────────────────────────────────────────── */
+
+/**
+ * Top-of-page KPI strip — four mini-cards giving HSE managers instant
+ * site-health context before they pick a tab. All counts come from the
+ * existing module endpoints; no new backend needed. ``useQueries``
+ * deliberately runs the fetches in parallel — hook-rule-safe per the
+ * v4.5.0 propdev decision (memory: useQueries for hook safety).
+ *
+ *  - Open Investigations: status != completed/abandoned
+ *  - Overdue CAPAs:       due_date < today AND not closed
+ *  - Active Permits:      status === 'active'
+ *  - Days Since LTI:      proxy = today - latest investigation incident_date
+ *                         (no LTI flag exists yet on investigations; we
+ *                         approximate via "last severe/major/critical
+ *                         incident" which is what RIDDOR / OSHA flag).
+ *
+ * Severity-tinted backgrounds drive at-a-glance reading:
+ *  - red       when overdue CAPAs > 0 or days-since-LTI < 7
+ *  - amber     when days-since-LTI < 30
+ *  - emerald   when ≥ 30 days
+ *  - neutral   when no data
+ */
+function HSEKpiStrip({ projectId }: { projectId: string }) {
+  const { t } = useTranslation();
+  const results = useQueries({
+    queries: [
+      {
+        queryKey: ['hse-kpi-investigations', projectId],
+        queryFn: () => fetchInvestigations(projectId),
+        select: (d: unknown) => normalizeListResponse<IncidentInvestigation>(d as IncidentInvestigation[] | { items: IncidentInvestigation[] } | null | undefined),
+        staleTime: 30_000,
+      },
+      {
+        queryKey: ['hse-kpi-capas', projectId],
+        queryFn: () => fetchCAPAs(projectId),
+        select: (d: unknown) => normalizeListResponse<CorrectiveAction>(d as CorrectiveAction[] | { items: CorrectiveAction[] } | null | undefined),
+        staleTime: 30_000,
+      },
+      {
+        queryKey: ['hse-kpi-permits', projectId],
+        queryFn: () => fetchPermits(projectId),
+        select: (d: unknown) => normalizeListResponse<PermitToWork>(d as PermitToWork[] | { items: PermitToWork[] } | null | undefined),
+        staleTime: 30_000,
+      },
+    ],
+  });
+
+  const [invQ, capaQ, permQ] = results;
+  const isLoading = results.some((r) => r.isLoading);
+  const isError = results.some((r) => r.isError);
+
+  const stats = useMemo(() => {
+    const investigations = (invQ.data ?? []) as IncidentInvestigation[];
+    const capas = (capaQ.data ?? []) as CorrectiveAction[];
+    const permits = (permQ.data ?? []) as PermitToWork[];
+
+    const openInvestigations = investigations.filter(
+      (it) => it.status !== 'completed' && it.status !== 'cancelled',
+    ).length;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const overdueCapas = capas.filter((c) => {
+      if (c.status === 'closed' || c.status === 'verified' || c.status === 'completed') {
+        return false;
+      }
+      if (!c.due_date) return false;
+      const due = new Date(c.due_date);
+      if (Number.isNaN(due.getTime())) return false;
+      due.setHours(0, 0, 0, 0);
+      return due.getTime() < today.getTime();
+    }).length;
+
+    const activePermits = permits.filter((p) => p.status === 'active').length;
+
+    // Days-since-LTI proxy: most-recent severe/major/critical incident
+    // among the formal investigations. The investigation record is what
+    // RIDDOR / OSHA actually cares about (not the lightweight Safety log).
+    let mostRecentSevere: Date | null = null;
+    for (const inv of investigations) {
+      if (
+        inv.severity !== 'major' &&
+        inv.severity !== 'severe' &&
+        inv.severity !== 'critical'
+      ) {
+        continue;
+      }
+      if (!inv.incident_date) continue;
+      const d = new Date(inv.incident_date);
+      if (Number.isNaN(d.getTime())) continue;
+      if (mostRecentSevere === null || d > mostRecentSevere) {
+        mostRecentSevere = d;
+      }
+    }
+    const daysSinceLti: number | null =
+      mostRecentSevere === null
+        ? null
+        : Math.max(0, Math.floor((today.getTime() - mostRecentSevere.getTime()) / 86_400_000));
+
+    return { openInvestigations, overdueCapas, activePermits, daysSinceLti };
+  }, [invQ.data, capaQ.data, permQ.data]);
+
+  if (isError) {
+    // Don't block the page on KPI failure — just hide the strip silently
+    // and let the user fall back to the tabs.
+    return null;
+  }
+
+  const ltiTone: KpiTone =
+    stats.daysSinceLti === null
+      ? 'neutral'
+      : stats.daysSinceLti < 7
+        ? 'error'
+        : stats.daysSinceLti < 30
+          ? 'warning'
+          : 'success';
+
+  const capaTone: KpiTone = stats.overdueCapas === 0 ? 'success' : 'error';
+
+  return (
+    <div
+      className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6"
+      data-testid="hse-kpi-strip"
+      aria-label={t('hse_advanced.kpi_aria', { defaultValue: 'HSE key indicators' })}
+    >
+      <KpiCard
+        label={t('hse_advanced.kpi_open_investigations', {
+          defaultValue: 'Open investigations',
+        })}
+        value={isLoading ? '—' : stats.openInvestigations}
+        icon={<ShieldAlert size={16} />}
+        tone={stats.openInvestigations > 0 ? 'warning' : 'neutral'}
+        testId="hse-kpi-open-investigations"
+      />
+      <KpiCard
+        label={t('hse_advanced.kpi_overdue_capas', { defaultValue: 'Overdue CAPAs' })}
+        value={isLoading ? '—' : stats.overdueCapas}
+        icon={<Wrench size={16} />}
+        tone={capaTone}
+        testId="hse-kpi-overdue-capas"
+      />
+      <KpiCard
+        label={t('hse_advanced.kpi_active_permits', { defaultValue: 'Active permits' })}
+        value={isLoading ? '—' : stats.activePermits}
+        icon={<FileCheck size={16} />}
+        tone={stats.activePermits > 0 ? 'blue' : 'neutral'}
+        testId="hse-kpi-active-permits"
+      />
+      <KpiCard
+        label={t('hse_advanced.kpi_days_since_lti', {
+          defaultValue: 'Days since LTI',
+        })}
+        value={
+          isLoading
+            ? '—'
+            : stats.daysSinceLti === null
+              ? t('hse_advanced.kpi_no_lti', { defaultValue: 'No record' })
+              : stats.daysSinceLti
+        }
+        icon={<Clock size={16} />}
+        tone={ltiTone}
+        testId="hse-kpi-days-since-lti"
+      />
+    </div>
+  );
+}
+
+type KpiTone = 'success' | 'warning' | 'error' | 'blue' | 'neutral';
+
+function KpiCard({
+  label,
+  value,
+  icon,
+  tone,
+  testId,
+}: {
+  label: string;
+  value: number | string;
+  icon: React.ReactNode;
+  tone: KpiTone;
+  testId: string;
+}) {
+  // Soft tints — match the project's badge palette so the cards never
+  // overpower the table data they sit above.
+  const toneCls: Record<KpiTone, string> = {
+    success: 'border-semantic-success/30 bg-semantic-success/5 text-semantic-success',
+    warning: 'border-amber-500/30 bg-amber-50 text-amber-700',
+    error: 'border-semantic-error/30 bg-semantic-error/5 text-semantic-error',
+    blue: 'border-oe-blue/30 bg-oe-blue-subtle text-oe-blue',
+    neutral: 'border-border bg-surface-secondary text-content-tertiary',
+  };
+  return (
+    <div
+      className={`rounded-xl border px-4 py-3 transition-colors ${toneCls[tone]}`}
+      data-testid={testId}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium opacity-80">{label}</span>
+        <span className="opacity-70">{icon}</span>
+      </div>
+      <div className="mt-1 text-2xl font-bold tabular-nums">{value}</div>
+    </div>
+  );
+}
+
 /* ── Modal Shell ─────────────────────────────────────────────────────── */
 
 function ModalShell({
@@ -464,7 +691,7 @@ function IncidentsTab({ projectId }: { projectId: string }) {
     severity: 'minor' as IncidentSeverity,
   });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-investigations', projectId],
     queryFn: () => fetchInvestigations(projectId),
     select: (d) => normalizeListResponse<IncidentInvestigation>(d),
@@ -513,13 +740,7 @@ function IncidentsTab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse_advanced.load_error', {
-            defaultValue: 'Failed to load HSE records. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -846,7 +1067,7 @@ function JSATab({ projectId }: { projectId: string }) {
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ title: '', task_description: '', location: '' });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-jsas', projectId],
     queryFn: () => fetchJSAs(projectId),
     select: (d) => normalizeListResponse<JobSafetyAnalysis>(d),
@@ -884,13 +1105,7 @@ function JSATab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse_advanced.load_error', {
-            defaultValue: 'Failed to load HSE records. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -1041,7 +1256,7 @@ function PermitsTab({ projectId }: { projectId: string }) {
     expires_at: '',
   });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-permits', projectId],
     queryFn: () => fetchPermits(projectId),
     select: (d) => normalizeListResponse<PermitToWork>(d),
@@ -1099,13 +1314,7 @@ function PermitsTab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse_advanced.load_error', {
-            defaultValue: 'Failed to load HSE records. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -1421,6 +1630,8 @@ function PermitDetailDrawer({ item, onClose }: { item: PermitToWork; onClose: ()
         </div>
       </div>
 
+      <PermitPrereqChecklist item={item} />
+
       <div>
         <div className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-1">
           {t('hse_advanced.signatures', { defaultValue: 'Signatures' })}
@@ -1477,6 +1688,99 @@ function PermitDetailDrawer({ item, onClose }: { item: PermitToWork; onClose: ()
   );
 }
 
+/**
+ * Pre-activation safety prerequisites for a Permit-to-Work.
+ *
+ * The backend stores 5 booleans (jsa_approved, supervisor_present,
+ * fire_watch_assigned, extinguisher_present, atmospheric_test_passed)
+ * that gate the requested → active FSM transition. The legacy UI
+ * showed only the post-issue signatures, leaving the actual permit-issue
+ * gate invisible to the supervisor reading the record.
+ *
+ * We render the list read-only here (mutating a checklist live would
+ * change the audit trail underneath an active permit). When the permit
+ * isn't yet active the section is still shown so reviewers can see what
+ * still needs to be ticked off; once active or closed it doubles as the
+ * historical "everything was checked" record.
+ */
+function PermitPrereqChecklist({ item }: { item: PermitToWork }) {
+  const { t } = useTranslation();
+  const items: { key: string; label: string; checked: boolean }[] = [
+    {
+      key: 'jsa',
+      label: t('hse_advanced.prereq_jsa', { defaultValue: 'JSA approved' }),
+      checked: item.prereq_jsa_approved === true,
+    },
+    {
+      key: 'supervisor',
+      label: t('hse_advanced.prereq_supervisor', {
+        defaultValue: 'Supervisor present',
+      }),
+      checked: item.prereq_supervisor_present === true,
+    },
+    {
+      key: 'fire_watch',
+      label: t('hse_advanced.prereq_fire_watch', {
+        defaultValue: 'Fire watch assigned',
+      }),
+      checked: item.prereq_fire_watch_assigned === true,
+    },
+    {
+      key: 'extinguisher',
+      label: t('hse_advanced.prereq_extinguisher', {
+        defaultValue: 'Extinguisher on hand',
+      }),
+      checked: item.prereq_extinguisher_present === true,
+    },
+    {
+      key: 'atmospheric',
+      label: t('hse_advanced.prereq_atmospheric', {
+        defaultValue: 'Atmospheric test passed',
+      }),
+      checked: item.prereq_atmospheric_test_passed === true,
+    },
+  ];
+  const passed = items.filter((i) => i.checked).length;
+  return (
+    <div data-testid="permit-prereq-checklist">
+      <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-1">
+        <span>
+          {t('hse_advanced.prereq_title', {
+            defaultValue: 'Pre-activation checks',
+          })}
+        </span>
+        <span className="text-content-tertiary tabular-nums">
+          {passed}/{items.length}
+        </span>
+      </div>
+      <ul className="text-sm space-y-1">
+        {items.map((row) => (
+          <li
+            key={row.key}
+            className="flex items-center gap-2"
+            data-testid={`permit-prereq-${row.key}`}
+          >
+            <CheckCircle2
+              size={14}
+              className={
+                row.checked ? 'text-semantic-success' : 'text-content-tertiary opacity-40'
+              }
+              aria-hidden
+            />
+            <span
+              className={
+                row.checked ? 'text-content-secondary' : 'text-content-tertiary line-through'
+              }
+            >
+              {row.label}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /* ── Toolbox Tab ─────────────────────────────────────────────────────── */
 
 function ToolboxTab({ projectId }: { projectId: string }) {
@@ -1492,7 +1796,7 @@ function ToolboxTab({ projectId }: { projectId: string }) {
     summary: '',
   });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-toolbox', projectId],
     queryFn: () => fetchToolboxTalks(projectId),
     select: (d) => normalizeListResponse<ToolboxTalk>(d),
@@ -1533,13 +1837,7 @@ function ToolboxTab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse_advanced.load_error', {
-            defaultValue: 'Failed to load HSE records. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -1709,7 +2007,7 @@ function PPETab({ projectId }: { projectId: string }) {
     quantity: 1,
   });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-ppe', projectId],
     queryFn: () => fetchPPEIssues(projectId),
     select: (d) => normalizeListResponse<PPEIssue>(d),
@@ -1784,13 +2082,7 @@ function PPETab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse_advanced.load_error', {
-            defaultValue: 'Failed to load HSE records. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -2128,7 +2420,7 @@ function PPEDetailDrawer({ item, onClose }: { item: PPEIssue; onClose: () => voi
       {item.notes && (
         <div>
           <div className="text-xs text-content-tertiary uppercase mb-1">
-            {t('common.notes', { defaultValue: 'Notes' })}
+            {t('common.notes')}
           </div>
           <p className="text-sm text-content-secondary whitespace-pre-wrap">{item.notes}</p>
         </div>
@@ -2152,7 +2444,7 @@ function AuditsTab({ projectId }: { projectId: string }) {
     scope: '',
   });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-audits', projectId],
     queryFn: () => fetchAudits(projectId),
     select: (d) => normalizeListResponse<SafetyAudit>(d),
@@ -2193,13 +2485,7 @@ function AuditsTab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse_advanced.load_error', {
-            defaultValue: 'Failed to load HSE records. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -2417,7 +2703,7 @@ function CAPALegacyTab({ projectId }: { projectId: string }) {
     due_date: '',
   });
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-capa', projectId],
     queryFn: () => fetchCAPAs(projectId),
     select: (d) => normalizeListResponse<CorrectiveAction>(d),
@@ -2482,13 +2768,7 @@ function CAPALegacyTab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse_advanced.load_error', {
-            defaultValue: 'Failed to load HSE records. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }
@@ -2734,7 +3014,7 @@ function CorrectiveActionsFSMTab({ projectId }: { projectId: string }) {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hse-corrective-actions', projectId],
     queryFn: () => fetchCorrectiveActions({ projectId }),
     select: (d) => normalizeListResponse<CorrectiveActionRow>(d),
@@ -2769,13 +3049,7 @@ function CorrectiveActionsFSMTab({ projectId }: { projectId: string }) {
   if (isError) {
     return (
       <Card className="py-12">
-        <EmptyState
-          icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-          title={t('common.error', { defaultValue: 'Error' })}
-          description={t('hse.advanced.ca_load_error', {
-            defaultValue: 'Failed to load corrective actions. Please try again.',
-          })}
-        />
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       </Card>
     );
   }

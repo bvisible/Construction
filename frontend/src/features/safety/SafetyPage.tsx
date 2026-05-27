@@ -8,7 +8,6 @@ import {
   ShieldAlert,
   Eye,
   Search,
-  HardHat,
   Download,
   Loader2,
   Plus,
@@ -21,6 +20,7 @@ import {
   ThumbsUp,
   UserX,
   AlertOctagon,
+  Globe2,
 } from 'lucide-react';
 import {
   Button,
@@ -28,14 +28,17 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   SkeletonTable,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { SectionIntro } from '@/features/validation';
 import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -112,7 +115,8 @@ function normaliseObservation(o: ObservationWire): Observation {
 
 /* ── Constants ────────────────────────────────────────────────────────── */
 
-type SafetyTab = 'incidents' | 'observations';
+const SAFETY_TAB_IDS = ['incidents', 'observations'] as const;
+type SafetyTab = (typeof SAFETY_TAB_IDS)[number];
 
 const INCIDENT_TYPE_COLORS: Record<
   string,
@@ -179,31 +183,31 @@ function getIncidentTypeCards(t: (key: string, opts?: Record<string, unknown>) =
       icon: Heart,
       color:
         'text-red-600 bg-red-50 border-red-200 dark:text-red-400 dark:bg-red-950/30 dark:border-red-800',
-      description: t('safety.incident_type_injury', { defaultValue: 'Worker injury‌⁠‍' }),
+      description: t('safety.incident_type_injury', { defaultValue: 'Worker injury' }),
     },
     near_miss: {
       icon: AlertTriangle,
       color:
         'text-amber-600 bg-amber-50 border-amber-200 dark:text-amber-400 dark:bg-amber-950/30 dark:border-amber-800',
-      description: t('safety.incident_type_near_miss', { defaultValue: 'Close call‌⁠‍' }),
+      description: t('safety.incident_type_near_miss', { defaultValue: 'Close call' }),
     },
     property_damage: {
       icon: Home,
       color:
         'text-orange-600 bg-orange-50 border-orange-200 dark:text-orange-400 dark:bg-orange-950/30 dark:border-orange-800',
-      description: t('safety.incident_type_property_damage', { defaultValue: 'Equipment/structure damage‌⁠‍' }),
+      description: t('safety.incident_type_property_damage', { defaultValue: 'Equipment/structure damage' }),
     },
     environmental: {
       icon: Leaf,
       color:
         'text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-950/30 dark:border-green-800',
-      description: t('safety.incident_type_environmental', { defaultValue: 'Spill or emission‌⁠‍' }),
+      description: t('safety.incident_type_environmental', { defaultValue: 'Spill or emission' }),
     },
     fire: {
       icon: Flame,
       color:
         'text-rose-600 bg-rose-50 border-rose-200 dark:text-rose-400 dark:bg-rose-950/30 dark:border-rose-800',
-      description: t('safety.incident_type_fire', { defaultValue: 'Fire or explosion‌⁠‍' }),
+      description: t('safety.incident_type_fire', { defaultValue: 'Fire or explosion' }),
     },
   };
 }
@@ -475,6 +479,13 @@ export function SafetyPage() {
   const projectName = useProjectContextStore((s) => s.activeProjectName);
 
   const [activeTab, setActiveTab] = useState<SafetyTab>('incidents');
+  // Arrow-key navigation across the Incidents / Observations tabs (WCAG 2.1.1).
+  const onTabKeyDown = useTabKeyboardNav<SafetyTab>({
+    ids: SAFETY_TAB_IDS,
+    activeId: activeTab,
+    onChange: setActiveTab,
+    orientation: 'horizontal',
+  });
 
   const tabs: { key: SafetyTab; label: string; icon: React.ReactNode }[] = [
     {
@@ -503,15 +514,30 @@ export function SafetyPage() {
       />
 
       {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-content-primary">
-          {t('safety.title', { defaultValue: 'Safety' })}
-        </h1>
-        <p className="mt-1 text-sm text-content-secondary">
-          {t('safety.subtitle', {
-            defaultValue: 'Report incidents, record observations, and monitor site safety compliance',
-          })}
-        </p>
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-content-primary">
+            {t('safety.title', { defaultValue: 'Safety' })}
+          </h1>
+          <p className="mt-1 text-sm text-content-secondary">
+            {t('safety.subtitle', {
+              defaultValue: 'Report incidents, record observations, and monitor site safety compliance',
+            })}
+          </p>
+        </div>
+        {projectId && (
+          <button
+            type="button"
+            onClick={() => navigate(`/projects/${projectId}/geo`)}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border-light bg-surface-primary px-2.5 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-oe-blue focus:outline-none focus:ring-2 focus:ring-oe-blue/40 shrink-0"
+            title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+            aria-label={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+            data-testid="safety-view-on-map"
+          >
+            <Globe2 size={13} />
+            {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+          </button>
+        )}
       </div>
 
       <SectionIntro
@@ -543,31 +569,34 @@ export function SafetyPage() {
       {/* Quality Ecosystem Summary */}
       {projectId && <QualityDashboardSummary projectId={projectId} />}
 
-      {/* No-project warning */}
-      {!projectId && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3">
-          <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">{t('common.no_project_selected', { defaultValue: 'No project selected' })}</p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">{t('common.select_project_hint', { defaultValue: 'Select a project from the header to view and manage items.' })}</p>
-          </div>
-        </div>
-      )}
-
-      {projectId ? (
-        <>
-          {/* Tab Bar */}
-          <div className="flex items-center gap-1 mb-6 border-b border-border-light" role="tablist">
-            {tabs.map((tab) => (
+      <RequiresProject
+        emptyHint={t('safety.select_project', {
+          defaultValue:
+            'Select a project from the header to report incidents, record safety observations, and track compliance.',
+        })}
+      >
+        {/* Tab Bar */}
+        <div
+          className="flex items-center gap-1 mb-6 border-b border-border-light"
+          role="tablist"
+          aria-label={t('safety.tabs_aria', { defaultValue: 'Safety sections' })}
+          onKeyDown={onTabKeyDown}
+        >
+          {tabs.map((tab) => {
+            const isActive = activeTab === tab.key;
+            return (
               <button
                 key={tab.key}
                 role="tab"
-                aria-selected={activeTab === tab.key}
+                id={`safety-tab-${tab.key}`}
+                aria-selected={isActive}
+                aria-controls={`safety-panel-${tab.key}`}
+                tabIndex={isActive ? 0 : -1}
                 onClick={() => setActiveTab(tab.key)}
                 className={`
                   flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-all
                   ${
-                    activeTab === tab.key
+                    isActive
                       ? 'border-oe-blue text-oe-blue'
                       : 'border-transparent text-content-tertiary hover:text-content-primary hover:bg-surface-secondary'
                   }
@@ -576,29 +605,24 @@ export function SafetyPage() {
                 {tab.icon}
                 {tab.label}
               </button>
-            ))}
-          </div>
+            );
+          })}
+        </div>
 
-          {/* Tab Content */}
-          {activeTab === 'incidents' && (
+        {/* Tab Content */}
+        <div
+          role="tabpanel"
+          id={`safety-panel-${activeTab}`}
+          aria-labelledby={`safety-tab-${activeTab}`}
+        >
+          {activeTab === 'incidents' && projectId && (
             <IncidentsTab projectId={projectId} />
           )}
-          {activeTab === 'observations' && (
+          {activeTab === 'observations' && projectId && (
             <ObservationsTab projectId={projectId} />
           )}
-        </>
-      ) : (
-        <EmptyState
-          icon={<HardHat size={28} strokeWidth={1.5} />}
-          title={t('safety.no_project', {
-            defaultValue: 'No project selected',
-          })}
-          description={t('safety.select_project', {
-            defaultValue:
-              'Select a project from the header to report incidents, record safety observations, and track compliance.',
-          })}
-        />
-      )}
+        </div>
+      </RequiresProject>
     </div>
   );
 }
@@ -699,7 +723,13 @@ function IncidentsTab({ projectId }: { projectId: string }) {
       }),
   });
 
-  const { data: incidents, isLoading } = useQuery({
+  const {
+    data: incidents,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['safety-incidents', projectId],
     queryFn: () =>
       apiGet<IncidentWire[]>(
@@ -722,6 +752,8 @@ function IncidentsTab({ projectId }: { projectId: string }) {
   }, [incidents, search]);
 
   if (isLoading) return <SkeletonTable rows={5} columns={7} />;
+
+  if (isError) return <RecoveryCard error={error} onRetry={() => refetch()} />;
 
   const isEmpty = !incidents || incidents.length === 0;
 
@@ -1201,7 +1233,13 @@ function ObservationsTab({ projectId }: { projectId: string }) {
       }),
   });
 
-  const { data: observations, isLoading } = useQuery({
+  const {
+    data: observations,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery({
     queryKey: ['safety-observations', projectId],
     queryFn: () =>
       apiGet<ObservationWire[]>(
@@ -1224,6 +1262,8 @@ function ObservationsTab({ projectId }: { projectId: string }) {
   }, [observations, search]);
 
   if (isLoading) return <SkeletonTable rows={5} columns={6} />;
+
+  if (isError) return <RecoveryCard error={error} onRetry={() => refetch()} />;
 
   const isEmpty = !observations || observations.length === 0;
 

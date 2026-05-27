@@ -1,5 +1,6 @@
 """‌⁠‍Regional configuration for Russia and CIS countries."""
 
+from decimal import Decimal
 from typing import Any
 
 PACK_CONFIG: dict[str, Any] = {
@@ -142,5 +143,13 @@ PACK_CONFIG: dict[str, Any] = {
         "volume": "м³",
         "weight": "кг",
         "temperature": "°C",
+    },
+    # ── НДС / VAT rates (Wave 25) ────────────────────────────────────────────
+    "vat_rates": {
+        "RU": {
+            "standard": Decimal("0.20"),
+            "reduced": Decimal("0.10"),
+            "zero": Decimal("0.00"),
+        },
     },
 }

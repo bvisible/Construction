@@ -10,8 +10,25 @@ the response boundary (matching the BOQ module's wire convention).
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal, InvalidOperation
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 
 class AffectedPosition(BaseModel):
@@ -44,8 +61,8 @@ class CostImpactComponents(BaseModel):
         "(default 10%). Multiplied by ``rework_positions_total`` to "
         "obtain ``rework_subtotal``.",
     )
-    rework_subtotal: float = Field(
-        default=0.0,
+    rework_subtotal: Decimal = Field(
+        default=Decimal("0"),
         description="``rework_positions_total × (rework_factor_pct / 100)``.",
     )
     labour_hours: float = Field(
@@ -58,10 +75,14 @@ class CostImpactComponents(BaseModel):
         description="Project-level blended labour rate per hour in the "
         "project's native currency (default 50.0).",
     )
-    labour_subtotal: float = Field(
-        default=0.0,
+    labour_subtotal: Decimal = Field(
+        default=Decimal("0"),
         description="``labour_hours × blended_rate``.",
     )
+
+    @field_serializer("rework_subtotal", "labour_subtotal", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class ClashCostImpactResponse(BaseModel):

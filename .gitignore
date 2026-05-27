@@ -51,9 +51,23 @@ frontend/e2e/v1.9/.auth-token.txt
 frontend/e2e/v1.9/.auth-state.json
 *.trace.zip
 frontend/video-output/
+.tests-artifacts/
 frontend/playwright.video.config.ts
 frontend/e2e/_*.spec.ts
 frontend/e2e/*-diagnostic.spec.ts
+
+# New Playwright E2E harness (tests/e2e/) — generated artefacts only
+frontend/qa-report/
+frontend/qa-screenshots/
+frontend/qa-output/
+frontend/qa-results.json
+frontend/playwright/.auth/
+frontend/test-results/
+qa-report/
+qa-screenshots/
+qa-output/
+playwright/.auth/
+test-results/
 
 # Dev / debug artefacts
 backend/audit_output.txt
@@ -87,6 +101,7 @@ data/exports/
 data/cwicr/cache/
 data/approvals/
 data/transmittals/
+data/tilesets/
 frontend/debug-bim/
 
 # Claude Code / MCP — keep instruction files (.claude/*.md) but
@@ -106,10 +121,17 @@ frontend/debug-bim/
 # QA / Dev artifacts
 screenshots/
 !docs/screenshots/
+# qa/screenshots/ holds the source for the route-grid screenshot suite
+# (full-app.spec.ts + playwright.config.ts + README.md). Output PNGs go
+# to qa-report/screenshots/<date>/ which is still ignored.
+!qa/screenshots/
+qa/screenshots/_pw_artifacts/
 qa-tests/
 ux-review/
 QA_*.md
 UX_*.md
+# Curated QA docs committed deliberately — opt-in exceptions to the above ignores.
+!docs/qa/UX_WEAKNESSES_AUDIT.md
 TESTING_PLAN.md
 TAKEOFF_TESTING_PLAN.md
 IMPROVEMENTS_TODO.md
@@ -184,6 +206,25 @@ qa-report/
 .claude/qa-reports/
 .claude/audit_reports/
 .claude/security_audit/
+.claude/orphan_test_backups/
+
+# Secrets and ad-hoc dev artifacts under .claude/ — never commit
+.claude/_pat.txt
+.claude/_pat
+.claude/token.txt
+.claude/_three_cards_*.txt
+.claude/_three_ddc_cards.txt
+.claude/RELEASE_NOTES_*.md
+.claude/PYPI_PUSH_BLOCKER.md
+.claude/probe_*.mjs
+.claude/probe_*.cjs
+.claude/reingest_*.sh
+.claude/reingest_*.py
+.claude/repro*.cjs
+.claude/repro*.mjs
+.claude/repro*.py
+.claude/swap_emojis.py
+.claude/*.rvt
 
 # Ad-hoc QA/test scripts that hit a hardcoded localhost — not real tests
 backend/qa_api_test.py
@@ -197,6 +238,11 @@ backend/tmp_api.json
 # Heavy sample data — fetched on demand, not committed
 data/bim/
 docs/media/*.mp4
+
+# Re-ingest rollback backups (snapshots of a single BIM model's prior
+# state, captured by scripts/reingest_bim_model.py for safe rollback).
+# Large, transient, not source.
+data/reingest_backup_*.json
 
 # Generated license inventories — attached to GH Releases, not committed
 /NOTICE.backend.json

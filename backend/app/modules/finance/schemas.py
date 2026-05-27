@@ -5,7 +5,23 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 
 def _validate_non_negative_decimal(v: str, field_name: str = "value") -> str:
@@ -239,6 +255,11 @@ class PaymentCreate(BaseModel):
     currency_code: str = Field(default="", max_length=10)
     exchange_rate_snapshot: str = Field(default="1", max_length=50)
     reference: str | None = Field(default=None, max_length=255)
+    # R7: idempotency key — supply a stable token per payment attempt;
+    # a second POST with the same key returns the existing row (no duplicate).
+    idempotency_key: str | None = Field(default=None, max_length=64)
+    # R7: refund flag — positive amount with is_refund=True decreases net_paid.
+    is_refund: bool = Field(default=False)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("amount")
@@ -264,6 +285,8 @@ class PaymentResponse(BaseModel):
     currency_code: str = ""
     exchange_rate_snapshot: str = "1"
     reference: str | None = None
+    idempotency_key: str | None = None
+    is_refund: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
@@ -472,27 +495,114 @@ class EVMListResponse(BaseModel):
 
 
 class FinanceDashboardResponse(BaseModel):
-    """Aggregated finance KPIs for a project or across all projects."""
+    """Aggregated finance KPIs for a project or across all projects.
 
-    total_payable: float = 0.0
-    total_receivable: float = 0.0
-    total_overdue: float = 0.0
+    v3 §10 — money fields are Decimal-as-string in JSON.
+    ``cash_flow_net`` and ``budget_consumed_pct`` are not in the deferred
+    list and stay float (one is a derived signed delta, the other a
+    percentage ratio).
+    """
+
+    total_payable: Decimal = Decimal("0")
+    total_receivable: Decimal = Decimal("0")
+    total_overdue: Decimal = Decimal("0")
     overdue_count: int = 0
     invoices_draft: int = 0
     invoices_pending: int = 0
     invoices_approved: int = 0
     invoices_paid: int = 0
-    total_budget_original: float = 0.0
-    total_budget_revised: float = 0.0
-    total_committed: float = 0.0
-    total_actual: float = 0.0
-    total_variance: float = 0.0
+    total_budget_original: Decimal = Decimal("0")
+    total_budget_revised: Decimal = Decimal("0")
+    total_committed: Decimal = Decimal("0")
+    total_actual: Decimal = Decimal("0")
+    total_variance: Decimal = Decimal("0")
     budget_consumed_pct: float = 0.0
     budget_warning_level: str = "normal"  # "normal" | "caution" | "critical"
-    total_payments: float = 0.0
+    total_payments: Decimal = Decimal("0")
     cash_flow_net: float = 0.0
     # Dominant project currency (budget lines preferred, invoices as
     # fallback). Empty string when no financial record carries a currency
     # yet — the UI then renders amounts without a currency symbol rather
     # than mislabelling them (task #217).
     currency: str = ""
+
+    @field_serializer(
+        "total_payable", "total_receivable", "total_overdue",
+        "total_budget_original", "total_budget_revised", "total_committed",
+        "total_actual", "total_variance", "total_payments",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
+
+
+# ── Ledger (R7 double-entry) ──────────────────────────────────────────────
+
+
+class LedgerEntryCreate(BaseModel):
+    """Payload for create_ledger_transaction().
+
+    Represents a balanced double-entry transaction — the service enforces
+    debit_amount == credit_amount before writing any rows.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    project_id: UUID
+    transaction_ref: str = Field(..., min_length=1, max_length=100)
+    debit_account: str = Field(..., min_length=1, max_length=100)
+    credit_account: str = Field(..., min_length=1, max_length=100)
+    debit_amount: str = Field(..., max_length=50)
+    credit_amount: str = Field(..., max_length=50)
+    description: str | None = Field(default=None, max_length=2000)
+    currency_code: str = Field(default="", max_length=10)
+    posted_at: str = Field(default="", max_length=30)
+    source_type: str | None = Field(default=None, max_length=50)
+    source_id: str | None = Field(default=None, max_length=36)
+    created_by: str | None = Field(default=None, max_length=36)
+
+    @field_validator("debit_amount", "credit_amount")
+    @classmethod
+    def _check_non_negative(cls, v: str) -> str:
+        return _validate_non_negative_decimal(v)
+
+
+class LedgerEntryResponse(BaseModel):
+    """Single ledger row returned from the API."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    transaction_ref: str
+    account_code: str
+    description: str | None = None
+    debit_amount: str = "0"
+    credit_amount: str = "0"
+    currency_code: str = ""
+    posted_at: str
+    source_type: str | None = None
+    source_id: str | None = None
+    is_reversal: bool = False
+    reversal_of_id: UUID | None = None
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    _coerce_decimal = field_validator(
+        "debit_amount", "credit_amount", mode="before"
+    )(lambda cls, v: _decimal_to_str(v))
+
+
+class LedgerTransactionResponse(BaseModel):
+    """Pair of ledger rows from a balanced transaction."""
+
+    debit: LedgerEntryResponse
+    credit: LedgerEntryResponse
+
+
+class LedgerListResponse(BaseModel):
+    """Paginated ledger entry list."""
+
+    items: list[LedgerEntryResponse]
+    total: int

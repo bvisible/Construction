@@ -17,6 +17,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.assemblies.models import Assembly, Component
 from app.modules.assemblies.repository import AssemblyRepository, ComponentRepository
 from app.modules.assemblies.schemas import (
@@ -41,6 +43,46 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
         _logger_ev.debug("Event publish skipped: %s", name)
 
 logger = logging.getLogger(__name__)
+
+
+# ── Recursion / cycle guard (R7 deep-improve) ──────────────────────────────
+# Assemblies can reference other assemblies as components ("composite
+# recipes"). A self-reference or a long A→B→C→…→A loop would otherwise
+# explode the recursion stack and the response size. We cap depth and
+# raise a 400 with a translatable message when the cap is hit or a cycle
+# is detected.
+MAX_ASSEMBLY_DEPTH: int = 8
+
+
+class AssemblyCycleError(HTTPException):
+    """Raised when assembly nesting cycles or exceeds MAX_ASSEMBLY_DEPTH."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=400, detail=detail)
+
+
+def _check_assembly_depth(
+    assembly_id: uuid.UUID,
+    visited: frozenset[uuid.UUID] | None = None,
+    depth: int = 0,
+) -> frozenset[uuid.UUID]:
+    """Guard against cyclic / over-deep assembly composition.
+
+    Raises ``AssemblyCycleError`` (HTTP 400) if ``assembly_id`` is already
+    in ``visited`` (cycle), or if ``depth >= MAX_ASSEMBLY_DEPTH`` (nesting
+    too deep). Returns the new ``visited`` set on success.
+    """
+    if visited is None:
+        visited = frozenset()
+    if assembly_id in visited:
+        raise AssemblyCycleError(
+            f"Assembly cycle detected involving {assembly_id}",
+        )
+    if depth >= MAX_ASSEMBLY_DEPTH:
+        raise AssemblyCycleError(
+            f"Assembly nesting depth exceeds {MAX_ASSEMBLY_DEPTH} levels",
+        )
+    return visited | {assembly_id}
 
 
 def _compute_component_total(factor: float, quantity: float, unit_cost: float) -> str:
@@ -376,18 +418,33 @@ class AssemblyService:
             limit=limit,
         )
 
-    async def update_assembly(self, assembly_id: uuid.UUID, data: AssemblyUpdate) -> Assembly:
+    async def update_assembly(
+        self,
+        assembly_id: uuid.UUID,
+        data: AssemblyUpdate,
+        *,
+        caller_user_id: str | None = None,
+        caller_is_admin: bool = False,
+    ) -> Assembly:
         """Update assembly metadata fields.
 
         Args:
             assembly_id: Target assembly identifier.
             data: Partial update payload.
+            caller_user_id: ID of the calling user (for project re-parent
+                ownership check — NEW-ASM-106).
+            caller_is_admin: When True, skip the cross-tenant project
+                ownership check (admins manage global templates).
 
         Returns:
             Updated Assembly.
 
         Raises:
             HTTPException 404 if assembly not found.
+            HTTPException 404 if a new ``project_id`` refers to a project
+                the caller does not own (returned as 404 not 403 to keep
+                the existence-oracle closed — matches the rest of this
+                module).
             HTTPException 409 if new code conflicts with an existing assembly.
         """
         assembly = await self.get_assembly(assembly_id)
@@ -401,6 +458,36 @@ class AssemblyService:
         # Convert bid_factor float to string for storage
         if "bid_factor" in fields:
             fields["bid_factor"] = str(fields["bid_factor"])
+
+        # NEW-ASM-106 — verify the caller owns the *new* project before
+        # re-parenting. Without this, an authenticated owner of assembly
+        # X could PATCH ``{"project_id": "<other-tenant's-project-id>"}``
+        # and pollute the other tenant's per-project assembly listing
+        # (``GET /assemblies/?project_id=...``). The owner_id of the
+        # assembly is unchanged — but the project filter is keyed off
+        # ``project_id``, so the assembly would show up under another
+        # tenant's project. 404 (not 403) — see docstring.
+        if (
+            "project_id" in fields
+            and fields["project_id"] is not None
+            and not caller_is_admin
+            and caller_user_id is not None
+        ):
+            new_pid = fields["project_id"]
+            current_pid = assembly.project_id
+            if str(new_pid) != str(current_pid or ""):
+                from app.modules.projects.repository import ProjectRepository
+
+                project_repo = ProjectRepository(self.session)
+                target_project = await project_repo.get_by_id(new_pid)
+                if (
+                    target_project is None
+                    or str(getattr(target_project, "owner_id", "")) != str(caller_user_id)
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=translate("errors.project_not_found", locale=get_locale()),
+                    )
 
         # Check code uniqueness if code is being changed
         if "code" in fields and fields["code"] != assembly.code:
@@ -660,7 +747,8 @@ class AssemblyService:
                     factor=_str_to_float(comp.factor),
                     quantity=_str_to_float(comp.quantity),
                     unit=comp.unit,
-                    unit_cost=_str_to_float(comp.unit_cost),
+                    # v3 §10 — money as Decimal; Pydantic coerces str→Decimal
+                    unit_cost=Decimal(str(comp.unit_cost or "0")),
                     total=_str_to_float(comp.total),
                     sort_order=comp.sort_order,
                     metadata=comp.metadata_ or {},
@@ -817,18 +905,36 @@ class AssemblyService:
                     ),
                 }
 
-        # Determine effective rate (apply regional factor if provided)
+        # Determine effective rate (apply regional factor if provided).
+        # NEW-ASM-105 / ASM-007 — ``Decimal("Infinity")`` and
+        # ``Decimal("NaN")`` parse WITHOUT raising, so a poisoned
+        # ``regional_factors`` value (or a legacy assembly whose stored
+        # ``total_rate`` is non-finite) would otherwise propagate through
+        # the float() cast below into ``PositionCreate.unit_rate`` —
+        # whose schema only enforces ``ge=0.0`` and happily accepts
+        # ``inf``. The result is a BOQ position with a non-finite
+        # ``unit_rate`` that serialises as ``null`` and corrupts every
+        # downstream rollup. Reject any non-finite intermediate to 0.
         try:
             base_rate = Decimal(str(assembly.total_rate))
         except (InvalidOperation, ValueError):
+            base_rate = Decimal("0")
+        if not base_rate.is_finite() or base_rate < 0:
             base_rate = Decimal("0")
 
         if data.region and data.region in assembly.regional_factors:
             try:
                 factor = Decimal(str(assembly.regional_factors[data.region]))
-                effective_rate = base_rate * factor
             except (InvalidOperation, ValueError):
+                factor = Decimal("1")
+            if not factor.is_finite() or factor < 0:
+                # Garbage stored factor — silently skip (matches the
+                # existing fall-through contract for an absent region).
                 effective_rate = base_rate
+            else:
+                effective_rate = base_rate * factor
+                if not effective_rate.is_finite():
+                    effective_rate = base_rate
         else:
             effective_rate = base_rate
 
@@ -839,6 +945,11 @@ class AssemblyService:
         # is Decimal("1") when no conversion applies, so this is a no-op
         # for same-currency / unconfigured-rate paths.
         effective_rate = effective_rate * fx_multiplier
+        if not effective_rate.is_finite() or effective_rate < 0:
+            # Final guard — the product can also overflow when both
+            # ``base_rate`` and ``fx_multiplier`` sit near the upper
+            # bound. Land at 0 rather than poison the BOQ.
+            effective_rate = Decimal("0")
 
         ordinal = data.ordinal if data.ordinal else f"ASM-{assembly.code}"
 

@@ -1,13 +1,31 @@
 """‌⁠‍Tendering Pydantic schemas — request/response models.
 
 Defines create, update, and response schemas for tender packages and bids.
+v3 §10 — money fields are Decimal-as-string in JSON.
 """
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # ── Package schemas ──────────────────────────────────────────────────────────
 
@@ -68,14 +86,23 @@ class PackageWithBidsResponse(PackageResponse):
 
 
 class BidLineItem(BaseModel):
-    """A single line item within a bid."""
+    """A single line item within a bid.
+
+    v3 §10 — ``unit_rate`` is money; Decimal-as-string in JSON.
+    ``total`` stays float (not in the deferred audit list — kept as the
+    UI-side preview value the FE rolls up).
+    """
 
     position_id: str | None = None
     description: str = ""
     unit: str = ""
     quantity: float = 0.0
-    unit_rate: float = 0.0
+    unit_rate: Decimal = Decimal("0")
     total: float = 0.0
+
+    @field_serializer("unit_rate", when_used="json")
+    def _ser_unit_rate(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class BidCreate(BaseModel):
@@ -134,27 +161,46 @@ class BidResponse(BaseModel):
 
 
 class BidComparisonRow(BaseModel):
-    """A single row in the bid comparison matrix."""
+    """A single row in the bid comparison matrix.
+
+    v3 §10 — ``budget_rate`` and ``budget_total`` are money;
+    Decimal-as-string in JSON. ``budget_quantity`` listed in the audit as
+    "measurement, but priced — verify per project"; it is genuinely a
+    measured quantity in the bid context (not a unit price) so we keep
+    it as float for symmetry with ``BidLineItem.quantity`` and the
+    upstream BOQ position's ``quantity``.
+    """
 
     position_id: str | None = None
     description: str = ""
     unit: str = ""
     budget_quantity: float = 0.0
-    budget_rate: float = 0.0
-    budget_total: float = 0.0
+    budget_rate: Decimal = Decimal("0")
+    budget_total: Decimal = Decimal("0")
     bids: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_serializer("budget_rate", "budget_total", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class BidComparisonResponse(BaseModel):
-    """Full bid comparison for a package."""
+    """Full bid comparison for a package.
+
+    v3 §10 — ``budget_total`` is money; Decimal-as-string in JSON.
+    """
 
     package_id: UUID
     package_name: str
     bid_count: int = 0
     bid_companies: list[str] = Field(default_factory=list)
-    budget_total: float = 0.0
+    budget_total: Decimal = Decimal("0")
     rows: list[BidComparisonRow] = Field(default_factory=list)
     bid_totals: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_serializer("budget_total", when_used="json")
+    def _ser_budget_total(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Project Intelligence (RFC 25) ───────────────────────────────────────────

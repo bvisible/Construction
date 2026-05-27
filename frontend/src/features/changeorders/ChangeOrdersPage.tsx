@@ -16,7 +16,8 @@ import {
   Trash2,
   Download,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, InfoHint, ConfirmDialog } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, InfoHint, ConfirmDialog, RecoveryCard, SkeletonTable, SkeletonCard } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import {
   WideModal,
   WideModalSection,
@@ -87,7 +88,7 @@ interface ChangeOrder {
 }
 
 /**
- * ‌⁠‍Decode the ``sub`` (subject / user id) claim from a JWT access token.
+ * Decode the ``sub`` (subject / user id) claim from a JWT access token.
  *
  * Backend ``CurrentUserId`` reads the same claim, so matching against it
  * client-side is the cleanest way to tell whether the logged-in user is
@@ -134,11 +135,11 @@ const STATUS_COLORS: Record<string, 'neutral' | 'blue' | 'success' | 'warning' |
 
 function getReasonLabels(t: (key: string, opts?: Record<string, unknown>) => string): Record<string, string> {
   return {
-    client_request: t('changeorders.reason_client_request', { defaultValue: 'Client Request‌⁠‍' }),
-    design_change: t('changeorders.reason_design_change', { defaultValue: 'Design Change‌⁠‍' }),
-    unforeseen: t('changeorders.reason_unforeseen', { defaultValue: 'Unforeseen Conditions‌⁠‍' }),
-    regulatory: t('changeorders.reason_regulatory', { defaultValue: 'Regulatory‌⁠‍' }),
-    error: t('changeorders.reason_error', { defaultValue: 'Error/Omission‌⁠‍' }),
+    client_request: t('changeorders.reason_client_request', { defaultValue: 'Client Request' }),
+    design_change: t('changeorders.reason_design_change', { defaultValue: 'Design Change' }),
+    unforeseen: t('changeorders.reason_unforeseen', { defaultValue: 'Unforeseen Conditions' }),
+    regulatory: t('changeorders.reason_regulatory', { defaultValue: 'Regulatory' }),
+    error: t('changeorders.reason_error', { defaultValue: 'Error/Omission' }),
   };
 }
 
@@ -261,7 +262,7 @@ function CreateDialog({
     >
       <WideModalSection columns={2}>
         <WideModalField
-          label={t('common.title', { defaultValue: 'Title' })}
+          label={t('common.title')}
           required
           span={2}
           htmlFor="co-title"
@@ -275,7 +276,7 @@ function CreateDialog({
           />
         </WideModalField>
         <WideModalField
-          label={t('common.description', { defaultValue: 'Description' })}
+          label={t('common.description')}
           span={2}
           htmlFor="co-description"
         >
@@ -431,7 +432,7 @@ function AddItemDialog({
           </select>
         </WideModalField>
         <WideModalField
-          label={t('common.unit', { defaultValue: 'Unit' })}
+          label={t('common.unit')}
           htmlFor="item-unit"
         >
           <input
@@ -518,7 +519,7 @@ function AddItemDialog({
 /* ── Approval Chain Builder ────────────────────────────────────────────── */
 
 /**
- * ‌⁠‍Minimal approver-id picker — accepts one UUID per line so an admin can
+ * Minimal approver-id picker — accepts one UUID per line so an admin can
  * paste a list of user ids without needing the full users-directory
  * search-and-select widget. The full picker can replace this textarea
  * later without changing the API surface.
@@ -800,11 +801,7 @@ function DetailView({
   });
 
   if (isLoading || (!order && !isError)) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <div className="h-6 w-6 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" />
-      </div>
-    );
+    return <SkeletonCard className="my-6" />;
   }
 
   if (isError || !order) {
@@ -1184,7 +1181,7 @@ export function ChangeOrdersPage() {
   const project = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
   // Fetch change orders
-  const { data: orders = [], isLoading, isError } = useQuery({
+  const { data: orders = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['changeorders', projectId],
     queryFn: () => apiGet<ChangeOrder[]>(`/v1/changeorders/?project_id=${projectId}`),
     select: (d): ChangeOrder[] => normalizeListResponse(d),
@@ -1306,17 +1303,6 @@ export function ChangeOrdersPage() {
 
       <InfoHint className="mt-4 mb-2" text={t('changeorders.workflow_desc', { defaultValue: 'Change Order workflow: Draft (prepare scope change) \u2192 Submitted (send for review) \u2192 Approved or Rejected. Each order tracks cost impact and schedule impact in days. Add line items to detail what changed \u2014 original vs new quantities and rates. The cost delta is computed automatically.' })} />
 
-      {/* No-project warning */}
-      {!projectId && (
-        <div className="mb-4 mt-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3">
-          <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">{t('common.no_project_selected', { defaultValue: 'No project selected' })}</p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">{t('common.select_project_hint', { defaultValue: 'Select a project from the header to view and manage items.' })}</p>
-          </div>
-        </div>
-      )}
-
       {/* Summary cards */}
       {summary && (
         <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -1403,22 +1389,14 @@ export function ChangeOrdersPage() {
       {/* Orders table */}
       <div>
         {!projectId ? (
-          <EmptyState
-            icon={<FileEdit size={28} strokeWidth={1.5} />}
-            title={t('changeorders.no_project', { defaultValue: 'No project selected' })}
-            description={t('changeorders.no_project_desc', { defaultValue: 'Open a project first to view and manage change orders.' })}
-          />
+          <RequiresProject
+            emptyHint={t('changeorders.no_project_desc', { defaultValue: 'Open a project first to view and manage change orders.' })}
+          >{null}</RequiresProject>
         ) : isLoading ? (
-          <div className="flex items-center justify-center py-20">
-            <div className="h-6 w-6 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" />
-          </div>
+          <SkeletonTable rows={6} columns={5} />
         ) : isError ? (
           <Card className="py-12">
-            <EmptyState
-              icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-              title={t('common.error', { defaultValue: 'Error' })}
-              description={t('changeorders.load_error', { defaultValue: 'Failed to load change orders. Please try again.' })}
-            />
+            <RecoveryCard error={error} onRetry={() => refetch()} />
           </Card>
         ) : orders.length === 0 ? (
           <Card>
@@ -1444,10 +1422,10 @@ export function ChangeOrdersPage() {
                       {t('changeorders.code', { defaultValue: 'Code' })}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-content-secondary">
-                      {t('common.title', { defaultValue: 'Title' })}
+                      {t('common.title')}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-content-secondary">
-                      {t('common.status', { defaultValue: 'Status' })}
+                      {t('common.status')}
                     </th>
                     <th className="px-4 py-3 text-left font-medium text-content-secondary">
                       {t('changeorders.reason', { defaultValue: 'Reason' })}

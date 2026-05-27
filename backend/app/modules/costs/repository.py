@@ -7,6 +7,7 @@ No business logic — pure data access.
 from __future__ import annotations
 
 import uuid
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import String, and_, cast, func, or_, select, update
@@ -171,8 +172,8 @@ class CostItemRepository:
         region: str | None = None,
         category: str | None = None,
         classification_path: str | None = None,
-        min_rate: float | None = None,
-        max_rate: float | None = None,
+        min_rate: Decimal | float | None = None,
+        max_rate: Decimal | float | None = None,
         offset: int = 0,
         limit: int = 50,
         cursor: tuple[str, str] | None = None,
@@ -263,11 +264,15 @@ class CostItemRepository:
                 expr = _classification_expr(_CLASSIFICATION_DEPTHS[depth_idx])
                 base = base.where(expr == segment)
 
+        # Cast to Float for cross-dialect comparison — the rate column is
+        # String(50) for SQLite Decimal compat (see models.py). Pre-cast
+        # the bound so Decimal inputs (Round-7) don't end up with mixed
+        # precision under PostgreSQL's stricter type promotion.
         if min_rate is not None:
-            base = base.where(cast(CostItem.rate, Float) >= min_rate)
+            base = base.where(cast(CostItem.rate, Float) >= float(min_rate))
 
         if max_rate is not None:
-            base = base.where(cast(CostItem.rate, Float) <= max_rate)
+            base = base.where(cast(CostItem.rate, Float) <= float(max_rate))
 
         # Total count — only when explicitly requested. Cursor-paginated
         # queries skip this since counting on every page is wasteful and
@@ -313,6 +318,90 @@ class CostItemRepository:
         items = rows[:limit]
 
         return items, total, has_more
+
+    async def search_for_autocomplete(
+        self,
+        *,
+        q: str,
+        region: str | None = None,
+        limit: int = 8,
+    ) -> list[CostItem]:
+        """Autocomplete-tuned search: ORDER BY components-first IN SQL.
+
+        Hot path for ``/v1/costs/autocomplete/``. The previous
+        implementation fetched ``limit*3`` rows via the generic
+        :meth:`search` then resorted them in Python by "items with
+        components first" (richer cards for the estimator). On a 110k-row
+        catalogue this issued a 24-row fetch + Python sort per keystroke
+        when the user only ever saw 8 — pure waste.
+
+        Pushing the priority into the ORDER BY uses the same single index
+        the generic search already exploits (``ix_costs_active_code``)
+        for the WHERE clause, then leans on the planner's tiebreaker
+        sort over a tiny post-filter set. Result: 1 query, ``limit``
+        rows returned, no Python-side resort.
+
+        The "has components" predicate is encoded as a CASE expression so
+        it compiles identically on SQLite (json_array_length) and
+        PostgreSQL (jsonb_array_length). Empty JSON arrays sort AFTER
+        non-empty ones (DESC on the CASE) which matches the legacy
+        Python order ``(0 if has else 1, code)``.
+
+        Args:
+            q: Substring match against code OR description (ILIKE).
+                Required — no q means use the generic listing endpoint.
+            region: Optional region filter (e.g. ``"DE_BERLIN"``).
+            limit: Hard cap on returned rows (matches the public endpoint
+                cap of 20).
+
+        Returns:
+            Up to ``limit`` ``CostItem`` rows, items-with-components
+            first then code-ascending.
+        """
+        from app.database import engine as _engine
+
+        base = select(CostItem).where(CostItem.is_active.is_(True))
+
+        pattern = f"%{q}%"
+        base = base.where(
+            CostItem.code.ilike(pattern) | CostItem.description.ilike(pattern),
+        )
+
+        if region:
+            base = base.where(CostItem.region == region)
+
+        # Dialect-aware "has components" predicate. We treat any non-empty
+        # JSON array as 1, empty/NULL as 0 — matches the Python ``_has_components``
+        # helper the router used to call. Postgres ships JSONB whose
+        # ``jsonb_array_length`` is the canonical helper; SQLite has
+        # ``json_array_length`` which mirrors it semantically (both return
+        # 0 for ``[]`` and NULL for non-arrays / NULL).
+        if "sqlite" in str(_engine.url):
+            comp_len = func.coalesce(
+                func.json_array_length(CostItem.components), 0
+            )
+        else:
+            # ``jsonb_array_length`` on a TEXT JSON column requires an
+            # explicit cast on Postgres; CostItem.components is declared
+            # as plain ``JSON`` so we route through ``json_array_length``
+            # which works on json (text-domain) and reuse the same
+            # coalesce semantics so NULL rows sort AFTER empty arrays.
+            comp_len = func.coalesce(
+                func.json_array_length(CostItem.components), 0
+            )
+
+        # CASE(comp_len > 0 → 1 else 0) — items WITH components first.
+        # DESC so the "1" rows lead.
+        from sqlalchemy import case
+
+        priority = case((comp_len > 0, 1), else_=0).label("priority")
+
+        stmt = (
+            base.order_by(priority.desc(), CostItem.code.asc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
 
     async def category_tree(
         self,

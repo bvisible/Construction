@@ -15,7 +15,9 @@
  * than showing zeros against an undefined id.
  */
 
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import {
   LayoutDashboard,
   RefreshCw,
@@ -27,13 +29,16 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  FolderOpen,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { EmptyState } from '@/shared/ui/EmptyState';
+import { EmptyState, RecoveryCard } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useActiveProjectProfile } from '@/features/projects/useProjectProfile';
+import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import {
   fetchCoordinationDashboard,
   fetchCoordinationTimeline,
@@ -43,6 +48,19 @@ import { CoordinationKPICards } from './CoordinationKPICards';
 import { CoordinationTimeline } from './CoordinationTimeline';
 import { CoordinationTradeMatrix } from './CoordinationTradeMatrix';
 import type { CoordinationDashboard } from './types';
+
+/** Pull a numeric HTTP status off any thrown value (ApiError uses ``status``;
+ *  other shapes occasionally surface ``response.status``). Returns
+ *  ``undefined`` when the error isn't HTTP-shaped (e.g. an AbortError or a
+ *  TypeError from a network failure) — callers treat that as "transient,
+ *  show the generic Retry card". */
+function statusOf(err: unknown): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const e = err as { status?: unknown; response?: { status?: unknown } };
+  if (typeof e.status === 'number') return e.status;
+  if (e.response && typeof e.response.status === 'number') return e.response.status;
+  return undefined;
+}
 
 /** Tiny presentational wrapper — gives any section the same glass
  *  treatment as the KPI row above. Two faint accent strokes (top
@@ -212,6 +230,7 @@ export function CoordinationHubPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { projectId } = useActiveProjectProfile();
+  const clearProject = useProjectContextStore((s) => s.clearProject);
 
   const dashboardQuery = useQuery({
     queryKey: ['coordination-dashboard', projectId],
@@ -237,21 +256,62 @@ export function CoordinationHubPage() {
     retry: false,
   });
 
+  // Stale-project detection. The user's `oe_active_project` localStorage
+  // entry can outlive the project itself (deleted on the server, fresh
+  // install with a different demo seed, multi-tenant switch, etc.). When
+  // that happens every coordination endpoint returns 404 and the page
+  // previously surfaced a generic "Couldn't load this" — leaving the
+  // user stuck because the chrome project switcher still showed the
+  // dead id. Detecting an all-404 fan-out lets us route them back to
+  // /projects with a clear explanation + auto-clear the dead context.
+  const allFour04 =
+    !!projectId &&
+    statusOf(dashboardQuery.error) === 404 &&
+    statusOf(matrixQuery.error) === 404 &&
+    statusOf(timelineQuery.error) === 404;
+
+  // Auto-clear the stale id once we've confirmed it's gone server-side.
+  // useEffect (not inline) so the store mutation never fires during
+  // render — that would trip the "Cannot update during render" warning
+  // and re-mount the page in a loop.
+  useEffect(() => {
+    if (allFour04) {
+      clearProject();
+    }
+  }, [allFour04, clearProject]);
+
   if (!projectId) {
     return (
       <div data-testid="coordination-no-project" className="px-4 py-8">
-        <EmptyState
-          icon={<LayoutDashboard size={28} />}
-          title={t('coordination.no_project_title', {
-            defaultValue: 'No project selected',
-          })}
-          description={t('coordination.no_project_desc', {
+        <RequiresProject
+          emptyHint={t('coordination.no_project_desc', {
             defaultValue: 'Pick a project to see its coordination dashboard.',
           })}
-          action={{
-            label: t('nav.projects', { defaultValue: 'Projects' }),
-            onClick: () => navigate('/projects'),
-          }}
+        >{null}</RequiresProject>
+      </div>
+    );
+  }
+
+  if (allFour04) {
+    return (
+      <div data-testid="coordination-project-missing" className="px-4 py-8">
+        <EmptyState
+          icon={<FolderOpen size={28} strokeWidth={1.5} />}
+          title={t('coordination.project_missing_title', {
+            defaultValue: 'That project is no longer available',
+          })}
+          description={t('coordination.project_missing_desc', {
+            defaultValue:
+              'The previously selected project was removed or you no longer have access to it. Pick a different project to continue.',
+          })}
+          action={
+            <Link
+              to="/projects"
+              className="inline-flex h-10 items-center justify-center rounded-md bg-oe-blue px-4 text-sm font-medium text-white transition-colors hover:bg-oe-blue/90"
+            >
+              {t('coordination.open_projects', { defaultValue: 'Open Projects' })}
+            </Link>
+          }
         />
       </div>
     );
@@ -263,6 +323,12 @@ export function CoordinationHubPage() {
     timelineQuery.refetch();
   };
 
+  // ``hasError`` keeps the legacy "every fan-out failed" full-page card
+  // (matching the existing test contract). Partial failures fall through
+  // to the per-panel branches below so a flaky timeline endpoint never
+  // hides the KPI rollup the user came here for. Bumped to a transient-
+  // error tone so a 401/403 (handled by RecoveryCard) still routes to
+  // sign-in / request-access rather than a generic retry.
   const hasError =
     dashboardQuery.isError && matrixQuery.isError && timelineQuery.isError;
 
@@ -337,22 +403,30 @@ export function CoordinationHubPage() {
         </header>
 
         {hasError ? (
-          <div
-            data-testid="coordination-error"
-            className="rounded-2xl border border-rose-200/60 bg-rose-50/70 p-5 text-sm text-rose-900 backdrop-blur dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-100"
-          >
-            {t('coordination.error', {
-              defaultValue: 'Could not load the coordination dashboard.',
-            })}
+          <div data-testid="coordination-error">
+            <RecoveryCard
+              error={dashboardQuery.error ?? matrixQuery.error ?? timelineQuery.error}
+              onRetry={handleRefresh}
+            />
           </div>
         ) : (
           <>
-            <HealthBanner data={dashboardQuery.data} />
-
-            <CoordinationKPICards
-              data={dashboardQuery.data}
-              isLoading={dashboardQuery.isLoading}
-            />
+            {dashboardQuery.isError ? (
+              <div data-testid="coordination-kpi-error">
+                <RecoveryCard
+                  error={dashboardQuery.error}
+                  onRetry={() => dashboardQuery.refetch()}
+                />
+              </div>
+            ) : (
+              <>
+                <HealthBanner data={dashboardQuery.data} />
+                <CoordinationKPICards
+                  data={dashboardQuery.data}
+                  isLoading={dashboardQuery.isLoading}
+                />
+              </>
+            )}
 
             {/* Quick actions — get-to-the-work shortcuts. Mirrors the
                 "Skip the sales call" home-page CTA pattern but scoped
@@ -427,11 +501,20 @@ export function CoordinationHubPage() {
                   'Click a cell to drill into the filtered clash list',
               })}
             >
-              <CoordinationTradeMatrix
-                data={matrixQuery.data}
-                isLoading={matrixQuery.isLoading}
-                projectId={projectId}
-              />
+              {matrixQuery.isError ? (
+                <div data-testid="coordination-matrix-error">
+                  <RecoveryCard
+                    error={matrixQuery.error}
+                    onRetry={() => matrixQuery.refetch()}
+                  />
+                </div>
+              ) : (
+                <CoordinationTradeMatrix
+                  data={matrixQuery.data}
+                  isLoading={matrixQuery.isLoading}
+                  projectId={projectId}
+                />
+              )}
             </GlassPanel>
 
             {/* Recent activity timeline */}
@@ -446,10 +529,19 @@ export function CoordinationHubPage() {
                   'Clash runs, federations, rule pack checks and BCF topics',
               })}
             >
-              <CoordinationTimeline
-                data={timelineQuery.data}
-                isLoading={timelineQuery.isLoading}
-              />
+              {timelineQuery.isError ? (
+                <div data-testid="coordination-timeline-error">
+                  <RecoveryCard
+                    error={timelineQuery.error}
+                    onRetry={() => timelineQuery.refetch()}
+                  />
+                </div>
+              ) : (
+                <CoordinationTimeline
+                  data={timelineQuery.data}
+                  isLoading={timelineQuery.isLoading}
+                />
+              )}
             </GlassPanel>
           </>
         )}

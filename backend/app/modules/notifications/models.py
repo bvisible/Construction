@@ -4,6 +4,7 @@ Tables:
     oe_notifications_notification — per-user in-app notifications
     oe_notification_preference     — per-user, per-event-type channel routing
     oe_notification_digest_queue   — queued payloads for hourly/daily digest
+    oe_notification_webhook_target — admin-managed webhook endpoints (Epic B)
 """
 
 import uuid
@@ -15,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     UniqueConstraint,
 )
@@ -158,4 +160,57 @@ class NotificationDigestQueue(Base):
         return (
             f"<NotificationDigestQueue user={self.user_id} "
             f"event={self.event_type} channel={self.channel} [{sent}]>"
+        )
+
+
+class WebhookTarget(Base):
+    """‌⁠‍Admin-managed webhook endpoint that consumes ``notifications.dispatch.webhook``.
+
+    Each row is one outbound POST destination.  When the notification
+    dispatcher fires a ``webhook`` channel, every active target whose
+    ``event_filter`` matches the event type receives the payload as
+    JSON.  ``secret`` is optional; when set it is included as a
+    HMAC-SHA256 signature in the ``X-OE-Signature`` header so
+    downstream services can verify authenticity.
+
+    Idempotency: the dispatcher uses a per-event UUID4 idempotency key
+    that downstream consumers can dedupe on.  ``failure_count`` /
+    ``last_status`` track the most recent delivery so the Admin UI can
+    surface broken endpoints without trawling logs.
+
+    NOT scoped to ``user_id`` — webhooks are tenant-global plumbing,
+    not per-user channels.  RBAC at the router edge restricts CRUD to
+    admins.
+    """
+
+    __tablename__ = "oe_notification_webhook_target"
+    __table_args__ = (
+        Index("ix_oe_notification_webhook_target_active", "active"),
+    )
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    # Comma-separated list of event-type patterns this target should
+    # receive.  ``*`` is wildcard.  Stored as a string (not JSON array)
+    # so SQLite indexes can lean on it for substring searches when the
+    # list grows.
+    event_filter: Mapped[str] = mapped_column(
+        String(1024), nullable=False, default="*", server_default="*",
+    )
+    secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1",
+    )
+    last_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
+    failure_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<WebhookTarget {self.name!r} url={self.url[:40]}... "
+            f"active={self.active}>"
         )

@@ -30,6 +30,16 @@ logger = logging.getLogger(__name__)
 # Default storage root -- matches existing BIM file storage layout.
 _DATA_ROOT = Path("data/bim")
 
+
+class ParquetWriteError(RuntimeError):
+    """Raised when a Parquet sidecar write fails for a BIM model.
+
+    Wraps the underlying exception so the background ingester can surface
+    it in structured form (project_id, model_id, original cause) without
+    leaking the bare exception type to callers.  The original exception is
+    chained via ``__cause__``.
+    """
+
 # Operators that take no value (unary predicates).
 _UNARY_OPS = frozenset({"IS NULL", "IS NOT NULL"})
 

@@ -630,6 +630,21 @@ class HSEAdvancedService:
     ) -> HSEIncidentInvestigation:
         obj = await self.get_investigation(item_id)
         fields = data.model_dump(exclude_unset=True)
+        # RIDDOR (UK) / OSHA 1904.33 (US) require the formal investigation
+        # record to be immutable once closed — re-editing findings or root
+        # cause after completion would falsify the regulatory submission.
+        # Pure status transitions go via dedicated workflow methods, so a
+        # content-only update on a terminal investigation is rejected here.
+        # ``status`` may still be edited so a mis-closed probe can be
+        # re-opened explicitly (which is itself audit-logged downstream).
+        content_keys = fields.keys() - {"status"}
+        if content_keys and obj.status in ("completed", "abandoned"):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Cannot edit a {obj.status} investigation — "
+                "regulatory records (RIDDOR / OSHA) are immutable. "
+                "Re-open it explicitly to amend.",
+            )
         if fields:
             await self.investigation_repo.update_fields(item_id, **fields)
             await self.session.refresh(obj)

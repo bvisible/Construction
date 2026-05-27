@@ -327,25 +327,36 @@ class SubmittalService:
         await self.repo.update_fields(submittal_id, **fields)
         fresh = await self.repo.get_by_id(submittal_id)
 
-        try:
-            from app.core.audit_log import log_activity
+        # Epic H — universal audit trail. The try/except: pass wrapper
+        # has been removed: the helper now raises only for real DB
+        # failures, and silently swallowing those would lose the
+        # compliance trail right when we need it most. If the audit
+        # write actually fails the business write rolls back too — that
+        # is the documented atomicity contract.
+        from app.core.audit_log import log_activity as _log_activity
 
-            await log_activity(
-                self.session,
-                actor_id=created_by_s,
-                entity_type="submittal",
-                entity_id=str(submittal_id),
-                action="status_changed",
-                from_status=prior_status,
-                to_status="submitted",
-                reason="Submittal submitted via submit_submittal()",
-                metadata={
-                    "submittal_number": submittal_number_s,
-                    "revision": fields.get("current_revision", current_rev),
-                },
-            )
-        except Exception:
-            logger.debug("FSM audit log skipped for submittal %s submit", submittal_id)
+        await _log_activity(
+            self.session,
+            actor_id=created_by_s,
+            entity_type="submittal",
+            entity_id=str(submittal_id),
+            action="status_changed",
+            from_status=prior_status,
+            to_status="submitted",
+            reason="Submittal submitted via submit_submittal()",
+            metadata={
+                "submittal_number": submittal_number_s,
+                "revision": fields.get("current_revision", current_rev),
+            },
+            module="submittals",
+            parent_entity_type="project",
+            parent_entity_id=project_id_s,
+            before_state={"status": prior_status, "revision": current_rev},
+            after_state={
+                "status": "submitted",
+                "revision": fields.get("current_revision", current_rev),
+            },
+        )
 
         await _safe_publish(
             "submittal.submitted",
@@ -423,22 +434,29 @@ class SubmittalService:
         await self.repo.update_fields(submittal_id, **fields)
         fresh = await self.repo.get_by_id(submittal_id)
 
-        try:
-            from app.core.audit_log import log_activity
+        # Epic H — universal audit trail (drop the try/except: pass
+        # wrapper; the helper raises only for real DB failures).
+        from app.core.audit_log import log_activity as _log_activity
 
-            await log_activity(
-                self.session,
-                actor_id=reviewer_id,
-                entity_type="submittal",
-                entity_id=str(submittal_id),
-                action="status_changed",
-                from_status=prior_status,
-                to_status=new_status,
-                reason=f"Submittal reviewed: decision={new_status}",
-                metadata={"reviewer_id": reviewer_id},
-            )
-        except Exception:
-            logger.debug("FSM audit log skipped for submittal %s review", submittal_id)
+        await _log_activity(
+            self.session,
+            actor_id=reviewer_id,
+            entity_type="submittal",
+            entity_id=str(submittal_id),
+            action="status_changed",
+            from_status=prior_status,
+            to_status=new_status,
+            reason=f"Submittal reviewed: decision={new_status}",
+            metadata={"reviewer_id": reviewer_id},
+            module="submittals",
+            parent_entity_type="project",
+            parent_entity_id=project_id_s,
+            before_state={"status": prior_status},
+            after_state={
+                "status": new_status,
+                "ball_in_court": str(ball) if ball else None,
+            },
+        )
 
         await _safe_publish(
             "submittal.reviewed",
@@ -542,22 +560,25 @@ class SubmittalService:
         await self.repo.update_fields(submittal_id, **fields)
         fresh = await self.repo.get_by_id(submittal_id)
 
-        try:
-            from app.core.audit_log import log_activity
+        # Epic H — universal audit trail (drop the try/except: pass wrapper).
+        from app.core.audit_log import log_activity as _log_activity
 
-            await log_activity(
-                self.session,
-                actor_id=approver_id,
-                entity_type="submittal",
-                entity_id=str(submittal_id),
-                action="status_changed",
-                from_status=prior_status,
-                to_status="approved",
-                reason="Submittal approved via approve_submittal()",
-                metadata={"approver_id": approver_id},
-            )
-        except Exception:
-            logger.debug("FSM audit log skipped for submittal %s approve", submittal_id)
+        await _log_activity(
+            self.session,
+            actor_id=approver_id,
+            entity_type="submittal",
+            entity_id=str(submittal_id),
+            action="status_changed",
+            from_status=prior_status,
+            to_status="approved",
+            reason="Submittal approved via approve_submittal()",
+            metadata={"approver_id": approver_id},
+            module="submittals",
+            parent_entity_type="project",
+            parent_entity_id=project_id_s,
+            before_state={"status": prior_status},
+            after_state={"status": "approved", "ball_in_court": None},
+        )
 
         await _safe_publish(
             "submittal.approved",

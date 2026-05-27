@@ -24,8 +24,9 @@ import {
   ListChecks,
   ScrollText,
 } from 'lucide-react';
-import { Card, Badge, Button, Input } from '@/shared/ui';
+import { Card, Badge, Button, ConfirmDialog, Input } from '@/shared/ui';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -86,6 +87,7 @@ export function WebhookLeads() {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  const { confirm, ...confirmProps } = useConfirm();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [revealedSecret, setRevealedSecret] = useState<{
@@ -419,16 +421,20 @@ export function WebhookLeads() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (
-                      window.confirm(
-                        t('webhook_leads.confirm_delete', {
-                          defaultValue: 'Delete this webhook source?',
-                        }),
-                      )
-                    )
-                      deleteSource.mutate(s.id);
+                    const ok = await confirm({
+                      title: t('webhook_leads.confirm_delete_title', {
+                        defaultValue: 'Delete webhook source?',
+                      }),
+                      message: t('webhook_leads.confirm_delete', {
+                        defaultValue: 'Delete this webhook source?',
+                      }),
+                      confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+                      variant: 'danger',
+                    });
+                    if (!ok) return;
+                    deleteSource.mutate(s.id);
                   }}
                 >
                   <Trash2 className="w-4 h-4 text-red-500" />
@@ -624,6 +630,7 @@ export function WebhookLeads() {
           </Card>
         </>
       )}
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

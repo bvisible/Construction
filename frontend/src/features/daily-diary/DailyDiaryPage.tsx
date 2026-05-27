@@ -20,6 +20,7 @@ import {
   Trash2,
   ArrowRight,
   X,
+  Globe2,
 } from 'lucide-react';
 import {
   Button,
@@ -32,6 +33,7 @@ import {
   WideModalSection,
   WideModalField,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -141,18 +143,18 @@ function WorkflowIntro() {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-content-primary">
             {t('daily_diary.intro_title', {
-              defaultValue: 'One signed record per site day‌⁠‍',
+              defaultValue: 'One signed record per site day',
             })}
           </p>
           <p className="mt-1 text-xs leading-relaxed text-content-secondary">
             {t('daily_diary.intro_body', {
               defaultValue:
-                'Each day, open the diary and log weather, headcount, deliveries and events, attach site photos, then close and sign it. A signed diary is sealed with a sha256 fingerprint — it becomes tamper-evident evidence for delay claims, progress verification and dispute resolution.‌⁠‍',
+                'Each day, open the diary and log weather, headcount, deliveries and events, attach site photos, then close and sign it. A signed diary is sealed with a sha256 fingerprint — it becomes tamper-evident evidence for delay claims, progress verification and dispute resolution.',
             })}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
-              {t('daily_diary.intro_connects', { defaultValue: 'Feeds into‌⁠‍' })}
+              {t('daily_diary.intro_connects', { defaultValue: 'Feeds into' })}
             </span>
             <button
               type="button"
@@ -160,7 +162,7 @@ function WorkflowIntro() {
               className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
             >
               {t('daily_diary.intro_link_schedule', {
-                defaultValue: 'Schedule progress‌⁠‍',
+                defaultValue: 'Schedule progress',
               })}
               <ArrowRight size={11} />
             </button>
@@ -177,7 +179,7 @@ function WorkflowIntro() {
               onClick={() => navigate('/files')}
               className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
             >
-              {t('daily_diary.intro_link_files', { defaultValue: 'Site photos‌⁠‍' })}
+              {t('daily_diary.intro_link_files', { defaultValue: 'Site photos' })}
               <ArrowRight size={11} />
             </button>
           </div>
@@ -199,6 +201,7 @@ function WorkflowIntro() {
 
 export function DailyDiaryPage() {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>('diaries');
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
@@ -318,6 +321,19 @@ export function DailyDiaryPage() {
               ))}
             </select>
           )}
+          {projectId && (
+            <button
+              type="button"
+              onClick={() => navigate(`/projects/${projectId}/geo`)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-border-light bg-surface-primary px-2.5 py-1.5 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-oe-blue focus:outline-none focus:ring-2 focus:ring-oe-blue/40 shrink-0"
+              title={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+              aria-label={t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+              data-testid="daily-diary-view-on-map"
+            >
+              <Globe2 size={13} />
+              {t('geo_hub.view_on_map', { defaultValue: 'View on map' })}
+            </button>
+          )}
           <Button
             variant="primary"
             size="sm"
@@ -386,13 +402,11 @@ export function DailyDiaryPage() {
           {projectsQ.isLoading ? (
             <SkeletonTable rows={6} columns={3} />
           ) : (
-            <EmptyState
-              icon={<Calendar size={22} />}
-              title={t('daily_diary.no_project', { defaultValue: 'No project selected' })}
-              description={t('daily_diary.no_project_desc', {
+            <RequiresProject
+              emptyHint={t('daily_diary.no_project_desc', {
                 defaultValue: 'Create a project first to start logging site diaries.',
               })}
-            />
+            >{null}</RequiresProject>
           )}
         </Card>
       ) : tab === 'diaries' ? (
@@ -1287,7 +1301,7 @@ function ArchiveTab({
           <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-2.5 text-left">{t('daily_diary.date', { defaultValue: 'Date' })}</th>
-              <th className="px-4 py-2.5 text-left">{t('common.status', { defaultValue: 'Status' })}</th>
+              <th className="px-4 py-2.5 text-left">{t('common.status')}</th>
               <th className="px-4 py-2.5 text-left">{t('daily_diary.signed_at', { defaultValue: 'Signed' })}</th>
               <th className="px-4 py-2.5 text-left">{t('daily_diary.signature_ref', { defaultValue: 'Fingerprint' })}</th>
             </tr>
@@ -1432,7 +1446,7 @@ function CreateDiaryModal({
             className={inputCls}
           />
         </WideModalField>
-        <WideModalField label={t('common.notes', { defaultValue: 'Notes' })} span={2}>
+        <WideModalField label={t('common.notes')} span={2}>
           <textarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}

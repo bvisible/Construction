@@ -259,10 +259,16 @@ export function InlinePdfAnnotator({
       pageDimensionsRef.current = { width: viewport.width, height: viewport.height };
       viewportRef.current = viewport;
 
-      // Also size the overlay canvas
+      // Also size the overlay canvas. Assigning width/height resets the
+      // bitmap, but we additionally clearRect() to be defensive against
+      // browsers that skip the reset when the new size equals the old one,
+      // and so the overlay is visibly blank during the awaited PDF render
+      // (otherwise the previous page's strokes can flash through).
       if (overlayRef.current) {
         overlayRef.current.width = viewport.width;
         overlayRef.current.height = viewport.height;
+        const overlayCtx = overlayRef.current.getContext('2d');
+        overlayCtx?.clearRect(0, 0, overlayRef.current.width, overlayRef.current.height);
       }
 
       activeTask = page.render({ canvasContext: ctx, viewport });
@@ -274,6 +280,9 @@ export function InlinePdfAnnotator({
         if (err && (err as { name?: string }).name !== 'RenderingCancelledException') {
           if (import.meta.env.DEV) console.warn('PDF page render failed', err);
         }
+        // Even on cancellation, repaint the overlay so stale strokes from
+        // the previous page can't linger if the redraw effect races us.
+        if (!cancelled) drawAnnotations();
         return;
       }
       if (!cancelled) {
@@ -473,6 +482,16 @@ export function InlinePdfAnnotator({
     drawAnnotations();
   }, [drawAnnotations]);
 
+  // On page change, drop any in-flight drag so a half-drawn stroke from
+  // page N can't bleed onto page N+1 (the drag state is shared across pages).
+  useEffect(() => {
+    setIsDrawing(false);
+    setDrawStart(null);
+    setDrawEnd(null);
+    setShowTextInput(false);
+    setTextPosition(null);
+  }, [currentPage]);
+
   /* ── Mouse handlers ───────────────────────────────────────────────── */
 
   const getCanvasCoords = useCallback((e: React.MouseEvent): { x: number; y: number } => {
@@ -591,7 +610,7 @@ export function InlinePdfAnnotator({
   const handleSaveAll = useCallback(async () => {
     const unsaved = annotations.filter((a) => TOOL_TO_MARKUP_TYPE[a.tool]);
     if (unsaved.length === 0) {
-      addToast({ type: 'info', title: t('markups.nothing_to_save', { defaultValue: 'No annotations to save‌⁠‍' }) });
+      addToast({ type: 'info', title: t('markups.nothing_to_save', { defaultValue: 'No annotations to save' }) });
       return;
     }
 
@@ -636,7 +655,7 @@ export function InlinePdfAnnotator({
       addToast({
         type: 'success',
         title: t('markups.annotations_saved', {
-          defaultValue: '{{count}} annotation(s) saved‌⁠‍',
+          defaultValue: '{{count}} annotation(s) saved',
           count: ok,
         }),
       });
@@ -647,7 +666,7 @@ export function InlinePdfAnnotator({
       addToast({
         type: 'error',
         title: t('markups.save_failed', {
-          defaultValue: '{{count}} annotation(s) failed to save‌⁠‍',
+          defaultValue: '{{count}} annotation(s) failed to save',
           count: fail,
         }),
       });
@@ -678,7 +697,7 @@ export function InlinePdfAnnotator({
       <div className="flex items-center justify-center py-20">
         <Loader2 size={32} className="text-oe-blue animate-spin" />
         <span className="ml-3 text-sm text-content-secondary">
-          {t('markups.loading_pdf', { defaultValue: 'Loading document...‌⁠‍' })}
+          {t('markups.loading_pdf', { defaultValue: 'Loading document...' })}
         </span>
       </div>
     );
@@ -827,7 +846,7 @@ export function InlinePdfAnnotator({
           <>
             <span className="text-2xs text-content-tertiary">
               {t('markups.annotations_count', {
-                defaultValue: '{{count}} annotation(s)‌⁠‍',
+                defaultValue: '{{count}} annotation(s)',
                 count: annotations.length,
               })}
             </span>

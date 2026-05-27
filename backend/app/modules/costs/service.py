@@ -154,6 +154,25 @@ class CostItemService:
         """Get multiple cost items by their codes."""
         return await self.repo.get_by_codes(codes)
 
+    async def search_for_autocomplete(
+        self,
+        *,
+        q: str,
+        region: str | None = None,
+        limit: int = 8,
+    ) -> list[CostItem]:
+        """Autocomplete-tuned search delegating to the repository.
+
+        See :meth:`CostItemRepository.search_for_autocomplete` — pushes
+        the "items WITH components first" priority into the SQL
+        ORDER BY so the router never has to over-fetch + re-sort.
+        """
+        return await self.repo.search_for_autocomplete(
+            q=q,
+            region=region,
+            limit=limit,
+        )
+
     async def search_costs(self, query: CostSearchQuery) -> tuple[list[CostItem], int]:
         """Search cost items with filters and pagination (legacy offset path).
 

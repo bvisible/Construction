@@ -77,6 +77,77 @@ class MeetingService:
         self.session = session
         self.repo = MeetingRepository(session)
 
+    # ── Integrity helpers ────────────────────────────────────────────────
+
+    async def _reject_foreign_document_ids(
+        self,
+        project_id: uuid.UUID,
+        document_ids: list[str],
+    ) -> None:
+        """Raise 422 if any document_id belongs to a different project.
+
+        A meeting's ``document_ids`` JSON array is a cross-module
+        reference into ``oe_documents_document``.  Pre-fix this field
+        was stored verbatim, so a caller could attach a UUID that
+        resolves to a document inside another project (even on a
+        sibling project of the same tenant).  That breaks data
+        integrity in two ways:
+
+        1. The reference leaks the existence of foreign documents into
+           the meeting payload returned by ``GET /meetings/{id}``.
+        2. The dangling FK survives deletion of the foreign project,
+           leaving zombie pointers no team can clean up without
+           superuser DB access.
+
+        The check is symmetric — it applies whether the caller is a
+        tenant boundary breach OR a same-tenant mistake (an admin
+        copy-pasting the wrong UUID from another project).  Missing
+        documents return the same 422 — we do NOT distinguish
+        ``not-found`` from ``wrong-project`` here, to avoid turning
+        the meeting create into a UUID-existence oracle.
+        """
+        if not document_ids:
+            return
+        # Lazy import to avoid a module-level circular: documents
+        # depends on the audit log, which sometimes lazy-imports
+        # meetings at startup.
+        from sqlalchemy import select as _select
+
+        from app.modules.documents.models import Document
+
+        # Coerce input to UUID, ignoring malformed entries so a single
+        # bad string doesn't blow up the whole insertion — the
+        # ``oe_documents_document.id`` column is GUID-typed, so any
+        # non-UUID can't possibly match anyway.
+        ids: list[uuid.UUID] = []
+        for raw in document_ids:
+            try:
+                ids.append(uuid.UUID(str(raw)))
+            except (ValueError, AttributeError):
+                continue
+        if not ids:
+            return
+
+        stmt = _select(Document.id, Document.project_id).where(
+            Document.id.in_(ids),
+        )
+        rows = (await self.session.execute(stmt)).all()
+        by_id = {str(row[0]): str(row[1]) for row in rows}
+
+        bad: list[str] = []
+        for raw in document_ids:
+            owner = by_id.get(str(raw))
+            if owner is None or owner != str(project_id):
+                bad.append(str(raw))
+        if bad:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "document_ids reference documents that do not belong "
+                    f"to project {project_id}: {bad}"
+                ),
+            )
+
     # ── Create ────────────────────────────────────────────────────────────
 
     async def create_meeting(
@@ -85,6 +156,15 @@ class MeetingService:
         user_id: str | None = None,
     ) -> Meeting:
         """Create a new meeting with auto-generated meeting number."""
+        # Reject any document_ids that don't live inside this project —
+        # a meeting referencing a foreign-project document is a
+        # data-integrity violation that creates dangling cross-project
+        # FKs and leaks the *existence* of foreign documents into the
+        # meeting payload.  Same rule on update_meeting below.
+        await self._reject_foreign_document_ids(
+            data.project_id, [str(x) for x in data.document_ids],
+        )
+
         meeting_number = await self.repo.next_meeting_number(data.project_id)
 
         attendees_data = [entry.model_dump() for entry in data.attendees]
@@ -221,6 +301,10 @@ class MeetingService:
                     seen.add(s)
                     deduped.append(s)
             fields["document_ids"] = deduped
+            # Same per-project integrity gate as create_meeting.
+            await self._reject_foreign_document_ids(
+                meeting.project_id, deduped,
+            )
 
         if not fields:
             return meeting
@@ -369,6 +453,17 @@ class MeetingService:
             # made it into the DB.  An empty creation set means
             # downstream subscribers (notifications, vector index)
             # have nothing to consume — publishing would be a lie.
+            #
+            # Idempotency note: ``complete_meeting`` is guarded above
+            # against re-completion ("Meeting is already completed"),
+            # so this event fires at most once per meeting in the
+            # happy path.  We still hand subscribers a stable
+            # ``event_key`` (``meeting:complete:<id>``) so they can
+            # dedupe defensively if the bus ever gains
+            # at-least-once delivery semantics — the publish itself
+            # is a fire-and-forget detached task and a transient
+            # bus retry would otherwise create duplicate
+            # notifications on the task owner's inbox.
             if created_action_items:
                 event_bus.publish_detached(
                     "meeting.action_items_created",
@@ -380,6 +475,7 @@ class MeetingService:
                         "failed_action_items": failed_action_items,
                         "created_count": len(created_action_items),
                         "failed_count": len(failed_action_items),
+                        "event_key": f"meeting:complete:{meeting.id}",
                     },
                     source_module="meetings",
                 )

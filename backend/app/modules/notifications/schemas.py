@@ -215,3 +215,70 @@ class EventTypeCatalogEntry(BaseModel):
     event_type: str
     module: str
     description: str
+
+
+# ── Webhook target CRUD (Epic B / B8) ─────────────────────────────────────
+
+
+class WebhookTargetCreate(BaseModel):
+    """Payload to register a new webhook target."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str = Field(min_length=1, max_length=120)
+    url: str = Field(min_length=8, max_length=2048, pattern=r"^https?://.+")
+    event_filter: str = Field(
+        default="*",
+        max_length=1024,
+        description=(
+            "Comma-separated list of event-type patterns. "
+            "Use ``*`` for wildcard, ``boq.*`` for prefix, exact event "
+            "type otherwise."
+        ),
+    )
+    secret: str | None = Field(default=None, max_length=255)
+    active: bool = True
+
+
+class WebhookTargetUpdate(BaseModel):
+    """Partial-update payload for an existing webhook target."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    url: str | None = Field(
+        default=None, min_length=8, max_length=2048, pattern=r"^https?://.+",
+    )
+    event_filter: str | None = Field(default=None, max_length=1024)
+    secret: str | None = Field(default=None, max_length=255)
+    active: bool | None = None
+
+
+class WebhookTargetResponse(BaseModel):
+    """Single webhook target row returned to the Admin UI."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    url: str
+    event_filter: str
+    # The plaintext secret is intentionally NEVER serialised back to
+    # the client.  We expose a boolean so the UI can show "secret set"
+    # without ever leaking the value.
+    has_secret: bool = False
+    active: bool
+    last_status: int | None = None
+    last_attempt_at: datetime | None = None
+    failure_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    @model_validator(mode="after")
+    def _populate_has_secret(self) -> "WebhookTargetResponse":
+        """``has_secret`` is computed by the router (where the ORM row
+        is still in scope).  This validator is a no-op safety net so
+        the model is internally consistent if anyone constructs the
+        response directly.
+        """
+        return self

@@ -27,6 +27,8 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import (
     CurrentUserId,
     RequirePermission,
@@ -55,6 +57,7 @@ from app.modules.contracts.repository import (
 )
 from app.modules.contracts.schemas import (
     AutoGenerateClaimRequest,
+    ContractCloneRequest,
     ContractCreate,
     ContractDashboardResponse,
     ContractLineBulkCreate,
@@ -110,7 +113,7 @@ async def _load_contract_or_404(session, contract_id: uuid.UUID) -> Contract:
 async def _load_claim_or_404(session, claim_id: uuid.UUID) -> ProgressClaim:
     obj = await session.get(ProgressClaim, claim_id)
     if obj is None:
-        raise HTTPException(status_code=404, detail="Progress claim not found")
+        raise HTTPException(status_code=404, detail=translate("errors.claim_not_found", locale=get_locale()))
     return obj
 
 
@@ -328,6 +331,52 @@ async def terminate_contract(
     service = ContractsService(session)
     contract = await service.transition_contract(contract_id, "terminated", user_id)
     return _contract_to_response(contract)
+
+
+@router.post(
+    "/contracts/{contract_id}/clone",
+    response_model=ContractResponse,
+    status_code=201,
+)
+async def clone_contract(
+    contract_id: uuid.UUID,
+    payload: ContractCloneRequest,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("contracts.clone")),
+) -> ContractResponse:
+    """Deep-clone a contract.
+
+    Cross-tenant safety (R7):
+        1. The caller must have project-level access on the **source**
+           contract — enforced via ``_verify_contract_access``.
+        2. If ``payload.target_project_id`` is given, the caller must
+           ALSO have project-level access on the **destination** —
+           enforced via a second ``verify_project_access`` call.
+           Without this gate, IDOR turns into cross-tenant data
+           exfiltration: a manager on project A could clone project A's
+           confidential commercial terms into project B (which they own)
+           and walk away with them.
+        3. The route requires the ``contracts.clone`` permission
+           (manager-or-higher).
+    """
+    source = await _verify_contract_access(session, contract_id, user_id)
+    if (
+        payload.target_project_id is not None
+        and payload.target_project_id != source.project_id
+    ):
+        await verify_project_access(payload.target_project_id, user_id, session)
+    service = ContractsService(session)
+    clone = await service.clone_contract(
+        contract_id,
+        new_code=payload.new_code,
+        target_project_id=payload.target_project_id,
+        new_title=payload.new_title,
+        include_lines=payload.include_lines,
+        copy_subconfigs=payload.copy_subconfigs,
+        user_id=user_id,
+    )
+    return _contract_to_response(clone)
 
 
 # ── ContractLines ────────────────────────────────────────────────────────
@@ -1048,7 +1097,7 @@ async def get_final_account(
     repo = FinalAccountRepository(session)
     obj = await repo.get_by_id(account_id)
     if obj is None:
-        raise HTTPException(status_code=404, detail="Final account not found")
+        raise HTTPException(status_code=404, detail=translate("errors.final_account_not_found", locale=get_locale()))
     await _verify_contract_access(session, obj.contract_id, user_id)
     return FinalAccountResponse.model_validate(obj)
 
@@ -1066,7 +1115,7 @@ async def update_final_account(
     repo = FinalAccountRepository(session)
     obj = await repo.get_by_id(account_id)
     if obj is None:
-        raise HTTPException(status_code=404, detail="Final account not found")
+        raise HTTPException(status_code=404, detail=translate("errors.final_account_not_found", locale=get_locale()))
     await _verify_contract_access(session, obj.contract_id, user_id)
     fields = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
     if fields:
@@ -1088,7 +1137,7 @@ async def delete_final_account(
     repo = FinalAccountRepository(session)
     obj = await repo.get_by_id(account_id)
     if obj is None:
-        raise HTTPException(status_code=404, detail="Final account not found")
+        raise HTTPException(status_code=404, detail=translate("errors.final_account_not_found", locale=get_locale()))
     await _verify_contract_access(session, obj.contract_id, user_id)
     await repo.delete(account_id)
 

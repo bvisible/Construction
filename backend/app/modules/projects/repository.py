@@ -6,7 +6,8 @@ No business logic — pure data access.
 
 import uuid
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Integer, func, select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
@@ -107,11 +108,100 @@ class ProjectRepository:
         count = (await self.session.execute(stmt)).scalar_one()
         return bool(count)
 
+    async def existing_project_codes(self, codes: list[str]) -> set[str]:
+        """Bulk variant of :meth:`project_code_exists`.
+
+        Returns the subset of ``codes`` that are already committed in
+        ``Project.project_code``. Issues a single ``WHERE IN (...)``
+        query instead of N point queries — used by the stale-reservation
+        prune in ``ProjectService._generate_project_code`` which can
+        otherwise spend O(N) round-trips checking reservations on every
+        ``create_project`` call when the in-process reservation set has
+        grown (long-running uvicorn workers, batch importer scenarios).
+
+        Empty input → empty set (no query issued).
+
+        Hard cap on input size — refuses to issue an unbounded ``IN``
+        clause that could trip Postgres' parameter-limit (max 32k bind
+        params on the wire). The caller (generator) keeps the
+        reservation set small in practice, but guarding here protects
+        against pathological batch flows.
+        """
+        if not codes:
+            return set()
+        # Postgres caps at ~32k bind parameters per statement; chunk
+        # defensively. 1000 covers any sane in-process reservation set
+        # while staying well below the limit even on the worst engine.
+        BATCH = 1000
+        found: set[str] = set()
+        for start in range(0, len(codes), BATCH):
+            chunk = codes[start:start + BATCH]
+            stmt = select(Project.project_code).where(
+                Project.project_code.in_(chunk),
+            )
+            result = await self.session.execute(stmt)
+            for row in result.all():
+                if row[0] is not None:
+                    found.add(row[0])
+        return found
+
     async def max_project_code_seq(self, prefix: str) -> int | None:
         """Find the maximum sequence number for project codes with the given prefix.
 
         Scans codes like ``PRJ-2026-0001`` and extracts the numeric suffix.
         Returns ``None`` if no matching codes exist.
+
+        Performance: pushes the scan into the database as a single
+        ``SELECT MAX(CAST(SUBSTR(project_code, N) AS INTEGER))`` aggregate
+        scoped by ``LIKE prefix || '%'``. Previously this method loaded
+        every matching row into the application and iterated in Python —
+        an O(n) pull that became measurable past a few hundred projects.
+        The aggregate runs in O(1) wall time on the indexed column with
+        a single round-trip and zero rows transferred.
+
+        ``GLOB`` (SQLite) / ``SIMILAR TO`` (Postgres) would be the
+        absolutely safest filter for the cast, but neither is portable.
+        Instead we feed the cast a substring that's already been
+        prefix-matched, then defensively coalesce a ``NULL`` MAX (no
+        rows) to ``None``. Rows whose suffix isn't a pure integer don't
+        produce a meaningful ``int(...)`` in the old code path either —
+        on SQLite the cast yields ``0`` for them (harmless: 0 < any real
+        sequence), on Postgres the cast raises and we fall through to the
+        Python scan as a safety net (preserves existing semantics for
+        any pre-existing malformed codes).
+        """
+        prefix_len = len(prefix)
+        if prefix_len <= 0:
+            return None
+
+        # SUBSTR is 1-indexed in SQL — pass prefix_len + 1 to start past
+        # the prefix.
+        suffix_expr = func.substr(Project.project_code, prefix_len + 1)
+        max_expr = func.max(func.cast(suffix_expr, Integer))
+        stmt = select(max_expr).where(
+            Project.project_code.isnot(None),
+            Project.project_code.startswith(prefix),
+        )
+        try:
+            result = await self.session.execute(stmt)
+            max_seq = result.scalar()
+        except DBAPIError:
+            # Postgres raises on a non-numeric cast; fall back to the
+            # original Python-side scan so a single malformed historical
+            # row doesn't break code generation.
+            return await self._max_project_code_seq_python_fallback(prefix)
+
+        if max_seq is None or max_seq <= 0:
+            return None
+        return int(max_seq)
+
+    async def _max_project_code_seq_python_fallback(self, prefix: str) -> int | None:
+        """Python-side scan fallback for ``max_project_code_seq``.
+
+        Used only when the SQL CAST raises (e.g. Postgres encountering a
+        non-numeric suffix on a malformed legacy row). Preserves the
+        pre-aggregate behaviour: ignore unparseable codes, return the
+        max integer suffix observed.
         """
         stmt = select(Project.project_code).where(
             Project.project_code.isnot(None),
@@ -128,9 +218,9 @@ class ProjectRepository:
         for code in codes:
             try:
                 seq = int(code[prefix_len:])
-                if seq > max_seq:
-                    max_seq = seq
             except (ValueError, IndexError):
                 continue
+            if seq > max_seq:
+                max_seq = seq
 
         return max_seq if max_seq > 0 else None

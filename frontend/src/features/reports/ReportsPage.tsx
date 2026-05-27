@@ -24,7 +24,7 @@ import {
   LineChart,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { Breadcrumb, InfoHint } from '@/shared/ui';
+import { Breadcrumb, InfoHint, SkeletonGrid } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -33,6 +33,19 @@ import { projectsApi, type Project } from '@/features/projects/api';
 import { boqApi } from '@/features/boq/api';
 import { scheduleApi } from '@/features/schedule/api';
 import { costModelApi } from '@/features/costmodel/api';
+import { GeneratedReportsHistory } from './GeneratedReportsHistory';
+
+// HTML-escape user-controlled strings before they land in the HTML-report
+// generators below. Pre-fix (Wave V_REPORTING audit) values like
+// projectName / risk title / BOQ description were interpolated raw —
+// a malicious "<img src=x onerror=...>" project name would execute in
+// the recipient's browser when they opened the downloaded .html.
+function esc(value: string | number | null | undefined): string {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
@@ -698,10 +711,10 @@ async function downloadCashFlowReport(projectId: string, projectName: string): P
  */
 async function downloadProgressReport(projectId: string, projectName: string): Promise<void> {
   const htmlParts: string[] = [];
-  htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${projectName} — Progress Report</title>`);
+  htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${esc(projectName)} — Progress Report</title>`);
   htmlParts.push('<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:900px;margin:0 auto;padding:40px 24px;color:#1a1a1a;line-height:1.6}h1{font-size:28px;border-bottom:3px solid #2563eb;padding-bottom:12px}h2{font-size:20px;color:#2563eb;margin-top:32px;border-bottom:1px solid #e5e7eb;padding-bottom:6px}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-size:14px}th{background:#f9fafb;font-weight:600}.metric{display:inline-block;margin:8px 16px 8px 0;padding:12px 20px;border:1px solid #e5e7eb;border-radius:8px;text-align:center}.metric-label{font-size:11px;text-transform:uppercase;color:#6b7280;letter-spacing:0.05em}.metric-value{font-size:22px;font-weight:700}p.footer{color:#9ca3af;font-size:12px;margin-top:40px;border-top:1px solid #e5e7eb;padding-top:12px}@media print{body{padding:0}}</style>');
   htmlParts.push('</head><body>');
-  htmlParts.push(`<h1>${projectName} — Progress Report</h1>`);
+  htmlParts.push(`<h1>${esc(projectName)} — Progress Report</h1>`);
   htmlParts.push(`<p style="color:#6b7280">Generated: ${new Date().toLocaleString()}</p>`);
 
   // EVM section
@@ -727,7 +740,7 @@ async function downloadProgressReport(projectId: string, projectName: string): P
         const pct = gantt.summary.total_activities > 0
           ? Math.round((gantt.summary.completed / gantt.summary.total_activities) * 100)
           : 0;
-        htmlParts.push(`<h3>${sched.name}</h3>`);
+        htmlParts.push(`<h3>${esc(sched.name)}</h3>`);
         htmlParts.push(`<div class="metric"><div class="metric-label">Progress</div><div class="metric-value">${pct}%</div></div>`);
         htmlParts.push(`<div class="metric"><div class="metric-label">Activities</div><div class="metric-value">${gantt.summary.total_activities}</div></div>`);
         htmlParts.push(`<div class="metric"><div class="metric-label">Completed</div><div class="metric-value">${gantt.summary.completed}</div></div>`);
@@ -744,7 +757,7 @@ async function downloadProgressReport(projectId: string, projectName: string): P
       htmlParts.push('<table><thead><tr><th>Code</th><th>Risk</th><th>Severity</th><th>Score</th></tr></thead><tbody>');
       const sorted = [...risks].sort((a, b) => b.risk_score - a.risk_score);
       for (const r of sorted) {
-        htmlParts.push(`<tr><td>${r.code}</td><td>${r.title}</td><td>${r.impact_severity}</td><td>${r.risk_score.toFixed(1)}</td></tr>`);
+        htmlParts.push(`<tr><td>${esc(r.code)}</td><td>${esc(r.title)}</td><td>${esc(r.impact_severity)}</td><td>${r.risk_score.toFixed(1)}</td></tr>`);
       }
       htmlParts.push('</tbody></table>');
     }
@@ -877,7 +890,7 @@ export function ReportsPage() {
           addToast({
             type: 'warning',
             title: t('reports.select_project_first', {
-              defaultValue: 'Please select a project first‌⁠‍',
+              defaultValue: 'Please select a project first',
             }),
           });
           return;
@@ -891,14 +904,14 @@ export function ReportsPage() {
           addToast({
             type: 'success',
             title: t('reports.download_success', {
-              defaultValue: 'Report downloaded successfully‌⁠‍',
+              defaultValue: 'Report downloaded successfully',
             }),
           });
         } catch (err) {
           addToast({
             type: 'error',
             title: t('reports.download_error', {
-              defaultValue: 'Failed to generate report‌⁠‍',
+              defaultValue: 'Failed to generate report',
             }),
             message: err instanceof Error ? err.message : undefined,
           });
@@ -912,7 +925,7 @@ export function ReportsPage() {
       if (!selectedBoqId || !selectedBoq) {
         addToast({
           type: 'warning',
-          title: t('reports.select_boq_first', { defaultValue: 'Please select a project and BOQ first‌⁠‍' }),
+          title: t('reports.select_boq_first', { defaultValue: 'Please select a project and BOQ first' }),
         });
         return;
       }
@@ -925,7 +938,7 @@ export function ReportsPage() {
         addToast({
           type: 'success',
           title: t('reports.download_success', {
-            defaultValue: 'Report downloaded successfully‌⁠‍',
+            defaultValue: 'Report downloaded successfully',
           }),
         });
       } catch (err) {
@@ -953,9 +966,7 @@ export function ReportsPage() {
           ]}
           className="mb-4"
         />
-        <div className="flex items-center justify-center py-20">
-          <Loader2 size={24} className="animate-spin text-oe-blue" />
-        </div>
+        <SkeletonGrid items={6} />
       </div>
     );
   }
@@ -1104,6 +1115,10 @@ export function ReportsPage() {
         </div>
       </div>
 
+      {/* Recently generated reports — surfaces backend history that was
+          previously a blind spot for users (V_REPORTING audit). */}
+      {selectedProjectId && <GeneratedReportsHistory projectId={selectedProjectId} />}
+
       {/* Custom Report Builder panel */}
       {showBuilder && (
         <CustomReportBuilder
@@ -1140,10 +1155,10 @@ export function ReportsPage() {
 
               const htmlParts: string[] = [];
 
-              htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${projectName} — Project Report</title>`);
+              htmlParts.push(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>${esc(projectName)} — Project Report</title>`);
               htmlParts.push('<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;max-width:900px;margin:0 auto;padding:40px 24px;color:#1a1a1a;line-height:1.6}h1{font-size:28px;border-bottom:3px solid #2563eb;padding-bottom:12px;margin-bottom:8px}h2{font-size:20px;color:#2563eb;margin-top:32px;border-bottom:1px solid #e5e7eb;padding-bottom:6px}h3{font-size:16px;margin-top:20px;color:#374151}table{width:100%;border-collapse:collapse;margin:12px 0}th,td{padding:8px 12px;text-align:left;border-bottom:1px solid #e5e7eb;font-size:14px}th{background:#f9fafb;font-weight:600;color:#374151}tr:hover{background:#f9fafb}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600}.badge-success{background:#dcfce7;color:#166534}.badge-warning{background:#fef3c7;color:#92400e}.badge-error{background:#fee2e2;color:#991b1b}.badge-blue{background:#dbeafe;color:#1e40af}.badge-neutral{background:#f3f4f6;color:#4b5563}.metric{display:inline-block;margin:8px 16px 8px 0;padding:12px 20px;border:1px solid #e5e7eb;border-radius:8px;text-align:center}.metric-label{font-size:11px;text-transform:uppercase;color:#6b7280;letter-spacing:0.05em}.metric-value{font-size:22px;font-weight:700;color:#1a1a1a}p.generated{color:#9ca3af;font-size:12px;margin-top:40px;border-top:1px solid #e5e7eb;padding-top:12px}@media print{body{padding:0}}</style>');
               htmlParts.push('</head><body>');
-              htmlParts.push(`<h1>${projectName}</h1>`);
+              htmlParts.push(`<h1>${esc(projectName)}</h1>`);
               htmlParts.push(`<p style="color:#6b7280;margin-bottom:24px">Generated: ${new Date().toLocaleString()}</p>`);
 
               // Executive Summary
@@ -1191,7 +1206,7 @@ export function ReportsPage() {
                     htmlParts.push('<table><thead><tr><th>Category</th><th style="text-align:right">Planned</th><th style="text-align:right">Actual</th><th style="text-align:right">Variance</th></tr></thead><tbody>');
                     for (const cat of categories) {
                       const v = Number(cat.planned || 0) - Number(cat.actual || 0);
-                      htmlParts.push(`<tr><td>${cat.category || cat.name || 'Unknown'}</td><td style="text-align:right">${Number(cat.planned || 0).toLocaleString()}</td><td style="text-align:right">${Number(cat.actual || 0).toLocaleString()}</td><td style="text-align:right;color:${v >= 0 ? '#166534' : '#991b1b'}">${v >= 0 ? '+' : ''}${v.toLocaleString()}</td></tr>`);
+                      htmlParts.push(`<tr><td>${esc(String(cat.category || cat.name || 'Unknown'))}</td><td style="text-align:right">${Number(cat.planned || 0).toLocaleString()}</td><td style="text-align:right">${Number(cat.actual || 0).toLocaleString()}</td><td style="text-align:right;color:${v >= 0 ? '#166534' : '#991b1b'}">${v >= 0 ? '+' : ''}${v.toLocaleString()}</td></tr>`);
                     }
                     htmlParts.push('</tbody></table>');
                   } else {
@@ -1227,7 +1242,7 @@ export function ReportsPage() {
                     htmlParts.push('<p>No schedules found.</p>');
                   }
                   for (const sched of schedules) {
-                    htmlParts.push(`<h3>${sched.name} <span class="badge badge-blue">${sched.status}</span></h3>`);
+                    htmlParts.push(`<h3>${esc(sched.name)} <span class="badge badge-blue">${esc(sched.status)}</span></h3>`);
                     try {
                       const gantt = await scheduleApi.getGantt(sched.id);
                       htmlParts.push(`<div class="metric"><div class="metric-label">Total Activities</div><div class="metric-value">${gantt.summary.total_activities}</div></div>`);
@@ -1261,7 +1276,7 @@ export function ReportsPage() {
                     const top5 = [...risks].sort((a, b) => b.risk_score - a.risk_score).slice(0, 5);
                     for (const r of top5) {
                       const cls = r.impact_severity === 'critical' ? 'error' : r.impact_severity === 'high' ? 'warning' : 'neutral';
-                      htmlParts.push(`<tr><td>${r.code}</td><td>${r.title}</td><td>${(r.probability * 100).toFixed(0)}%</td><td><span class="badge badge-${cls}">${r.impact_severity}</span></td><td style="text-align:right">${r.risk_score.toFixed(1)}</td></tr>`);
+                      htmlParts.push(`<tr><td>${esc(r.code)}</td><td>${esc(r.title)}</td><td>${(r.probability * 100).toFixed(0)}%</td><td><span class="badge badge-${cls}">${esc(r.impact_severity)}</span></td><td style="text-align:right">${r.risk_score.toFixed(1)}</td></tr>`);
                     }
                     htmlParts.push('</tbody></table>');
                   }
@@ -1291,12 +1306,12 @@ export function ReportsPage() {
                 try {
                   const boqDetail = await apiGet<{ positions?: Array<{ ordinal: string; description: string; unit: string; quantity: number; unit_rate: number; total: number }> }>(`/v1/boq/boqs/${selectedBoqId}`);
                   const positions = boqDetail.positions ?? [];
-                  htmlParts.push(`<p>BOQ: <strong>${selectedBoq.name}</strong> (${positions.length} positions)</p>`);
+                  htmlParts.push(`<p>BOQ: <strong>${esc(selectedBoq.name)}</strong> (${positions.length} positions)</p>`);
                   htmlParts.push('<table><thead><tr><th>#</th><th>Description</th><th>Unit</th><th style="text-align:right">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Total</th></tr></thead><tbody>');
                   let grandTotal = 0;
                   for (const pos of positions) {
                     grandTotal += Number(pos.total || 0);
-                    htmlParts.push(`<tr><td>${pos.ordinal || ''}</td><td>${pos.description || ''}</td><td>${pos.unit || ''}</td><td style="text-align:right">${Number(pos.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${Number(pos.unit_rate || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${Number(pos.total || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td></tr>`);
+                    htmlParts.push(`<tr><td>${esc(pos.ordinal)}</td><td>${esc(pos.description)}</td><td>${esc(pos.unit)}</td><td style="text-align:right">${Number(pos.quantity || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${Number(pos.unit_rate || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td><td style="text-align:right">${Number(pos.total || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td></tr>`);
                   }
                   htmlParts.push(`<tr style="font-weight:700;border-top:2px solid #1a1a1a"><td colspan="5">Grand Total</td><td style="text-align:right">${grandTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td></tr>`);
                   htmlParts.push('</tbody></table>');

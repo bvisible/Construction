@@ -55,7 +55,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 
-import { Badge, ConfirmDialog, EmptyState } from '@/shared/ui';
+import { Badge, ConfirmDialog, EmptyState, SkeletonTable } from '@/shared/ui';
 import { apiGet } from '@/shared/lib/api';
 import { FolderOpen } from 'lucide-react';
 import BIMRequirementsImport from './BIMRequirementsImport';
@@ -413,10 +413,10 @@ function RuleEditorModal({
 
   const modeTitle =
     mode === 'edit'
-      ? t('bim_rules.edit_rule', { defaultValue: 'Edit rule‌⁠‍' })
+      ? t('bim_rules.edit_rule', { defaultValue: 'Edit rule' })
       : mode === 'duplicate'
-        ? t('bim_rules.duplicate_rule', { defaultValue: 'Duplicate rule‌⁠‍' })
-        : t('bim_rules.new_rule', { defaultValue: 'New rule‌⁠‍' });
+        ? t('bim_rules.duplicate_rule', { defaultValue: 'Duplicate rule' })
+        : t('bim_rules.new_rule', { defaultValue: 'New rule' });
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4">
@@ -456,11 +456,11 @@ function RuleEditorModal({
               <input
                 id="rule-name"
                 type="text"
-                required
+                required aria-required="true"
                 value={form.name}
                 onChange={(e) => updateField('name', e.target.value)}
                 placeholder={t('bim_rules.field_name_placeholder', {
-                  defaultValue: 'e.g. Exterior walls — concrete‌⁠‍',
+                  defaultValue: 'e.g. Exterior walls — concrete',
                 })}
                 className="w-full rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm text-content-primary focus:border-oe-blue focus:outline-none focus:ring-1 focus:ring-oe-blue"
               />
@@ -472,7 +472,7 @@ function RuleEditorModal({
                 htmlFor="rule-element-type"
                 className="mb-1 block text-xs font-medium text-content-secondary"
               >
-                {t('bim_rules.field_element_type', { defaultValue: 'Element type filter‌⁠‍' })}
+                {t('bim_rules.field_element_type', { defaultValue: 'Element type filter' })}
               </label>
               <input
                 id="rule-element-type"
@@ -883,7 +883,7 @@ function RuleEditorModal({
               className="flex items-center gap-1.5 rounded-lg bg-oe-blue px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-oe-blue-dark disabled:cursor-not-allowed disabled:opacity-60"
             >
               {submitting && <Loader2 size={12} className="animate-spin" />}
-              {t('common.save', { defaultValue: 'Save' })}
+              {t('common.save')}
             </button>
           </div>
         </form>
@@ -2131,7 +2131,7 @@ function RequirementsTabContent({
               title={t('bim_rules.req_export_xlsx', { defaultValue: 'Export as Excel' })}
             >
               <Download size={12} />
-              {t('common.export', { defaultValue: 'Export' })}
+              {t('common.export')}
             </a>
           )}
 
@@ -2273,10 +2273,7 @@ function RequirementsTabContent({
 
       {/* Content */}
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 text-sm text-content-secondary">
-          <Loader2 size={18} className="mr-2 animate-spin" />
-          {t('common.loading', { defaultValue: 'Loading...' })}
-        </div>
+        <SkeletonTable rows={6} columns={4} />
       ) : !currentSetId || filteredReqs.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border-light bg-surface-secondary/30 px-6 py-8">
           <div className="text-center">
@@ -2418,7 +2415,7 @@ function RequirementsTabContent({
                         type="button"
                         onClick={() => openEdit(req)}
                         className="rounded p-1 text-content-secondary hover:bg-surface-tertiary hover:text-oe-blue"
-                        title={t('common.edit', { defaultValue: 'Edit' })}
+                        title={t('common.edit')}
                       >
                         <Pencil size={13} />
                       </button>
@@ -3090,10 +3087,7 @@ export function BIMQuantityRulesPage() {
         ) : activeTab === 'requirements' ? (
           <RequirementsTabContent projectId={activeProjectId} elements={requirementsElements} />
         ) : rulesQuery.isLoading ? (
-          <div className="flex items-center justify-center py-16 text-sm text-content-secondary">
-            <Loader2 size={18} className="mr-2 animate-spin" />
-            {t('bim_rules.loading', { defaultValue: 'Loading rules…' })}
-          </div>
+          <SkeletonTable rows={6} columns={4} />
         ) : rulesQuery.error ? (
           <div className="flex items-center justify-center gap-2 py-16 text-sm text-red-600">
             <AlertCircle size={18} />

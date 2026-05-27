@@ -201,21 +201,46 @@ function getTypeKey(el: BIMElementData, _format: BIMModelFormat): string {
  * Source preference order:
  *   1. `properties.type_name` (promoted alias from upload pipeline)
  *   2. `properties.family` (promoted alias from upload pipeline)
- *   3. `el.name` (always populated by the parquet ingestion path)
+ *   3. `el.name` *if* it carries real Family/Type information
  *   4. `properties["Family"]` / `properties["family and type"]` / `properties["Type"]`
  *   5. fallback to "Unspecified"
- */
+ *
+ * The showcase seed and the converted-DAE fast path both populate
+ * `el.name` with a generic sequential placeholder like `"Walls 1"`,
+ * `"Walls 2"`, ... when no real Revit Family/Type can be resolved from
+ * the source file. Returning that verbatim would explode the
+ * Category → Type Name hierarchy: a model with 64 walls would render 64
+ * unique single-element TypeName rows under the Walls category instead
+ * of collapsing into the 2–3 actual family/types. Detect that pattern
+ * (`<element_type>\s+\d+`) and treat it as no-real-name so the row falls
+ * through to the "Unspecified" bucket like other unlabeled elements. */
+const GENERIC_NAME_RE = /^(?:[A-Za-z][\w&/+\- ]*?)\s+\d+$/;
+
+function isGenericPlaceholderName(name: string, elementType: string | null | undefined): boolean {
+  if (!GENERIC_NAME_RE.test(name)) return false;
+  // Strip the trailing digits and compare to element_type — a
+  // placeholder is specifically a repeat of the category + index, not a
+  // legitimate type like "L Mullion 1" or "Roof 2:3.5m parapet".
+  const prefix = name.replace(/\s+\d+$/, '').trim();
+  return !!elementType && prefix.toLowerCase() === elementType.toLowerCase();
+}
+
 function getTypeNameKey(el: BIMElementData): string {
   const props = (el.properties || {}) as Record<string, unknown>;
-  // Prefer explicit type_name from the promoted alias, then fall back
-  // to family, then el.name, then generic property lookup.
   const typeName =
     typeof props.type_name === 'string' && props.type_name ? props.type_name : null;
   const family = typeof props.family === 'string' && props.family ? props.family : null;
 
   if (typeName) return typeName;
   if (family) return family;
-  if (el.name && el.name !== 'None' && el.name !== '') return el.name;
+  if (
+    el.name &&
+    el.name !== 'None' &&
+    el.name !== '' &&
+    !isGenericPlaceholderName(el.name, el.element_type)
+  ) {
+    return el.name;
+  }
 
   const cand =
     props['Family'] ?? props['family and type'] ?? props['Type'] ?? props['type'];
@@ -469,6 +494,29 @@ export default function BIMFilterPanel({
     length: number;
   }
 
+  // Active isolation set — declared up here (not next to `visibleElements`
+  // below) because `counts` also needs it as a dependency: chip counts must
+  // narrow to the isolated subset when isolation is active, otherwise the
+  // panel still reports model-total counts while the viewport only shows a
+  // handful of elements (e.g. property-search isolate → 5 elements visible
+  // but chips claim 64 Walls).
+  const isolationSet = useMemo(
+    () => (isolatedIds && isolatedIds.length > 0 ? new Set(isolatedIds) : null),
+    [isolatedIds],
+  );
+
+  // Facet-counts pattern: each chip's count reflects "what you'd see if
+  // you ADDED this chip to the currently active filters" — i.e. counts on
+  // every axis are computed against elements that pass all OTHER axes but
+  // NOT this axis. Storey counts respect the active category/type/search
+  // filter; category & bucket counts respect the active storey/search
+  // filter. Without this, selecting "Walls" leaves every level chip
+  // showing its full unfiltered total (e.g. "L01: 64" while the viewport
+  // really has 11 walls on L01), and the typename grouping still lists
+  // every category with its original total — making the user think the
+  // filter "broke" because the panel counts contradict the 3D viewport
+  // and the "Showing 64 Walls" summary. Reported repeatedly by Artem
+  // ("группировка на виде опять не работает").
   const counts = useMemo(() => {
     const byStorey = new Map<string, number>();
     const byType = new Map<string, number>();
@@ -480,21 +528,73 @@ export default function BIMFilterPanel({
     /** Category → (TypeName → count) — Revit Browser hierarchy */
     const byCategoryThenType = new Map<string, Map<string, number>>();
 
+    const search = state.search.trim().toLowerCase();
+
+    // Per-axis predicates: each tests whether an element passes the
+    // filters OTHER than the named axis. We deliberately reuse the same
+    // axis-membership rules as `applyFilters()` so the chip counts match
+    // what would actually appear in the viewport if the user toggled the
+    // corresponding chip on. Isolation is treated like a baseline filter
+    // (it constrains the visible universe for every axis).
+    const matchesSearch = (el: BIMElementData): boolean => {
+      if (!search) return true;
+      const elProps = (el.properties || {}) as Record<string, unknown>;
+      const propCat =
+        typeof elProps.category === 'string' ? elProps.category : '';
+      const hay = (
+        (el.name || '') +
+        ' ' +
+        (el.element_type || '') +
+        ' ' +
+        (el.category || '') +
+        ' ' +
+        propCat +
+        ' ' +
+        (el.storey || '')
+      ).toLowerCase();
+      return hay.includes(search);
+    };
+    const matchesTypeFilter = (el: BIMElementData): boolean => {
+      if (state.types.size === 0) return true;
+      const tpe = getTypeKey(el, format);
+      const typeName = getTypeNameKey(el);
+      return state.types.has(tpe) || state.types.has(typeName);
+    };
+
     for (const el of elements) {
+      if (isolationSet && !isolationSet.has(el.id)) continue;
       const tpe = getTypeKey(el, format);
       const isNoise = isNoiseCategory(tpe);
+      if (!matchesSearch(el)) continue;
 
-      // Storey counts skip noise when buildingsOnly is on, AND skip
-      // null storeys entirely (an annotation row with no level isn't
-      // a useful "—" filter target).
-      if (!(state.buildingsOnly && isNoise) && el.storey) {
+      // Storey chip counts: skip the storey filter so toggling levels
+      // doesn't make their own counts collapse to zero, but DO respect
+      // the active type filter so picking "Walls" updates every level
+      // chip to show wall-on-this-level counts. Noise categories are
+      // dropped from storey counts when buildingsOnly is on so the
+      // annotation rows don't dominate the level chip badges.
+      if (
+        !(state.buildingsOnly && isNoise) &&
+        el.storey &&
+        matchesTypeFilter(el)
+      ) {
         byStorey.set(el.storey, (byStorey.get(el.storey) ?? 0) + 1);
       }
 
-      // ALL categories go into the byType map regardless of the
-      // buildingsOnly toggle — the split into "building" vs "other" now
-      // happens in the render layer (CategoryFlatList) so the user always
-      // sees what's available, with annotations collapsed by default.
+      // Type / bucket / category-with-types population: NOT gated by any
+      // filter. The Category sidebar, Category → Type Name tree and
+      // Buckets view must show every category that exists in the model
+      // so the user can navigate to it — even after they pick a storey
+      // or type chip. Gating these on storey (the prior ba1887cb attempt
+      // at facet UI) caused the entire tree to shrink to e.g. L02-only
+      // categories when the user picked storey L02, which the user
+      // reported as "грузировка опять не работает" (2026-05-25).
+      //
+      // Storey chip counts above DO respect facet semantics
+      // (matchesTypeFilter) because that is the chip the user is
+      // actively choosing among — collapsing the storey chip's own
+      // count to zero on pick would defeat the chip. The category /
+      // bucket tree is structural, not a chip set, so it stays stable.
       byType.set(tpe, (byType.get(tpe) ?? 0) + 1);
 
       // Accumulate quantities per type for the summary display
@@ -584,7 +684,14 @@ export default function BIMFilterPanel({
       buckets: orderedBuckets,
       categoriesWithTypes,
     };
-  }, [elements, format, state.buildingsOnly]);
+  }, [
+    elements,
+    format,
+    state.buildingsOnly,
+    state.types,
+    state.search,
+    isolationSet,
+  ]);
 
   // ── Filter predicate ───────────────────────────────────────────────
   const applyFilters = useCallback(
@@ -706,10 +813,8 @@ export default function BIMFilterPanel({
   // counts, Link-to-BOQ button and CSV export aligned with what the
   // user actually sees on screen — otherwise they'd link 109 elements
   // expecting "those few I isolated" and quietly link the whole filter.
-  const isolationSet = useMemo(
-    () => (isolatedIds && isolatedIds.length > 0 ? new Set(isolatedIds) : null),
-    [isolatedIds],
-  );
+  // (`isolationSet` itself is declared above, next to the `counts` memo,
+  // because chip counts also need it.)
   const visibleElements = useMemo(() => {
     const search = state.search.trim().toLowerCase();
     return elements.filter((el) => {
@@ -718,7 +823,19 @@ export default function BIMFilterPanel({
       if (state.buildingsOnly && isNoiseCategory(tpe)) return false;
       if (state.storeys.size > 0 && !state.storeys.has(el.storey || '—'))
         return false;
-      if (state.types.size > 0 && !state.types.has(tpe)) return false;
+      // Type filter — must mirror applyFilters() above: match either the
+      // category (e.g. "Walls") OR the individual Type Name (e.g.
+      // "Generic - 200mm").  Without the second check, clicking an
+      // individual Type Name chip would correctly isolate the 3D viewport
+      // (driven by applyFilters → onFilterChange) while the panel's
+      // element-explorer list, group counts, summary bar and CSV export
+      // would all silently show 0 rows — the same Category-vs-TypeName
+      // alias bug we hit in the earliest versions (regressed when the
+      // visibleElements predicate was added alongside applyFilters).
+      if (state.types.size > 0) {
+        const typeName = getTypeNameKey(el);
+        if (!state.types.has(tpe) && !state.types.has(typeName)) return false;
+      }
       if (search) {
         const hay = (
           (el.name || '') +
@@ -751,16 +868,16 @@ export default function BIMFilterPanel({
   // Label for the types section changes depending on model format
   const typesSectionTitle =
     format === 'rvt'
-      ? t('bim.filter_revit_categories', { defaultValue: 'Revit Categories‌⁠‍' })
+      ? t('bim.filter_revit_categories', { defaultValue: 'Revit Categories' })
       : format === 'ifc'
-        ? t('bim.filter_ifc_entities', { defaultValue: 'IFC Entities‌⁠‍' })
-        : t('bim.filter_types', { defaultValue: 'Element Types‌⁠‍' });
+        ? t('bim.filter_ifc_entities', { defaultValue: 'IFC Entities' })
+        : t('bim.filter_types', { defaultValue: 'Element Types' });
 
   const typeGroupLabel =
     format === 'rvt'
-      ? t('bim.filter_group_category', { defaultValue: 'by Category‌⁠‍' })
+      ? t('bim.filter_group_category', { defaultValue: 'by Category' })
       : format === 'ifc'
-        ? t('bim.filter_group_entity', { defaultValue: 'by Entity‌⁠‍' })
+        ? t('bim.filter_group_entity', { defaultValue: 'by Entity' })
         : t('bim.filter_group_type', { defaultValue: 'by Type' });
 
   return (

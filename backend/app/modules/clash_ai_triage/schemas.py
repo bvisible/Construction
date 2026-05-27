@@ -5,9 +5,26 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # ── Enumerations ────────────────────────────────────────────────────────────
 # Tuples are exported so service-layer validators can ``in``-check without
@@ -94,10 +111,17 @@ class TriageResultResponse(BaseModel):
     suggested_action: TriageSuggestedAction | None = None
     model_evidence_used: list[str] = Field(default_factory=list)
     tokens_used: int = 0
-    cost_usd_estimate: float = 0.0
+    # v3 §10 — money is Decimal-as-string on the wire. The DB column is
+    # Float (small USD values, no precision risk) but the contract stays
+    # uniform with every other money field.
+    cost_usd_estimate: Decimal = Decimal("0")
     created_by_user_id: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("cost_usd_estimate", when_used="json")
+    def _ser_cost_usd_estimate(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Request shapes ─────────────────────────────────────────────────────────

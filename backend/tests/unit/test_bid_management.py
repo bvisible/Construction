@@ -858,10 +858,15 @@ async def test_submission_locked_after_award() -> None:
             package_id=pkg.id, invitee_email="a@b.com", status="opened"
         )
         await svc.invitation_repo.create(inv)
+        # R7 bidder-impersonation guard: bidder must belong to the same
+        # package as the invitation, so seed an in-package bidder first.
+        from app.modules.bid_management.models import Bidder
+        bidder = Bidder(package_id=pkg.id, company_name="LK Co")
+        await svc.bidder_repo.create(bidder)
         sub = await svc.record_submission(
             BidSubmissionCreate(
                 invitation_id=inv.id,
-                bidder_id=uuid.uuid4(),
+                bidder_id=bidder.id,
                 total_amount=Decimal("1000"),
                 currency="EUR",
             )
@@ -942,11 +947,16 @@ async def test_record_submission_emits_event() -> None:
     inv = BidInvitation(package_id=pkg_id, invitee_email="x@y.com", status="opened")
     await svc.invitation_repo.create(inv)
 
+    # R7 bidder-impersonation guard: bidder must belong to the same
+    # package as the invitation; seed one explicitly.
+    from app.modules.bid_management.models import Bidder
+    bidder = Bidder(package_id=pkg_id, company_name="XY Co")
+    await svc.bidder_repo.create(bidder)
+
     publish_mock = AsyncMock()
-    bidder_id = uuid.uuid4()
     data = BidSubmissionCreate(
         invitation_id=inv.id,
-        bidder_id=bidder_id,
+        bidder_id=bidder.id,
         total_amount=Decimal("5000"),
         currency="EUR",
     )

@@ -59,6 +59,8 @@ def _incident_to_response(item: object) -> IncidentResponse:
         corrective_actions=item.corrective_actions or [],  # type: ignore[attr-defined]
         reported_to_regulator=item.reported_to_regulator,  # type: ignore[attr-defined]
         status=item.status,  # type: ignore[attr-defined]
+        geo_lat=getattr(item, "geo_lat", None),
+        geo_lon=getattr(item, "geo_lon", None),
         created_by=item.created_by,  # type: ignore[attr-defined]
         metadata=getattr(item, "metadata_", {}),
         created_at=item.created_at,  # type: ignore[attr-defined]

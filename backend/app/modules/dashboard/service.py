@@ -1,0 +1,972 @@
+"""Dashboard rollup aggregation service.
+
+Each ``compute_*`` function executes ONE query (or a small fixed number)
+across all of the caller's accessible projects, replacing the per-project
+``Promise.all`` fan-out the frontend used to do (50 projects = 50 HTTP
+calls per widget). Money fields are returned as Decimal-as-string per
+CLAUDE.md §10.
+
+Imports of sibling-module models are done **inside** each function so the
+dashboard module stays loadable even when an optional dependency module
+(safety, clash, finance, ...) is disabled on a given install.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from collections import defaultdict
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+
+logger = logging.getLogger(__name__)
+
+# Canonical widget IDs the rollup endpoint understands. Mirrors
+# ``DASHBOARD_WIDGETS`` (wave 2) in the frontend registry.
+KNOWN_WIDGETS: frozenset[str] = frozenset({
+    "boq_summary",
+    "validation_score",
+    "clash_health",
+    "schedule_critical",
+    "risk_top",
+    "hse_scorecard",
+    "procurement_pipeline",
+    "budget_variance",
+    "change_orders",
+    "weather_site",
+})
+
+
+# ─── Access control ─────────────────────────────────────────────────────────
+
+
+async def is_admin(session: AsyncSession, user_id: str) -> bool:
+    """Return True when the caller has the admin role."""
+    try:
+        uid = uuid.UUID(str(user_id))
+    except (ValueError, TypeError):
+        return False
+    try:
+        user = await session.get(User, uid)
+    except Exception:  # noqa: BLE001 — defensive
+        return False
+    return user is not None and getattr(user, "role", "") == "admin"
+
+
+async def accessible_projects(
+    session: AsyncSession,
+    user_id: str,
+    *,
+    requested_ids: list[uuid.UUID] | None = None,
+) -> list[Project]:
+    """Return Project rows the caller may see.
+
+    Admins see all (non-archived). Regular users see only their own.
+    When ``requested_ids`` is provided we silently drop ids that are
+    not accessible — never raise 403, the parent router returns 404 /
+    empty per the IDOR posture.
+    """
+    admin = await is_admin(session, user_id)
+    stmt = select(Project).where(Project.status != "archived")
+    if not admin:
+        try:
+            uid = uuid.UUID(str(user_id))
+        except (ValueError, TypeError):
+            return []
+        stmt = stmt.where(Project.owner_id == uid)
+    if requested_ids:
+        stmt = stmt.where(Project.id.in_(requested_ids))
+    rows = await session.execute(stmt)
+    return list(rows.scalars().all())
+
+
+# ─── Decimal helpers ────────────────────────────────────────────────────────
+
+
+def _to_decimal(value: Any) -> Decimal:
+    """Best-effort coercion to ``Decimal('0')`` on bad input."""
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _money(value: Decimal) -> str:
+    """Format a Decimal as a string with 2dp — JS-safe."""
+    return f"{value.quantize(Decimal('0.01'))}"
+
+
+# ─── Widget aggregators ─────────────────────────────────────────────────────
+
+
+async def compute_boq_summary(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Sum BOQ totals + position health counts grouped by project.
+
+    Includes ``active_boqs`` (status not in ``archived/closed/cancelled/
+    rejected``) and a ``last_boq`` pointer so the KpiRibbon + lastBoq logic
+    in DashboardPage can stop fanning out ``/v1/boq/boqs/?project_id=…``
+    per project (v4.6.2 N+1 nuke 2026-05-24).
+    """
+    from app.modules.boq.models import BOQ, Position  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {
+            "total_boqs": 0,
+            "active_boqs": 0,
+            "total_value_eur": "0.00",
+            "position_count": 0,
+            "positions_missing_quantity": 0,
+            "positions_zero_price": 0,
+            "last_boq": None,
+            "by_project": [],
+        }
+
+    # Per-project BOQ count + status + updated_at so we can pick the most-
+    # recently-edited BOQ and count active vs inactive in one query.
+    boq_meta_stmt = select(
+        BOQ.id,
+        BOQ.project_id,
+        BOQ.name,
+        BOQ.status,
+        BOQ.updated_at,
+    ).where(BOQ.project_id.in_(project_ids))
+    boq_meta_rows = (await session.execute(boq_meta_stmt)).all()
+
+    boq_count_by_project: dict[uuid.UUID, int] = defaultdict(int)
+    inactive_statuses = {"archived", "closed", "cancelled", "rejected"}
+    active_count = 0
+    latest_boq: dict[str, Any] | None = None
+    latest_ts: float = float("-inf")
+    project_currency_by_id = {
+        p.id: getattr(p, "currency", "EUR") or "EUR" for p in projects
+    }
+    project_name_by_id = {p.id: p.name for p in projects}
+
+    for boq_id, project_id, boq_name, status_, updated_at in boq_meta_rows:
+        boq_count_by_project[project_id] += 1
+        if (status_ or "").lower() not in inactive_statuses:
+            active_count += 1
+        # ``updated_at`` may be a datetime (PG) or an ISO string (SQLite shim).
+        ts: float | None = None
+        if updated_at is None:
+            ts = None
+        elif isinstance(updated_at, datetime):
+            ts = updated_at.replace(tzinfo=UTC if updated_at.tzinfo is None else updated_at.tzinfo).timestamp()
+        else:
+            try:
+                ts = datetime.fromisoformat(str(updated_at)).timestamp()
+            except ValueError:
+                ts = None
+        if ts is not None and ts > latest_ts:
+            latest_ts = ts
+            iso = (
+                updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at)
+            )
+            latest_boq = {
+                "id": str(boq_id),
+                "name": boq_name or "—",
+                "project_id": str(project_id),
+                "project_name": project_name_by_id.get(project_id, "—"),
+                "currency": project_currency_by_id.get(project_id, "EUR"),
+                "status": status_,
+                "updated_at": iso,
+                # Position counts + totals filled in below from the position pass.
+                "position_count": 0,
+                "grand_total": "0.00",
+            }
+
+    # Per-project position aggregates — quantity/unit_rate/total stored
+    # as String in SQLite, so we sum in Python. Also collect per-BOQ totals
+    # so we can attach the latest BOQ's own total/position_count.
+    pos_stmt = (
+        select(
+            BOQ.id,
+            BOQ.project_id,
+            Position.quantity,
+            Position.unit_rate,
+            Position.total,
+        )
+        .join(BOQ, BOQ.id == Position.boq_id)
+        .where(BOQ.project_id.in_(project_ids))
+    )
+    pos_rows = (await session.execute(pos_stmt)).all()
+
+    per_project: dict[uuid.UUID, dict[str, Any]] = defaultdict(
+        lambda: {
+            "total": Decimal("0"),
+            "positions": 0,
+            "missing_qty": 0,
+            "zero_price": 0,
+        },
+    )
+    per_boq: dict[uuid.UUID, dict[str, Any]] = defaultdict(
+        lambda: {"total": Decimal("0"), "positions": 0},
+    )
+    for boq_id, project_id, qty_s, rate_s, total_s in pos_rows:
+        bucket = per_project[project_id]
+        bucket["positions"] += 1
+        qty = _to_decimal(qty_s)
+        rate = _to_decimal(rate_s)
+        # Prefer stored total; fall back to qty*rate
+        total = _to_decimal(total_s) if total_s and total_s != "0" else qty * rate
+        bucket["total"] += total
+        if qty == 0:
+            bucket["missing_qty"] += 1
+        if rate == 0:
+            bucket["zero_price"] += 1
+        boq_bucket = per_boq[boq_id]
+        boq_bucket["positions"] += 1
+        boq_bucket["total"] += total
+
+    by_project: list[dict[str, Any]] = []
+    overall_total = Decimal("0")
+    overall_positions = 0
+    overall_missing = 0
+    overall_zero_price = 0
+
+    for p in projects:
+        bucket = per_project.get(p.id, {
+            "total": Decimal("0"),
+            "positions": 0,
+            "missing_qty": 0,
+            "zero_price": 0,
+        })
+        by_project.append(
+            {
+                "project_id": str(p.id),
+                "project_name": p.name,
+                "boq_count": boq_count_by_project.get(p.id, 0),
+                "total_value": _money(bucket["total"]),
+                "currency": getattr(p, "currency", "EUR") or "EUR",
+                "position_count": bucket["positions"],
+                "positions_missing_quantity": bucket["missing_qty"],
+                "positions_zero_price": bucket["zero_price"],
+            },
+        )
+        overall_total += bucket["total"]
+        overall_positions += bucket["positions"]
+        overall_missing += bucket["missing_qty"]
+        overall_zero_price += bucket["zero_price"]
+
+    if latest_boq is not None:
+        try:
+            latest_id = uuid.UUID(latest_boq["id"])
+            stats = per_boq.get(latest_id)
+            if stats is not None:
+                latest_boq["position_count"] = stats["positions"]
+                latest_boq["grand_total"] = _money(stats["total"])
+        except (ValueError, KeyError):
+            pass
+
+    return {
+        "total_boqs": sum(boq_count_by_project.values()),
+        "active_boqs": active_count,
+        "total_value_eur": _money(overall_total),
+        "position_count": overall_positions,
+        "positions_missing_quantity": overall_missing,
+        "positions_zero_price": overall_zero_price,
+        "last_boq": latest_boq,
+        "by_project": by_project,
+    }
+
+
+async def compute_validation_score(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Average of the latest-per-project ValidationReport.score."""
+    from app.modules.validation.models import ValidationReport  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {
+            "avg": None,
+            "passed": 0,
+            "warnings": 0,
+            "errors": 0,
+            "by_project": [],
+        }
+
+    # Pull all reports for these projects — small payload (no `results`
+    # column needed) and SQLite can't always do correlated subqueries
+    # for "latest per group" cheaply. We pick the latest per project in
+    # Python.
+    stmt = (
+        select(
+            ValidationReport.id,
+            ValidationReport.project_id,
+            ValidationReport.status,
+            ValidationReport.score,
+            ValidationReport.created_at,
+        )
+        .where(ValidationReport.project_id.in_(project_ids))
+        .order_by(ValidationReport.created_at.desc())
+    )
+    rows = (await session.execute(stmt)).all()
+
+    counts_by_project: dict[uuid.UUID, dict[str, int]] = defaultdict(
+        lambda: {"passed": 0, "warnings": 0, "errors": 0},
+    )
+    latest_score_by_project: dict[uuid.UUID, float | None] = {}
+
+    for _rid, project_id, status_, score_s, _created in rows:
+        bucket = counts_by_project[project_id]
+        if status_ == "passed":
+            bucket["passed"] += 1
+        elif status_ == "warnings":
+            bucket["warnings"] += 1
+        elif status_ in {"errors", "failed"}:
+            bucket["errors"] += 1
+        # First time we see this project (rows ordered DESC) → latest.
+        if project_id not in latest_score_by_project:
+            try:
+                latest_score_by_project[project_id] = (
+                    float(score_s) if score_s is not None else None
+                )
+            except (ValueError, TypeError):
+                latest_score_by_project[project_id] = None
+
+    by_project: list[dict[str, Any]] = []
+    overall_passed = 0
+    overall_warnings = 0
+    overall_errors = 0
+    scores_for_avg: list[float] = []
+
+    for p in projects:
+        bucket = counts_by_project.get(p.id, {"passed": 0, "warnings": 0, "errors": 0})
+        score = latest_score_by_project.get(p.id)
+        if score is not None:
+            scores_for_avg.append(score)
+        by_project.append(
+            {
+                "project_id": str(p.id),
+                "project_name": p.name,
+                "avg_score": score,
+                "passed": bucket["passed"],
+                "warnings": bucket["warnings"],
+                "errors": bucket["errors"],
+            },
+        )
+        overall_passed += bucket["passed"]
+        overall_warnings += bucket["warnings"]
+        overall_errors += bucket["errors"]
+
+    avg = sum(scores_for_avg) / len(scores_for_avg) if scores_for_avg else None
+    return {
+        "avg": avg,
+        "passed": overall_passed,
+        "warnings": overall_warnings,
+        "errors": overall_errors,
+        "by_project": by_project,
+    }
+
+
+async def compute_clash_health(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Count clash issues by status + priority, grouped by project."""
+    from app.modules.clash.models import ClashIssue  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {
+            "total": 0, "open": 0, "high": 0, "medium": 0, "low": 0,
+            "pct_resolved": 0, "by_project": [],
+        }
+
+    stmt = (
+        select(
+            ClashIssue.project_id,
+            ClashIssue.status,
+            ClashIssue.priority,
+        )
+        .where(ClashIssue.project_id.in_(project_ids))
+    )
+    rows = (await session.execute(stmt)).all()
+
+    per_project: dict[uuid.UUID, dict[str, int]] = defaultdict(
+        lambda: {"total": 0, "open": 0, "high": 0, "medium": 0, "low": 0},
+    )
+    closed_statuses = {"resolved", "ignored", "archived"}
+    for project_id, status_, priority in rows:
+        bucket = per_project[project_id]
+        bucket["total"] += 1
+        if status_ not in closed_statuses:
+            bucket["open"] += 1
+            if priority in {"high", "critical"}:
+                bucket["high"] += 1
+            elif priority == "medium":
+                bucket["medium"] += 1
+            elif priority == "low":
+                bucket["low"] += 1
+
+    by_project: list[dict[str, Any]] = []
+    total = 0
+    total_open = 0
+    total_high = 0
+    total_medium = 0
+    total_low = 0
+    for p in projects:
+        bucket = per_project.get(p.id, {"total": 0, "open": 0, "high": 0, "medium": 0, "low": 0})
+        by_project.append(
+            {
+                "project_id": str(p.id),
+                "project_name": p.name,
+                **bucket,
+            },
+        )
+        total += bucket["total"]
+        total_open += bucket["open"]
+        total_high += bucket["high"]
+        total_medium += bucket["medium"]
+        total_low += bucket["low"]
+
+    resolved = total - total_open
+    pct_resolved = round(100 * resolved / total) if total > 0 else 0
+    return {
+        "total": total,
+        "open": total_open,
+        "high": total_high,
+        "medium": total_medium,
+        "low": total_low,
+        "pct_resolved": pct_resolved,
+        "by_project": by_project,
+    }
+
+
+async def compute_schedule_critical(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Top-5 critical-path activities across the caller's schedules.
+
+    Also returns ``total_schedules`` so the KpiRibbon's "Schedule Status"
+    tile can stop fanning out ``/v1/schedule/schedules/?project_id=…`` per
+    project (v4.6.2 N+1 nuke 2026-05-24).
+    """
+    from app.modules.schedule.models import Activity, Schedule  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"top": [], "total_schedules": 0}
+
+    project_name_by_id = {p.id: p.name for p in projects}
+
+    # Total schedules across the caller's projects — one COUNT query, NOT a
+    # per-project fan-out.
+    sched_count_stmt = select(func.count(Schedule.id)).where(
+        Schedule.project_id.in_(project_ids),
+    )
+    total_schedules = int((await session.execute(sched_count_stmt)).scalar() or 0)
+
+    stmt = (
+        select(
+            Activity.id,
+            Activity.name,
+            Schedule.project_id,
+            Activity.start_date,
+            Activity.end_date,
+            Activity.status,
+            Activity.is_critical,
+            Activity.total_float,
+        )
+        .join(Schedule, Schedule.id == Activity.schedule_id)
+        .where(Schedule.project_id.in_(project_ids))
+    )
+    rows = (await session.execute(stmt)).all()
+
+    if not rows:
+        return {"top": [], "total_schedules": total_schedules}
+
+    flagged = [r for r in rows if r[6] is True]
+    pool = flagged if flagged else rows
+
+    def _sort_key(r: Any) -> float:
+        try:
+            return datetime.fromisoformat(r[3]).timestamp() if r[3] else float("inf")
+        except ValueError:
+            return float("inf")
+
+    top = sorted(pool, key=_sort_key)[:5]
+
+    return {
+        "total_schedules": total_schedules,
+        "top": [
+            {
+                "id": str(r[0]),
+                "name": r[1] or "—",
+                "project_id": str(r[2]),
+                "project_name": project_name_by_id.get(r[2], "—"),
+                "start_date": r[3],
+                "end_date": r[4],
+                "status": r[5],
+                "is_critical": bool(r[6]),
+                "total_float": r[7],
+            }
+            for r in top
+        ],
+    }
+
+
+async def compute_risk_top(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Top-5 risks across projects by probability × impact severity."""
+    from app.modules.risk.models import RiskItem as Risk  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"top": []}
+
+    project_name_by_id = {p.id: p.name for p in projects}
+
+    stmt = select(
+        Risk.id,
+        Risk.project_id,
+        Risk.title,
+        Risk.probability,
+        Risk.impact_severity,
+        Risk.risk_score,
+        Risk.status,
+    ).where(Risk.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    # severity → numeric weight for ranking; matches the frontend's
+    # rough "score = prob × impact" ordering.
+    severity_weight = {
+        "low": 1.0,
+        "medium": 2.0,
+        "high": 3.0,
+        "critical": 4.0,
+        "catastrophic": 5.0,
+    }
+
+    enriched: list[tuple[float, dict[str, Any]]] = []
+    for r in rows:
+        rid, project_id, title, prob_s, sev, score_s, status_ = r
+        try:
+            prob = float(prob_s) if prob_s is not None else 0.0
+        except (ValueError, TypeError):
+            prob = 0.0
+        try:
+            persisted_score = float(score_s) if score_s is not None else 0.0
+        except (ValueError, TypeError):
+            persisted_score = 0.0
+        impact_weight = severity_weight.get(sev or "medium", 2.0)
+        # Prefer the persisted ``risk_score`` (computed by the risk
+        # module's own scoring service) when it's > 0; otherwise fall
+        # back to a uniform prob × impact heuristic so risks without
+        # a computed score still surface.
+        rank = persisted_score if persisted_score > 0 else prob * impact_weight
+        enriched.append(
+            (
+                rank,
+                {
+                    "id": str(rid),
+                    "project_id": str(project_id),
+                    "project_name": project_name_by_id.get(project_id, "—"),
+                    "title": title,
+                    "score": round(rank, 3),
+                    "probability": prob,
+                    "impact_severity": sev or "medium",
+                    "status": status_,
+                },
+            ),
+        )
+
+    enriched.sort(key=lambda x: x[0], reverse=True)
+    return {"top": [item for _, item in enriched[:5]]}
+
+
+async def compute_hse_scorecard(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """HSE incident counts + days-since-last grouped by project."""
+    from app.modules.safety.models import SafetyIncident  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {
+            "total": 0, "last_30d": 0, "near_miss": 0, "recordables": 0,
+            "days_since_last": None, "by_project": [],
+        }
+
+    stmt = select(
+        SafetyIncident.project_id,
+        SafetyIncident.incident_date,
+        SafetyIncident.incident_type,
+        SafetyIncident.severity,
+        SafetyIncident.osha_recordable,
+    ).where(SafetyIncident.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    now = datetime.now(UTC)
+    cutoff_30d = now - timedelta(days=30)
+
+    per_project: dict[uuid.UUID, dict[str, Any]] = defaultdict(
+        lambda: {
+            "total": 0, "last_30d": 0, "near_miss": 0,
+            "recordables": 0, "last_date": None,
+        },
+    )
+    serious_severities = {"moderate", "major", "critical", "fatal"}
+
+    for project_id, incident_date_s, itype, severity, osha in rows:
+        bucket = per_project[project_id]
+        bucket["total"] += 1
+        # ``incident_date`` is ISO YYYY-MM-DD string per safety/models.py.
+        incident_dt: datetime | None = None
+        if incident_date_s:
+            try:
+                incident_dt = datetime.fromisoformat(incident_date_s).replace(
+                    tzinfo=UTC,
+                )
+            except ValueError:
+                incident_dt = None
+        if incident_dt:
+            if incident_dt >= cutoff_30d:
+                bucket["last_30d"] += 1
+            current_last = bucket["last_date"]
+            if current_last is None or incident_dt > current_last:
+                bucket["last_date"] = incident_dt
+        if itype == "near_miss":
+            bucket["near_miss"] += 1
+        if osha or (severity and severity in serious_severities):
+            bucket["recordables"] += 1
+
+    by_project: list[dict[str, Any]] = []
+    total = 0
+    total_30d = 0
+    total_near_miss = 0
+    total_recordables = 0
+    overall_last_date: datetime | None = None
+
+    for p in projects:
+        bucket = per_project.get(p.id, {
+            "total": 0, "last_30d": 0, "near_miss": 0,
+            "recordables": 0, "last_date": None,
+        })
+        last_date: datetime | None = bucket["last_date"]
+        days_since_last = (
+            (now - last_date).days if last_date is not None else None
+        )
+        by_project.append(
+            {
+                "project_id": str(p.id),
+                "project_name": p.name,
+                "total": bucket["total"],
+                "last_30d": bucket["last_30d"],
+                "near_miss": bucket["near_miss"],
+                "recordables": bucket["recordables"],
+                "days_since_last": days_since_last,
+            },
+        )
+        total += bucket["total"]
+        total_30d += bucket["last_30d"]
+        total_near_miss += bucket["near_miss"]
+        total_recordables += bucket["recordables"]
+        if last_date and (overall_last_date is None or last_date > overall_last_date):
+            overall_last_date = last_date
+
+    overall_days_since = (
+        (now - overall_last_date).days if overall_last_date is not None else None
+    )
+    return {
+        "total": total,
+        "last_30d": total_30d,
+        "near_miss": total_near_miss,
+        "recordables": total_recordables,
+        "days_since_last": overall_days_since,
+        "by_project": by_project,
+    }
+
+
+async def compute_procurement_pipeline(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Counts of POs by lifecycle status across the caller's projects."""
+    from app.modules.procurement.models import PurchaseOrder  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"rfqs_pending": 0, "pos_issued": 0, "pos_received": 0}
+
+    stmt = (
+        select(PurchaseOrder.status, func.count(PurchaseOrder.id))
+        .where(PurchaseOrder.project_id.in_(project_ids))
+        .group_by(PurchaseOrder.status)
+    )
+    rows = (await session.execute(stmt)).all()
+    counts: dict[str, int] = {r[0]: r[1] for r in rows}
+
+    pending_states = {"draft", "pending", "open"}
+    issued_states = {"issued", "sent", "approved"}
+    received_states = {"received", "closed", "completed"}
+
+    return {
+        "rfqs_pending": sum(counts.get(s, 0) for s in pending_states),
+        "pos_issued": sum(counts.get(s, 0) for s in issued_states),
+        "pos_received": sum(counts.get(s, 0) for s in received_states),
+    }
+
+
+async def compute_budget_variance(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Top 3 over-budget projects (revised_budget - actual)."""
+    from app.modules.finance.models import ProjectBudget  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"over_budget_count": 0, "top_over": []}
+
+    project_name_by_id = {p.id: p.name for p in projects}
+    project_currency_by_id = {
+        p.id: getattr(p, "currency", "EUR") or "EUR" for p in projects
+    }
+
+    stmt = select(
+        ProjectBudget.project_id,
+        ProjectBudget.currency_code,
+        ProjectBudget.original_budget,
+        ProjectBudget.revised_budget,
+        ProjectBudget.actual,
+    ).where(ProjectBudget.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    per_project: dict[uuid.UUID, dict[str, Any]] = defaultdict(
+        lambda: {
+            "planned": Decimal("0"),
+            "actual": Decimal("0"),
+            "currency": "",
+        },
+    )
+    for project_id, currency, orig, rev, actual in rows:
+        bucket = per_project[project_id]
+        planned = _to_decimal(rev) if _to_decimal(rev) > 0 else _to_decimal(orig)
+        bucket["planned"] += planned
+        bucket["actual"] += _to_decimal(actual)
+        # Use the first non-empty currency code we encounter; fall back
+        # to the project's currency when the budget row didn't stamp one.
+        if not bucket["currency"] and currency:
+            bucket["currency"] = currency
+
+    enriched: list[dict[str, Any]] = []
+    for project_id, bucket in per_project.items():
+        variance = bucket["actual"] - bucket["planned"]
+        if variance <= 0:
+            continue
+        pct = (
+            int(round(100 * variance / bucket["planned"]))
+            if bucket["planned"] > 0
+            else 0
+        )
+        enriched.append(
+            {
+                "project_id": str(project_id),
+                "project_name": project_name_by_id.get(project_id, "—"),
+                "currency": bucket["currency"] or project_currency_by_id.get(project_id, "EUR"),
+                "planned": _money(bucket["planned"]),
+                "actual": _money(bucket["actual"]),
+                "variance": _money(variance),
+                "pct": pct,
+            },
+        )
+
+    enriched.sort(key=lambda x: Decimal(x["variance"]), reverse=True)
+    return {"over_budget_count": len(enriched), "top_over": enriched[:3]}
+
+
+async def compute_change_orders(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Open change-order count + total cost impact + top 3 pending."""
+    from app.modules.changeorders.models import ChangeOrder  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    project_name_by_id = {p.id: p.name for p in projects}
+    fallback_currency = (
+        getattr(projects[0], "currency", "EUR") if projects else "EUR"
+    ) or "EUR"
+
+    if not project_ids:
+        return {
+            "open_count": 0,
+            "total_impact": "0.00",
+            "currency": fallback_currency,
+            "top_pending": [],
+        }
+
+    stmt = select(
+        ChangeOrder.id,
+        ChangeOrder.project_id,
+        ChangeOrder.code,
+        ChangeOrder.title,
+        ChangeOrder.status,
+        ChangeOrder.cost_impact,
+        ChangeOrder.currency,
+    ).where(ChangeOrder.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    closed_statuses = {"approved", "rejected", "closed"}
+    open_rows = [r for r in rows if r[4] not in closed_statuses]
+
+    total_impact = Decimal("0")
+    for r in open_rows:
+        total_impact += _to_decimal(r[5])
+
+    top_pending = open_rows[:3]
+    return {
+        "open_count": len(open_rows),
+        "total_impact": _money(total_impact),
+        "currency": fallback_currency,
+        "top_pending": [
+            {
+                "id": str(r[0]),
+                "project_id": str(r[1]),
+                "project_name": project_name_by_id.get(r[1], "—"),
+                "code": r[2],
+                "title": r[3],
+                "status": r[4],
+                "cost_impact": _money(_to_decimal(r[5])),
+                "currency": r[6] or fallback_currency,
+            }
+            for r in top_pending
+        ],
+    }
+
+
+async def compute_weather_site(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Latest WeatherRecord for the first project that has geo coords + diary entry.
+
+    No external HTTP fetch (the frontend already falls back to open-meteo
+    client-side when our diary store is empty). This endpoint surfaces
+    only the DB-cached weather row, so the rollup stays sync + fast.
+    """
+    from app.modules.daily_diary.models import WeatherRecord  # noqa: PLC0415
+
+    # Pick the first project with any address coords for the header card.
+    first_geo = next(
+        (
+            p for p in projects
+            if isinstance(getattr(p, "address", None), dict)
+            and p.address.get("lat") is not None
+            and p.address.get("lng") is not None
+        ),
+        None,
+    )
+    if first_geo is None and projects:
+        first_geo = projects[0]
+    if first_geo is None:
+        return {
+            "project_id": None,
+            "project_name": None,
+            "city": None,
+            "temperature_c": None,
+            "conditions": None,
+            "source": None,
+        }
+
+    stmt = (
+        select(WeatherRecord)
+        .where(WeatherRecord.project_id == first_geo.id)
+        .order_by(WeatherRecord.captured_at.desc())
+        .limit(1)
+    )
+    row = (await session.execute(stmt)).scalar_one_or_none()
+
+    address: dict[str, Any] = (
+        getattr(first_geo, "address", None) or {}
+    )
+    city = address.get("city") if isinstance(address, dict) else None
+
+    if row is None:
+        return {
+            "project_id": str(first_geo.id),
+            "project_name": first_geo.name,
+            "city": city,
+            "temperature_c": None,
+            "conditions": None,
+            "source": None,
+        }
+
+    return {
+        "project_id": str(first_geo.id),
+        "project_name": first_geo.name,
+        "city": city,
+        "temperature_c": (
+            float(row.temperature_c) if row.temperature_c is not None else None
+        ),
+        "conditions": row.conditions_text,
+        "source": row.source,
+    }
+
+
+# ─── Dispatch ───────────────────────────────────────────────────────────────
+
+
+_COMPUTE_MAP: dict[str, Any] = {
+    "boq_summary": compute_boq_summary,
+    "validation_score": compute_validation_score,
+    "clash_health": compute_clash_health,
+    "schedule_critical": compute_schedule_critical,
+    "risk_top": compute_risk_top,
+    "hse_scorecard": compute_hse_scorecard,
+    "procurement_pipeline": compute_procurement_pipeline,
+    "budget_variance": compute_budget_variance,
+    "change_orders": compute_change_orders,
+    "weather_site": compute_weather_site,
+}
+
+
+async def compute_rollup(
+    session: AsyncSession,
+    projects: list[Project],
+    widgets: list[str],
+) -> dict[str, Any]:
+    """Compute the requested widget payloads in one go.
+
+    A failure inside a single widget aggregator is logged + that widget
+    is dropped from the response — one disabled module (eg. ``oe_clash``
+    removed on a slim install) must not break the rest of the dashboard.
+    """
+    result: dict[str, Any] = {}
+    for widget_id in widgets:
+        compute = _COMPUTE_MAP.get(widget_id)
+        if compute is None:
+            continue
+        try:
+            result[widget_id] = await compute(session, projects)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Dashboard widget %s aggregation failed: %s",
+                widget_id, exc,
+                exc_info=True,
+            )
+            # Skip — frontend treats absence as "module not available".
+            continue
+    return result

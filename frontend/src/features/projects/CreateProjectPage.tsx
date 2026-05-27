@@ -13,6 +13,8 @@ import {
 import { Button, Input, InfoHint } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { useWidgetSettingsStore } from '@/stores/useWidgetSettingsStore';
+import { AddressAutocomplete } from '@/features/geo-hub/AddressAutocomplete';
+import type { AddressAutocompleteSelection } from '@/features/geo-hub/AddressAutocomplete';
 import {
   projectsApi,
   type CreateProjectData,
@@ -406,6 +408,27 @@ export function CreateProjectModal({
   const [addressCity, setAddressCity] = useState('');
   const [addressCountry, setAddressCountry] = useState('');
   const [addressPostal, setAddressPostal] = useState('');
+  // Free-text query for the Nominatim autocomplete row that sits above
+  // the 4 structured inputs. Selecting a result fills the parts below.
+  const [addressSearchQuery, setAddressSearchQuery] = useState('');
+
+  function applyAutocompleteSelection(sel: AddressAutocompleteSelection) {
+    const parts = sel.address_parts ?? {};
+    // Nominatim returns ``road`` for street name and ``house_number``
+    // separately — we concatenate for the single-line "street" field.
+    const street = [parts.house_number, parts.road ?? parts.street]
+      .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+      .join(' ')
+      .trim();
+    if (street) setAddressStreet(street);
+    const city = parts.city || parts.town || parts.village;
+    if (city) setAddressCity(city);
+    if (parts.country) setAddressCountry(parts.country);
+    if (parts.postcode) setAddressPostal(parts.postcode);
+    // Keep the search field in sync with the picked display name so the
+    // dropdown closes cleanly and the user sees what they accepted.
+    setAddressSearchQuery(sel.display_name);
+  }
 
   // Quick-create extras — all optional Phase-12 expansion fields the
   // backend `ProjectCreate` schema already accepts. Empty string means
@@ -730,7 +753,7 @@ export function CreateProjectModal({
         addToast({
           type: 'warning',
           title: t('project_wizard.profile_apply_failed', {
-            defaultValue: 'Project created, but the module setup could not be applied — you can re-run it from Project Settings.‌⁠‍',
+            defaultValue: 'Project created, but the module setup could not be applied — you can re-run it from Project Settings.',
           }),
         });
       }
@@ -751,10 +774,10 @@ export function CreateProjectModal({
         type: 'success',
         title: isEdit
           ? t('project_wizard.setup_updated', {
-              defaultValue: 'Project setup updated‌⁠‍',
+              defaultValue: 'Project setup updated',
             })
           : t('toasts.project_created', {
-              defaultValue: 'Project created successfully‌⁠‍',
+              defaultValue: 'Project created successfully',
             }),
       });
       // Navigate away — no focus return here (we're leaving the page).
@@ -762,7 +785,7 @@ export function CreateProjectModal({
       navigate(`/projects/${project.id}`);
     },
     onError: (error: Error) => {
-      addToast({ type: 'error', title: t('toasts.project_create_failed', { defaultValue: 'Failed to create project‌⁠‍' }), message: error.message });
+      addToast({ type: 'error', title: t('toasts.project_create_failed', { defaultValue: 'Failed to create project' }), message: error.message });
     },
   });
 
@@ -822,7 +845,7 @@ export function CreateProjectModal({
   const submitBlockReason = (() => {
     if (!trimmedName)
       return t('project_wizard.need_name', {
-        defaultValue: 'Enter a project name (step 1).‌⁠‍',
+        defaultValue: 'Enter a project name (step 1).',
       });
     if (!effectiveRegion)
       return t('project_wizard.need_region', {
@@ -916,7 +939,7 @@ export function CreateProjectModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="cpw-title"
-        className="relative w-full max-w-2xl mx-4 max-h-[90vh] rounded-2xl bg-surface-elevated border border-border-light shadow-2xl animate-fade-in flex flex-col"
+        className="relative w-full max-w-2xl mx-4 max-h-[90vh] rounded-xl bg-surface-elevated border border-border-light shadow-2xl animate-fade-in flex flex-col"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
@@ -1385,6 +1408,15 @@ export function CreateProjectModal({
                       </p>
                     </div>
                   </div>
+                  {/* Address autocomplete — picks Nominatim suggestions
+                      and fills the 4 structured inputs below. The user
+                      can still type/edit each part manually. */}
+                  <AddressAutocomplete
+                    value={addressSearchQuery}
+                    onChange={setAddressSearchQuery}
+                    onSelect={applyAutocompleteSelection}
+                    ariaLabel={t('projects.address_search', { defaultValue: 'Search address' })}
+                  />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <input type="text" value={addressStreet} onChange={(e) => setAddressStreet(e.target.value)} aria-label={t('projects.address_street', { defaultValue: 'Street & number' })} placeholder={t('projects.address_street', { defaultValue: 'Street & number' })} className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent" />
                     <input type="text" value={addressCity} onChange={(e) => setAddressCity(e.target.value)} aria-label={t('projects.address_city', { defaultValue: 'City' })} placeholder={t('projects.address_city', { defaultValue: 'City' })} className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent" />
@@ -1548,7 +1580,7 @@ export function CreateProjectModal({
                 value={form.name}
                 onChange={(e) => set('name', e.target.value)}
                 placeholder={t('projects.project_name_placeholder', { defaultValue: 'e.g. Office Tower Downtown' })}
-                required
+                required aria-required="true"
                 autoFocus
               />
               {duplicateExists && (
@@ -1827,6 +1859,14 @@ export function CreateProjectModal({
                     {t('projects.address_hint', { defaultValue: 'Optional — enables the location map and weather forecast' })}
                   </span>
                 </div>
+                {/* Address autocomplete (all-on-one variant) — same
+                    handler fills the structured inputs on pick. */}
+                <AddressAutocomplete
+                  value={addressSearchQuery}
+                  onChange={setAddressSearchQuery}
+                  onSelect={applyAutocompleteSelection}
+                  ariaLabel={t('projects.address_search', { defaultValue: 'Search address' })}
+                />
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <input type="text" value={addressStreet} onChange={(e) => setAddressStreet(e.target.value)} placeholder={t('projects.address_street', { defaultValue: 'Street & number' })} className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent" />
                   <input type="text" value={addressCity} onChange={(e) => setAddressCity(e.target.value)} placeholder={t('projects.address_city', { defaultValue: 'City' })} className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent" />
@@ -2008,7 +2048,7 @@ export function CreateProjectModal({
             silently throw away everything on a stray backdrop click /
             Escape. */}
         {confirmingClose && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-surface-elevated/85 backdrop-blur-sm">
+          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-surface-elevated/85 backdrop-blur-sm">
             <div
               role="alertdialog"
               aria-modal="true"

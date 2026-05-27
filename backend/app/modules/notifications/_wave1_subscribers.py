@@ -26,14 +26,8 @@ from app.modules.notifications.service import NotificationService
 
 
 async def _can_open_isolated_session() -> bool:
-    """‌⁠‍Return True if the dialect supports concurrent writers safely."""
-    try:
-        async with async_session_factory() as probe:
-            bind = probe.get_bind()
-            dialect = getattr(getattr(bind, "dialect", None), "name", "") or ""
-        return dialect == "postgresql"
-    except Exception:
-        return False
+    """‌⁠‍Always True post-Epic-B — see :mod:`app.modules.notifications.events`."""
+    return True
 
 logger = logging.getLogger(__name__)
 

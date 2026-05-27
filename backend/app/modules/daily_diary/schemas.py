@@ -7,7 +7,32 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+def _validate_storage_url(value: str | None) -> str | None:
+    """‌⁠‍Reject non-http(s) URLs for stored asset references.
+
+    Photo / video / drone-ortho / point-cloud URLs are rendered by the
+    diary UI as ``<img>`` / ``<a href>`` links. Allowing
+    ``javascript:`` or ``data:`` schemes would let an uploader stash
+    XSS payloads under a benign-looking asset id. Restrict to http(s)
+    or relative paths (``/files/...``) at the schema boundary.
+    """
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    lowered = stripped.lower()
+    if stripped.startswith("/"):
+        return stripped  # relative MinIO / static path is fine
+    if not (lowered.startswith("http://") or lowered.startswith("https://")):
+        raise ValueError(
+            "Asset URL must use http(s) or a relative /path "
+            "(javascript:/data:/file: rejected)",
+        )
+    return stripped
 
 # ── Status enums (encoded as patterns) ───────────────────────────────────
 
@@ -23,9 +48,32 @@ _SIGNER_ROLE_RE = r"^(owner|supervisor|inspector|client)$"
 # so it MUST be constrained to the platform image allow-list — otherwise a
 # caller could persist e.g. ``text/html`` and the UI would trust it. Mirrors
 # documents.ALLOWED_IMAGE_TYPES (+ avif, which site cameras now emit).
+# SVG is explicitly NOT in this set — it can carry arbitrary script payload
+# and the UI would render it inline.
 _PHOTO_MIME_RE = (
     r"^image/(jpeg|png|gif|webp|heic|heif|avif|tiff)$"
 )
+# Video MIME — site recorders emit mp4/quicktime/webm/AVI; absolutely no
+# ``text/*`` / ``application/*`` / ``image/svg+xml`` allowed (a maliciously
+# stored MIME would be served back verbatim and trusted by the UI).
+_VIDEO_MIME_RE = (
+    r"^video/(mp4|quicktime|webm|x-msvideo|x-matroska|3gpp|3gpp2|mpeg)$"
+)
+# Caps for file_size_bytes — preventing nonsense values that would distort
+# storage-quota dashboards and break downstream aggregation. 5 GB matches
+# what a long drone-flight clip realistically produces; nothing in a site
+# diary should ever be larger than that.
+_MAX_PHOTO_BYTES = 200 * 1024 * 1024       # 200 MB
+_MAX_VIDEO_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB
+
+# Realistic upper bound for headcount / equipment count on a single site
+# on a single calendar day. The world's largest projects (e.g. Riyadh
+# Metro mega-package, Three Gorges peak) topped out around 30 000 — but
+# THOSE are reported as PROGRAMME totals, not as a single-site daily
+# diary. 10 000 is generous for a single diary; anything higher is
+# almost certainly a unit-mistake (line items × people, or a typo).
+_MAX_LABOUR_COUNT = 10_000
+_MAX_EQUIPMENT_COUNT = 5_000
 
 
 # ── DailyDiary ───────────────────────────────────────────────────────────
@@ -40,8 +88,8 @@ class DailyDiaryCreate(BaseModel):
     diary_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
     site_supervisor_id: UUID | None = None
     weather_summary: dict[str, Any] = Field(default_factory=dict)
-    labour_count: int = Field(default=0, ge=0)
-    equipment_count: int = Field(default=0, ge=0)
+    labour_count: int = Field(default=0, ge=0, le=_MAX_LABOUR_COUNT)
+    equipment_count: int = Field(default=0, ge=0, le=_MAX_EQUIPMENT_COUNT)
     notes: str | None = Field(default=None, max_length=20000)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -53,8 +101,10 @@ class DailyDiaryUpdate(BaseModel):
 
     site_supervisor_id: UUID | None = None
     weather_summary: dict[str, Any] | None = None
-    labour_count: int | None = Field(default=None, ge=0)
-    equipment_count: int | None = Field(default=None, ge=0)
+    labour_count: int | None = Field(default=None, ge=0, le=_MAX_LABOUR_COUNT)
+    equipment_count: int | None = Field(
+        default=None, ge=0, le=_MAX_EQUIPMENT_COUNT,
+    )
     notes: str | None = Field(default=None, max_length=20000)
     metadata: dict[str, Any] | None = None
 
@@ -243,11 +293,14 @@ class DiaryPhotoCreate(BaseModel):
     mime_type: str = Field(
         default="image/jpeg", max_length=80, pattern=_PHOTO_MIME_RE
     )
-    file_size_bytes: int = Field(default=0, ge=0)
+    file_size_bytes: int = Field(default=0, ge=0, le=_MAX_PHOTO_BYTES)
     description: str | None = Field(default=None, max_length=20000)
     tags: list[str] = Field(default_factory=list)
     is_360: bool = False
     is_drone: bool = False
+
+    _validate_file_url = field_validator("file_url")(_validate_storage_url)
+    _validate_thumb_url = field_validator("thumbnail_url")(_validate_storage_url)
 
 
 class DiaryPhotoUpdate(BaseModel):
@@ -266,6 +319,8 @@ class DiaryPhotoUpdate(BaseModel):
     is_360: bool | None = None
     is_drone: bool | None = None
     is_archived: bool | None = None
+
+    _validate_thumb_url = field_validator("thumbnail_url")(_validate_storage_url)
 
 
 class DiaryPhotoResponse(BaseModel):
@@ -308,10 +363,19 @@ class DiaryVideoCreate(BaseModel):
     recorded_at: datetime
     file_url: str = Field(..., min_length=1, max_length=2000)
     thumbnail_url: str | None = Field(default=None, max_length=2000)
-    duration_seconds: int = Field(default=0, ge=0)
-    file_size_bytes: int = Field(default=0, ge=0)
+    # 24h hard cap — a site video longer than a calendar day is nonsense and
+    # almost certainly indicates a unit-mistake (e.g. milliseconds in a
+    # ``seconds`` field) that would corrupt the SCL bundle hash.
+    duration_seconds: int = Field(default=0, ge=0, le=86_400)
+    file_size_bytes: int = Field(default=0, ge=0, le=_MAX_VIDEO_BYTES)
+    mime_type: str | None = Field(
+        default=None, max_length=80, pattern=_VIDEO_MIME_RE,
+    )
     description: str | None = Field(default=None, max_length=20000)
     tags: list[str] = Field(default_factory=list)
+
+    _validate_file_url = field_validator("file_url")(_validate_storage_url)
+    _validate_thumb_url = field_validator("thumbnail_url")(_validate_storage_url)
 
 
 class DiaryVideoUpdate(BaseModel):
@@ -321,7 +385,10 @@ class DiaryVideoUpdate(BaseModel):
 
     diary_id: UUID | None = None
     thumbnail_url: str | None = Field(default=None, max_length=2000)
-    duration_seconds: int | None = Field(default=None, ge=0)
+    duration_seconds: int | None = Field(default=None, ge=0, le=86_400)
+    mime_type: str | None = Field(
+        default=None, max_length=80, pattern=_VIDEO_MIME_RE,
+    )
     description: str | None = Field(default=None, max_length=20000)
     tags: list[str] | None = None
 
@@ -358,13 +425,37 @@ class DroneSurveyCreate(BaseModel):
     flown_at: datetime
     pilot_name: str | None = Field(default=None, max_length=255)
     drone_model: str | None = Field(default=None, max_length=255)
-    area_m2: Decimal | None = Field(default=None, ge=0)
+    # Surveyed coverage area, m² — Numeric(14, 2) in the model. Capped at
+    # 100 km² since no realistic single drone flight exceeds that
+    # (battery + line-of-sight limits); rejects a stray unit-mistake
+    # (e.g. mm² confused with m²) before it pollutes the DB.
+    area_m2: Decimal | None = Field(default=None, ge=0, le=Decimal("100000000"))
     ortho_file_url: str | None = Field(default=None, max_length=2000)
     dsm_file_url: str | None = Field(default=None, max_length=2000)
     point_cloud_url: str | None = Field(default=None, max_length=2000)
-    elevation_min_m: Decimal | None = None
-    elevation_max_m: Decimal | None = None
+    # Elevations are bounded by realistic surveyed terrain — Mariana
+    # Trench (-11 km) to Everest (8.85 km) plus a comfortable margin.
+    elevation_min_m: Decimal | None = Field(
+        default=None, ge=Decimal("-12000"), le=Decimal("10000"),
+    )
+    elevation_max_m: Decimal | None = Field(
+        default=None, ge=Decimal("-12000"), le=Decimal("10000"),
+    )
     notes: str | None = Field(default=None, max_length=20000)
+
+    _validate_ortho = field_validator("ortho_file_url")(_validate_storage_url)
+    _validate_dsm = field_validator("dsm_file_url")(_validate_storage_url)
+    _validate_cloud = field_validator("point_cloud_url")(_validate_storage_url)
+
+    @model_validator(mode="after")
+    def _check_elevation_ordering(self) -> DroneSurveyCreate:
+        """``elevation_min_m`` must be ≤ ``elevation_max_m`` when both set."""
+        lo, hi = self.elevation_min_m, self.elevation_max_m
+        if lo is not None and hi is not None and lo > hi:
+            raise ValueError(
+                "elevation_min_m must be less than or equal to elevation_max_m",
+            )
+        return self
 
 
 class DroneSurveyUpdate(BaseModel):
@@ -375,13 +466,35 @@ class DroneSurveyUpdate(BaseModel):
     flown_at: datetime | None = None
     pilot_name: str | None = Field(default=None, max_length=255)
     drone_model: str | None = Field(default=None, max_length=255)
-    area_m2: Decimal | None = Field(default=None, ge=0)
+    area_m2: Decimal | None = Field(
+        default=None, ge=0, le=Decimal("100000000"),
+    )
     ortho_file_url: str | None = Field(default=None, max_length=2000)
     dsm_file_url: str | None = Field(default=None, max_length=2000)
     point_cloud_url: str | None = Field(default=None, max_length=2000)
-    elevation_min_m: Decimal | None = None
-    elevation_max_m: Decimal | None = None
+    elevation_min_m: Decimal | None = Field(
+        default=None, ge=Decimal("-12000"), le=Decimal("10000"),
+    )
+    elevation_max_m: Decimal | None = Field(
+        default=None, ge=Decimal("-12000"), le=Decimal("10000"),
+    )
     notes: str | None = Field(default=None, max_length=20000)
+
+    @model_validator(mode="after")
+    def _check_elevation_ordering(self) -> DroneSurveyUpdate:
+        """``elevation_min_m`` must be ≤ ``elevation_max_m`` when both set.
+
+        Note: a PATCH that only updates one side can still produce an
+        inconsistent row (combined with the unchanged opposite end on the
+        DB). The service layer enforces the combined invariant; the
+        schema covers the common case where both come in the same call.
+        """
+        lo, hi = self.elevation_min_m, self.elevation_max_m
+        if lo is not None and hi is not None and lo > hi:
+            raise ValueError(
+                "elevation_min_m must be less than or equal to elevation_max_m",
+            )
+        return self
 
 
 class DroneSurveyResponse(BaseModel):
@@ -424,6 +537,8 @@ class RealityCaptureCreate(BaseModel):
     accuracy_mm: Decimal | None = Field(default=None, ge=0)
     notes: str | None = Field(default=None, max_length=20000)
     linked_bim_model_ref: UUID | None = None
+
+    _validate_file_url = field_validator("file_url")(_validate_storage_url)
 
 
 class RealityCaptureUpdate(BaseModel):

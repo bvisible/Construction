@@ -1,6 +1,6 @@
 [project]
 name = "openconstructionerp"
-version = "4.3.2"
+version = "5.2.5"
 description = "Open-source construction cost estimation — multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 24 languages. AGPL-3.0. After install, run: openconstructionerp"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
@@ -32,7 +32,11 @@ classifiers = [
 
 dependencies = [
     # Web framework
-    "fastapi>=0.115.0,<1",
+    # FastAPI 0.115.0-0.115.7 had a regression where @router.delete(status_code=204)
+    # routes with `-> None` annotation fail with AssertionError "Status code 204 must
+    # not have a response body". Floor at 0.116 forces the fix. Affected installs on
+    # 4.5.0 wheel could not start at all (issue #157).
+    "fastapi>=0.116.0,<1",
     "uvicorn[standard]>=0.32.0,<1",
     "python-multipart>=0.0.26",  # CVE-2026-40347: request smuggling via malformed multipart
     # Database (SQLite — works out of the box, no external DB needed)
@@ -185,6 +189,15 @@ dev = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# Custom build hook — runs before any target resolves its file lists. The
+# hook lives in ``backend/hatch_build.py`` and creates a placeholder file at
+# ``../frontend/dist/.placeholder`` so the wheel target's ``force-include``
+# map always resolves, even on a cold clone where Vite hasn't been built
+# yet. Removes the documented "mkdir frontend/dist" workaround from the
+# install runbook — ``pip install -e ./backend`` now just works.
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
 
@@ -194,13 +207,13 @@ packages = ["app"]
 "../frontend/dist" = "app/_frontend_dist"
 
 # Editable installs (uv pip install -e ./backend, pip install -e .) do NOT
-# need the bundled frontend — Vite's dev server serves the UI on :5180
+# need the bundled frontend — Vite's dev server serves the UI on :5173
 # during development. Without this section, hatchling re-uses the wheel
 # target's force-include map and aborts with "Forced include not found:
 # .../frontend/dist" on a fresh checkout where the frontend hasn't been
 # built yet.
 #
-# Two-layer fix:
+# Three-layer fix:
 #   1. ``dev-mode-dirs`` makes hatchling generate a simple ``.pth`` pointing
 #      at the source folders, bypassing the wheel-style file detection that
 #      consults ``force-include``.
@@ -210,6 +223,9 @@ packages = ["app"]
 #   3. ``only-include = ["app"]`` keeps the discovered file set scoped to
 #      the package itself, so even if (1) and (2) were to fail open, the
 #      frontend/dist path never enters the inclusion candidate list.
+#   4. Belt-and-braces: ``hatch_build.py`` creates a placeholder dist dir
+#      pre-build so hatchling versions that walk the map regardless of the
+#      overrides above still find the path.
 [tool.hatch.build.targets.editable]
 packages = ["app"]
 dev-mode-dirs = ["."]

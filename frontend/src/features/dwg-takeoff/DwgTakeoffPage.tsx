@@ -62,6 +62,7 @@ import { apiGet } from '@/shared/lib/api';
 import { boqApi, normalizePositions, type Position } from '@/features/boq/api';
 import { projectsApi } from '@/features/projects/api';
 import { installBIMConverter } from '@/features/bim/api';
+import { ConverterInstallProgressBar } from '@/features/bim/ConverterInstallProgressBar';
 import {
   fetchDrawings,
   deleteDrawing,
@@ -459,7 +460,7 @@ function OfflineReadyBadge({
         data-testid={testId}
       >
         <Loader2 size={11} className="animate-spin" />
-        {t('dwg_takeoff.offline_checking', { defaultValue: 'Checking...‌⁠‍' })}
+        {t('dwg_takeoff.offline_checking', { defaultValue: 'Checking...' })}
       </div>
     );
   }
@@ -482,17 +483,17 @@ function OfflineReadyBadge({
           ready
             ? t('dwg_takeoff.offline_ready_tooltip', {
                 defaultValue:
-                  'This tool works fully offline — conversions run on your machine.‌⁠‍',
+                  'This tool works fully offline — conversions run on your machine.',
               })
             : t('dwg_takeoff.offline_install_tooltip', {
                 defaultValue:
-                  'Install the local DWG converter to enable offline .dwg conversion. DXF files already work.‌⁠‍',
+                  'Install the local DWG converter to enable offline .dwg conversion. DXF files already work.',
               })
         }
         aria-label={
           ready
-            ? t('dwg_takeoff.offline_ready', { defaultValue: 'Offline Ready‌⁠‍' })
-            : t('dwg_takeoff.offline_install', { defaultValue: 'Install converter‌⁠‍' })
+            ? t('dwg_takeoff.offline_ready', { defaultValue: 'Offline Ready' })
+            : t('dwg_takeoff.offline_install', { defaultValue: 'Install converter' })
         }
       >
         {ready ? <Wifi size={11} /> : <WifiOff size={11} />}
@@ -572,6 +573,14 @@ function OfflineReadyBadge({
                   </>
                 )}
               </button>
+              {installMutation.isPending && (
+                <div className="mt-2">
+                  <ConverterInstallProgressBar
+                    converterId="dwg"
+                    installing={installMutation.isPending}
+                  />
+                </div>
+              )}
               <a
                 href="https://github.com/datadrivenconstruction/cad2data-Revit-IFC-DWG-DGN/tree/main/DDC_WINDOWS_Converters/DDC_CONVERTER_DWG"
                 target="_blank"

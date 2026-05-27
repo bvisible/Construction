@@ -306,7 +306,7 @@ async def update_purchase_order(
 @router.post(
     "/{po_id}/create-invoice/",
     status_code=201,
-    dependencies=[Depends(RequirePermission("procurement.create"))],
+    dependencies=[Depends(RequirePermission("procurement.create_invoice"))],
 )
 async def create_invoice_from_po(
     po_id: uuid.UUID,
@@ -326,6 +326,20 @@ async def create_invoice_from_po(
 
     Pass ``force=true`` to bypass the 3-way match (e.g. service-only POs with
     no goods to physically receive). The override is audit-logged.
+
+    Cross-module atomicity (R7):
+        The Invoice header AND every InvoiceLineItem are inserted under a
+        SAVEPOINT (``begin_nested``). Any failure inside the conversion
+        body rolls back the partial finance writes WITHOUT discarding the
+        outer request session — so a half-created invoice (header without
+        line items) can never be left behind. The reference pattern is
+        :func:`app.modules.variations.service.convert_vr_to_vo`.
+
+        Authorisation is MANAGER (``procurement.create_invoice``): the
+        PO → payable invoice path commits a financial obligation against
+        the project that bypasses the normal invoice draft → approve →
+        pay chain, so EDITORs may draft POs and receive goods but only
+        MANAGER+ may convert one into a payable.
     """
     import logging as _logging
 
@@ -339,106 +353,161 @@ async def create_invoice_from_po(
     # Lazy import finance module
     try:
         from app.modules.finance.models import Invoice, InvoiceLineItem
-
-        # Generate invoice number from PO number
-        invoice_number = f"INV-{po.po_number}"
-
-        po_items = po.items or []
-        proposed_lines = [
-            {
-                "ordinal": idx,
-                "po_item_id": item.id,
-                "quantity": item.quantity,
-                "description": item.description,
-            }
-            for idx, item in enumerate(po_items)
-        ]
-
-        violations = _validate_3way_match(po, proposed_lines)
-        # Determine HTTP code by violation reason: ``no_confirmed_grs`` is a
-        # workflow problem (caller skipped GR confirmation) → 400; everything
-        # else is an arithmetic mismatch (over-invoicing) → 422.
-        no_conf_violation = next(
-            (v for v in violations if v.get("reason") == "no_confirmed_grs"),
-            None,
+    except ImportError:
+        raise HTTPException(
+            status_code=501,
+            detail="Finance module is not available.",
         )
-        if violations and not force:
-            if no_conf_violation is not None:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "code": "no_confirmed_grs",
-                        "message": no_conf_violation.get("message") or (
-                            "No confirmed goods receipts exist for this PO; "
-                            "pass force=true to invoice without GR match."
-                        ),
-                        "errors": violations,
-                    },
-                )
+
+    # Generate invoice number from PO number
+    invoice_number = f"INV-{po.po_number}"
+
+    po_items = po.items or []
+    proposed_lines = [
+        {
+            "ordinal": idx,
+            "po_item_id": item.id,
+            "quantity": item.quantity,
+            "description": item.description,
+        }
+        for idx, item in enumerate(po_items)
+    ]
+
+    violations = _validate_3way_match(po, proposed_lines)
+    # Determine HTTP code by violation reason: ``no_confirmed_grs`` is a
+    # workflow problem (caller skipped GR confirmation) → 400; everything
+    # else is an arithmetic mismatch (over-invoicing) → 422.
+    no_conf_violation = next(
+        (v for v in violations if v.get("reason") == "no_confirmed_grs"),
+        None,
+    )
+    if violations and not force:
+        if no_conf_violation is not None:
             raise HTTPException(
-                status_code=422,
+                status_code=400,
                 detail={
-                    "message": (
-                        "3-way match failed: invoice quantity exceeds confirmed "
-                        "goods-receipt quantity for one or more lines. "
-                        "Pass force=true to override."
+                    "code": "no_confirmed_grs",
+                    "message": no_conf_violation.get("message") or (
+                        "No confirmed goods receipts exist for this PO; "
+                        "pass force=true to invoice without GR match."
                     ),
                     "errors": violations,
                 },
             )
-        if violations and force:
-            _log.warning(
-                "3-way match override on PO %s",
-                po.po_number,
-                extra={
-                    "po_id": str(po_id),
-                    "user_id": str(user_id),
-                    "force_3way_match": True,
-                    "bypassed_3way_match": True,
-                    "violations": violations,
-                },
-            )
-
-        invoice = Invoice(
-            project_id=po.project_id,
-            contact_id=po.vendor_contact_id,
-            invoice_direction="payable",
-            invoice_number=invoice_number,
-            invoice_date=po.issue_date or "",
-            due_date=None,
-            currency_code=po.currency_code,
-            amount_subtotal=po.amount_subtotal,
-            tax_amount=po.tax_amount,
-            amount_total=po.amount_total,
-            status="draft",
-            notes=f"Auto-created from PO {po.po_number}",
-            created_by=user_id,
-            metadata_={
-                "source": "procurement",
-                "po_id": str(po_id),
-                "po_number": po.po_number,
-                "force_3way_match": bool(force and violations),
-                "bypassed_3way_match": bool(force and violations),
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    "3-way match failed: invoice quantity exceeds confirmed "
+                    "goods-receipt quantity for one or more lines. "
+                    "Pass force=true to override."
+                ),
+                "errors": violations,
             },
         )
-        session.add(invoice)
-        await session.flush()
+    if violations and force:
+        _log.warning(
+            "3-way match override on PO %s",
+            po.po_number,
+            extra={
+                "po_id": str(po_id),
+                "user_id": str(user_id),
+                "force_3way_match": True,
+                "bypassed_3way_match": True,
+                "violations": violations,
+            },
+        )
 
-        for idx, item in enumerate(po_items):
-            line = InvoiceLineItem(
-                invoice_id=invoice.id,
-                description=item.description,
-                quantity=item.quantity,
-                unit=item.unit,
-                unit_rate=item.unit_rate,
-                amount=item.amount,
-                wbs_id=item.wbs_id,
-                cost_category=item.cost_category,
-                sort_order=idx,
+    # ── Cross-module atomicity: SAVEPOINT around finance writes ─────────
+    #
+    # If the line-item flush blows up (FK violation, DB outage between
+    # the two flushes), the header insert must be undone too — otherwise
+    # the finance module ends up with a header-only invoice that has
+    # ``amount_total`` set but no detail rows, silently double-counting
+    # in dashboards. ``begin_nested`` issues a SAVEPOINT scoped to the
+    # outer request transaction; we either commit both writes or roll
+    # back both. Mirrors ``variations.convert_vr_to_vo`` (R6 atomicity).
+    try:
+        async with session.begin_nested():
+            invoice = Invoice(
+                project_id=po.project_id,
+                contact_id=po.vendor_contact_id,
+                invoice_direction="payable",
+                invoice_number=invoice_number,
+                invoice_date=po.issue_date or "",
+                due_date=None,
+                currency_code=po.currency_code,
+                amount_subtotal=po.amount_subtotal,
+                tax_amount=po.tax_amount,
+                amount_total=po.amount_total,
+                status="draft",
+                notes=f"Auto-created from PO {po.po_number}",
+                created_by=user_id,
+                metadata_={
+                    "source": "procurement",
+                    "po_id": str(po_id),
+                    "po_number": po.po_number,
+                    "force_3way_match": bool(force and violations),
+                    "bypassed_3way_match": bool(force and violations),
+                },
             )
-            session.add(line)
+            session.add(invoice)
+            await session.flush()
 
-        await session.flush()
+            for idx, item in enumerate(po_items):
+                line = InvoiceLineItem(
+                    invoice_id=invoice.id,
+                    description=item.description,
+                    quantity=item.quantity,
+                    unit=item.unit,
+                    unit_rate=item.unit_rate,
+                    amount=item.amount,
+                    wbs_id=item.wbs_id,
+                    cost_category=item.cost_category,
+                    sort_order=idx,
+                )
+                session.add(line)
+
+            await session.flush()
+
+            # Audit row inside the same SAVEPOINT — so an audit-log
+            # failure rolls the invoice back too. Best-effort log_activity
+            # exists elsewhere; here we want the audit to be load-bearing
+            # because the PO → payable conversion is the load-bearing
+            # financial step (R7).
+            try:
+                from app.core.audit_log import log_activity
+
+                await log_activity(
+                    session,
+                    actor_id=str(user_id) if user_id else None,
+                    entity_type="purchase_order",
+                    entity_id=str(po_id),
+                    action="invoice_created",
+                    reason=(
+                        "PO → payable invoice conversion via "
+                        "create_invoice_from_po()"
+                    ),
+                    metadata={
+                        "po_number": po.po_number,
+                        "invoice_id": str(invoice.id),
+                        "invoice_number": invoice_number,
+                        "amount_total": str(po.amount_total),
+                        "currency_code": po.currency_code or "",
+                        "force_3way_match": bool(force and violations),
+                    },
+                )
+            except Exception as exc:
+                # Audit row failure inside the SAVEPOINT cancels the
+                # whole conversion. This is intentional: silent audit
+                # gaps on financial-commitment endpoints are a P0
+                # compliance hazard.
+                _log.exception(
+                    "Audit log FAILED inside PO→Invoice SAVEPOINT, "
+                    "rolling back invoice (PO %s): %s",
+                    po.po_number, exc,
+                )
+                raise
 
         _log.info(
             "Created invoice %s from PO %s (project %s)",
@@ -453,11 +522,6 @@ async def create_invoice_from_po(
             "po_number": po.po_number,
             "amount_total": po.amount_total,
         }
-    except ImportError:
-        raise HTTPException(
-            status_code=501,
-            detail="Finance module is not available.",
-        )
     except HTTPException:
         raise
     except Exception as exc:

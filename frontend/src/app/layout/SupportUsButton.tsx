@@ -171,9 +171,9 @@ export function SupportUsButton() {
           'transition-all duration-300 ease-out',
         )}
         title={t('support.button_tooltip', {
-          defaultValue: 'Support the project — star us or share‌⁠‍',
+          defaultValue: 'Support the project — star us or share',
         })}
-        aria-label={t('support.button_aria', { defaultValue: 'Support us‌⁠‍' })}
+        aria-label={t('support.button_aria', { defaultValue: 'Support us' })}
       >
         {/* Animated shine sweep on hover */}
         <span
@@ -186,7 +186,7 @@ export function SupportUsButton() {
           className="relative fill-amber-400 text-amber-500 drop-shadow-[0_0_3px_rgba(251,191,36,0.6)] group-hover:rotate-12 group-hover:scale-125 transition-transform duration-300"
         />
         <span className="relative text-xs font-semibold whitespace-nowrap tracking-wide">
-          {t('support.button_label', { defaultValue: 'Support us‌⁠‍' })}
+          {t('support.button_label', { defaultValue: 'Support us' })}
         </span>
       </button>
 
@@ -199,9 +199,9 @@ export function SupportUsButton() {
           'text-amber-500 hover:bg-surface-secondary transition-colors',
         )}
         title={t('support.button_tooltip', {
-          defaultValue: 'Support the project‌⁠‍',
+          defaultValue: 'Support the project',
         })}
-        aria-label={t('support.button_aria', { defaultValue: 'Support us‌⁠‍' })}
+        aria-label={t('support.button_aria', { defaultValue: 'Support us' })}
       >
         <Star size={16} strokeWidth={1.75} className="fill-amber-400 text-amber-500" />
       </button>
@@ -278,10 +278,10 @@ function SupportUsModal({ onClose, copied, setCopied }: ModalProps) {
         ref={dialogRef}
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-[640px] max-h-[92vh] overflow-y-auto rounded-2xl bg-surface-primary shadow-2xl border border-border-light animate-card-in"
+        className="relative w-full max-w-[640px] max-h-[92vh] overflow-y-auto rounded-xl bg-surface-primary shadow-2xl border border-border-light animate-card-in"
       >
         {/* Hero band */}
-        <div className="relative overflow-hidden rounded-t-2xl">
+        <div className="relative overflow-hidden rounded-t-xl">
           <div
             aria-hidden
             className="absolute inset-0 bg-gradient-to-br from-amber-200/40 via-orange-100/30 to-yellow-100/40 dark:from-amber-900/30 dark:via-orange-900/20 dark:to-yellow-900/30"
@@ -299,7 +299,7 @@ function SupportUsModal({ onClose, copied, setCopied }: ModalProps) {
             <X size={18} />
           </button>
           <div className="relative px-6 sm:px-8 py-7 text-center">
-            <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-lg mb-4">
+            <div className="inline-flex h-14 w-14 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 text-white shadow-lg mb-4">
               <Heart size={26} strokeWidth={2} />
             </div>
             <h2

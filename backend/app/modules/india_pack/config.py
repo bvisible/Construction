@@ -1,5 +1,6 @@
 """‌⁠‍Regional configuration for India."""
 
+from decimal import Decimal
 from typing import Any
 
 PACK_CONFIG: dict[str, Any] = {
@@ -215,5 +216,13 @@ PACK_CONFIG: dict[str, Any] = {
         "volume": "m³",
         "weight": "kg",
         "temperature": "°C",
+    },
+    # ── GST rates (Wave 25 — India uses CGST+SGST split; standard combined) ──
+    "vat_rates": {
+        "IN": {
+            "standard": Decimal("0.18"),
+            "reduced": Decimal("0.12"),
+            "zero": Decimal("0.00"),
+        },
     },
 }

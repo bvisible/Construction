@@ -281,6 +281,7 @@ class QMSService:
         inspection = await self.repo.get_inspection(inspection_id)
         if inspection is None:
             raise ValueError(f"Inspection {inspection_id} not found")
+        prior_status = inspection.status
         _guard_transition(
             _INSPECTION_STATUS_TRANSITIONS,
             current=inspection.status, new="in_progress", entity="inspection",
@@ -289,6 +290,13 @@ class QMSService:
             inspection_id, status="in_progress",
         )
         await self.session.refresh(inspection)
+        await self.repo.append_audit(
+            entity_type="inspection",
+            entity_id=inspection_id,
+            action="status_change",
+            old_status=prior_status,
+            new_status="in_progress",
+        )
         return inspection
 
     async def add_signature(
@@ -346,6 +354,7 @@ class QMSService:
         if inspection is None:
             raise ValueError(f"Inspection {inspection_id} not found")
 
+        prior_status = inspection.status
         _guard_transition(
             _INSPECTION_STATUS_TRANSITIONS,
             current=inspection.status, new=result, entity="inspection",
@@ -372,6 +381,15 @@ class QMSService:
             update_fields["notes"] = notes
         await self.repo.update_inspection_fields(inspection_id, **update_fields)
         await self.session.refresh(inspection)
+
+        await self.repo.append_audit(
+            entity_type="inspection",
+            entity_id=inspection_id,
+            action="completed",
+            old_status=prior_status,
+            new_status=result,
+            after_state={"result": result},
+        )
 
         event_name = (
             "qms.inspection.passed" if result == "passed"
@@ -435,6 +453,19 @@ class QMSService:
             linked_inspection_id=data.linked_inspection_id,
         )
         ncr = await self.repo.create_ncr(ncr)
+
+        await self.repo.append_audit(
+            entity_type="ncr",
+            entity_id=ncr.id,
+            action="created",
+            actor_user_id=raised_by_uuid,
+            old_status=None,
+            new_status="open",
+            after_state={
+                "severity": ncr.severity,
+                "title": ncr.title,
+            },
+        )
 
         logger.info(
             "QMS NCR raised: project=%s id=%s severity=%s "
@@ -565,12 +596,21 @@ class QMSService:
             raise ValueError(
                 "Cannot close NCR until every corrective action is verified",
             )
+        prior_status = ncr.status
         _guard_transition(
             _NCR_STATUS_TRANSITIONS,
             current=ncr.status, new="closed", entity="NCR",
         )
         await self.repo.update_ncr_fields(ncr_id, status="closed")
         await self.session.refresh(ncr)
+        await self.repo.append_audit(
+            entity_type="ncr",
+            entity_id=ncr_id,
+            action="closed",
+            old_status=prior_status,
+            new_status="closed",
+            after_state={"actions_verified": len(actions)},
+        )
         event_bus.publish_detached(
             "qms.ncr.closed",
             {

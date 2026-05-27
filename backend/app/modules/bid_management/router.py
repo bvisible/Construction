@@ -21,6 +21,8 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import (
     CurrentUserId,
     RequirePermission,
@@ -113,7 +115,7 @@ async def _verify_invitation_access(
 ) -> BidInvitation:
     inv = await session.get(BidInvitation, invitation_id)
     if inv is None:
-        raise HTTPException(status_code=404, detail="Invitation not found")
+        raise HTTPException(status_code=404, detail=translate("errors.invitation_not_found", locale=get_locale()))
     await _verify_package_access(session, inv.package_id, user_id)
     return inv
 
@@ -123,7 +125,7 @@ async def _verify_submission_access(
 ) -> BidSubmission:
     sub = await session.get(BidSubmission, submission_id)
     if sub is None:
-        raise HTTPException(status_code=404, detail="Submission not found")
+        raise HTTPException(status_code=404, detail=translate("errors.submission_not_found", locale=get_locale()))
     await _verify_invitation_access(session, sub.invitation_id, user_id)
     return sub
 
@@ -376,7 +378,7 @@ async def record_subcontractor_scorecard(
     payload: SubcontractorScorecardCreate,
     session: SessionDep,
     user_id: CurrentUserId,
-    _perm: None = Depends(RequirePermission("bid_management.update")),
+    _perm: None = Depends(RequirePermission("bid_management.record_scorecard")),
 ) -> SubcontractorScorecardResponse:
     """Capture a post-award subcontractor performance scorecard."""
     await _verify_package_access(session, package_id, user_id)
@@ -519,7 +521,7 @@ async def update_bidder(
 ) -> BidderResponse:
     bidder_row = await session.get(Bidder, bidder_id)
     if bidder_row is None:
-        raise HTTPException(status_code=404, detail="Bidder not found")
+        raise HTTPException(status_code=404, detail=translate("errors.bidder_not_found", locale=get_locale()))
     await _verify_package_access(session, bidder_row.package_id, user_id)
     svc = BidManagementService(session)
     bidder = await svc.update_bidder(bidder_id, data)
@@ -535,7 +537,7 @@ async def delete_bidder(
 ) -> None:
     bidder_row = await session.get(Bidder, bidder_id)
     if bidder_row is None:
-        raise HTTPException(status_code=404, detail="Bidder not found")
+        raise HTTPException(status_code=404, detail=translate("errors.bidder_not_found", locale=get_locale()))
     await _verify_package_access(session, bidder_row.package_id, user_id)
     svc = BidManagementService(session)
     await svc.delete_bidder(bidder_id)
@@ -551,7 +553,7 @@ async def disqualify_bidder(
 ) -> BidderResponse:
     bidder_row = await session.get(Bidder, bidder_id)
     if bidder_row is None:
-        raise HTTPException(status_code=404, detail="Bidder not found")
+        raise HTTPException(status_code=404, detail=translate("errors.bidder_not_found", locale=get_locale()))
     await _verify_package_access(session, bidder_row.package_id, user_id)
     svc = BidManagementService(session)
     bidder = await svc.disqualify_bidder(bidder_id, data.reason)
@@ -1033,7 +1035,7 @@ async def update_rejection(
 ) -> BidRejectionResponse:
     rej_row = await session.get(BidRejection, rejection_id)
     if rej_row is None:
-        raise HTTPException(status_code=404, detail="Rejection not found")
+        raise HTTPException(status_code=404, detail=translate("errors.rejection_not_found", locale=get_locale()))
     await _verify_package_access(session, rej_row.package_id, user_id)
     svc = BidManagementService(session)
     rej = await svc.update_rejection(rejection_id, data)
@@ -1049,7 +1051,7 @@ async def delete_rejection(
 ) -> None:
     rej_row = await session.get(BidRejection, rejection_id)
     if rej_row is None:
-        raise HTTPException(status_code=404, detail="Rejection not found")
+        raise HTTPException(status_code=404, detail=translate("errors.rejection_not_found", locale=get_locale()))
     await _verify_package_access(session, rej_row.package_id, user_id)
     svc = BidManagementService(session)
     await svc.delete_rejection(rejection_id)
@@ -1066,7 +1068,7 @@ async def notify_rejection(
 ) -> BidRejectionResponse:
     rej_row = await session.get(BidRejection, rejection_id)
     if rej_row is None:
-        raise HTTPException(status_code=404, detail="Rejection not found")
+        raise HTTPException(status_code=404, detail=translate("errors.rejection_not_found", locale=get_locale()))
     await _verify_package_access(session, rej_row.package_id, user_id)
     svc = BidManagementService(session)
     rej = await svc.notify_rejection(rejection_id)

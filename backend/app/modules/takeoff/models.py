@@ -8,11 +8,25 @@ Tables:
 
 import uuid
 from datetime import datetime
+from decimal import Decimal
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import GUID, Base
+
+# Numeric precision for measured-quantity columns on TakeoffMeasurement.
+# Round-6 audit (2026-05-22) flagged ``measurement_value``, ``depth``,
+# ``volume``, ``perimeter`` as ``Float`` even though every one of them
+# flows directly into BOQ totals via ``link-to-boq``. The sibling
+# ``dwg_takeoff.DwgAnnotation`` already uses Numeric(18, 6) (Round 3
+# Wave A migration ``v3097_dwg_takeoff_decimal_quantities``); this
+# brings the PDF takeoff path into the same precision regime so that
+# a measurement carrying through to a unit_rate × quantity computation
+# stays within ±1e-6 of the user-visible value instead of accumulating
+# binary float drift across the round-trip.
+_MEASURE_NUMERIC = Numeric(18, 6)
+_SCALE_NUMERIC = Numeric(18, 6)
 
 
 class CadExtractionSession(Base):
@@ -119,12 +133,19 @@ class TakeoffMeasurement(Base):
     points: Mapped[list] = mapped_column(  # type: ignore[assignment]
         JSON, nullable=False, default=list, server_default="[]"
     )  # [{x, y}, ...]
-    measurement_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Round-6 audit (2026-05-22) — these four columns feed BOQ totals.
+    # Migrated Float → Numeric(18, 6) so PDF takeoff matches the dwg_takeoff
+    # precision regime (v3097_dwg_takeoff_decimal_quantities).
+    measurement_value: Mapped[Decimal | None] = mapped_column(_MEASURE_NUMERIC, nullable=True)
     measurement_unit: Mapped[str] = mapped_column(String(20), nullable=False, default="m")
-    depth: Mapped[float | None] = mapped_column(Float, nullable=True)
-    volume: Mapped[float | None] = mapped_column(Float, nullable=True)
-    perimeter: Mapped[float | None] = mapped_column(Float, nullable=True)
+    depth: Mapped[Decimal | None] = mapped_column(_MEASURE_NUMERIC, nullable=True)
+    volume: Mapped[Decimal | None] = mapped_column(_MEASURE_NUMERIC, nullable=True)
+    perimeter: Mapped[Decimal | None] = mapped_column(_MEASURE_NUMERIC, nullable=True)
     count_value: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ``scale_pixels_per_unit`` stays Float — it's a UI calibration ratio
+    # (px-per-metre) used as a divisor and never persisted into a money
+    # rollup. Migrating it would force every existing PDF takeoff session
+    # in production to be re-calibrated for no precision gain.
     scale_pixels_per_unit: Mapped[float | None] = mapped_column(Float, nullable=True)
     linked_boq_position_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]

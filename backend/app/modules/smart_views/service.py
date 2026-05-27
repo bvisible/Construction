@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.bim_hub.models import BIMFederation, BIMModel
 from app.modules.projects.models import Project
 from app.modules.smart_views.evaluator import evaluate_smart_view
@@ -170,7 +172,7 @@ class SmartViewService:
             if project is None:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Project not found",
+                    detail=translate("errors.project_not_found", locale=get_locale()),
                 )
             if str(getattr(project, "owner_id", "")) != str(user_id):
                 raise HTTPException(

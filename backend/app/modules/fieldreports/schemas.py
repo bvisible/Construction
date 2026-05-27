@@ -5,13 +5,62 @@ for field reports.
 """
 
 from datetime import date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field
 
 # Bound ints at PostgreSQL INT4 max.
 _INT32_MAX = 2_147_483_647
+
+# ``signature_data`` is a base64 data URI of a hand-drawn signature
+# image. A typical 600×200 PNG signature is ~10 KB base64-encoded.
+# Cap at 2 MB so a single field report can't blow the request body up
+# into the megabytes (and so a malicious client can't dump arbitrary
+# blobs into the signature column). Anything > 2 MB is rejected at the
+# schema layer before the row is built — this also caps the eventual
+# PDF export size.
+_SIGNATURE_MAX_LEN = 2 * 1024 * 1024
+
+
+def _check_signature_data(value: str | None) -> str | None:
+    """Sniff the signature payload — accept only base64 image data URIs.
+
+    A real signature pad emits ``data:image/png;base64,...`` (Chrome /
+    Firefox / Safari all default to PNG). Allow PNG / JPEG / WebP /
+    SVG+xml, plus a permissive empty-string fallback. Reject anything
+    else outright so the column doesn't become a free-text dumping
+    ground for inline scripts or arbitrary binaries.
+    """
+    if value is None or value == "":
+        return value
+    if len(value) > _SIGNATURE_MAX_LEN:
+        raise ValueError(
+            f"signature_data exceeds maximum size ({_SIGNATURE_MAX_LEN} bytes)"
+        )
+    if not value.startswith("data:image/"):
+        raise ValueError(
+            "signature_data must be a base64-encoded image data URI "
+            "(data:image/png;base64,...)"
+        )
+    # Cheap allow-list of the MIME types signature pads actually emit.
+    head = value[:64].lower()
+    allowed_prefixes = (
+        "data:image/png",
+        "data:image/jpeg",
+        "data:image/jpg",
+        "data:image/webp",
+        "data:image/svg+xml",
+    )
+    if not any(head.startswith(p) for p in allowed_prefixes):
+        raise ValueError(
+            "signature_data MIME type is not allowed; "
+            "use png / jpeg / webp / svg+xml"
+        )
+    return value
+
+
+SignatureData = Annotated[str | None, AfterValidator(_check_signature_data)]
 
 FieldType = Literal["text", "textarea", "number", "select", "date", "checkbox"]
 
@@ -62,7 +111,7 @@ class FieldReportCreate(BaseModel):
     photos: list[str] = Field(default_factory=list, max_length=1000)
     notes: str | None = Field(default=None, max_length=5000)
     signature_by: str | None = Field(default=None, max_length=255)
-    signature_data: str | None = None
+    signature_data: SignatureData = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     # Optional coordinates for auto-fetching weather from OpenWeatherMap
     lat: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
@@ -102,7 +151,7 @@ class FieldReportUpdate(BaseModel):
     photos: list[str] | None = Field(default=None, max_length=1000)
     notes: str | None = Field(default=None, max_length=5000)
     signature_by: str | None = Field(default=None, max_length=255)
-    signature_data: str | None = None
+    signature_data: SignatureData = None
     metadata: dict[str, Any] | None = None
 
 

@@ -14,6 +14,11 @@ def register_variations_permissions() -> None:
             "variations.delete": Role.MANAGER,
             "variations.submit_request": Role.EDITOR,
             "variations.approve_request": Role.MANAGER,
+            # R7 audit: tunable in service.HIGH_VALUE_APPROVAL_THRESHOLD —
+            # this permission gates approvals whose cost impact exceeds the
+            # threshold (default 100_000). Admin-only by default so a
+            # rubber-stamp manager cannot wave through a large change.
+            "variations.approve_high_value": Role.ADMIN,
             "variations.convert_to_vo": Role.MANAGER,
             "variations.complete_vo": Role.EDITOR,
             "variations.sign_daywork": Role.EDITOR,

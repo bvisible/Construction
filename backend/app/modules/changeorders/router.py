@@ -189,10 +189,20 @@ async def get_summary(
 async def create_change_order(
     data: ChangeOrderCreate,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("changeorders.create")),
     service: ChangeOrderService = Depends(_get_service),
 ) -> ChangeOrderResponse:
-    """Create a new change order."""
+    """Create a new change order.
+
+    R7 audit: the legacy POST trusted the ``project_id`` field on the
+    payload and would happily create a change order on any project whose
+    UUID the caller could guess — silently leaking cost / schedule data
+    across tenants on subsequent reads. Now gated through
+    ``verify_project_access`` which returns 404 on both "missing" and
+    "not owned" so we don't leak existence either.
+    """
+    await verify_project_access(data.project_id, str(user_id), session)
     try:
         order = await service.create_order(data)
         return _order_to_response(order)

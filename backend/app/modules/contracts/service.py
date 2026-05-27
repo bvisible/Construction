@@ -21,13 +21,18 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.contracts.models import (
     Contract,
     ContractLine,
     FeeStructure,
     FinalAccount,
+    GainshareConfiguration,
+    LDClause,
     ProgressClaim,
     ProgressClaimLine,
+    RetentionSchedule,
 )
 from app.modules.contracts.repository import (
     ContractLineRepository,
@@ -567,6 +572,12 @@ class ContractsService:
                 },
             )
 
+        # Contracts always start in 'draft'. The FSM (draft → active →
+        # suspended / completed / terminated) is enforced by dedicated
+        # transition endpoints that stamp signed_at and emit
+        # contracts.contract.signed. Letting the caller pre-set status
+        # would bypass both, producing a commercially-live contract
+        # with no signed-audit-trail and no event reaching finance.
         contract = Contract(
             code=data.code,
             title=data.title,
@@ -581,8 +592,8 @@ class ContractsService:
             currency=data.currency,
             retention_percent=Decimal(str(data.retention_percent or 0)),
             retention_release_event=data.retention_release_event,
-            status=data.status,
-            signed_at=data.signed_at,
+            status="draft",
+            signed_at=None,
             terms=data.terms,
             created_by=user_id,
             metadata_=data.metadata,
@@ -680,6 +691,195 @@ class ContractsService:
     async def delete_contract(self, contract_id: uuid.UUID) -> None:
         await self.get_contract(contract_id)
         await self.contract_repo.delete(contract_id)
+
+    async def clone_contract(
+        self,
+        source_contract_id: uuid.UUID,
+        new_code: str,
+        *,
+        target_project_id: uuid.UUID | None = None,
+        new_title: str | None = None,
+        include_lines: bool = True,
+        copy_subconfigs: bool = True,
+        user_id: str | None = None,
+    ) -> Contract:
+        """Deep-clone a contract into the same or a different project.
+
+        Security model (R7 IDOR-closure):
+            * Read access on the **source** contract is verified by the
+              router via :func:`_verify_contract_access` before this
+              method is called.
+            * Write access on the **destination** project is verified by
+              the router via :func:`verify_project_access` before this
+              method is called — so a manager on project A cannot
+              ``clone --target_project_id=<project_B_id>`` and copy
+              project A's commercial terms into project B.
+            * Manager-or-higher RBAC is enforced at the route level
+              via ``RequirePermission("contracts.clone")``.
+
+        Lifecycle invariants:
+            * Clone is always materialised in ``draft`` status with
+              ``signed_at=None`` regardless of the source's lifecycle
+              stage — a cloned contract is a brand-new instrument that
+              must be re-signed.
+            * Payment history (progress claims, claim lines, final
+              accounts, lien-waiver attachments, retention-release
+              audit entries) is **never** copied — that ledger belongs
+              to the original contract.
+        """
+        source = await self.get_contract(source_contract_id)
+        dest_project_id = target_project_id or source.project_id
+
+        # Bare-minimum guard against accidental code collision (the DB
+        # has a UNIQUE constraint, but a friendly 400 beats a 500).
+        existing = await self.contract_repo.get_by_code(new_code)
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "contract_code_in_use",
+                    "message": f"Contract code {new_code!r} is already in use",
+                },
+            )
+
+        # Copy the terms dict by value so a later mutation on the clone
+        # cannot bleed back into the source contract's terms.
+        cloned_terms = dict(source.terms or {})
+        cloned_meta = dict(getattr(source, "metadata_", {}) or {})
+        # Strip volatile audit-trail fields so the clone starts with a
+        # clean retention-release / lifecycle metadata block.
+        for k in ("retention_releases", "lien_waivers"):
+            cloned_meta.pop(k, None)
+        cloned_meta["cloned_from_contract_id"] = str(source.id)
+
+        clone = Contract(
+            code=new_code,
+            title=new_title or f"{source.title} (clone)",
+            contract_type=source.contract_type,
+            counterparty_type=source.counterparty_type,
+            counterparty_id=source.counterparty_id,
+            project_id=dest_project_id,
+            parent_contract_id=None,  # do NOT inherit the source's parent
+            start_date=source.start_date,
+            end_date=source.end_date,
+            total_value=Decimal(str(source.total_value or 0)),
+            currency=source.currency,
+            retention_percent=Decimal(str(source.retention_percent or 0)),
+            retention_release_event=source.retention_release_event,
+            status="draft",          # cloned instrument starts as draft
+            signed_at=None,          # must be re-signed
+            terms=cloned_terms,
+            created_by=user_id,
+            metadata_=cloned_meta,
+        )
+        clone = await self.contract_repo.create(clone)
+
+        # ── Schedule-of-Values lines (preserve hierarchy) ────────────
+        if include_lines:
+            src_lines = await self.line_repo.list_for_contract(source.id)
+            # Map old line id → new line id so child parent_line_id
+            # references resolve correctly in the clone.
+            id_map: dict[uuid.UUID, uuid.UUID] = {}
+            # Two-pass to handle parent_line_id ordering.
+            for ln in src_lines:
+                new_line = ContractLine(
+                    contract_id=clone.id,
+                    parent_line_id=None,  # rewritten in pass 2
+                    code=ln.code,
+                    description=ln.description,
+                    scope_section=ln.scope_section,
+                    line_type=ln.line_type,
+                    unit=ln.unit,
+                    quantity=Decimal(str(ln.quantity or 0)),
+                    unit_rate=Decimal(str(ln.unit_rate or 0)),
+                    total_value=Decimal(str(ln.total_value or 0)),
+                    order_index=ln.order_index,
+                    metadata_=dict(getattr(ln, "metadata_", {}) or {}),
+                )
+                new_line = await self.line_repo.create(new_line)
+                id_map[ln.id] = new_line.id
+            # Pass 2 — wire up parent_line_id translations.
+            for ln in src_lines:
+                if ln.parent_line_id is None:
+                    continue
+                new_parent = id_map.get(ln.parent_line_id)
+                if new_parent is None:
+                    continue
+                await self.line_repo.update_fields(
+                    id_map[ln.id], parent_line_id=new_parent,
+                )
+
+        # ── Sub-configurations ──────────────────────────────────────
+        if copy_subconfigs:
+            src_retention = await self.retention_repo.list_for_contract(source.id)
+            for r in src_retention:
+                self.session.add(RetentionSchedule(
+                    contract_id=clone.id,
+                    accrual_rule=dict(r.accrual_rule or {}),
+                    release_rule=dict(r.release_rule or {}),
+                    notes=r.notes,
+                ))
+            src_fee = await self.fee_repo.get_for_contract(source.id)
+            if src_fee is not None:
+                self.session.add(FeeStructure(
+                    contract_id=clone.id,
+                    fee_type=src_fee.fee_type,
+                    fee_percent=Decimal(str(src_fee.fee_percent or 0)),
+                    fee_fixed_amount=(
+                        None if src_fee.fee_fixed_amount is None
+                        else Decimal(str(src_fee.fee_fixed_amount))
+                    ),
+                    sliding_scale=list(src_fee.sliding_scale or []),
+                    max_fee=(
+                        None if src_fee.max_fee is None
+                        else Decimal(str(src_fee.max_fee))
+                    ),
+                ))
+            src_gain = await self.gainshare_repo.get_for_contract(source.id)
+            if src_gain is not None:
+                self.session.add(GainshareConfiguration(
+                    contract_id=clone.id,
+                    target_cost=Decimal(str(src_gain.target_cost or 0)),
+                    gmp_cap=Decimal(str(src_gain.gmp_cap or 0)),
+                    savings_split_owner_pct=Decimal(
+                        str(src_gain.savings_split_owner_pct or 0),
+                    ),
+                    savings_split_contractor_pct=Decimal(
+                        str(src_gain.savings_split_contractor_pct or 0),
+                    ),
+                    overrun_responsibility=src_gain.overrun_responsibility,
+                ))
+            src_lds = await self.ld_repo.list_for_contract(source.id)
+            for ld in src_lds:
+                self.session.add(LDClause(
+                    contract_id=clone.id,
+                    per_day_amount=Decimal(str(ld.per_day_amount or 0)),
+                    currency=ld.currency,
+                    max_amount=(
+                        None if ld.max_amount is None
+                        else Decimal(str(ld.max_amount))
+                    ),
+                    milestone_id=ld.milestone_id,
+                    enforcement_status=ld.enforcement_status,
+                ))
+            await self.session.flush()
+
+        event_bus.publish_detached(
+            "contracts.contract.cloned",
+            data={
+                "source_contract_id": str(source.id),
+                "clone_contract_id": str(clone.id),
+                "source_project_id": str(source.project_id),
+                "dest_project_id": str(dest_project_id),
+                "actor": user_id,
+            },
+            source_module="contracts",
+        )
+        logger.info(
+            "Contract cloned: %s → %s (project %s → %s)",
+            source.code, clone.code, source.project_id, dest_project_id,
+        )
+        return clone
 
     async def transition_contract(
         self,
@@ -813,7 +1013,7 @@ class ContractsService:
     ) -> ProgressClaim:
         claim = await self.claim_repo.get_by_id(claim_id)
         if claim is None:
-            raise HTTPException(status_code=404, detail="Progress claim not found")
+            raise HTTPException(status_code=404, detail=translate("errors.claim_not_found", locale=get_locale()))
         try:
             assert_claim_transition(claim.status, target_status)
         except InvalidTransitionError as exc:
@@ -889,10 +1089,32 @@ class ContractsService:
         claim_id: uuid.UUID,
         payload: Any,
     ) -> ProgressClaim:
-        """Auto-generate claim lines + roll up totals based on contract type."""
+        """Auto-generate claim lines + roll up totals based on contract type.
+
+        Refuses non-``draft`` claims: a submitted / approved / certified /
+        paid / rejected claim is part of the immutable audit trail, and
+        silently rewriting its line breakdown and gross / retention /
+        net totals would corrupt reconciliation against AR and the lien
+        waiver chain. Changes after submission must go through the
+        proper transition + new-claim workflow.
+        """
         claim = await self.claim_repo.get_by_id(claim_id)
         if claim is None:
-            raise HTTPException(status_code=404, detail="Progress claim not found")
+            raise HTTPException(status_code=404, detail=translate("errors.claim_not_found", locale=get_locale()))
+        if claim.status != "draft":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "claim_not_draft",
+                    "message": (
+                        "Auto-generate is only valid for draft claims; the "
+                        f"claim is currently in status {claim.status!r}. "
+                        "Create a new draft claim or reset this one via the "
+                        "rejected → draft transition."
+                    ),
+                    "claim_status": claim.status,
+                },
+            )
         contract = await self.get_contract(claim.contract_id)
         lines = await self.line_repo.list_for_contract(contract.id)
         prior_paid = await self.claim_repo.paid_total(contract.id)
@@ -1142,14 +1364,64 @@ class ContractsService:
         # Sum outstanding retention from claim repo (less anything already released).
         held = await self.claim_repo.outstanding_retention(contract_id)
         meta = dict(contract.metadata_ or {})
+        prior_releases = list(meta.get("retention_releases", []) or [])
+        # Idempotency / audit-trail integrity: the same event must not be
+        # released twice. Pre-fix the audit log was append-only but never
+        # consulted to dedupe, so each call would compute net_held = held -
+        # already_released and re-release the configured percentage of
+        # whatever was left — asymptotically draining retention to zero
+        # regardless of the schedule's stated intent.
+        if any(r.get("event") == event for r in prior_releases):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "retention_event_already_released",
+                    "message": (
+                        f"Retention has already been released for event "
+                        f"{event!r}. Use a different event key or a custom "
+                        "schedule entry to make a further release."
+                    ),
+                    "event": event,
+                },
+            )
         already_released = sum(
             (Decimal(str(r.get("amount_released", 0) or 0))
-             for r in meta.get("retention_releases", []) or []),
+             for r in prior_releases),
             DEC_ZERO,
         )
         net_held = held - already_released
         if net_held < DEC_ZERO:
             net_held = DEC_ZERO
+
+        # Validate custom_schedule values up-front so a configuration
+        # mistake (negative, > 100, or non-numeric percentage) fails
+        # loudly instead of being silently clamped by plan_retention_release.
+        if custom_schedule is not None:
+            for key, val in custom_schedule.items():
+                try:
+                    pct = Decimal(str(val))
+                except (ArithmeticError, ValueError):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "invalid_custom_schedule",
+                            "message": (
+                                f"custom_schedule[{key!r}] must be numeric, "
+                                f"got {val!r}"
+                            ),
+                        },
+                    ) from None
+                if pct < DEC_ZERO or pct > DEC_HUNDRED:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail={
+                            "error": "invalid_custom_schedule",
+                            "message": (
+                                f"custom_schedule[{key!r}] must be between "
+                                f"0 and 100, got {val!r}"
+                            ),
+                        },
+                    )
 
         result = plan_retention_release(
             net_held, event, schedule=custom_schedule,
@@ -1212,7 +1484,25 @@ class ContractsService:
             )
         claim = await self.claim_repo.get_by_id(claim_id)
         if claim is None:
-            raise HTTPException(status_code=404, detail="Progress claim not found")
+            raise HTTPException(status_code=404, detail=translate("errors.claim_not_found", locale=get_locale()))
+        # Lien waivers are a legal release of lien rights tied to a specific
+        # payment application. A waiver on a draft claim (never submitted)
+        # has no underlying lien to release; one on a rejected claim ties
+        # the waiver to an amount the owner has explicitly refused. Both
+        # are operationally bogus and reject up-front.
+        if claim.status in ("draft", "rejected"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "claim_not_in_lienable_state",
+                    "message": (
+                        "Lien waivers can only be attached to claims that "
+                        "have been submitted to the owner. Current status: "
+                        f"{claim.status!r}."
+                    ),
+                    "claim_status": claim.status,
+                },
+            )
         meta = dict(claim.metadata_ or {})
         waivers = list(meta.get("lien_waivers", []) or [])
         from datetime import UTC
@@ -1249,7 +1539,7 @@ class ContractsService:
     async def list_lien_waivers(self, claim_id: uuid.UUID) -> list[dict[str, Any]]:
         claim = await self.claim_repo.get_by_id(claim_id)
         if claim is None:
-            raise HTTPException(status_code=404, detail="Progress claim not found")
+            raise HTTPException(status_code=404, detail=translate("errors.claim_not_found", locale=get_locale()))
         return list((claim.metadata_ or {}).get("lien_waivers", []) or [])
 
     # ── Dashboard ────────────────────────────────────────────────────────

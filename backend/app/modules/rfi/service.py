@@ -37,6 +37,14 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
 
 _RFI_RESPONSE_DUE_DAYS = 14
 
+# BUG-RFI-STATS-UNBOUNDED: ``get_stats`` previously ran a
+# ``SELECT * FROM oe_rfi_rfi WHERE project_id=:p`` with no LIMIT, so a
+# tenant with a noisy 100k-row RFI history paid the full table read on
+# every dashboard tick. Cap the scan at a sane upper bound; the stats
+# panel is a high-level summary anyway and the API surface exposes
+# this constant so the truthfulness of the cap is testable.
+_RFI_STATS_SCAN_CAP = 10000
+
 # R5 / BUG-RFI-UNIQ: retry budget for ``create_rfi`` when two concurrent
 # transactions race on ``max(rfi_number)+1``. Mirrors the changeorders
 # code-collision retry loop.
@@ -52,6 +60,14 @@ _ASSIGNER_ROLES = frozenset({"admin", "manager", "owner"})
 # manager/admin escalations must be able to close out an RFI when the
 # assignee is unavailable.
 _ESCALATION_ROLES = frozenset({"admin", "manager", "owner"})
+
+# BUG-RFI-FSM-REOPEN: roles permitted to reopen an ``answered`` RFI
+# (status answered → open). The generic FSM table allows it as a
+# free transition because the workflow has to support "the answer was
+# wrong, let's re-open", but doing that invalidates the prior response
+# and should never be a silent EDITOR action — it's the same
+# escalation chain as (re)assigning ball-in-court.
+_REOPEN_ROLES = frozenset({"admin", "manager", "owner"})
 
 # ── Allowed RFI status transitions ────────────────────────────────────────────
 
@@ -106,6 +122,23 @@ class RFIService:
         if ball_in_court is None and data.assigned_to is not None:
             ball_in_court = data.assigned_to
 
+        # BUG-RFI-RAISED-SPOOF: ``raised_by`` is part of the audit log
+        # (who filed this RFI) and must always be the authenticated
+        # caller. The Pydantic schema still exposes the field — older
+        # clients populate it as a convenience and some internal
+        # background paths supply it explicitly when no JWT is in
+        # scope — but when a real ``user_id`` is in scope it wins
+        # unconditionally, so the wire payload cannot impersonate
+        # another user. Mirrors the changeorders / variations pattern
+        # (created_by is always JWT-derived).
+        if user_id:
+            try:
+                raised_by_val: uuid.UUID | None = uuid.UUID(str(user_id))
+            except (ValueError, TypeError):
+                raised_by_val = data.raised_by
+        else:
+            raised_by_val = data.raised_by
+
         # Auto-calculate response_due_date (14 business days) when status
         # is 'open' and no explicit due date was given.
         response_due_date = data.response_due_date
@@ -120,7 +153,7 @@ class RFIService:
                 rfi_number=rfi_number,
                 subject=data.subject,
                 question=data.question,
-                raised_by=data.raised_by or (uuid.UUID(user_id) if user_id else None),
+                raised_by=raised_by_val,
                 assigned_to=data.assigned_to,
                 status=data.status,
                 ball_in_court=ball_in_court,
@@ -277,6 +310,27 @@ class RFIService:
                     ),
                 )
 
+            # BUG-RFI-FSM-REOPEN: reopening an answered RFI invalidates
+            # the prior official response and should never be a silent
+            # EDITOR action. The FSM table allows answered → open as a
+            # mechanical transition; the role gate keeps it scoped to
+            # MANAGER+ so a junior estimator can't quietly invalidate a
+            # vetted answer. ``actor_role=None`` means an internal
+            # caller (no JWT in scope) — those bypass the check, same
+            # convention as the assigner gate above.
+            if (
+                rfi.status == "answered"
+                and new_status == "open"
+                and actor_role
+                and actor_role.lower() not in _REOPEN_ROLES
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "Only managers or admins may reopen an answered RFI."
+                    ),
+                )
+
         # When status transitions to 'open' and no response_due_date is set,
         # auto-calculate it (14 business days from now).
         new_status = fields.get("status")
@@ -381,10 +435,27 @@ class RFIService:
         neutralised by ``verify_project_access`` at the router boundary.
         """
         rfi = await self.get_rfi(rfi_id)
-        if rfi.status in ("closed", "void"):
+        # BUG-RFI-FSM-RESPOND: ``respond_to_rfi`` used to block only
+        # ``closed`` / ``void``, which silently let a ``draft`` (or
+        # already-``answered``) RFI leap straight to ``answered`` —
+        # bypassing the documented ``draft → open → answered`` flow
+        # and overwriting any prior response without a state-change
+        # log entry. We now constrain the transition to the single
+        # value ``_RFI_STATUS_TRANSITIONS`` permits as a source for
+        # ``answered`` (``open``).
+        allowed_source_for_answer = {
+            src
+            for src, targets in _RFI_STATUS_TRANSITIONS.items()
+            if "answered" in targets
+        }
+        if rfi.status not in allowed_source_for_answer:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot respond to an RFI with status '{rfi.status}'",
+                detail=(
+                    f"Cannot respond to an RFI with status '{rfi.status}'. "
+                    f"Allowed source states: "
+                    f"{', '.join(sorted(allowed_source_for_answer)) or 'none'}."
+                ),
             )
 
         # R5 / BUG-RFI-ROLE: identity verification.
@@ -416,6 +487,28 @@ class RFIService:
             ball_in_court=str(rfi.raised_by),
         )
         fresh = await self.repo.get_by_id(rfi_id)
+
+        # Epic H — universal audit trail. Service-layer log so the row
+        # lands in the same transaction as the business write; on
+        # rollback the audit row goes with it.
+        from app.core.audit_log import log_activity as _log_activity
+
+        await _log_activity(
+            self.session,
+            actor_id=responded_by,
+            entity_type="rfi",
+            entity_id=str(rfi_id),
+            action="status_changed",
+            from_status=old_status,
+            to_status="answered",
+            reason="RFI answered via respond_to_rfi()",
+            metadata={"rfi_number": rfi_number_s, "ball_in_court": raised_by_s},
+            module="rfi",
+            parent_entity_type="project",
+            parent_entity_id=project_id_s,
+            before_state={"status": old_status, "ball_in_court": assigned_s},
+            after_state={"status": "answered", "ball_in_court": raised_by_s},
+        )
 
         await _safe_publish(
             "rfi.responded",
@@ -470,6 +563,25 @@ class RFIService:
 
         await self.repo.update_fields(rfi_id, status="closed", ball_in_court=None)
         fresh = await self.repo.get_by_id(rfi_id)
+
+        from app.core.audit_log import log_activity as _log_activity
+
+        await _log_activity(
+            self.session,
+            actor_id=closed_by,
+            entity_type="rfi",
+            entity_id=str(rfi_id),
+            action="status_changed",
+            from_status=old_status,
+            to_status="closed",
+            reason="RFI closed via close_rfi()",
+            metadata={"rfi_number": rfi_number_s},
+            module="rfi",
+            parent_entity_type="project",
+            parent_entity_id=project_id_s,
+            before_state={"status": old_status},
+            after_state={"status": "closed", "ball_in_court": None},
+        )
 
         await _safe_publish(
             "rfi.closed",
@@ -534,8 +646,17 @@ class RFIService:
         now = datetime.now(UTC)
         today_str = now.strftime("%Y-%m-%d")
 
-        # Fetch all RFIs for the project (unfiltered, no pagination)
-        base = select(RFI).where(RFI.project_id == project_id)
+        # Fetch RFIs for the project, capped at ``_RFI_STATS_SCAN_CAP``
+        # so a runaway project history can't lock up the dashboard.
+        # When the cap is hit the numbers are still useful (open /
+        # overdue / impact counts on the most recent slice) and large
+        # tenants get sub-second p99 instead of a full table scan.
+        base = (
+            select(RFI)
+            .where(RFI.project_id == project_id)
+            .order_by(RFI.created_at.desc())
+            .limit(_RFI_STATS_SCAN_CAP)
+        )
         result = await self.session.execute(base)
         rfis = list(result.scalars().all())
 

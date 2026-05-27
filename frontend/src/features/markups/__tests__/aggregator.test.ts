@@ -31,6 +31,7 @@ function makeHubMarkup(overrides: Partial<Markup> = {}): Markup {
     id: 'hub-1',
     project_id: 'p1',
     document_id: 'doc-a',
+    file_version_id: null,
     page: 2,
     type: 'cloud',
     geometry: {},

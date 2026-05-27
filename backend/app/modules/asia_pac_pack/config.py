@@ -1,5 +1,6 @@
 """‌⁠‍Regional configuration for Asia-Pacific (AU, NZ, JP, SG)."""
 
+from decimal import Decimal
 from typing import Any
 
 PACK_CONFIG: dict[str, Any] = {
@@ -210,5 +211,12 @@ PACK_CONFIG: dict[str, Any] = {
             "to_m2": "1.62",
             "description": "Tatami-mat area unit (varies by region)",
         },
+    },
+    # ── VAT / GST rates (Wave 25) ────────────────────────────────────────────
+    "vat_rates": {
+        "AU": {"standard": Decimal("0.10"), "zero": Decimal("0.00")},
+        "NZ": {"standard": Decimal("0.15"), "zero": Decimal("0.00")},
+        "JP": {"standard": Decimal("0.10"), "reduced": Decimal("0.08")},
+        "SG": {"standard": Decimal("0.09"), "zero": Decimal("0.00")},
     },
 }

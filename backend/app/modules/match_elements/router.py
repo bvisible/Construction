@@ -39,6 +39,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, SessionDep, verify_project_access
 from app.modules.match_elements import pipeline, schemas
 from app.modules.match_elements.analytics import compute_match_analytics
@@ -690,7 +692,7 @@ async def get_prompt_template(
 ) -> schemas.PromptTemplateRead:
     row = await session.get(MatchPromptTemplate, template_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
+        raise HTTPException(status_code=404, detail=translate("errors.prompt_not_found", locale=get_locale()))
     if not row.is_system:
         try:
             uid = uuid.UUID(current_user_id)
@@ -698,7 +700,8 @@ async def get_prompt_template(
             uid = None
         if row.created_by != uid:
             raise HTTPException(
-                status_code=404, detail="Prompt template not found",
+                status_code=404,
+                detail=translate("errors.prompt_not_found", locale=get_locale()),
             )
     return schemas.PromptTemplateRead.model_validate(row)
 
@@ -779,7 +782,7 @@ async def update_prompt_template(
     """Edit a user-owned prompt. System prompts are immutable — fork first."""
     row = await session.get(MatchPromptTemplate, template_id)
     if row is None:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
+        raise HTTPException(status_code=404, detail=translate("errors.prompt_not_found", locale=get_locale()))
     if row.is_system:
         raise HTTPException(
             status_code=403,
@@ -790,7 +793,7 @@ async def update_prompt_template(
     except (ValueError, TypeError):
         uid = None
     if row.created_by != uid:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
+        raise HTTPException(status_code=404, detail=translate("errors.prompt_not_found", locale=get_locale()))
     data = patch.model_dump(exclude_unset=True)
     for field, value in data.items():
         setattr(row, field, value)
@@ -818,7 +821,7 @@ async def delete_prompt_template(
     except (ValueError, TypeError):
         uid = None
     if row.created_by != uid:
-        raise HTTPException(status_code=404, detail="Prompt template not found")
+        raise HTTPException(status_code=404, detail=translate("errors.prompt_not_found", locale=get_locale()))
     await session.delete(row)
     await session.commit()
 

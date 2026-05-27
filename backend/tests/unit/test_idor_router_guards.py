@@ -98,6 +98,29 @@ ROUTER_HANDLERS: dict[str, list[str]] = {
     "requirements": ["get_set", "update_set", "delete_set"],
     "documents": ["get_document", "download_document", "update_document", "delete_document"],
     "teams": ["update_team", "delete_team"],
+    # Round-6 audit — dwg_takeoff IDOR sweep. Every endpoint must funnel
+    # through ``_gate_by_drawing`` / ``_gate_by_annotation`` /
+    # ``_gate_by_group`` (or call ``verify_project_access`` directly for
+    # the list-by-project_id endpoints).
+    "dwg_takeoff": [
+        "upload_drawing",
+        "list_drawings",
+        "get_drawing",
+        "delete_drawing",
+        "get_entities",
+        "get_thumbnail",
+        "update_drawing_scale",
+        "update_layer_visibility",
+        "create_annotation",
+        "list_annotations",
+        "update_annotation",
+        "delete_annotation",
+        "link_to_boq",
+        "get_pins",
+        "create_entity_group",
+        "list_entity_groups",
+        "delete_entity_group",
+    ],
 }
 
 
@@ -134,6 +157,11 @@ _GUARD_WRAPPERS = frozenset({
     "_verify_takeoff_doc_access",
     # Audit B6 — CAD extraction session access helper.
     "_verify_cad_session_access",
+    # Round-6 audit — dwg_takeoff IDOR sweep. Each helper resolves the
+    # resource's owning project_id and delegates to verify_project_access.
+    "_gate_by_drawing",
+    "_gate_by_annotation",
+    "_gate_by_group",
 })
 
 

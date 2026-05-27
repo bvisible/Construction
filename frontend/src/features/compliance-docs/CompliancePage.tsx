@@ -6,7 +6,8 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, ShieldCheck } from 'lucide-react';
 
-import { Button, Card, EmptyState, Skeleton } from '@/shared/ui';
+import { Button, Card, ConfirmDialog, EmptyState, Skeleton } from '@/shared/ui';
+import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 
 import { deleteComplianceDoc, listComplianceDocs } from './api';
@@ -30,6 +31,7 @@ export function CompliancePage({ projectId }: CompliancePageProps) {
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [showCreate, setShowCreate] = useState(false);
+  const { confirm, ...confirmProps } = useConfirm();
 
   const query = useQuery({
     queryKey: [
@@ -57,7 +59,7 @@ export function CompliancePage({ projectId }: CompliancePageProps) {
       });
       toast({
         title: t('compliance.toast.deleted', {
-          defaultValue: 'Compliance document deleted.‌⁠‍',
+          defaultValue: 'Compliance document deleted.',
         }),
         type: 'success',
       });
@@ -65,7 +67,7 @@ export function CompliancePage({ projectId }: CompliancePageProps) {
     onError: () => {
       toast({
         title: t('compliance.toast.delete_failed', {
-          defaultValue: 'Failed to delete compliance document.‌⁠‍',
+          defaultValue: 'Failed to delete compliance document.',
         }),
         type: 'error',
       });
@@ -86,11 +88,11 @@ export function CompliancePage({ projectId }: CompliancePageProps) {
       <EmptyState
         icon={<ShieldCheck size={48} strokeWidth={1.5} />}
         title={t('compliance.empty.no_project_title', {
-          defaultValue: 'Open a project‌⁠‍',
+          defaultValue: 'Open a project',
         })}
         description={t('compliance.empty.no_project_description', {
           defaultValue:
-            'Compliance documents are scoped to a project — open one first.‌⁠‍',
+            'Compliance documents are scoped to a project — open one first.',
         })}
       />
     );
@@ -102,7 +104,7 @@ export function CompliancePage({ projectId }: CompliancePageProps) {
         <div>
           <h2 className="text-base font-semibold text-content-primary">
             {t('compliance.page.title', {
-              defaultValue: 'Compliance documents‌⁠‍',
+              defaultValue: 'Compliance documents',
             })}
           </h2>
           <p className="text-xs text-content-tertiary">
@@ -247,17 +249,20 @@ export function CompliancePage({ projectId }: CompliancePageProps) {
                   <td className="px-3 py-2 text-right">
                     <button
                       type="button"
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            t('compliance.confirm.delete', {
-                              defaultValue:
-                                'Delete this compliance document?',
-                            }),
-                          )
-                        ) {
-                          removeMutation.mutate(row.id);
-                        }
+                      onClick={async () => {
+                        const ok = await confirm({
+                          title: t('compliance.confirm.delete_title', {
+                            defaultValue: 'Delete compliance document?',
+                          }),
+                          message: t('compliance.confirm.delete', {
+                            defaultValue:
+                              'Delete this compliance document?',
+                          }),
+                          confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+                          variant: 'danger',
+                        });
+                        if (!ok) return;
+                        removeMutation.mutate(row.id);
                       }}
                       className="rounded-md p-1 text-content-tertiary hover:bg-surface-secondary hover:text-semantic-error"
                       aria-label={t('common.delete', {
@@ -281,6 +286,7 @@ export function CompliancePage({ projectId }: CompliancePageProps) {
           onClose={() => setShowCreate(false)}
         />
       )}
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

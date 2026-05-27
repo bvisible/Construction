@@ -192,6 +192,14 @@ export function getDiary(id: string): Promise<DailyDiary> {
   return apiGet<DailyDiary>(`/v1/daily-diary/diaries/${id}`);
 }
 
+export function deleteDiary(id: string): Promise<void> {
+  // Backend exposes DELETE /api/v1/daily-diary/diaries/{id} (204) gated by
+  // the `daily_diary.delete` permission. UI surfaces are not wiring this
+  // yet — exposed here so admin / cleanup tooling can call it without
+  // re-implementing the URL.
+  return apiDelete(`/v1/daily-diary/diaries/${id}`);
+}
+
 export function updateDiary(
   id: string,
   data: { notes?: string; labour_count?: number; equipment_count?: number },

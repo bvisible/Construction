@@ -14,7 +14,7 @@ a clean error response instead of crashing the stream.
 
 import logging
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +26,19 @@ logger = logging.getLogger(__name__)
 
 class ToolAuthError(Exception):
     """‌⁠‍Raised when a tool handler fails authorization or input validation."""
+
+
+class ToolPermissionDenied(Exception):
+    """‌⁠‍Raised when the caller passes IDOR but lacks the role for a write tool.
+
+    Distinct from :class:`ToolAuthError` (404-style, "you don't see this
+    project") so the dispatcher can return a 403-shaped error card with a
+    machine-readable ``i18n_key`` for the frontend to localize.
+    """
+
+    def __init__(self, i18n_key: str = "chat.error.manager_required") -> None:
+        super().__init__(i18n_key)
+        self.i18n_key = i18n_key
 
 
 def _parse_uuid(raw: Any, field_name: str = "id") -> uuid.UUID:
@@ -105,6 +118,166 @@ def _auth_error(msg: str) -> dict[str, Any]:
         "data": {"error": msg},
         "summary": f"Error: {msg}",
     }
+
+
+# ── Write-tool RBAC: gate destructive tools behind manager+ ────────────────
+#
+# Reads (any authenticated user) vs. writes (manager+) follow the same
+# convention as the rest of the platform — the global ``User.role`` enum
+# (admin > manager > editor > viewer) determines what each user can do, and
+# elevated project-team roles (``owner``, ``project_manager``) count as
+# manager+ for *that specific project*. Anything else, the tool returns a
+# friendly i18n-keyed error card so the floating chat panel can localize it.
+#
+# Project-existence check ALWAYS runs first so the role-denied response
+# never leaks the existence of a project the user can't see (IDOR posture:
+# 404 over 403 for cross-tenant access).
+
+ToolPermission = Literal["read", "write"]
+
+
+async def _user_is_manager_or_above(
+    session: AsyncSession,
+    user_id: str,
+    project_id: uuid.UUID | None,
+) -> bool:
+    """True iff the user can perform write operations on ``project_id``.
+
+    Resolution order:
+
+    1. Global ``User.role`` ∈ {admin, manager} → always allowed (covers
+       cross-project ops and the unscoped tools).
+    2. Project owner → allowed for the specific project.
+    3. Member of a team in this project with elevated role
+       (``owner`` / ``project_manager``) → allowed.
+
+    Returns False on lookup error (closed-fail; the dispatcher then emits a
+    ``manager_permission_required`` error rather than calling the handler).
+    """
+    from app.core.permissions import Role, _resolve_role
+    from app.modules.users.repository import UserRepository
+
+    try:
+        uid = uuid.UUID(str(user_id))
+    except (TypeError, ValueError):
+        return False
+
+    # 1. Global role check — admin / manager bypass project scope.
+    try:
+        user_repo = UserRepository(session)
+        user = await user_repo.get_by_id(uid)
+        if user is not None:
+            resolved = _resolve_role(getattr(user, "role", "") or "")
+            if resolved in (Role.ADMIN, Role.MANAGER):
+                return True
+    except Exception:  # noqa: BLE001
+        logger.exception("Role lookup failed in manager-check")
+
+    if project_id is None:
+        # No project context to fall back on; deny.
+        return False
+
+    # 2. Project owner.
+    try:
+        from app.modules.projects.repository import ProjectRepository
+
+        proj_repo = ProjectRepository(session)
+        project = await proj_repo.get_by_id(project_id)
+        if project is not None and str(getattr(project, "owner_id", "")) == str(uid):
+            return True
+    except Exception:  # noqa: BLE001
+        logger.exception("Project lookup failed in manager-check")
+
+    # 3. Elevated team role in this project.
+    try:
+        from sqlalchemy import select as _select
+
+        from app.modules.teams.models import Team, TeamMembership
+        from app.modules.teams.schemas import ELEVATED_TEAM_ROLES
+
+        stmt = (
+            _select(TeamMembership.role)
+            .join(Team, Team.id == TeamMembership.team_id)
+            .where(Team.project_id == project_id, TeamMembership.user_id == uid)
+        )
+        for (role,) in (await session.execute(stmt)).all():
+            if role in ELEVATED_TEAM_ROLES:
+                return True
+    except Exception:  # noqa: BLE001
+        logger.exception("Team-role lookup failed in manager-check")
+
+    return False
+
+
+def _extract_project_id(tool_name: str, args: dict[str, Any]) -> uuid.UUID | None:
+    """Best-effort: find the project this tool call targets, or None.
+
+    ``compare_projects`` passes a list — we take the first parsable one so
+    the manager check gates on at least one referenced project (matches the
+    handler's "any accessible project" semantics).
+    """
+    raw = args.get("project_id")
+    if raw is None and tool_name == "compare_projects":
+        ids = args.get("project_ids") or []
+        if isinstance(ids, list) and ids:
+            raw = ids[0]
+    if raw is None or raw == "":
+        return None
+    try:
+        return uuid.UUID(str(raw))
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+
+async def check_tool_permission(
+    session: AsyncSession,
+    tool_name: str,
+    args: dict[str, Any],
+    user_id: str,
+) -> None:
+    """Enforce ``TOOL_PERMISSIONS`` before a handler runs.
+
+    Raises:
+        ToolPermissionDenied: write tool invoked by a user without
+            manager+ rights on the referenced project. The dispatcher
+            converts this into a friendly chat-message error card and an
+            HTTP 403 on the SSE wire.
+
+    Reads pass through unchanged — every read tool still gates IDOR via its
+    handler's own ``_require_project_access`` call, which is what enforces
+    the 404-over-403 IDOR posture for cross-tenant access. This function
+    intentionally does NOT pre-check project existence: that's the
+    handler's job, and double-checking would just slow the hot path.
+    """
+    permission = TOOL_PERMISSIONS.get(tool_name, "read")
+    if permission != "write":
+        return
+
+    project_id = _extract_project_id(tool_name, args)
+    is_manager = await _user_is_manager_or_above(session, user_id, project_id)
+    if not is_manager:
+        raise ToolPermissionDenied("chat.error.manager_required")
+
+
+def manager_permission_error_result() -> dict[str, Any]:
+    """Build the standard 'write tool denied — manager+ required' card.
+
+    Carries a machine-readable ``i18n_key`` so the frontend can swap the
+    English fallback for the user's locale.
+    """
+    return {
+        "renderer": "error",
+        "data": {
+            "error": "manager_permission_required",
+            "i18n_key": "chat.error.manager_required",
+            "message": (
+                "This action requires manager-or-higher permission on the "
+                "referenced project."
+            ),
+        },
+        "summary": "Manager permission required",
+    }
+
 
 # ── Tool definitions (Anthropic function-calling format) ─────────────────────
 
@@ -1127,6 +1300,36 @@ async def handle_search_anything(
 
 
 # ── Tool handler dispatch map ────────────────────────────────────────────────
+
+
+# Permission classifier — keep in sync with TOOL_HANDLER_MAP below.
+# Reads (any authenticated user): all ``get_*`` / ``search_*`` /
+#   ``compare_projects`` / ``run_validation`` (the latter returns a report
+#   from the persisted ValidationReport table — no mutation, no side
+#   effects).
+# Writes (manager+): anything that creates / updates / deletes data.
+# When you add a new tool, add it here too — otherwise it defaults to
+# ``read`` which is wrong for any mutating handler.
+TOOL_PERMISSIONS: dict[str, ToolPermission] = {
+    "get_all_projects": "read",
+    "get_project_summary": "read",
+    "get_boq_items": "read",
+    "get_schedule": "read",
+    "get_validation_results": "read",
+    "get_risk_register": "read",
+    "search_cwicr_database": "read",
+    "get_cost_model": "read",
+    "compare_projects": "read",
+    "run_validation": "read",
+    "create_boq_item": "write",
+    "search_boq_positions": "read",
+    "search_documents": "read",
+    "search_tasks": "read",
+    "search_risks": "read",
+    "search_bim_elements": "read",
+    "search_anything": "read",
+}
+
 
 TOOL_HANDLER_MAP: dict[str, Any] = {
     "get_all_projects": handle_get_all_projects,

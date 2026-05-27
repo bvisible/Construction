@@ -13,6 +13,8 @@ import { Plus, Trash2, UserPlus, X } from 'lucide-react';
 import { WideModal } from '@/shared/ui/WideModal';
 import { Button } from '@/shared/ui/Button';
 import { Input } from '@/shared/ui/Input';
+import { ConfirmDialog } from '@/shared/ui/ConfirmDialog';
+import { useConfirm } from '@/shared/hooks/useConfirm';
 import {
   useAddDistributionMember,
   useCreateDistributionList,
@@ -54,6 +56,7 @@ export function DistributionListModal({
   const [newEmail, setNewEmail] = useState('');
   const [newRole, setNewRole] = useState<string>('for_review');
   const [error, setError] = useState<string | null>(null);
+  const { confirm, ...confirmProps } = useConfirm();
 
   useEffect(() => {
     if (open) {
@@ -93,12 +96,17 @@ export function DistributionListModal({
   };
 
   const submitDelete = async (list: DistributionList) => {
-    const confirmed = window.confirm(
-      t('files.distribution.delete_list_confirm', {
+    const confirmed = await confirm({
+      title: t('files.distribution.delete_list_title', {
+        defaultValue: 'Delete distribution list?',
+      }),
+      message: t('files.distribution.delete_list_confirm', {
         defaultValue: 'Delete list "{{name}}"?',
         name: list.name,
       }),
-    );
+      confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+      variant: 'danger',
+    });
     if (!confirmed) return;
     await deleteMut.mutateAsync(list.id);
     if (activeId === list.id) setActiveId(null);
@@ -140,6 +148,7 @@ export function DistributionListModal({
   };
 
   return (
+    <>
     <WideModal
       open={open}
       onClose={onClose}
@@ -386,5 +395,7 @@ export function DistributionListModal({
         </div>
       )}
     </WideModal>
+    <ConfirmDialog {...confirmProps} />
+    </>
   );
 }

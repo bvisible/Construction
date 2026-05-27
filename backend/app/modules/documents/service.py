@@ -25,6 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.bim_hub.models import BIMElement
 from app.modules.documents.activity_service import record_activity
 from app.modules.documents.models import Document, DocumentBIMLink, ProjectPhoto, Sheet
@@ -37,6 +39,54 @@ from app.modules.documents.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def _register_version_safely(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    file_kind: str,
+    entity: Any,
+    file_id: str,
+    file_size: int,
+    uploaded_by: str | None,
+) -> None:
+    """Best-effort register-new-version call.
+
+    Epic C — every upload path must register a chain row so the version
+    history is continuous. Wrapped in a try/except so a chain-write
+    failure (e.g. ``oe_file_version`` table missing on a misconfigured
+    install) cannot mask a successful upload. The kind-side row is the
+    source of truth; the chain row is the index.
+    """
+    try:
+        from app.modules.file_versions.helpers import canonical_name_for
+        from app.modules.file_versions.schemas import FileVersionCreate
+        from app.modules.file_versions.service import FileVersionService
+
+        svc = FileVersionService(session)
+        canonical = canonical_name_for(file_kind, entity)
+        uploaded_by_uuid: uuid.UUID | None
+        try:
+            uploaded_by_uuid = uuid.UUID(str(uploaded_by)) if uploaded_by else None
+        except (TypeError, ValueError):
+            uploaded_by_uuid = None
+        payload = FileVersionCreate(
+            project_id=project_id,
+            file_kind=file_kind,  # type: ignore[arg-type]
+            file_id=file_id,
+            canonical_name=canonical,
+            file_size=int(file_size or 0),
+        )
+        await svc.register_new_version(payload, uploaded_by_id=uploaded_by_uuid)
+    except Exception:
+        logger.warning(
+            "Failed to register FileVersion chain row for kind=%s file_id=%s",
+            file_kind,
+            file_id,
+            exc_info=True,
+        )
+
 
 # Base directory for file uploads
 UPLOAD_BASE = Path.home() / ".openestimator" / "uploads"
@@ -359,6 +409,169 @@ class DocumentService:
             },
         )
 
+        # Epic C — register the chain row. A re-upload with the same
+        # ``name`` rolls the chain forward (old row superseded, new row
+        # current). Wrapped so a chain-write failure cannot block the
+        # upload itself; the file is on disk and the Document row is in
+        # the DB regardless.
+        await _register_version_safely(
+            self.session,
+            project_id=project_id,
+            file_kind="document",
+            entity=document,
+            file_id=str(document.id),
+            file_size=len(content),
+            uploaded_by=user_id,
+        )
+
+        return document
+
+    # ── Revisions (Epic C) ─────────────────────────────────────────────────
+
+    async def upload_document_revision(
+        self,
+        document_id: uuid.UUID,
+        file: UploadFile,
+        user_id: str,
+        notes: str | None = None,
+    ) -> Document:
+        """Upload a NEW revision for an existing document.
+
+        Reuses ``upload_document`` security gates (magic-byte, blocked
+        extensions, size cap) by inlining the same checks here — but
+        keys the chain off the EXISTING document's ``name`` so the
+        re-upload lands in the same chain regardless of what the user
+        names their incoming file.
+
+        Args:
+            document_id: The document whose chain we are extending.
+            file: The freshly uploaded file (already opened by FastAPI).
+            user_id: Caller's id, recorded as uploader.
+            notes: Optional version-note carried into ``FileVersion.notes``.
+
+        Returns:
+            The original ``Document`` row (with a refreshed
+            ``updated_at``). The new chain row is fetchable via
+            ``GET /file-versions/?file_id={id}&kind=document``.
+        """
+        document = await self.get_document(document_id)
+        safe_name = _sanitize_filename(file.filename or document.name)
+
+        bad_ext = _blocked_extension_segment(safe_name)
+        if bad_ext is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"File type '{bad_ext}' is not allowed for security reasons.",
+            )
+
+        content = await file.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(
+                    f"File too large: {len(content)} bytes "
+                    f"(max {MAX_FILE_SIZE} bytes)."
+                ),
+            )
+
+        from app.core.file_signature import (
+            ALLOWED_CAD_TYPES,
+            ALLOWED_DOCUMENT_TYPES,
+            BANNED_SIGNATURE_TOKENS,
+            SIGNATURE_BYTES_REQUIRED,
+        )
+        from app.core.file_signature import detect as _sig_detect
+        from app.core.file_signature import mime_for_signature as _mime_for_signature
+
+        allowed = ALLOWED_DOCUMENT_TYPES | ALLOWED_CAD_TYPES
+        detected = _sig_detect(content[:SIGNATURE_BYTES_REQUIRED])
+        if detected is not None and detected in BANNED_SIGNATURE_TOKENS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Executable/script content is not allowed (detected: {detected})."
+                ),
+            )
+        if detected is not None and detected not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Uploaded content does not match an allowed format (detected: {detected})."
+                ),
+            )
+
+        stored_mime = _mime_for_signature(detected)
+
+        file_uuid = uuid.uuid4().hex[:12]
+        storage_name = f"{file_uuid}_{safe_name}"
+        upload_dir = UPLOAD_BASE / str(document.project_id)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_path = upload_dir / storage_name
+
+        try:
+            file_path.write_bytes(content)
+        except Exception:
+            logger.exception("Failed to write revision to disk: %s", file_path)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to save file to disk.",
+            )
+
+        # Bump the Document row's audit fields. We deliberately do NOT
+        # mutate ``Document.name`` — the chain key follows the original
+        # name so the version dropdown stays continuous.
+        from app.modules.documents.repository import DocumentRepository
+
+        repo = DocumentRepository(self.session)
+        await repo.update_fields(
+            document_id,
+            file_path=str(file_path),
+            file_size=len(content),
+            mime_type=stored_mime,
+        )
+        await self.session.refresh(document)
+
+        # Register the new chain row. ``canonical_name`` is derived from
+        # the EXISTING document row so re-uploads land in the same chain.
+        try:
+            from app.modules.file_versions.helpers import canonical_name_for
+            from app.modules.file_versions.schemas import FileVersionCreate
+            from app.modules.file_versions.service import FileVersionService
+
+            svc = FileVersionService(self.session)
+            try:
+                uploader_uuid = uuid.UUID(str(user_id)) if user_id else None
+            except (TypeError, ValueError):
+                uploader_uuid = None
+            payload = FileVersionCreate(
+                project_id=document.project_id,
+                file_kind="document",
+                file_id=str(document.id),
+                canonical_name=canonical_name_for("document", document),
+                file_size=len(content),
+                notes=notes,
+            )
+            await svc.register_new_version(payload, uploaded_by_id=uploader_uuid)
+        except Exception:
+            logger.warning(
+                "Failed to register FileVersion chain row for revision (doc=%s)",
+                document.id,
+                exc_info=True,
+            )
+
+        await record_activity(
+            self.session,
+            document.id,
+            user_id or None,
+            "revision_uploaded",
+            {
+                "name": safe_name,
+                "file_size": len(content),
+                "mime_type": stored_mime,
+                "notes": notes or "",
+            },
+        )
+
         return document
 
     # ── Read ───────────────────────────────────────────────────────────────
@@ -369,7 +582,7 @@ class DocumentService:
         if document is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document not found",
+                detail=translate("errors.document_not_found", locale=get_locale()),
             )
         return document
 
@@ -801,6 +1014,18 @@ class PhotoService:
             len(content),
             "yes" if thumb_generated else "no",
             project_id,
+        )
+
+        # Epic C — register the chain row. ``file_id`` is the photo row
+        # id; ``canonical_name`` derives from ``filename``.
+        await _register_version_safely(
+            self.session,
+            project_id=project_id,
+            file_kind="photo",
+            entity=photo,
+            file_id=str(photo.id),
+            file_size=len(content),
+            uploaded_by=user_id,
         )
 
         # Also create a Document record so photos appear in Documents hub
@@ -1309,6 +1534,28 @@ class SheetService:
         if sheets:
             sheets = await self.repo.create_many(sheets)
 
+        # Epic C — register a chain row per sheet AND one for the
+        # parent PDF so the document hub also sees the chain.
+        await _register_version_safely(
+            self.session,
+            project_id=project_id,
+            file_kind="document",
+            entity=document,
+            file_id=str(document.id),
+            file_size=len(content),
+            uploaded_by=user_id,
+        )
+        for sheet in sheets:
+            await _register_version_safely(
+                self.session,
+                project_id=project_id,
+                file_kind="sheet",
+                entity=sheet,
+                file_id=str(sheet.id),
+                file_size=0,
+                uploaded_by=user_id,
+            )
+
         logger.info(
             "PDF split into %d sheets: %s for project %s",
             len(sheets),
@@ -1374,7 +1621,7 @@ class DocumentBIMLinkService:
         if document is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Document not found",
+                detail=translate("errors.document_not_found", locale=get_locale()),
             )
 
         # Verify BIM element exists

@@ -1,0 +1,20 @@
+{
+  "route": "/finance",
+  "totalViolations": 1,
+  "buttonName": 0,
+  "colorContrast": 0,
+  "bySeverity": {
+    "critical": 1,
+    "serious": 0,
+    "moderate": 0,
+    "minor": 0
+  },
+  "ruleSummary": [
+    {
+      "id": "aria-valid-attr-value",
+      "impact": "critical",
+      "nodeCount": 1
+    }
+  ],
+  "colorContrastNodes": []
+}

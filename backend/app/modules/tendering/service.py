@@ -212,7 +212,10 @@ class TenderingService:
         # Verify package exists
         await self.get_package(package_id)
 
-        line_items_raw = [item.model_dump() for item in data.line_items]
+        # v3 §10 — ``BidLineItem.unit_rate`` is Decimal; dump in JSON
+        # mode so the serializer converts it to a string (the JSON DB
+        # column can't natively persist a ``Decimal`` object).
+        line_items_raw = [item.model_dump(mode="json") for item in data.line_items]
 
         bid = TenderBid(
             package_id=package_id,
@@ -269,10 +272,12 @@ class TenderingService:
         if "metadata" in fields:
             fields["metadata_"] = fields.pop("metadata")
 
-        # Serialize line_items if present
+        # Serialize line_items if present — JSON mode coerces Decimal to
+        # string so the persisted JSON value matches the wire contract.
         if "line_items" in fields and fields["line_items"] is not None:
             fields["line_items"] = [
-                item.model_dump() if hasattr(item, "model_dump") else item for item in fields["line_items"]
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+                for item in fields["line_items"]
             ]
 
         if not fields:

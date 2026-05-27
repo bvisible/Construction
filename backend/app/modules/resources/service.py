@@ -12,6 +12,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.resources.models import (
     Assignment,
     AvailabilityWindow,
@@ -371,7 +373,8 @@ class ResourcesService:
         resource = await self.resource_repo.get_by_id(resource_id)
         if resource is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Resource not found"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=translate("errors.resource_not_found", locale=get_locale()),
             )
         return resource
 
@@ -787,6 +790,26 @@ class ResourcesService:
                     f"Resource {resource.code} missing required skills", missing
                 )
 
+        # Cost-rate snapshot policy: the assignment freezes whatever the
+        # caller supplied AT THIS MOMENT. A *missing* cost_rate (None — only
+        # possible when extra fields drift) falls back to the resource
+        # default; a *zero* cost_rate (legit for donated kit / loaned staff
+        # / pro-bono crews) is honoured exactly as sent. Pre-fix, the
+        # ``data.cost_rate or default`` coalesce silently substituted the
+        # catalogue default for an explicit Decimal('0'), corrupting the
+        # rate-history audit trail.
+        explicit_rate = data.cost_rate
+        if explicit_rate is None:
+            cost_rate_snapshot = resource.default_cost_rate or Decimal("0")
+        else:
+            cost_rate_snapshot = explicit_rate
+        # Currency follows the same rule: empty string means "caller did not
+        # specify; inherit from the resource"; a non-empty value (even when
+        # exotic) is preserved verbatim.
+        if data.currency:
+            currency_snapshot = data.currency
+        else:
+            currency_snapshot = resource.currency or ""
         assignment = Assignment(
             resource_id=data.resource_id,
             project_id=data.project_id,
@@ -796,8 +819,8 @@ class ResourcesService:
             end_at=data.end_at,
             allocation_percent=data.allocation_percent,
             status="proposed",
-            cost_rate=data.cost_rate or resource.default_cost_rate or Decimal("0"),
-            currency=data.currency or resource.currency or "",
+            cost_rate=cost_rate_snapshot,
+            currency=currency_snapshot,
             notes=data.notes,
             created_by=user_id,
             metadata_=data.metadata,

@@ -175,7 +175,7 @@ function TopNToggle({ value, direction, onChange, testIdPrefix }: TopNToggleProp
           onClick={() => onChange(n, 'top')}
           className={btnCls(active(n, 'top'))}
         >
-          {t('explorer.show_top', { defaultValue: 'Top {{n}}‌⁠‍', n })}
+          {t('explorer.show_top', { defaultValue: 'Top {{n}}', n })}
         </button>
       ))}
       {TOP_N_OPTIONS.map((n) => (
@@ -186,7 +186,7 @@ function TopNToggle({ value, direction, onChange, testIdPrefix }: TopNToggleProp
           onClick={() => onChange(n, 'bottom')}
           className={btnCls(active(n, 'bottom'))}
         >
-          {t('explorer.show_bottom', { defaultValue: 'Bottom {{n}}‌⁠‍', n })}
+          {t('explorer.show_bottom', { defaultValue: 'Bottom {{n}}', n })}
         </button>
       ))}
     </div>
@@ -208,12 +208,12 @@ function SlicerBanner() {
     >
       <Filter size={12} className="text-content-tertiary shrink-0" />
       <span className="text-2xs font-semibold text-content-tertiary uppercase tracking-wide shrink-0">
-        {t('explorer.active_filters', { defaultValue: 'Active filters‌⁠‍' })}
+        {t('explorer.active_filters', { defaultValue: 'Active filters' })}
       </span>
       {slicers.length === 0 ? (
         <span className="text-2xs text-content-quaternary">
           {t('explorer.no_active_filters', {
-            defaultValue: 'Click any chart bar or slice to filter across tabs.‌⁠‍',
+            defaultValue: 'Click any chart bar or slice to filter across tabs.',
           })}
         </span>
       ) : (
@@ -225,7 +225,7 @@ function SlicerBanner() {
               data-testid={`slicer-chip-${s.column}`}
               onClick={() => removeSlicer(s.column)}
               className="group inline-flex items-center gap-1 rounded-full border border-oe-blue/30 bg-oe-blue/10 px-2.5 py-0.5 text-2xs font-medium text-oe-blue hover:bg-oe-blue/20"
-              title={t('explorer.delete_view', { defaultValue: 'Remove‌⁠‍' })}
+              title={t('explorer.delete_view', { defaultValue: 'Remove' })}
             >
               <span className="max-w-[140px] truncate">
                 {s.column} = {s.values.join(', ')}
@@ -2737,7 +2737,7 @@ function CreateBOQFromPivotModal({ open, onClose, groups, groupByColumns, aggCol
           <div>
             <label className="text-xs font-medium text-content-secondary mb-1.5 flex items-center gap-1.5">
               <FolderOpen size={12} />
-              {t('common.project', { defaultValue: 'Project' })}
+              {t('common.project')}
             </label>
             <select
               value={projectId}
@@ -3344,6 +3344,7 @@ export function CadDataExplorerPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const sessionId = searchParams.get('session') || '';
 
@@ -3842,6 +3843,27 @@ export function CadDataExplorerPage() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          {/* Round-trip with /bim. Sessions materialised from a BIM model carry
+              a `bim:<modelId>` filename (see takeoff router from-bim-model);
+              parse it back so the button deeplinks to the same model in the
+              3D viewer. Hidden when the session has no linked model. */}
+          {describe?.filename?.startsWith('bim:') && (
+            <button
+              onClick={() => {
+                const modelId = describe.filename.slice(4);
+                if (modelId) navigate(`/bim/${encodeURIComponent(modelId)}`);
+              }}
+              data-testid="explorer-open-in-bim-btn"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border text-content-secondary bg-surface-secondary border-border-light hover:bg-surface-tertiary"
+              title={t('explorer.open_in_bim_title', { defaultValue: 'View 3D model' })}
+              aria-label={t('explorer.open_in_bim', { defaultValue: 'Open in BIM viewer' })}
+            >
+              <Box size={13} />
+              <span className="hidden sm:inline">
+                {t('explorer.open_in_bim', { defaultValue: 'Open in BIM viewer' })}
+              </span>
+            </button>
+          )}
           <button
             onClick={handleSaveView}
             data-testid="explorer-save-view-btn"

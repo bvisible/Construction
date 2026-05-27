@@ -194,3 +194,41 @@ export async function uploadDocument(
 export async function deleteDocument(id: string): Promise<void> {
   return apiDelete(`/v1/documents/${id}`);
 }
+
+/** Epic C — upload a NEW revision of an existing document.
+ *
+ *  Hits ``POST /api/v1/documents/{id}/revisions/``. The chain key stays
+ *  anchored to the existing document's name so the file-versions
+ *  dropdown shows V01, V02, V03 … sequentially regardless of what the
+ *  user names the incoming file.
+ */
+export async function uploadDocumentRevision(
+  documentId: string,
+  file: File,
+  notes?: string | null,
+): Promise<DocumentItem> {
+  if (!documentId) throw new Error('documentId is required');
+  const formData = new FormData();
+  formData.append('file', file);
+  if (notes) formData.append('notes', notes);
+  const token = useAuthStore.getState().accessToken;
+  const res = await fetch(`/api/v1/documents/${documentId}/revisions/`, {
+    method: 'POST',
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-DDC-Client': 'OE/1.0',
+    },
+    body: formData,
+  });
+  if (!res.ok) {
+    let detail = 'Revision upload failed';
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return res.json();
+}

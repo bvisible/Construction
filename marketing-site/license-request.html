@@ -509,6 +509,8 @@ h1.display em{
         <div id="formWrap">
           <div id="errorMsg" class="error-msg" role="alert"></div>
           <form id="licenceForm" novalidate>
+            <!-- Honeypot — bots fill it, real users never see it. Backend rejects non-empty submissions. -->
+            <input type="text" id="_honey" name="_honey" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px" aria-hidden="true">
             <div class="form-row">
               <div class="form-group">
                 <label for="firstName">First name <span class="req">*</span></label>
@@ -724,6 +726,7 @@ h1.display em{
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>Sending…';
 
+    var honeyEl = document.getElementById('_honey');
     var data = {
       firstName: firstName,
       lastName: lastName,
@@ -740,7 +743,8 @@ h1.display em{
       utm_campaign: params.get('utm_campaign') || '',
       timestamp: new Date().toISOString(),
       userAgent: navigator.userAgent,
-      language: navigator.language
+      language: navigator.language,
+      _honey: honeyEl ? honeyEl.value : ''
     };
 
     function resetButton(){

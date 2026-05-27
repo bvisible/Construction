@@ -1,10 +1,47 @@
 """‌⁠‍Reporting & Dashboards Pydantic schemas — request/response models."""
 
+import html
+import re
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# ── R7 HTML-injection guard ──────────────────────────────────────────────
+#
+# Generated reports are rendered to PDF / HTML downstream (WeasyPrint or
+# similar). User-supplied ``title`` / ``description`` strings flow into
+# the renderer; if a future template embeds them inside HTML without
+# auto-escaping, ``<script>`` / ``<iframe>`` / ``<img onerror=...>`` tags
+# would execute in the email recipient's browser when they preview the
+# rendered HTML, or — in WeasyPrint's CSS-only context — fetch arbitrary
+# attacker-controlled assets at render time (SSRF + tracking pixels).
+#
+# We strip raw HTML tags at the schema layer so the row never lands in
+# the DB with executable markup. This is belt-and-braces on top of any
+# future ``{{ value | e }}`` auto-escaping in the template — a renderer
+# regression at the template layer (e.g. ``{{ value | safe }}``) would
+# otherwise re-introduce the vulnerability.
+
+# Match any HTML tag (greedy enough to swallow ``<script src="...">..</script>``
+# style payloads but not arithmetic ``a < b`` text). We also escape any
+# stray ``<`` / ``>`` left over so downstream renderers see a literal
+# entity, never an opening bracket.
+_HTML_TAG_RE = re.compile(r"<[^>]*>")
+
+
+def _strip_html(value: str) -> str:
+    """Return *value* with HTML tags removed and ``<>&`` HTML-escaped.
+
+    Two-pass: first ``<tag>`` removal, then ``html.escape`` of the
+    leftover so a raw ``<`` (e.g. inside a math expression) still lands
+    as ``&lt;`` rather than reaching the renderer raw.
+    """
+    if not value:
+        return value
+    stripped = _HTML_TAG_RE.sub("", value)
+    return html.escape(stripped, quote=True)
 
 # ── KPI Snapshot schemas ─────────────────────────────────────────────────
 
@@ -54,7 +91,13 @@ class KPISnapshotResponse(BaseModel):
 
 
 class ReportTemplateCreate(BaseModel):
-    """Create a custom report template."""
+    """Create a custom report template.
+
+    HTML-injection guard: ``name`` and ``description`` are sanitized at
+    the schema layer (strip raw HTML tags + ``html.escape`` leftovers)
+    because they end up in the PDF/HTML renderer downstream. See the
+    module-level ``_strip_html`` doc for the threat model.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -67,6 +110,13 @@ class ReportTemplateCreate(BaseModel):
     description: str | None = None
     template_data: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("name", "description")
+    @classmethod
+    def _sanitize_renderable(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return _strip_html(v)
 
 
 class ReportTemplateResponse(BaseModel):
@@ -130,7 +180,15 @@ class ReportScheduleRequest(BaseModel):
 
 
 class GenerateReportRequest(BaseModel):
-    """Request to generate a report."""
+    """Request to generate a report.
+
+    The ``title`` field is sanitized via ``_strip_html`` at the schema
+    layer — it is the highest-risk user-controlled string in this
+    module because it appears in every PDF / HTML rendering of the
+    report. A future template that does ``{{ title | safe }}`` would
+    otherwise execute attacker-supplied ``<script>`` in the recipient's
+    email preview.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -147,6 +205,11 @@ class GenerateReportRequest(BaseModel):
     )
     data_snapshot: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("title")
+    @classmethod
+    def _sanitize_title(cls, v: str) -> str:
+        return _strip_html(v)
 
 
 class GeneratedReportResponse(BaseModel):

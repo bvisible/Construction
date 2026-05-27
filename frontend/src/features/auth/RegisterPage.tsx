@@ -40,17 +40,20 @@ export function RegisterPage() {
 
   const passwordsMatch = password === confirmPassword;
   const passwordLongEnough = password.length >= 8;
+  const passwordHasLetter = /[a-zA-Zа-яА-Я]/.test(password);
+  const passwordHasDigit = /\d/.test(password);
+  const passwordStrong = passwordLongEnough && passwordHasLetter && passwordHasDigit;
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
 
     if (!passwordsMatch) {
-      setError(t('auth.passwords_no_match', { defaultValue: 'Passwords do not match‌⁠‍' }));
+      setError(t('auth.passwords_no_match', { defaultValue: 'Passwords do not match' }));
       return;
     }
-    if (!passwordLongEnough) {
-      setError(t('auth.password_min_length', { defaultValue: 'Password must be at least 8 characters‌⁠‍' }));
+    if (!passwordStrong) {
+      setError(t('auth.password_requirements', { defaultValue: 'Password must be at least 8 characters with at least one letter and one digit' }));
       return;
     }
 
@@ -72,7 +75,11 @@ export function RegisterPage() {
 
       if (!regRes.ok) {
         const data = await regRes.json().catch(() => null);
-        setError(data?.detail || t('auth.registration_failed', 'Registration failed'));
+        const detail = data?.detail;
+        const errorMsg = Array.isArray(detail)
+          ? detail.map((e: { msg?: string }) => e.msg).join('; ')
+          : detail || t('auth.registration_failed', 'Registration failed');
+        setError(errorMsg);
         return;
       }
 
@@ -243,7 +250,7 @@ export function RegisterPage() {
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder={t('auth.full_name_placeholder', 'John Smith')}
-                  required
+                  required aria-required="true"
                   autoFocus
                   autoComplete="name"
                   icon={<User size={15} />}
@@ -260,7 +267,7 @@ export function RegisterPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@company.com"
                   autoComplete="email"
-                  required
+                  required aria-required="true"
                   icon={<Mail size={15} />}
                 />
               </div>
@@ -336,7 +343,7 @@ export function RegisterPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     placeholder={t('auth.password_min', 'Minimum 8 characters')}
                     autoComplete="new-password"
-                    required
+                    required aria-required="true"
                     minLength={8}
                     className="h-9 w-full rounded-lg border border-border bg-surface-primary pl-9 pr-9 text-sm text-content-primary placeholder:text-content-tertiary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent hover:border-content-tertiary"
                   />
@@ -372,7 +379,7 @@ export function RegisterPage() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder={t('auth.confirm_password_placeholder', 'Repeat your password')}
                   autoComplete="new-password"
-                  required
+                  required aria-required="true"
                   error={confirmPassword && !passwordsMatch ? t('auth.passwords_mismatch', 'Passwords do not match') : undefined}
                   icon={<Lock size={15} />}
                 />
@@ -424,7 +431,7 @@ export function RegisterPage() {
                   variant="primary"
                   size="lg"
                   loading={loading}
-                  disabled={!fullName || !email || !password || !confirmPassword || !passwordsMatch || !passwordLongEnough || !privacyAccepted}
+                  disabled={!fullName || !email || !password || !confirmPassword || !passwordsMatch || !passwordStrong || !privacyAccepted}
                   className="w-full btn-shimmer"
                 >
                   {t('auth.create_account', 'Create account')}

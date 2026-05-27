@@ -203,10 +203,10 @@ function AddContactModal({
     const e: Record<string, string> = {};
     const hasName = form.first_name.trim() || form.last_name.trim();
     if (!form.company_name.trim() && !hasName) {
-      e.company_name = t('contacts.company_or_name_required', { defaultValue: 'Company name or contact name is required‌⁠‍' });
+      e.company_name = t('contacts.company_or_name_required', { defaultValue: 'Company name or contact name is required' });
     }
     if (form.country.trim() && form.country.trim().length !== 2) {
-      e.country = t('contacts.country_code_invalid', { defaultValue: 'Country code must be exactly 2 letters (ISO 3166-1 alpha-2, e.g. DE, US, GB)‌⁠‍' });
+      e.country = t('contacts.country_code_invalid', { defaultValue: 'Country code must be exactly 2 letters (ISO 3166-1 alpha-2, e.g. DE, US, GB)' });
     }
     setErrors(e);
     return Object.keys(e).length === 0;
@@ -225,7 +225,7 @@ function AddContactModal({
       size="xl"
       title={
         isEdit
-          ? t('contacts.edit_contact', { defaultValue: 'Edit Contact‌⁠‍' })
+          ? t('contacts.edit_contact', { defaultValue: 'Edit Contact' })
           : t('contacts.add_contact', { defaultValue: 'Add Contact' })
       }
       footer={
@@ -757,6 +757,22 @@ const ContactCard = React.memo(function ContactCard({
         )}
       </div>
 
+      {/* Module-bridge tags (v3117). Shown when the contact participates
+         in PropDev / brokers / vendors / … modules. Each tag is a small
+         badge so the user can spot at a glance which modules reference
+         this contact. */}
+      {contact.module_tags && contact.module_tags.length > 0 && (
+        <div className="mt-2.5 flex flex-wrap gap-1">
+          {contact.module_tags.map((tag) => (
+            <Badge key={tag} size="sm" variant="blue">
+              {t(`contacts.module_tag_${tag}`, {
+                defaultValue: tag.replace(/_/g, ' '),
+              })}
+            </Badge>
+          ))}
+        </div>
+      )}
+
       {/* Bottom row: country + prequal */}
       <div className="mt-3 pt-2.5 border-t border-border-light flex items-center justify-between">
         <div className="flex items-center gap-1.5">
@@ -1272,6 +1288,9 @@ export function ContactsPage() {
             <select
               value={countryFilter}
               onChange={(e) => setCountryFilter(e.target.value)}
+              aria-label={t('a11y.contacts.country_filter', {
+                defaultValue: 'Filter contacts by country',
+              })}
               className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-36"
             >
               <option value="">

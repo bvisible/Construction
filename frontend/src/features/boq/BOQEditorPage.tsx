@@ -4,7 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 // lucide-react icons used by sub-components (BOQToolbar, BOQGrid, etc.) — none needed directly here
 import { Database, Download, ExternalLink, X, Sparkles, AlertTriangle as WarnTriangle, Lock, Copy, Wallet, Keyboard, GitCompare, RefreshCw } from 'lucide-react';
-import { Button, Badge, Breadcrumb } from '@/shared/ui';
+import { Button, Badge, Breadcrumb, ModuleHelpButton, ConfirmDialog } from '@/shared/ui';
+import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useProgressStore } from '@/shared/ui/GlobalProgress';
 import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
@@ -131,6 +132,7 @@ export function BOQEditorPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const highlightPositionId = searchParams.get('highlight');
+  const { confirm, ...confirmProps } = useConfirm();
 
   /* ── Data fetching ─────────────────────────────────────────────────── */
 
@@ -267,7 +269,7 @@ export function BOQEditorPage() {
       addRecent({
         type: 'boq',
         id: boqId,
-        title: boq.name || t('boq.untitled', { defaultValue: 'Untitled BOQ‌⁠‍' }),
+        title: boq.name || t('boq.untitled', { defaultValue: 'Untitled BOQ' }),
         url: `/boq/${boqId}`,
       });
     }
@@ -402,17 +404,17 @@ export function BOQEditorPage() {
         addToast({
           type: 'success',
           title: t('boq.reuse_code_title', {
-            defaultValue: 'Reused code {{code}}‌⁠‍',
+            defaultValue: 'Reused code {{code}}',
             code: addedPosition.reference_code ?? addedPosition.ordinal,
           }),
           message: t('boq.reuse_code_msg', {
             defaultValue:
-              'Linked instance created — {{count}} positions share this code. Its quantity is independently editable.‌⁠‍',
+              'Linked instance created — {{count}} positions share this code. Its quantity is independently editable.',
             count: sharedCount,
           }),
         });
       } else {
-        addToast({ type: 'success', title: t('boq.position_added', { defaultValue: 'Position added‌⁠‍' }), message: t('boq.position_added_edit_hint', { defaultValue: 'Type the description, then Tab through unit, quantity & rate‌⁠‍' }) });
+        addToast({ type: 'success', title: t('boq.position_added', { defaultValue: 'Position added' }), message: t('boq.position_added_edit_hint', { defaultValue: 'Type the description, then Tab through unit, quantity & rate' }) });
         // Open the freshly-added leaf row directly in inline edit on its
         // Description cell so the user types straight away instead of
         // hunting for a cell to click. Skipped on undo/redo restore so a
@@ -439,7 +441,7 @@ export function BOQEditorPage() {
       isUndoRedoInProgressRef.current = false;
     },
     onError: (err: Error) => {
-      addToast({ type: 'error', title: t('boq.add_failed', { defaultValue: 'Failed to add position‌⁠‍' }), message: err.message });
+      addToast({ type: 'error', title: t('boq.add_failed', { defaultValue: 'Failed to add position' }), message: err.message });
     },
   });
 
@@ -536,11 +538,11 @@ export function BOQEditorPage() {
         addToast({
           type: 'info',
           title: t('boq.link_propagated_title', {
-            defaultValue: 'Definition propagated‌⁠‍',
+            defaultValue: 'Definition propagated',
           }),
           message: t('boq.link_propagated_msg', {
             defaultValue:
-              'Updated {{count}} linked position(s) across this project.‌⁠‍',
+              'Updated {{count}} linked position(s) across this project.',
             count: prop.propagated_to,
           }),
         });
@@ -558,11 +560,11 @@ export function BOQEditorPage() {
         addToast({
           type: 'info',
           title: t('boq.resource_link_propagated_title', {
-            defaultValue: 'Resource definition propagated‌⁠‍',
+            defaultValue: 'Resource definition propagated',
           }),
           message: t('boq.resource_link_propagated_msg', {
             defaultValue:
-              'Updated the shared resource on {{count}} other position(s) across this project.‌⁠‍',
+              'Updated the shared resource on {{count}} other position(s) across this project.',
             count: prop.resource_propagated_to,
           }),
         });
@@ -585,13 +587,13 @@ export function BOQEditorPage() {
           {
             type: 'warning',
             title: t('boq.link_unlinked_title', {
-              defaultValue: 'Position unlinked from shared code‌⁠‍',
+              defaultValue: 'Position unlinked from shared code',
             }),
             message:
               unlinkWarning ??
               t('boq.link_unlinked_msg', {
                 defaultValue:
-                  'Your edit changed this linked copy, so it no longer follows the shared code. If you did not mean to diverge it, change its code back instead.‌⁠‍',
+                  'Your edit changed this linked copy, so it no longer follows the shared code. If you did not mean to diverge it, change its code back instead.',
               }),
           },
           { duration: 9000 },
@@ -603,7 +605,7 @@ export function BOQEditorPage() {
       if (ctx?.previous !== undefined) {
         queryClient.setQueryData(['boq', boqId], ctx.previous);
       }
-      addToast({ type: 'error', title: t('boq.update_failed', { defaultValue: 'Failed to update position‌⁠‍' }), message: err.message });
+      addToast({ type: 'error', title: t('boq.update_failed', { defaultValue: 'Failed to update position' }), message: err.message });
     },
   });
 
@@ -694,17 +696,20 @@ export function BOQEditorPage() {
     },
   });
 
-  const handleLock = useCallback(() => {
+  const handleLock = useCallback(async () => {
     // Lock is irreversible without admin unlock — confirm before mutating (Bug 8).
-    const ok = window.confirm(
-      t('boq.lock_confirm', {
+    const ok = await confirm({
+      title: t('boq.lock_title', { defaultValue: 'Lock estimate?' }),
+      message: t('boq.lock_confirm', {
         defaultValue:
-          'Lock this estimate?\n\nLocked estimates cannot be edited. Unlocking requires admin privileges.',
+          'Lock this estimate? Locked estimates cannot be edited. Unlocking requires admin privileges.',
       }),
-    );
+      confirmLabel: t('boq.lock', { defaultValue: 'Lock' }),
+      variant: 'warning',
+    });
     if (!ok) return;
     lockMutation.mutate();
-  }, [lockMutation, t]);
+  }, [confirm, lockMutation, t]);
 
   const unlockMutation = useMutation({
     mutationFn: () => apiPost(`/v1/boq/boqs/${boqId}/unlock/`, {}),
@@ -1581,6 +1586,19 @@ export function BOQEditorPage() {
         const kids = childrenByParent.get(id);
         if (kids) stack.push(...kids);
       }
+      const ok = await confirm({
+        title: t('boq.delete_section_title', {
+          defaultValue: 'Delete section?',
+        }),
+        message: t('boq.confirm_delete_section', {
+          defaultValue:
+            'Delete this section and all {{count}} positions inside it?',
+          count: descendantCount,
+        }),
+        confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+        variant: 'danger',
+      });
+      if (!ok) return;
       // One recursive cascade delete — the backend removes the whole
       // subtree (nested sub-sections + their positions) leaves-first.
       // The previous per-child loop relied on the flat `grouped` view,
@@ -1608,7 +1626,7 @@ export function BOQEditorPage() {
         }),
       });
     },
-    [boq, invalidateAll, addToast, t],
+    [boq, confirm, invalidateAll, addToast, t],
   );
 
   /* Build flat position list for keyboard navigation — reserved for future use
@@ -2190,11 +2208,11 @@ export function BOQEditorPage() {
       addToast({
         type: 'success',
         title: t('boq.unlink_done_title', {
-          defaultValue: 'Position unlinked‌⁠‍',
+          defaultValue: 'Position unlinked',
         }),
         message: t('boq.unlink_done_msg', {
           defaultValue:
-            'Code {{code}} kept. This position no longer follows the shared code; its values were preserved.‌⁠‍',
+            'Code {{code}} kept. This position no longer follows the shared code; its values were preserved.',
           code: updated.reference_code ?? updated.ordinal,
         }),
       });
@@ -2203,7 +2221,7 @@ export function BOQEditorPage() {
       addToast({
         type: 'error',
         title: t('boq.unlink_failed', {
-          defaultValue: 'Failed to unlink position‌⁠‍',
+          defaultValue: 'Failed to unlink position',
         }),
         message: err instanceof Error ? err.message : '',
       });
@@ -3877,6 +3895,10 @@ export function BOQEditorPage() {
               <Copy size={14} className="mr-1" />
               {t('boq.create_revision', { defaultValue: 'Create Revision' })}
             </Button>
+            {/* Per-module Tour CTA — launches the BOQ-specific guided tour
+                via the registered TOUR_REGISTRY entry, independent of any
+                global / first-login tour state. */}
+            <ModuleHelpButton tourId="boq" />
           </div>
         </div>
 
@@ -3966,7 +3988,7 @@ export function BOQEditorPage() {
         // than the viewport when many custom columns are added — the grid
         // keeps its own internal horizontal scrollbar, which is what the
         // user expects (toolbar and headers stay aligned with the page).
-        <div className="mb-2 min-w-0">
+        <div className="mb-2 min-w-0" data-testid="boq-grid">
         <BOQGrid
           ref={boqGridRef}
           positions={boq.positions}
@@ -4061,19 +4083,21 @@ export function BOQEditorPage() {
 
       {/* ── Markup Management Panel ──────────────────────────────────── */}
       {boqId && (
-        <MarkupPanel
-          boqId={boqId}
-          markups={markups}
-          directCost={directCost}
-          currencySymbol={currencySymbol}
-          currencyCode={currencyCode}
-          locale={locale}
-          fmt={fmt}
-        />
+        <div data-testid="boq-markup-panel">
+          <MarkupPanel
+            boqId={boqId}
+            markups={markups}
+            directCost={directCost}
+            currencySymbol={currencySymbol}
+            currencyCode={currencyCode}
+            locale={locale}
+            fmt={fmt}
+          />
+        </div>
       )}
 
       {/* ── Resource Summary ──────────────────────────────────────────── */}
-      {boqId && hasPositions && <div className="mt-6"><ResourceSummary boqId={boqId} locale={locale} /></div>}
+      {boqId && hasPositions && <div className="mt-6" data-testid="boq-resource-summary"><ResourceSummary boqId={boqId} locale={locale} /></div>}
 
       {/* ── Cost Breakdown Panel ─────────────────────────────────────── */}
       {boqId && hasPositions && <div className="mt-6"><CostBreakdownPanel boqId={boqId} locale={locale} /></div>}
@@ -4691,6 +4715,7 @@ export function BOQEditorPage() {
           </div>
         </div>
       )}
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

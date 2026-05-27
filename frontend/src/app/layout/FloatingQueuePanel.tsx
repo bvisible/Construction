@@ -41,18 +41,18 @@ export function FloatingQueuePanel() {
       <div className="fixed bottom-4 right-4 z-50">
         <button
           onClick={() => setMinimized(false)}
-          className="flex items-center gap-2 px-3 py-2 rounded-full bg-surface-elevated border border-border-light shadow-lg hover:shadow-xl transition-all"
+          className="flex items-center gap-2 px-3 py-2 rounded-full bg-surface-elevated border border-border-light shadow-lg hover:shadow-xl transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue focus-visible:ring-offset-1"
         >
           {activeTasks.length > 0 ? (
             <>
               <Loader2 size={14} className="text-oe-blue animate-spin" />
               <span className="text-xs font-medium text-content-primary">
-                {activeTasks.length} {t('queue.processing', { defaultValue: 'processing‌⁠‍' })}
+                {activeTasks.length} {t('queue.processing', { defaultValue: 'processing' })}
               </span>
             </>
           ) : (
             <>
-              <CheckCircle2 size={14} className="text-green-500" />
+              <CheckCircle2 size={14} className="text-semantic-success" />
               <span className="text-xs font-medium text-content-primary">
                 {completedTasks.length} {t('queue.done', { defaultValue: 'done' })}
               </span>
@@ -72,27 +72,27 @@ export function FloatingQueuePanel() {
           {activeTasks.length > 0 ? (
             <Loader2 size={14} className="text-oe-blue animate-spin" />
           ) : (
-            <CheckCircle2 size={14} className="text-green-500" />
+            <CheckCircle2 size={14} className="text-semantic-success" />
           )}
           <span className="text-xs font-semibold text-content-primary">
             {activeTasks.length > 0
-              ? t('queue.title_active', { defaultValue: 'Processing ({{count}})‌⁠‍', count: activeTasks.length })
-              : t('queue.title_done', { defaultValue: 'All tasks complete‌⁠‍' })}
+              ? t('queue.title_active', { defaultValue: 'Processing ({{count}})', count: activeTasks.length })
+              : t('queue.title_done', { defaultValue: 'All tasks complete' })}
           </span>
         </div>
         <div className="flex items-center gap-1">
           {completedTasks.length > 0 && activeTasks.length === 0 && (
             <button
               onClick={clearCompleted}
-              className="text-2xs text-oe-blue hover:underline mr-1"
+              className="text-2xs text-oe-blue hover:underline mr-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue rounded"
             >
               {t('queue.clear', { defaultValue: 'Clear' })}
             </button>
           )}
           <button
             onClick={() => setMinimized(true)}
-            className="p-1 rounded hover:bg-surface-secondary text-content-tertiary"
-            title={t('queue.minimize', { defaultValue: 'Minimize‌⁠‍' })}
+            className="p-1 rounded hover:bg-surface-secondary text-content-tertiary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue"
+            title={t('queue.minimize', { defaultValue: 'Minimize' })}
           >
             <ChevronDown size={14} />
           </button>
@@ -110,7 +110,7 @@ export function FloatingQueuePanel() {
             <div className="mt-0.5 shrink-0">
               {task.status === 'processing' && <Loader2 size={16} className="text-oe-blue animate-spin" />}
               {task.status === 'queued' && <FileUp size={16} className="text-content-tertiary" />}
-              {task.status === 'completed' && <CheckCircle2 size={16} className="text-green-500" />}
+              {task.status === 'completed' && <CheckCircle2 size={16} className="text-semantic-success" />}
               {task.status === 'error' && <XCircle size={16} className="text-semantic-error" />}
             </div>
 
@@ -144,13 +144,13 @@ export function FloatingQueuePanel() {
                   {task.resultUrl && (
                     <button
                       onClick={() => navigate(task.resultUrl!)}
-                      className="inline-flex items-center gap-1 text-2xs text-oe-blue hover:underline font-medium"
+                      className="inline-flex items-center gap-1 text-2xs text-oe-blue hover:underline font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue rounded"
                     >
                       <ExternalLink size={10} />
-                      {t('queue.open_result', { defaultValue: 'Open in Explorer‌⁠‍' })}
+                      {t('queue.open_result', { defaultValue: 'Open in Explorer' })}
                     </button>
                   )}
-                  <span className="text-2xs text-content-quaternary">
+                  <span className="text-2xs text-content-quaternary truncate">
                     {task.message}
                   </span>
                 </div>
@@ -158,7 +158,9 @@ export function FloatingQueuePanel() {
 
               {/* Error */}
               {task.status === 'error' && (
-                <p className="text-2xs text-semantic-error mt-0.5 truncate">{task.error || 'Failed'}</p>
+                <p className="text-2xs text-semantic-error mt-0.5 truncate">
+                  {task.error || t('queue.failed', { defaultValue: 'Failed' })}
+                </p>
               )}
             </div>
 
@@ -166,7 +168,8 @@ export function FloatingQueuePanel() {
             {(task.status === 'completed' || task.status === 'error') && (
               <button
                 onClick={() => removeTask(task.id)}
-                className="shrink-0 p-0.5 rounded hover:bg-surface-secondary text-content-quaternary mt-0.5"
+                aria-label={t('common.remove', { defaultValue: 'Remove' })}
+                className="shrink-0 p-0.5 rounded hover:bg-surface-secondary text-content-quaternary mt-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue"
               >
                 <X size={12} />
               </button>

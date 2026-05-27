@@ -299,3 +299,129 @@ async def test_dtkc012_create_boq_real_uom_all_dimensions(
     # Literal column name must NEVER leak as a unit.
     assert "volume" not in units
     assert "area" not in units
+
+
+# ── Session expiry returns 410 Gone, not 404 ─────────────────────────────
+# An expired session is a resource that previously existed — 410 is the
+# correct HTTP semantic and lets the frontend distinguish "endpoint
+# wrong" (404) from "session timed out, re-upload". 404 was always the
+# wrong code; the user error log v4.3.2 showed the takeoff page
+# treating it as a routing error.
+#
+# These two tests deliberately avoid the heavy module-scoped ``auth``
+# fixture above (full app boot + register/login round-trip). On the
+# Windows aiosqlite + module-scoped lifespan stack the boot phase
+# occasionally collides with the User INSERT and 423s ("database is
+# locked"), which is environmental noise unrelated to the 410 contract
+# we want to lock. We mount just the takeoff router on a fresh app
+# with overridden auth dependencies — same trick the
+# ``test_projects_profile_autoretrofit.py`` suite uses.
+
+
+async def _build_takeoff_only_app():
+    """Boot a minimal FastAPI app with just the takeoff router mounted,
+    auth/perm dependencies stubbed, and a per-call empty SQLite session
+    so the database fallback path of ``_get_cad_session`` runs cleanly
+    (it will simply find no row → return None → endpoint raises 410)."""
+    import tempfile
+    from pathlib import Path
+
+    from fastapi import FastAPI
+    from sqlalchemy.ext.asyncio import (
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    # Import every model module the takeoff router (transitively)
+    # references so Base.metadata.create_all has the full set.
+    import app.core.audit  # noqa: F401
+    import app.core.audit_log  # noqa: F401
+    import app.modules.boq.models  # noqa: F401
+    import app.modules.projects.models  # noqa: F401
+    import app.modules.takeoff.models  # noqa: F401
+    import app.modules.users.models  # noqa: F401
+    from app.database import Base
+    from app.dependencies import (
+        RequirePermission,
+        get_current_user_id,
+        get_current_user_payload,
+        get_session,
+    )
+    from app.modules.takeoff.router import router as takeoff_router
+
+    tmp_db = Path(tempfile.mkdtemp()) / "takeoff_410.db"
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_db.as_posix()}", future=True,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    app_ = FastAPI()
+    app_.include_router(takeoff_router, prefix="/api/v1/takeoff")
+
+    async def _override_user_id() -> str:
+        return str(uuid.uuid4())
+
+    async def _override_payload() -> dict[str, str]:
+        return {"sub": str(uuid.uuid4()), "role": "admin"}
+
+    async def _override_session():
+        async with factory() as s:
+            yield s
+
+    app_.dependency_overrides[get_current_user_id] = _override_user_id
+    app_.dependency_overrides[get_current_user_payload] = _override_payload
+    app_.dependency_overrides[get_session] = _override_session
+
+    # Bypass the permission gate — we're only testing the 410-vs-404
+    # HTTP semantic on this code path, not the RBAC layer (which is
+    # locked elsewhere).
+    async def _allow() -> None:
+        return None
+
+    for route in app_.routes:
+        deps = getattr(route, "dependencies", None) or []
+        for dep in deps:
+            call = getattr(dep, "dependency", None)
+            if isinstance(call, RequirePermission):
+                app_.dependency_overrides[call] = _allow
+    return app_, engine
+
+
+@pytest.mark.asyncio
+async def test_cad_data_describe_unknown_session_returns_410() -> None:
+    """POST /cad-data/describe/ with a never-seen session id must
+    return 410 Gone (not 404), and the body must keep the
+    re-upload hint."""
+    app_, engine = await _build_takeoff_only_app()
+    transport = ASGITransport(app=app_)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            fake = f"missing-{uuid.uuid4().hex}"
+            r = await ac.post(
+                "/api/v1/takeoff/cad-data/describe/",
+                json={"session_id": fake},
+            )
+        assert r.status_code == 410, r.text
+        assert "expired" in r.text.lower() or "re-upload" in r.text.lower()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cad_data_elements_unknown_session_returns_410() -> None:
+    """GET /cad-data/elements/ with a never-seen session id must
+    also return 410 Gone."""
+    app_, engine = await _build_takeoff_only_app()
+    transport = ASGITransport(app=app_)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            fake = f"missing-{uuid.uuid4().hex}"
+            r = await ac.get(
+                f"/api/v1/takeoff/cad-data/elements/?session_id={fake}",
+            )
+        assert r.status_code == 410, r.text
+        assert "expired" in r.text.lower() or "re-upload" in r.text.lower()
+    finally:
+        await engine.dispose()

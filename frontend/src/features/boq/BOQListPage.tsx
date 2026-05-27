@@ -34,7 +34,10 @@ interface BOQ {
   status: string;
   created_at: string;
   position_count?: number;
-  grand_total?: number;
+  // Backend v3 §10 contract serializes money as Decimal-as-string. Keep
+  // the type honest so the boundary coercion below is type-safe and so
+  // future call-sites can't `b.grand_total - x` without thinking.
+  grand_total?: number | string | null;
 }
 
 interface BOQWithProject extends BOQ {
@@ -100,7 +103,7 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
         }
       })
       .catch(() => {
-        if (!cancelled) setError(t('boq.compare_load_error', { defaultValue: 'Failed to load BOQ data for comparison‌⁠‍' }));
+        if (!cancelled) setError(t('boq.compare_load_error', { defaultValue: 'Failed to load BOQ data for comparison' }));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -148,8 +151,8 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
     if (ungroupedTotalA > 0 || ungroupedTotalB > 0) {
       paired.push({
         key: '__ungrouped__',
-        nameA: t('boq.ungrouped', { defaultValue: 'Ungrouped‌⁠‍' }),
-        nameB: t('boq.ungrouped', { defaultValue: 'Ungrouped‌⁠‍' }),
+        nameA: t('boq.ungrouped', { defaultValue: 'Ungrouped' }),
+        nameB: t('boq.ungrouped', { defaultValue: 'Ungrouped' }),
         totalA: ungroupedTotalA,
         totalB: ungroupedTotalB,
         countA: groupA.ungrouped.length,
@@ -181,7 +184,7 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue">
               <GitCompareArrows size={18} />
             </div>
-            <h2 className="text-lg font-bold text-content-primary">{t('boq.compare_title', { defaultValue: 'BOQ Comparison‌⁠‍' })}</h2>
+            <h2 className="text-lg font-bold text-content-primary">{t('boq.compare_title', { defaultValue: 'BOQ Comparison' })}</h2>
           </div>
           <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-secondary transition-colors">
             <X size={18} />
@@ -209,7 +212,7 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
                     <span className="text-xl font-bold text-content-primary tabular-nums">{currencyFmt.format(boqA.grand_total)}</span>
                     <span className="text-xs text-content-tertiary">{currency}</span>
                   </div>
-                  <div className="mt-1 text-xs text-content-tertiary">{boqA.positions.length} {t('boq.positions_label', { defaultValue: 'positions‌⁠‍' })}</div>
+                  <div className="mt-1 text-xs text-content-tertiary">{boqA.positions.length} {t('boq.positions_label', { defaultValue: 'positions' })}</div>
                 </div>
 
                 {/* BOQ B summary */}
@@ -421,14 +424,25 @@ export function BOQListPage() {
       const fetches = scopedProjects.map(async (p) => {
         try {
           const boqs = await apiGet<BOQ[]>(`/v1/boq/boqs/?project_id=${p.id}`);
-          return boqs.map((b) => ({
-            ...b,
-            projectName: p.name,
-            currency: p.currency,
-            positionCount: b.position_count ?? 0,
-            grandTotal: b.grand_total ?? 0,
-            classificationStandard: p.classification_standard,
-          } as BOQWithProject));
+          return boqs.map((b) => {
+            // v3 §10 contract: money fields arrive as Decimal-as-string. The
+            // TypeScript `number` annotation lies — reducing across them
+            // string-concatenates ("634204086.52" + "528523" → "634…528…"),
+            // and `Number(multi-dot-string)` → NaN. Coerce once at the
+            // boundary so every downstream consumer (reduce, comparator,
+            // `currencyFmt.format`, threshold checks) sees a finite number.
+            const gtRaw = b.grand_total;
+            const gtNum =
+              typeof gtRaw === 'number' ? gtRaw : Number(gtRaw ?? 0);
+            return {
+              ...b,
+              projectName: p.name,
+              currency: p.currency,
+              positionCount: b.position_count ?? 0,
+              grandTotal: Number.isFinite(gtNum) ? gtNum : 0,
+              classificationStandard: p.classification_standard,
+            } as BOQWithProject;
+          });
         } catch (err) {
           if (import.meta.env.DEV) console.error(`Failed to fetch BOQs for project ${p.id}:`, err);
           return [] as BOQWithProject[];
@@ -574,13 +588,26 @@ export function BOQListPage() {
         <div>
           <h1 className="text-2xl font-bold text-content-primary">{t('boq.title')}</h1>
           <p className="mt-1 text-sm text-content-secondary">
-            {allBoqs
-              ? t('boq.list_subtitle_count', {
+            {/*
+              Bug #217 (mobile /boq stuck on "Loading…"): the subtitle previously
+              gated on ``allBoqs`` truthiness alone, but the per-project boqs
+              query is ``enabled`` only after ``scopedProjects`` resolves and
+              has at least one entry — so on first paint (and forever if the
+              user has zero projects) ``allBoqs`` stays ``undefined`` and the
+              subtitle hangs on "Loading…". On a slow mobile connection that
+              extends the empty-skeleton window past the user's patience and
+              the page reads as broken. Drive the spinner from the actual
+              ``isLoading`` query state instead, and fall back to a real
+              "0 estimates" count once the query has settled (or was never
+              enabled because there are no projects yet).
+            */}
+            {isLoading
+              ? t('common.loading')
+              : t('boq.list_subtitle_count', {
                   defaultValue: '{{boqCount}} estimates across {{projectCount}} projects',
-                  boqCount: allBoqs.length,
+                  boqCount: allBoqs?.length ?? 0,
                   projectCount: projects?.length ?? 0,
-                })
-              : t('common.loading')}
+                })}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -674,6 +701,9 @@ export function BOQListPage() {
                 <select
                   value={projectFilter}
                   onChange={(e) => setProjectFilter(e.target.value)}
+                  aria-label={t('a11y.boq.project_filter', {
+                    defaultValue: 'Filter estimates by project',
+                  })}
                   className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-44"
                 >
                   <option value="">{t('boq.all_projects', { defaultValue: 'All projects' })}</option>
@@ -693,6 +723,9 @@ export function BOQListPage() {
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
+                  aria-label={t('a11y.boq.status_filter', {
+                    defaultValue: 'Filter estimates by status',
+                  })}
                   className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-32"
                 >
                   <option value="">{t('boq.all_statuses', { defaultValue: 'All statuses' })}</option>

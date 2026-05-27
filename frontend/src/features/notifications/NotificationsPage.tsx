@@ -34,7 +34,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { Button, Breadcrumb, EmptyState } from '@/shared/ui';
+import { Button, Breadcrumb, EmptyState, DateDisplay, SkeletonTable } from '@/shared/ui';
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
 import { PreferencesTab } from './PreferencesTab';
 
@@ -83,17 +83,6 @@ const ICON_MAP: Record<IconCategory, { icon: typeof CheckCircle2; color: string;
   system: { icon: Settings, color: 'text-content-tertiary', bg: 'bg-surface-secondary' },
 };
 
-function formatDateTime(dateStr: string, locale: string): string {
-  const d = new Date(dateStr);
-  return d.toLocaleString(locale, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
 const ACTION_URL_REWRITES: Array<[RegExp, (m: RegExpMatchArray) => string]> = [
   [/^\/risk(\?.*)?$/, (m) => `/risks${m[1] ?? ''}`],
   [/^\/boq\?id=([0-9a-fA-F-]{8,})$/, (m) => `/boq/${m[1]}`],
@@ -129,7 +118,7 @@ const PAGE_SIZE = 50;
 type Filter = 'all' | 'unread' | 'read';
 
 export function NotificationsPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -260,7 +249,7 @@ export function NotificationsPage() {
           )}
           {unreadCount > 0 && (
             <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold bg-oe-blue-subtle text-oe-blue tabular-nums">
-              {unreadCount} {t('notifications.unread', { defaultValue: 'unread‌⁠‍' })}
+              {unreadCount} {t('notifications.unread', { defaultValue: 'unread' })}
             </span>
           )}
         </div>
@@ -280,10 +269,10 @@ export function NotificationsPage() {
             >
               <option value="all">{t('notifications.filter_all', { defaultValue: 'All' })}</option>
               <option value="unread">
-                {t('notifications.filter_unread', { defaultValue: 'Unread only‌⁠‍' })}
+                {t('notifications.filter_unread', { defaultValue: 'Unread only' })}
               </option>
               <option value="read">
-                {t('notifications.filter_read', { defaultValue: 'Read only‌⁠‍' })}
+                {t('notifications.filter_read', { defaultValue: 'Read only' })}
               </option>
             </select>
           </div>
@@ -295,7 +284,7 @@ export function NotificationsPage() {
               onClick={() => markAllReadMutation.mutate()}
               disabled={markAllReadMutation.isPending}
             >
-              {t('notifications.mark_all_read_short', { defaultValue: 'Mark all read‌⁠‍' })}
+              {t('notifications.mark_all_read_short', { defaultValue: 'Mark all read' })}
             </Button>
           )}
         </div>
@@ -304,10 +293,7 @@ export function NotificationsPage() {
       {/* List */}
       <div className="rounded-xl border border-border-light bg-surface-elevated overflow-hidden">
         {isLoading ? (
-          <div className="p-8 flex items-center justify-center text-content-tertiary">
-            <Loader2 className="animate-spin me-2" size={16} />
-            {t('common.loading', { defaultValue: 'Loading...‌⁠‍' })}
-          </div>
+          <SkeletonTable rows={6} columns={3} className="border-0 rounded-none" />
         ) : isError ? (
           <div className="p-8 text-center">
             <XCircle size={24} className="mx-auto mb-2 text-semantic-error" />
@@ -393,7 +379,7 @@ export function NotificationsPage() {
                         <p className="text-xs text-content-secondary mt-0.5">{body}</p>
                       )}
                       <p className="text-[11px] text-content-quaternary mt-1 tabular-nums">
-                        {formatDateTime(n.created_at, i18n.language)}
+                        <DateDisplay value={n.created_at} format="datetime" />
                       </p>
                     </div>
                   </button>

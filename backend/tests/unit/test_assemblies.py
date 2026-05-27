@@ -456,3 +456,255 @@ def test_formula_basic_math_unchanged():
     ev = FormulaEvaluator()
     assert ev.evaluate("${h} * ${l} * 0.24", {"h": 3.0, "l": 12.0}) == pytest.approx(8.64)
     assert ev.evaluate("max(2, 8) + sqrt(16)") == pytest.approx(12.0)
+
+
+# ── NEW-ASM-105 — apply-to-boq guards non-finite regional factor ─────────
+
+
+@pytest.mark.asyncio
+async def test_apply_to_boq_drops_non_finite_regional_factor(session):
+    """NEW-ASM-105: a stored ``regional_factors`` value of Infinity / NaN
+    (e.g. from a legacy JSON blob written before the schema sanitiser)
+    must not poison the BOQ position's unit_rate. The factor is
+    dropped, base_rate flows through unchanged.
+    """
+    svc = AssemblyService(session)
+    asm = await svc.create_assembly(
+        AssemblyCreate(code="ASM-RF1", name="RF1", unit="m", currency="EUR"),
+        owner_id=str(OWNER_ID),
+    )
+    await svc.add_component(
+        asm.id,
+        ComponentCreate(unit="m", description="c", factor=1.0, quantity=1.0, unit_cost=100.0),
+    )
+    # Bypass the schema validator — we want to prove the runtime is
+    # hardened even when a poisoned blob was already in the DB before
+    # the schema patch (legacy data).
+    from sqlalchemy import update as sa_update
+
+    from app.modules.assemblies.models import Assembly as AsmModel
+
+    await session.execute(
+        sa_update(AsmModel)
+        .where(AsmModel.id == asm.id)
+        .values(regional_factors={"berlin": "Infinity", "muc": "1.10"})
+    )
+    await session.flush()
+
+    from app.modules.boq.models import BOQ
+
+    boq = BOQ(project_id=PROJECT_ID, name="RFB")
+    session.add(boq)
+    await session.flush()
+
+    pos = await svc.apply_to_boq(
+        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0, region="berlin")
+    )
+    from app.modules.assemblies.service import _str_to_float
+
+    # The non-finite Berlin factor was silently dropped → base rate 100.
+    unit_rate = _str_to_float(pos.unit_rate)
+    assert unit_rate == pytest.approx(100.0)
+    import math
+
+    assert math.isfinite(unit_rate)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_boq_valid_regional_factor_still_applies(session):
+    """NEW-ASM-105 control: a normal regional factor still applies."""
+    svc = AssemblyService(session)
+    asm = await svc.create_assembly(
+        AssemblyCreate(
+            code="ASM-RF2",
+            name="RF2",
+            unit="m",
+            currency="EUR",
+            regional_factors={"muc": 1.10},
+        ),
+        owner_id=str(OWNER_ID),
+    )
+    await svc.add_component(
+        asm.id,
+        ComponentCreate(unit="m", description="c", factor=1.0, quantity=1.0, unit_cost=100.0),
+    )
+
+    from app.modules.boq.models import BOQ
+
+    boq = BOQ(project_id=PROJECT_ID, name="RFB2")
+    session.add(boq)
+    await session.flush()
+    pos = await svc.apply_to_boq(
+        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0, region="muc")
+    )
+    from app.modules.assemblies.service import _str_to_float
+
+    # 100 × 1.10 = 110.
+    assert _str_to_float(pos.unit_rate) == pytest.approx(110.0)
+
+
+# ── NEW-ASM-106 — PATCH /assemblies/{id} cross-tenant project re-parent ──
+
+
+@pytest.mark.asyncio
+async def test_update_assembly_rejects_cross_tenant_project_reparent(session):
+    """NEW-ASM-106: PATCH cannot move an assembly into another tenant's
+    project. Returns 404 (not 403) to keep the existence oracle closed.
+    """
+    from app.modules.assemblies.schemas import AssemblyUpdate
+    from app.modules.projects.models import Project
+    from app.modules.users.models import User
+
+    other_owner = User(
+        id=uuid.uuid4(),
+        email=f"o2-{uuid.uuid4().hex[:6]}@test.io",
+        hashed_password="x",
+        full_name="O2",
+    )
+    session.add(other_owner)
+    await session.flush()
+    foreign_project = Project(
+        id=uuid.uuid4(),
+        name="Foreign",
+        owner_id=other_owner.id,
+        currency="EUR",
+    )
+    session.add(foreign_project)
+    await session.flush()
+
+    svc = AssemblyService(session)
+    asm = await svc.create_assembly(
+        AssemblyCreate(code="ASM-XP", name="X", unit="m"),
+        owner_id=str(OWNER_ID),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await svc.update_assembly(
+            asm.id,
+            AssemblyUpdate(project_id=foreign_project.id),
+            caller_user_id=str(OWNER_ID),
+            caller_is_admin=False,
+        )
+    assert exc.value.status_code == 404
+    # The DB row was NOT re-parented.
+    refreshed = await svc.assembly_repo.get_by_id(asm.id)
+    assert refreshed is not None
+    assert refreshed.project_id is None  # still detached / unchanged
+
+
+@pytest.mark.asyncio
+async def test_update_assembly_allows_own_project_reparent(session):
+    """NEW-ASM-106 control: re-parenting into a project the caller owns
+    still works (no regression on the happy path)."""
+    from app.modules.assemblies.schemas import AssemblyUpdate
+    from app.modules.projects.models import Project
+
+    my_project = Project(
+        id=uuid.uuid4(),
+        name="Mine",
+        owner_id=OWNER_ID,
+        currency="EUR",
+    )
+    session.add(my_project)
+    await session.flush()
+
+    svc = AssemblyService(session)
+    asm = await svc.create_assembly(
+        AssemblyCreate(code="ASM-MP", name="MP", unit="m"),
+        owner_id=str(OWNER_ID),
+    )
+    updated = await svc.update_assembly(
+        asm.id,
+        AssemblyUpdate(project_id=my_project.id),
+        caller_user_id=str(OWNER_ID),
+        caller_is_admin=False,
+    )
+    assert updated.project_id == my_project.id
+
+
+@pytest.mark.asyncio
+async def test_update_assembly_admin_bypasses_reparent_check(session):
+    """NEW-ASM-106 control: admin role bypasses the project-owner check
+    (admins manage global templates)."""
+    from app.modules.assemblies.schemas import AssemblyUpdate
+    from app.modules.projects.models import Project
+    from app.modules.users.models import User
+
+    other_owner = User(
+        id=uuid.uuid4(),
+        email=f"o3-{uuid.uuid4().hex[:6]}@test.io",
+        hashed_password="x",
+        full_name="O3",
+    )
+    session.add(other_owner)
+    await session.flush()
+    foreign_project = Project(
+        id=uuid.uuid4(),
+        name="Foreign2",
+        owner_id=other_owner.id,
+        currency="EUR",
+    )
+    session.add(foreign_project)
+    await session.flush()
+
+    svc = AssemblyService(session)
+    asm = await svc.create_assembly(
+        AssemblyCreate(code="ASM-ADM", name="Adm", unit="m"),
+        owner_id=str(OWNER_ID),
+    )
+    updated = await svc.update_assembly(
+        asm.id,
+        AssemblyUpdate(project_id=foreign_project.id),
+        caller_user_id=str(OWNER_ID),
+        caller_is_admin=True,
+    )
+    assert updated.project_id == foreign_project.id
+
+
+# ── NEW-ASM-107 — regional_factors schema sanitisation ───────────────────
+
+
+def test_assembly_create_strips_non_finite_regional_factor():
+    """NEW-ASM-107: ``{"berlin": "Infinity"}`` is dropped at the schema
+    boundary instead of being persisted into JSON."""
+    a = AssemblyCreate(
+        code="ASM-Z",
+        name="Z",
+        unit="m",
+        regional_factors={
+            "berlin": "Infinity",
+            "muc": "1.10",
+            "neg": -5,
+            "junk": "abc",
+            "nan": float("nan"),
+            "ok": 1.05,
+        },
+    )
+    assert a.regional_factors == {"muc": 1.10, "ok": 1.05}
+
+
+def test_assembly_create_strips_nested_and_bool_values():
+    """NEW-ASM-107: nested containers / booleans are not numeric factors."""
+    a = AssemblyCreate(
+        code="ASM-Y",
+        name="Y",
+        unit="m",
+        regional_factors={
+            "x": {"nested": 1},
+            "y": [1, 2],
+            "z": True,
+            "ok": 1.0,
+        },
+    )
+    assert a.regional_factors == {"ok": 1.0}
+
+
+def test_assembly_update_preserves_unset_regional_factors():
+    """NEW-ASM-107: an absent ``regional_factors`` stays absent (None)
+    so ``exclude_unset=True`` semantics still skip the column on update.
+    """
+    from app.modules.assemblies.schemas import AssemblyUpdate
+
+    u = AssemblyUpdate()  # no fields set
+    dumped = u.model_dump(exclude_unset=True)
+    assert "regional_factors" not in dumped

@@ -36,6 +36,7 @@ import {
   LayoutGrid,
 } from 'lucide-react';
 import { Card, CardHeader, CardContent, CardFooter, Button, Badge, InfoHint, Skeleton, Breadcrumb } from '@/shared/ui';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { DashboardLayoutManager } from '@/features/dashboard/DashboardLayoutManager';
 import { UpdateNotification } from '@/shared/ui/UpdateChecker';
 import { apiGet, apiPatch, apiPost } from '@/shared/lib/api';
@@ -45,6 +46,7 @@ import { useThemeStore } from '@/stores/useThemeStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { useViewModeStore } from '@/stores/useViewModeStore';
 import { aiApi, type AIProvider, type AIConnectionStatus, type AISettings } from '@/features/ai/api';
+import { BIMConverterStatusBanner } from '@/features/bim/BIMConverterStatusBanner';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -218,6 +220,33 @@ const AI_PROVIDERS: ProviderInfo[] = [
     docsUrl: 'https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application',
     region: 'global',
   },
+  {
+    id: 'ollama',
+    name: 'Ollama (Local)',
+    description: 'settings.ai_desc_ollama',
+    descriptionDefault: 'Ollama — run local LLMs via OpenAI-compatible API. No API key required.',
+    keyPrefix: '',
+    docsUrl: 'https://ollama.ai/',
+    region: 'global',
+  },
+  {
+    id: 'kimi',
+    name: 'Kimi (Moonshot AI)',
+    description: 'settings.ai_desc_kimi',
+    descriptionDefault: 'Kimi 2.6 — Moonshot AI with strong reasoning and long context for construction documents.',
+    keyPrefix: 'sk-',
+    docsUrl: 'https://platform.moonshot.cn/console/api-keys',
+    region: 'global',
+  },
+  {
+    id: 'vllm',
+    name: 'vLLM (Local)',
+    description: 'settings.ai_desc_vllm',
+    descriptionDefault: 'vLLM — high-throughput local LLM inference server with OpenAI-compatible API. No API key required by default.',
+    keyPrefix: '',
+    docsUrl: 'https://docs.vllm.ai/',
+    region: 'global',
+  },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -244,12 +273,12 @@ function StatusIndicator({ status, lastTested }: { status: AIConnectionStatus; l
         <div className="flex items-center gap-2 text-sm">
           <CheckCircle2 size={16} className="text-semantic-success" />
           <span className="text-semantic-success font-medium">
-            {t('settings.ai_connected', { defaultValue: 'Connected‌⁠‍' })}
+            {t('settings.ai_connected', { defaultValue: 'Connected' })}
           </span>
           {lastTested && (
             <span className="text-content-tertiary text-xs">
               {t('settings.ai_last_tested', {
-                defaultValue: '(last tested: {{time}})‌⁠‍',
+                defaultValue: '(last tested: {{time}})',
                 time: formatTimeAgo(lastTested),
               })}
             </span>
@@ -261,7 +290,7 @@ function StatusIndicator({ status, lastTested }: { status: AIConnectionStatus; l
         <div className="flex items-center gap-2 text-sm">
           <XCircle size={16} className="text-semantic-error" />
           <span className="text-semantic-error font-medium">
-            {t('settings.ai_error', { defaultValue: 'Connection error‌⁠‍' })}
+            {t('settings.ai_error', { defaultValue: 'Connection error' })}
           </span>
         </div>
       );
@@ -271,7 +300,7 @@ function StatusIndicator({ status, lastTested }: { status: AIConnectionStatus; l
         <div className="flex items-center gap-2 text-sm">
           <AlertCircle size={16} className="text-content-tertiary" />
           <span className="text-content-tertiary">
-            {t('settings.ai_not_configured', { defaultValue: 'Not configured‌⁠‍' })}
+            {t('settings.ai_not_configured', { defaultValue: 'Not configured' })}
           </span>
         </div>
       );
@@ -283,7 +312,7 @@ function useFormatTimeAgo() {
   return (dateStr: string): string => {
     const diff = Date.now() - new Date(dateStr).getTime();
     const mins = Math.floor(diff / 60000);
-    if (mins < 1) return t('settings.time_just_now', { defaultValue: 'just now‌⁠‍' });
+    if (mins < 1) return t('settings.time_just_now', { defaultValue: 'just now' });
     if (mins < 60) return t('settings.time_minutes_ago', { defaultValue: '{{count}}m ago', count: mins });
     const hours = Math.floor(mins / 60);
     if (hours < 24) return t('settings.time_hours_ago', { defaultValue: '{{count}}h ago', count: hours });
@@ -307,6 +336,9 @@ function AIConfigurationCard() {
   // Per-provider model-id override. Empty string = use the platform default.
   const [modelInput, setModelInput] = useState('');
   const [modelTouched, setModelTouched] = useState(false);
+  // Custom base URL for local providers (Ollama, vLLM)
+  const [baseUrlInput, setBaseUrlInput] = useState('');
+  const [baseUrlTouched, setBaseUrlTouched] = useState(false);
 
   // Fetch current settings
   const { data: settings } = useQuery({
@@ -336,6 +368,9 @@ function AIConfigurationCard() {
         zhipu: 'zhipu', glm: 'zhipu',
         baidu: 'baidu', ernie: 'baidu',
         yandex: 'yandex',
+        ollama: 'ollama',
+        vllm: 'vllm',
+        kimi: 'kimi', moonshot: 'kimi',
       };
       const matched = Object.entries(providerMap).find(([key]) => model.includes(key));
       if (matched) setSelectedProvider(matched[1]);
@@ -352,6 +387,18 @@ function AIConfigurationCard() {
     setModelTouched(false);
   }, [selectedProvider, settings?.model_overrides]);
 
+  // Reflect the saved custom base URL for local providers
+  useEffect(() => {
+    if (selectedProvider === 'ollama') {
+      setBaseUrlInput(settings?.ollama_base_url ?? '');
+    } else if (selectedProvider === 'vllm') {
+      setBaseUrlInput(settings?.vllm_base_url ?? '');
+    } else {
+      setBaseUrlInput('');
+    }
+    setBaseUrlTouched(false);
+  }, [selectedProvider, settings?.ollama_base_url, settings?.vllm_base_url]);
+
   const defaultModel = settings?.default_models?.[selectedProvider] ?? '';
   const hasKeySet = isKeySetForProvider(settings, selectedProvider);
 
@@ -361,7 +408,7 @@ function AIConfigurationCard() {
   const testMutation = useMutation({
     mutationFn: async () => {
       const needsSave =
-        (hasUnsavedKey && apiKeyInput.trim()) || modelTouched;
+        (hasUnsavedKey && apiKeyInput.trim()) || modelTouched || baseUrlTouched;
       if (needsSave) {
         const update: Record<string, unknown> = { preferred_model: selectedProvider };
         if (hasUnsavedKey && apiKeyInput.trim()) {
@@ -370,6 +417,10 @@ function AIConfigurationCard() {
         if (modelTouched) {
           // Blank string clears the override (server falls back to default).
           update.model_overrides = { [selectedProvider]: modelInput.trim() };
+        }
+        if (baseUrlTouched) {
+          const urlKey = `${selectedProvider}_base_url`;
+          update[urlKey] = baseUrlInput.trim() || null;
         }
         await aiApi.updateSettings(update as Parameters<typeof aiApi.updateSettings>[0]);
       }
@@ -383,6 +434,13 @@ function AIConfigurationCard() {
         setShowKey(false);
       }
       setModelTouched(false);
+      setBaseUrlTouched(false);
+      // Same broadcast as the Save handler — the test path can also save.
+      try {
+        window.dispatchEvent(new CustomEvent('oe:ai-settings-updated'));
+      } catch {
+        /* non-fatal */
+      }
       if (result.success) {
         const parts: string[] = [];
         if (result.model) {
@@ -439,6 +497,10 @@ function AIConfigurationCard() {
         // Blank string clears the override (server uses the default).
         update.model_overrides = { [selectedProvider]: modelInput.trim() };
       }
+      if (baseUrlTouched) {
+        const urlKey = `${selectedProvider}_base_url`;
+        update[urlKey] = baseUrlInput.trim() || null;
+      }
       return aiApi.updateSettings(update as Parameters<typeof aiApi.updateSettings>[0]);
     },
     onSuccess: () => {
@@ -447,10 +509,19 @@ function AIConfigurationCard() {
       setHasUnsavedKey(false);
       setShowKey(false);
       setModelTouched(false);
+      setBaseUrlTouched(false);
       addToast({
         type: 'success',
         title: t('settings.ai_saved', { defaultValue: 'AI settings saved' }),
       });
+      // Let the floating chat (and any other panels probing AI status)
+      // refresh themselves immediately instead of waiting for the next
+      // re-mount.
+      try {
+        window.dispatchEvent(new CustomEvent('oe:ai-settings-updated'));
+      } catch {
+        /* CustomEvent unavailable in IE — non-fatal. */
+      }
     },
     onError: (err: Error) => {
       addToast({
@@ -466,6 +537,8 @@ function AIConfigurationCard() {
     setApiKeyInput('');
     setHasUnsavedKey(false);
     setShowKey(false);
+    setBaseUrlInput('');
+    setBaseUrlTouched(false);
     aiApi.updateSettings({ preferred_model: provider }).then(() => {
       queryClient.invalidateQueries({ queryKey: ['ai-settings'] });
     }).catch(() => { /* ignore — will save on next explicit Save */ });
@@ -564,7 +637,7 @@ function AIConfigurationCard() {
           {/* API Key input */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <label className="text-sm font-medium text-content-primary">
+              <label htmlFor="ai-api-key" className="text-sm font-medium text-content-primary">
                 {t('settings.ai_api_key', { defaultValue: 'API Key' })}
               </label>
               <a
@@ -579,6 +652,7 @@ function AIConfigurationCard() {
             </div>
             <div className="relative group">
               <input
+                id="ai-api-key"
                 type={showKey && hasUnsavedKey ? 'text' : 'password'}
                 value={hasUnsavedKey ? apiKeyInput : displayValue}
                 onChange={(e) => handleKeyChange(e.target.value)}
@@ -610,6 +684,41 @@ function AIConfigurationCard() {
               })}
             </p>
           </div>
+
+          {/* Custom base URL for local providers (Ollama, vLLM) */}
+          {(selectedProvider === 'ollama' || selectedProvider === 'vllm') && (
+            <div>
+              <label
+                htmlFor="ai-base-url"
+                className="text-sm font-medium text-content-primary block mb-1.5"
+              >
+                {t('settings.ai_base_url', { defaultValue: 'Server URL' })}
+              </label>
+              <input
+                id="ai-base-url"
+                type="text"
+                value={baseUrlInput}
+                onChange={(e) => {
+                  setBaseUrlInput(e.target.value);
+                  setBaseUrlTouched(true);
+                }}
+                placeholder={
+                  selectedProvider === 'ollama'
+                    ? 'http://localhost:11434'
+                    : 'http://localhost:8000'
+                }
+                spellCheck={false}
+                autoComplete="off"
+                className="h-10 w-full rounded-lg border border-border bg-surface-primary px-3 font-mono text-sm text-content-primary placeholder:text-content-tertiary focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue transition-all duration-normal ease-oe hover:border-content-tertiary"
+              />
+              <p className="mt-1.5 text-xs text-content-tertiary">
+                {t('settings.ai_base_url_hint', {
+                  defaultValue:
+                    'Enter the server address including port. The /v1/chat/completions path is appended automatically.',
+                })}
+              </p>
+            </div>
+          )}
 
           {/* Model name override — lets users track provider model
               renames/retirements without waiting for an app update. */}
@@ -665,7 +774,7 @@ function AIConfigurationCard() {
           variant="secondary"
           onClick={() => testMutation.mutate()}
           disabled={testMutation.isPending || (!hasKeySet && !hasUnsavedKey)}
-          title={hasUnsavedKey || modelTouched ? t('settings.ai_test_save_hint', { defaultValue: 'Save key and test connection' }) : t('settings.ai_test', { defaultValue: 'Test Connection' })}
+          title={hasUnsavedKey || modelTouched || baseUrlTouched ? t('settings.ai_test_save_hint', { defaultValue: 'Save changes and test connection' }) : t('settings.ai_test', { defaultValue: 'Test Connection' })}
           icon={
             testMutation.isPending ? (
               <Loader2 size={14} className="animate-spin" />
@@ -679,7 +788,7 @@ function AIConfigurationCard() {
         <Button
           variant="primary"
           onClick={() => saveMutation.mutate()}
-          disabled={saveMutation.isPending || (!hasUnsavedKey && !modelTouched && selectedProvider === settings?.provider)}
+          disabled={saveMutation.isPending || (!hasUnsavedKey && !modelTouched && !baseUrlTouched && selectedProvider === settings?.provider)}
           loading={saveMutation.isPending}
         >
           {t('settings.ai_save_btn', { defaultValue: 'Save Settings' })}
@@ -955,7 +1064,7 @@ function ProfileCard({ profile, loading, editing, setEditing, formName, setFormN
 
 // ── Tab definitions ──────────────────────────────────────────────────────────
 
-type SettingsTab = 'general' | 'dashboard' | 'account' | 'regional' | 'bimcad' | 'ai' | 'integrations' | 'advanced';
+type SettingsTab = 'general' | 'dashboard' | 'account' | 'regional' | 'converters' | 'ai' | 'integrations' | 'advanced';
 
 interface TabDef {
   id: SettingsTab;
@@ -980,7 +1089,7 @@ const TABS: readonly TabDef[] = [
   { id: 'dashboard',    labelKey: 'settings.tab_dashboard',    defaultLabel: 'Dashboard',    icon: LayoutGrid, descKey: 'settings.tab_dashboard_desc',  descDefault: 'Reorder, show or hide dashboard sections' },
   { id: 'account',      labelKey: 'settings.tab_account',      defaultLabel: 'Account',      icon: User,     descKey: 'settings.tab_account_desc',      descDefault: 'Password and sign out' },
   { id: 'regional',     labelKey: 'settings.tab_regional',     defaultLabel: 'Regional',     icon: Globe,    descKey: 'settings.tab_regional_desc',     descDefault: 'Language, timezone, and formats' },
-  { id: 'bimcad',       labelKey: 'settings.tab_bimcad',       defaultLabel: 'BIM / CAD',    icon: Layers,   descKey: 'settings.tab_bimcad_desc',       descDefault: 'BIM, takeoff, and DWG modules' },
+  { id: 'converters',   labelKey: 'settings.tab_converters',   defaultLabel: 'Converters',  icon: Layers,   descKey: 'settings.tab_converters_desc',   descDefault: 'DDC converters — installed versions and GitHub sources' },
   { id: 'ai',           labelKey: 'settings.tab_ai',           defaultLabel: 'AI',           icon: Sparkles, descKey: 'settings.tab_ai_desc',           descDefault: 'AI provider and semantic search' },
   { id: 'integrations', labelKey: 'settings.tab_integrations', defaultLabel: 'Integrations', icon: Plug,     descKey: 'settings.tab_integrations_desc', descDefault: 'Slack, Teams, Telegram, webhooks' },
   { id: 'advanced',     labelKey: 'settings.tab_advanced',     defaultLabel: 'Advanced',     icon: Wrench,   descKey: 'settings.tab_advanced_desc',     descDefault: 'Backup, databases, setup wizard' },
@@ -1041,7 +1150,19 @@ export function SettingsPage() {
 
   // ── Tab state with URL sync ──────────────────────────────────────────
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = (searchParams.get('tab') as SettingsTab) || 'general';
+  // Resolve legacy/renamed tab ids so old bookmarks keep working.
+  // ``?tab=bimcad`` was the pre-v4.6 id for the CAD/BIM panel which was
+  // renamed to ``converters`` in #76 — landing on the stale URL used to
+  // silently fall back to General, making it look like the redesign had
+  // been reverted.
+  const TAB_ALIASES: Record<string, SettingsTab> = {
+    bimcad: 'converters',
+    'bim-cad': 'converters',
+    'bim_cad': 'converters',
+    cad: 'converters',
+  };
+  const rawTab = searchParams.get('tab') ?? '';
+  const initialTab = (TAB_ALIASES[rawTab] ?? (rawTab as SettingsTab)) || 'general';
   const validTabIds = useMemo(() => TABS.map((t) => t.id), []);
   const [activeTab, setActiveTab] = useState<SettingsTab>(
     validTabIds.includes(initialTab) ? initialTab : 'general',
@@ -1058,6 +1179,16 @@ export function SettingsPage() {
       if (panel) panel.scrollTo?.({ top: 0, behavior: 'smooth' });
     }
   }, [searchParams, setSearchParams]);
+
+  // Arrow-key keyboard nav for the settings tab strip. Mobile is a
+  // horizontal scroll, desktop is a vertical sidebar — accept both
+  // orientations so the same handler serves both. (WCAG 2.1.1)
+  const onTabKeyDown = useTabKeyboardNav<SettingsTab>({
+    ids: validTabIds,
+    activeId: activeTab,
+    onChange: handleTabChange,
+    orientation: 'both',
+  });
 
   const activeTabDef: TabDef = TABS.find((tab) => tab.id === activeTab) ?? DEFAULT_TAB;
   const ActiveIcon = activeTabDef.icon;
@@ -1094,7 +1225,9 @@ export function SettingsPage() {
           <div
             role="tablist"
             aria-label={t('nav.settings', 'Settings')}
+            aria-orientation="horizontal"
             data-testid="settings-tabs"
+            onKeyDown={onTabKeyDown}
             className="lg:hidden -mx-4 px-4 flex gap-2 overflow-x-auto pb-2 scrollbar-thin"
           >
             {TABS.map((tab) => {
@@ -1109,6 +1242,7 @@ export function SettingsPage() {
                   aria-controls="settings-content"
                   id={`settings-tab-${tab.id}`}
                   data-testid={`settings-tab-${tab.id}`}
+                  tabIndex={isActive ? 0 : -1}
                   onClick={() => handleTabChange(tab.id)}
                   className={`shrink-0 inline-flex items-center gap-2 px-3.5 py-2 rounded-full text-sm font-medium transition-all ${
                     isActive
@@ -1127,6 +1261,8 @@ export function SettingsPage() {
           <nav
             role="tablist"
             aria-label={t('nav.settings', 'Settings')}
+            aria-orientation="vertical"
+            onKeyDown={onTabKeyDown}
             className="hidden lg:flex flex-col gap-1 rounded-xl border border-border-light bg-surface-elevated p-2 shadow-xs"
           >
             {TABS.map((tab) => {
@@ -1141,6 +1277,7 @@ export function SettingsPage() {
                   aria-controls="settings-content"
                   id={`settings-tab-${tab.id}-desktop`}
                   data-testid={`settings-tab-${tab.id}-desktop`}
+                  tabIndex={isActive ? 0 : -1}
                   onClick={() => handleTabChange(tab.id)}
                   className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-all duration-fast ${
                     isActive
@@ -1402,60 +1539,11 @@ export function SettingsPage() {
             </>
           )}
 
-          {/* ── BIM / CAD ────────────────────────────────────────── */}
-          {activeTab === 'bimcad' && (
-            <Card className="lg:col-span-2">
-              <CardHeader
-                title={t('settings.bimcad_title', { defaultValue: 'BIM & CAD' })}
-                subtitle={t('settings.bimcad_subtitle', { defaultValue: 'Manage BIM converters and takeoff settings from their dedicated modules' })}
-              />
-              <CardContent>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <Link
-                    to="/bim"
-                    className="group flex flex-col gap-1 rounded-xl border border-border-light bg-surface-secondary/40 px-4 py-3.5 transition-all hover:bg-surface-secondary hover:border-oe-blue/40"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-content-primary">
-                        {t('settings.open_bim', { defaultValue: 'Open BIM' })}
-                      </span>
-                      <ChevronRight size={14} className="text-content-tertiary group-hover:text-oe-blue transition-colors" />
-                    </div>
-                    <p className="text-xs text-content-tertiary">
-                      {t('settings.bimcad_bim_desc', { defaultValue: 'Browse BIM models and elements' })}
-                    </p>
-                  </Link>
-                  <Link
-                    to="/takeoff"
-                    className="group flex flex-col gap-1 rounded-xl border border-border-light bg-surface-secondary/40 px-4 py-3.5 transition-all hover:bg-surface-secondary hover:border-oe-blue/40"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-content-primary">
-                        {t('settings.open_takeoff', { defaultValue: 'Open Takeoff' })}
-                      </span>
-                      <ChevronRight size={14} className="text-content-tertiary group-hover:text-oe-blue transition-colors" />
-                    </div>
-                    <p className="text-xs text-content-tertiary">
-                      {t('settings.bimcad_takeoff_desc', { defaultValue: 'PDF takeoff and quantity extraction' })}
-                    </p>
-                  </Link>
-                  <Link
-                    to="/dwg-takeoff"
-                    className="group flex flex-col gap-1 rounded-xl border border-border-light bg-surface-secondary/40 px-4 py-3.5 transition-all hover:bg-surface-secondary hover:border-oe-blue/40"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-semibold text-content-primary">
-                        {t('settings.open_dwg', { defaultValue: 'Open DWG Takeoff' })}
-                      </span>
-                      <ChevronRight size={14} className="text-content-tertiary group-hover:text-oe-blue transition-colors" />
-                    </div>
-                    <p className="text-xs text-content-tertiary">
-                      {t('settings.bimcad_dwg_desc', { defaultValue: 'DWG drawing import and takeoff' })}
-                    </p>
-                  </Link>
-                </div>
-              </CardContent>
-            </Card>
+          {/* ── Converters ───────────────────────────────────────── */}
+          {activeTab === 'converters' && (
+            <div className="lg:col-span-2">
+              <ConverterStatusPanel />
+            </div>
           )}
 
           {/* ── AI ────────────────────────────────────────────────── */}
@@ -1572,6 +1660,274 @@ export function SettingsPage() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Converters panel ────────────────────────────────────────────────────────
+// Lists every DDC CAD/BIM converter, shows installed-vs-latest version and
+// a link to the corresponding source on GitHub. Backed by
+// /api/system/converters/version-check (cached server-side for 6 h).
+
+interface ConverterRow {
+  id: string;
+  name: string;
+  exe: string;
+  installed: boolean;
+  installed_path: string | null;
+  installed_size: number | null;
+  installed_sha: string | null;
+  latest_size: number | null;
+  latest_sha: string | null;
+  is_outdated: boolean;
+  download_url: string | null;
+  html_url: string | null;
+}
+
+interface ConverterStatusResponse {
+  converters: ConverterRow[];
+  any_outdated: boolean;
+  network_ok: boolean;
+  checked_at: string;
+  ttl_seconds: number;
+}
+
+const DDC_REPO_URL =
+  'https://github.com/datadrivenconstruction/cad2data-Revit-IFC-DWG-DGN-pipeline-with-conversion-validation-qto';
+
+function formatBytes(n: number | null): string {
+  if (n === null || n === undefined) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ConverterStatusPanel() {
+  const { t } = useTranslation();
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<ConverterStatusResponse>({
+    queryKey: ['system', 'converters', 'version-check'],
+    queryFn: () => apiGet<ConverterStatusResponse>('/api/system/converters/version-check'),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  return (
+    <div className="space-y-4">
+      {/* Live health banner — same component used on /bim. Surfaces smoke
+       *  tests (verify=true), one-click install / update / re-check actions
+       *  with live progress, and a top-level "{{ok}}/{{total}} working"
+       *  pill. This is what the user wanted parity with: "проверки версий
+       *  и показа какие версии используются в платформе - похожи на ту что
+       *  есть в БИМ разделе". */}
+      <BIMConverterStatusBanner />
+
+      <Card>
+      <CardHeader
+        title={t('settings.converters_title', { defaultValue: 'Converters' })}
+        subtitle={t('settings.converters_subtitle', {
+          defaultValue:
+            'DDC cad2data pipeline — installed bridges and the latest source available on GitHub.',
+        })}
+        action={
+          <button
+            type="button"
+            onClick={() => refetch()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border-light px-2.5 py-1 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-content-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue"
+            disabled={isFetching}
+            aria-label={t('common.refresh', { defaultValue: 'Refresh' })}
+          >
+            {isFetching ? <Loader2 size={12} className="animate-spin" /> : <Package size={12} />}
+            {t('common.refresh', { defaultValue: 'Refresh' })}
+          </button>
+        }
+      />
+      <CardContent>
+        <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-border-light bg-surface-secondary/40 px-3.5 py-2.5">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold text-content-primary">
+              {t('settings.converters_source_title', {
+                defaultValue: 'Source repository',
+              })}
+            </p>
+            <p className="text-2xs text-content-tertiary">
+              {t('settings.converters_source_desc', {
+                defaultValue:
+                  'Open-source converters for Revit (RVT), IFC, DWG and DGN, maintained by DataDrivenConstruction.',
+              })}
+            </p>
+          </div>
+          <a
+            href={DDC_REPO_URL}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-oe-blue/30 bg-oe-blue/[0.04] px-2.5 py-1.5 text-xs font-medium text-oe-blue hover:bg-oe-blue/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue"
+          >
+            <ExternalLink size={12} />
+            {t('settings.converters_open_repo', { defaultValue: 'GitHub repo' })}
+          </a>
+        </div>
+
+        {isLoading && (
+          <div className="space-y-2">
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        )}
+
+        {!isLoading && isError && (
+          <div className="rounded-lg border border-red-300/40 bg-red-50 px-3 py-3 text-xs text-red-900 dark:bg-red-950/40 dark:text-red-100">
+            <div className="flex items-start gap-2">
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <div className="space-y-1">
+                <div className="font-semibold">
+                  {t('settings.converters_error_title', {
+                    defaultValue: 'Could not check converter versions',
+                  })}
+                </div>
+                <div className="opacity-80">
+                  {t('settings.converters_error_hint', {
+                    defaultValue:
+                      'The backend could not reach GitHub. Installed converters still work — only the up-to-date check is unavailable.',
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {!isLoading && !isError && data && (
+          <>
+            {!data.network_ok && (
+              <div className="mb-3 rounded-md border border-amber-300/40 bg-amber-50 px-3 py-2 text-2xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+                {t('settings.converters_offline_hint', {
+                  defaultValue:
+                    'GitHub is not reachable from the server right now. Showing installed-only status; the up-to-date check is skipped.',
+                })}
+              </div>
+            )}
+            <ul className="space-y-2">
+              {data.converters.map((c) => {
+                const status: 'outdated' | 'current' | 'missing' = !c.installed
+                  ? 'missing'
+                  : c.is_outdated
+                    ? 'outdated'
+                    : 'current';
+                const statusLabel =
+                  status === 'missing'
+                    ? t('settings.converter_status_missing', { defaultValue: 'Not installed' })
+                    : status === 'outdated'
+                      ? t('settings.converter_status_outdated', { defaultValue: 'Update available' })
+                      : t('settings.converter_status_current', { defaultValue: 'Up to date' });
+                const statusClass =
+                  status === 'missing'
+                    ? 'bg-slate-100 text-slate-700 ring-1 ring-slate-300/60 dark:bg-slate-800 dark:text-slate-200 dark:ring-slate-700'
+                    : status === 'outdated'
+                      ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-300/60 dark:bg-amber-950 dark:text-amber-200 dark:ring-amber-700/60'
+                      : 'bg-emerald-100 text-emerald-900 ring-1 ring-emerald-300/60 dark:bg-emerald-950 dark:text-emerald-200 dark:ring-emerald-700/60';
+                const StatusIcon = status === 'current' ? CheckCircle2 : status === 'outdated' ? AlertCircle : XCircle;
+                return (
+                  <li
+                    key={c.id}
+                    className="flex items-start gap-3 rounded-lg border border-border-light bg-surface-secondary/30 px-3.5 py-3"
+                  >
+                    <div className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface-tertiary text-content-secondary">
+                      <Layers size={14} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-content-primary">
+                          {c.name}
+                        </span>
+                        <span className="font-mono text-2xs text-content-tertiary">
+                          {c.exe}
+                        </span>
+                        <span
+                          className={['inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-medium', statusClass].join(' ')}
+                        >
+                          <StatusIcon size={11} />
+                          {statusLabel}
+                        </span>
+                      </div>
+                      <dl className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-0.5 text-2xs text-content-tertiary sm:grid-cols-2">
+                        <div className="flex items-center gap-1.5">
+                          <dt className="font-medium uppercase tracking-wider">
+                            {t('settings.converter_installed', { defaultValue: 'Installed' })}
+                          </dt>
+                          <dd className="font-mono">
+                            {c.installed
+                              ? `${formatBytes(c.installed_size)} · ${c.installed_sha?.slice(0, 7) ?? '—'}`
+                              : '—'}
+                          </dd>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <dt className="font-medium uppercase tracking-wider">
+                            {t('settings.converter_latest', { defaultValue: 'Latest' })}
+                          </dt>
+                          <dd className="font-mono">
+                            {c.latest_sha
+                              ? `${formatBytes(c.latest_size)} · ${c.latest_sha.slice(0, 7)}`
+                              : t('settings.converter_unknown', { defaultValue: 'Unknown' })}
+                          </dd>
+                        </div>
+                      </dl>
+                      {c.installed_path && (
+                        <p
+                          className="mt-1 truncate font-mono text-2xs text-content-tertiary"
+                          title={c.installed_path}
+                        >
+                          {c.installed_path}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 flex-col gap-1.5">
+                      {c.html_url && (
+                        <a
+                          href={c.html_url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="inline-flex items-center gap-1 rounded-md border border-border-light px-2 py-1 text-2xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-content-primary"
+                        >
+                          <ExternalLink size={11} />
+                          {t('settings.converter_view_source', { defaultValue: 'GitHub' })}
+                        </a>
+                      )}
+                      {c.download_url && (
+                        <a
+                          href={c.download_url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          download
+                          className={[
+                            'inline-flex items-center gap-1 rounded-md px-2 py-1 text-2xs font-medium',
+                            status === 'outdated' || status === 'missing'
+                              ? 'border border-oe-blue/30 bg-oe-blue/[0.04] text-oe-blue hover:bg-oe-blue/10'
+                              : 'border border-border-light text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
+                          ].join(' ')}
+                        >
+                          <Package size={11} />
+                          {status === 'missing'
+                            ? t('settings.converter_install', { defaultValue: 'Download' })
+                            : status === 'outdated'
+                              ? t('settings.converter_update', { defaultValue: 'Update' })
+                              : t('settings.converter_reinstall', { defaultValue: 'Re-download' })}
+                        </a>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="mt-3 text-2xs text-content-tertiary">
+              {t('settings.converters_checked_at', {
+                defaultValue: 'Last checked: {{when}} (cached for 6 h)',
+                when: new Date(data.checked_at).toLocaleString(getIntlLocale()),
+              })}
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
     </div>
   );
 }

@@ -18,9 +18,10 @@ import {
   CheckCircle2,
   Send,
   DollarSign,
-  ShieldAlert,
   Users,
   FilePlus2,
+  Copy,
+  BookOpen,
 } from 'lucide-react';
 import {
   Button,
@@ -28,16 +29,21 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   SkeletonTable,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import {
   WideModal,
   WideModalSection,
   WideModalField,
 } from '@/shared/ui/WideModal';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
+import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { PipelineBanner } from './PipelineBanner';
+import { ContractStatusPipeline } from './ContractStatusPipeline';
+import { ContractExpiryBadge } from './ContractExpiryBadge';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { getErrorMessage } from '@/shared/lib/api';
@@ -53,6 +59,8 @@ import {
   resumeContract,
   terminateContract,
   closeContract,
+  cloneContract,
+  listClauseTemplates,
   submitClaim,
   approveClaim,
   certifyClaim,
@@ -255,19 +263,19 @@ export function ContractsPage() {
     <div className="space-y-5">
       <Breadcrumb
         items={[
-          { label: t('contracts.title', { defaultValue: 'Contracts‌⁠‍' }) },
+          { label: t('contracts.title', { defaultValue: 'Contracts' }) },
         ]}
       />
 
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-content-primary">
-            {t('contracts.title', { defaultValue: 'Contracts‌⁠‍' })}
+            {t('contracts.title', { defaultValue: 'Contracts' })}
           </h1>
           <p className="mt-1 text-sm text-content-secondary">
             {t('contracts.subtitle', {
               defaultValue:
-                'Type-aware contracts with schedule of values, retention, claims and final accounts.‌⁠‍',
+                'Type-aware contracts with schedule of values, retention, claims and final accounts.',
             })}
           </p>
         </div>
@@ -281,8 +289,8 @@ export function ContractsPage() {
           disabled={!projectId}
         >
           {tab === 'claims'
-            ? t('contracts.new_claim', { defaultValue: 'New Claim‌⁠‍' })
-            : t('contracts.new_contract', { defaultValue: 'New Contract‌⁠‍' })}
+            ? t('contracts.new_claim', { defaultValue: 'New Claim' })
+            : t('contracts.new_contract', { defaultValue: 'New Contract' })}
         </Button>
       </div>
 
@@ -360,10 +368,13 @@ export function ContractsPage() {
         <select
           value={projectId}
           onChange={(e) => setProjectId(e.target.value)}
+          aria-label={t('a11y.contracts.project_filter', {
+            defaultValue: 'Filter contracts by project',
+          })}
           className={clsx(inputCls, 'max-w-[260px]')}
         >
           <option value="">
-            — {t('contracts.select_project', { defaultValue: 'Select project' })} —
+            — {t('common.select_project')} —
           </option>
           {(projectsQ.data ?? []).map((p: Project) => (
             <option key={p.id} value={p.id}>
@@ -390,6 +401,9 @@ export function ContractsPage() {
           <select
             value={typeFilter}
             onChange={(e) => setTypeFilter(e.target.value as ContractType | '')}
+            aria-label={t('a11y.contracts.type_filter', {
+              defaultValue: 'Filter contracts by type',
+            })}
             className={clsx(inputCls, 'max-w-[200px]')}
           >
             <option value="">
@@ -409,6 +423,9 @@ export function ContractsPage() {
           <select
             value={effectiveClaimsContract}
             onChange={(e) => setClaimsContractId(e.target.value)}
+            aria-label={t('a11y.contracts.claims_contract_filter', {
+              defaultValue: 'Filter by claims contract',
+            })}
             className={clsx(inputCls, 'max-w-[260px]')}
           >
             {contracts.map((c) => (
@@ -422,6 +439,9 @@ export function ContractsPage() {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}
+          aria-label={t('a11y.contracts.status_filter', {
+            defaultValue: 'Filter contracts by status',
+          })}
           className={clsx(inputCls, 'max-w-[180px]')}
         >
           <option value="">
@@ -451,29 +471,17 @@ export function ContractsPage() {
       {/* Body */}
       <Card padding="none">
         {!projectId ? (
-          <EmptyState
-            icon={<FileText size={22} />}
-            title={t('contracts.no_project', { defaultValue: 'No project selected' })}
-            description={t('contracts.no_project_desc', {
+          <RequiresProject
+            emptyHint={t('contracts.no_project_desc', {
               defaultValue: 'Pick a project above to view its contracts.',
             })}
-          />
+          >{null}</RequiresProject>
         ) : isLoading ? (
           <div className="p-4">
             <SkeletonTable rows={8} columns={6} />
           </div>
         ) : isError ? (
-          <EmptyState
-            icon={<ShieldAlert size={22} />}
-            title={t('contracts.load_error', {
-              defaultValue: 'Could not load contracts',
-            })}
-            description={getErrorMessage(loadError)}
-            action={{
-              label: t('common.retry', { defaultValue: 'Retry' }),
-              onClick: retryLoad,
-            }}
-          />
+          <RecoveryCard error={loadError} onRetry={retryLoad} />
         ) : tab === 'contracts' ? (
           <ContractTable
             rows={filteredContracts}
@@ -537,20 +545,59 @@ function ContractTable({
   emptyAction: () => void;
 }) {
   const { t } = useTranslation();
+  // Pre-fetch clause templates for the empty-state hint chips. The
+  // query is cheap (in-memory dict on the backend) and is shared with
+  // the CreateContractModal via React Query's cache.
+  const templatesQ = useQuery({
+    queryKey: ['contracts', 'clause-templates'],
+    queryFn: listClauseTemplates,
+    staleTime: 60 * 60 * 1000,
+  });
+
   if (rows.length === 0) {
+    const families = Array.from(
+      new Set((templatesQ.data ?? []).map((tpl) => tpl.family.toUpperCase())),
+    ).slice(0, 5);
     return (
-      <EmptyState
-        icon={<FileText size={22} />}
-        title={t('contracts.empty', { defaultValue: 'No contracts yet' })}
-        description={t('contracts.empty_desc', {
-          defaultValue:
-            'Create your first contract — pick the contract type and the engine wires up the right schedule of values, fees and gainshare rules.',
-        })}
-        action={{
-          label: t('contracts.new_contract', { defaultValue: 'New Contract' }),
-          onClick: emptyAction,
-        }}
-      />
+      <div className="relative">
+        <EmptyState
+          icon={<FileText size={22} />}
+          title={t('contracts.empty', { defaultValue: 'No contracts yet' })}
+          description={t('contracts.empty_desc', {
+            defaultValue:
+              'Create your first contract — pick the contract type and the engine wires up the right schedule of values, fees and gainshare rules.',
+          })}
+          action={{
+            label: t('contracts.new_contract', { defaultValue: 'New Contract' }),
+            onClick: emptyAction,
+          }}
+        />
+        {families.length > 0 && (
+          <div
+            data-testid="contracts-template-chips"
+            className="mx-auto -mt-6 mb-12 flex max-w-md flex-wrap items-center justify-center gap-1.5 text-xs"
+          >
+            <BookOpen
+              size={12}
+              className="text-content-tertiary"
+              aria-hidden
+            />
+            <span className="text-content-tertiary">
+              {t('contracts.empty_templates_hint', {
+                defaultValue: 'Clause templates available:',
+              })}
+            </span>
+            {families.map((fam) => (
+              <span
+                key={fam}
+                className="inline-flex items-center rounded-md bg-surface-secondary px-1.5 py-0.5 font-medium text-content-secondary ring-1 ring-inset ring-border-light"
+              >
+                {fam}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     );
   }
   return (
@@ -598,9 +645,13 @@ function ContractTable({
                 {r.counterparty_type}
               </td>
               <td className="px-4 py-2">
-                <Badge variant={CONTRACT_STATUS_VARIANT[r.status]} dot>
-                  {r.status}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={CONTRACT_STATUS_VARIANT[r.status]} dot>
+                    {r.status}
+                  </Badge>
+                  <ContractStatusPipeline status={r.status} />
+                  <ContractExpiryBadge endDate={r.end_date} status={r.status} />
+                </div>
               </td>
               <td className="px-4 py-2 text-right">
                 <MoneyDisplay
@@ -611,6 +662,30 @@ function ContractTable({
             </tr>
           ))}
         </tbody>
+        {/* Honest cross-currency rollup — never silently sums mixed
+            currencies into a single number (the previous footer would
+            have done arithmetic on €+$ values without warning). */}
+        <tfoot className="bg-surface-secondary/60">
+          <tr className="border-t border-border-light">
+            <td colSpan={5} className="px-4 py-2 text-xs uppercase tracking-wide text-content-tertiary">
+              {t('contracts.register_total', { defaultValue: 'Register total' })}
+              <span className="ml-2 normal-case text-content-secondary">
+                ({rows.length}{' '}
+                {t('contracts.contracts_label', { defaultValue: 'contracts' })})
+              </span>
+            </td>
+            <td className="px-4 py-2 text-right text-sm font-medium">
+              <MultiCurrencyTotal
+                items={rows.map((r) => ({
+                  amount: r.total_value,
+                  currency: r.currency,
+                }))}
+                variant="inline"
+                compact
+              />
+            </td>
+          </tr>
+        </tfoot>
       </table>
     </div>
   );
@@ -990,6 +1065,32 @@ function ContractDetailDrawer({
     onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
   });
 
+  // Clone uses the existing R7-hardened POST /contracts/{id}/clone
+  // endpoint. We default the new code to "<source.code>-COPY" so the
+  // mandatory unique-code constraint is satisfied without a second
+  // round-trip; in practice the user immediately renames via the detail
+  // drawer of the clone. No subconfigs/lines toggle in the UI yet —
+  // backend defaults (include_lines=true, copy_subconfigs=true) are
+  // the only sensible "clone this contract template" semantics, and
+  // the partial-clone variants are power-user / API-only.
+  const cloneMut = useMutation({
+    mutationFn: () =>
+      cloneContract(contractId, {
+        new_code: `${contract?.code || 'C'}-COPY`,
+        new_title: contract?.title ? `${contract.title} (clone)` : undefined,
+        include_lines: true,
+        copy_subconfigs: true,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['contracts', 'list'] });
+      addToast({
+        type: 'success',
+        title: t('contracts.cloned_ok', { defaultValue: 'Contract cloned (draft)' }),
+      });
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -1020,11 +1121,13 @@ function ContractDetailDrawer({
             <h2 id="contract-drawer-title" className="text-base font-semibold">
               {contract.code} — {contract.title || 'Untitled'}
             </h2>
-            <div className="mt-1 flex items-center gap-2">
+            <div className="mt-1 flex flex-wrap items-center gap-2">
               <ContractTypeChip type={contract.contract_type} />
               <Badge variant={CONTRACT_STATUS_VARIANT[contract.status]} dot>
                 {contract.status}
               </Badge>
+              <ContractStatusPipeline status={contract.status} />
+              <ContractExpiryBadge endDate={contract.end_date} status={contract.status} />
             </div>
           </div>
           <button
@@ -1130,6 +1233,19 @@ function ContractDetailDrawer({
                 </Button>
               </>
             )}
+            {/* Clone is always available — it always produces a draft,
+                so cloning a terminated contract to start a renewal is
+                a legitimate, common pattern. The backend enforces
+                contracts.clone (Role.MANAGER) + cross-tenant IDOR
+                checks; the UI just surfaces the action. */}
+            <Button
+              variant="ghost"
+              icon={<Copy size={14} />}
+              onClick={() => cloneMut.mutate()}
+              loading={cloneMut.isPending}
+            >
+              {t('contracts.clone', { defaultValue: 'Clone' })}
+            </Button>
           </div>
 
           {/* Cross-module pipeline links */}

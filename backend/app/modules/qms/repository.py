@@ -12,7 +12,7 @@ import uuid
 from datetime import date
 from typing import Any
 
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.qms.models import (
@@ -22,6 +22,7 @@ from app.modules.qms.models import (
     ITPTemplate,
     QMSAudit,
     QMSAuditFinding,
+    QMSAuditLog,
     QMSCalibration,
     QMSInspection,
     QMSInspectionSignature,
@@ -550,3 +551,98 @@ class QMSRepository:
             stmt = stmt.where(QMSCalibration.project_id == project_id)
         stmt = stmt.order_by(QMSCalibration.valid_until.asc())
         return list((await self.session.execute(stmt)).scalars().all())
+
+    # ── Audit log (FSM transition trail) ───────────────────────────────
+
+    async def append_audit(
+        self,
+        *,
+        entity_type: str,
+        entity_id: uuid.UUID,
+        action: str,
+        tenant_id: uuid.UUID | None = None,
+        actor_user_id: uuid.UUID | None = None,
+        old_status: str | None = None,
+        new_status: str | None = None,
+        reason: str | None = None,
+        before_state: dict[str, Any] | None = None,
+        after_state: dict[str, Any] | None = None,
+    ) -> QMSAuditLog:
+        """Append a single audit-log row for an FSM transition.
+
+        ``before_state`` / ``after_state`` are stored verbatim as JSON so
+        the caller controls the schema. Empty dicts are fine and match
+        the column ``server_default``.
+        """
+        entry = QMSAuditLog(
+            tenant_id=tenant_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            action=action,
+            actor_user_id=actor_user_id,
+            old_status=old_status,
+            new_status=new_status,
+            reason=reason,
+            before_state=before_state or {},
+            after_state=after_state or {},
+        )
+        self.session.add(entry)
+        await self.session.flush()
+        return entry
+
+    async def list_audit_log(
+        self,
+        entity_id: uuid.UUID,
+        *,
+        entity_type: str | None = None,
+        offset: int = 0,
+        limit: int = 200,
+    ) -> list[QMSAuditLog]:
+        """Return audit-log rows for one ``entity_id`` in insertion order.
+
+        ``entity_type`` filters by category (e.g. ``"ncr"``,
+        ``"inspection"``) so callers don't get cross-category collisions
+        if two entity classes ever share a UUID space.
+        """
+        stmt = select(QMSAuditLog).where(QMSAuditLog.entity_id == entity_id)
+        if entity_type is not None:
+            stmt = stmt.where(QMSAuditLog.entity_type == entity_type)
+        stmt = (
+            stmt.order_by(QMSAuditLog.created_at.asc())
+            .offset(offset)
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def list_audit_for_entity(
+        self,
+        entity_type: str,
+        entity_id: uuid.UUID,
+        *,
+        offset: int = 0,
+        limit: int = 200,
+    ) -> list[QMSAuditLog]:
+        """Alias kept for symmetry with the other QMS repositories.
+
+        Same behaviour as :meth:`list_audit_log` with the parameters in
+        the order most callers prefer (``type, id``).
+        """
+        return await self.list_audit_log(
+            entity_id,
+            entity_type=entity_type,
+            offset=offset,
+            limit=limit,
+        )
+
+    async def purge_audit_for_tenant(self, tenant_id: uuid.UUID) -> int:
+        """Delete every audit-log row for ``tenant_id`` (GDPR forget).
+
+        Returns the number of rows removed so the caller can log it.
+        """
+        stmt = delete(QMSAuditLog).where(QMSAuditLog.tenant_id == tenant_id)
+        result = await self.session.execute(stmt)
+        await self.session.flush()
+        return result.rowcount or 0
+
+    # Alias matching the brief's naming.
+    purge_for_tenant = purge_audit_for_tenant

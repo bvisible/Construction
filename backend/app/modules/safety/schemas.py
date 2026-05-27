@@ -49,6 +49,10 @@ class IncidentCreate(BaseModel):
         default="reported",
         pattern=r"^(reported|investigating|corrective_action|closed)$",
     )
+    # WGS84 geo binding so the incident shows up as a pin on Geo Hub.
+    # Optional — incidents without a map pin still work end-to-end.
+    geo_lat: float | None = Field(default=None, ge=-90, le=90)
+    geo_lon: float | None = Field(default=None, ge=-180, le=180)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -82,6 +86,8 @@ class IncidentUpdate(BaseModel):
         default=None,
         pattern=r"^(reported|investigating|corrective_action|closed)$",
     )
+    geo_lat: float | None = Field(default=None, ge=-90, le=90)
+    geo_lon: float | None = Field(default=None, ge=-180, le=180)
     metadata: dict[str, Any] | None = None
 
 
@@ -106,8 +112,16 @@ class IncidentResponse(BaseModel):
     corrective_actions: list[dict[str, Any]] = Field(default_factory=list)
     reported_to_regulator: bool = False
     status: str = "reported"
+    geo_lat: float | None = None
+    geo_lon: float | None = None
     created_by: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
+    osha_recordable: bool = False
+    osha_case_number: str | None = None
+    days_away: int | None = None
+    days_restricted: int | None = None
+    root_cause_method: str | None = None
+    root_cause_tags: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 

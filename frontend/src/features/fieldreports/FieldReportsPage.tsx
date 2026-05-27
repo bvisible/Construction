@@ -34,10 +34,13 @@ import {
   EmptyState,
   Breadcrumb,
   ConfirmDialog,
+  RecoveryCard,
   WideModal,
   WideModalSection,
   WideModalField,
+  SkeletonGrid,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -197,7 +200,13 @@ export function FieldReportsPage() {
     enabled: !!projectId && view === 'calendar',
   });
 
-  const { data: listReports = [], isLoading: isListLoading } = useQuery({
+  const {
+    data: listReports = [],
+    isLoading: isListLoading,
+    isError: isListError,
+    error: listError,
+    refetch: refetchList,
+  } = useQuery({
     queryKey: ['fieldreports', 'list', projectId, statusFilter, typeFilter],
     queryFn: () =>
       fetchFieldReports(projectId, {
@@ -221,7 +230,7 @@ export function FieldReportsPage() {
     mutationFn: createFieldReport,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fieldreports'] });
-      addToast({ type: 'success', title: '', message: t('fieldreports.created', { defaultValue: 'Field report created‌⁠‍' }) });
+      addToast({ type: 'success', title: '', message: t('fieldreports.created', { defaultValue: 'Field report created' }) });
       setShowModal(false);
       setEditingReport(null);
     },
@@ -235,7 +244,7 @@ export function FieldReportsPage() {
       updateFieldReport(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fieldreports'] });
-      addToast({ type: 'success', title: '', message: t('fieldreports.updated', { defaultValue: 'Field report updated‌⁠‍' }) });
+      addToast({ type: 'success', title: '', message: t('fieldreports.updated', { defaultValue: 'Field report updated' }) });
       setShowModal(false);
       setEditingReport(null);
     },
@@ -248,7 +257,7 @@ export function FieldReportsPage() {
     mutationFn: deleteFieldReport,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fieldreports'] });
-      addToast({ type: 'success', title: '', message: t('fieldreports.deleted', { defaultValue: 'Field report deleted‌⁠‍' }) });
+      addToast({ type: 'success', title: '', message: t('fieldreports.deleted', { defaultValue: 'Field report deleted' }) });
     },
     onError: (err: Error) => {
       addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: err.message });
@@ -259,7 +268,7 @@ export function FieldReportsPage() {
     mutationFn: submitFieldReport,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fieldreports'] });
-      addToast({ type: 'success', title: '', message: t('fieldreports.submitted', { defaultValue: 'Report submitted for approval‌⁠‍' }) });
+      addToast({ type: 'success', title: '', message: t('fieldreports.submitted', { defaultValue: 'Report submitted for approval' }) });
     },
     onError: (err: Error) => {
       addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: err.message });
@@ -270,7 +279,7 @@ export function FieldReportsPage() {
     mutationFn: approveFieldReport,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fieldreports'] });
-      addToast({ type: 'success', title: '', message: t('fieldreports.approved', { defaultValue: 'Report approved‌⁠‍' }) });
+      addToast({ type: 'success', title: '', message: t('fieldreports.approved', { defaultValue: 'Report approved' }) });
     },
     onError: (err: Error) => {
       addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: err.message });
@@ -369,16 +378,14 @@ export function FieldReportsPage() {
     [deleteMut, t, confirm],
   );
 
-  // ── No project selected ─────────────────────────────────────────────
+  // Project gate
 
   if (!projectId) {
     return (
       <div className="p-6">
-        <EmptyState
-          icon={<ClipboardList size={28} strokeWidth={1.5} />}
-          title={t('fieldreports.no_project', { defaultValue: 'Select a project' })}
-          description={t('fieldreports.no_project_desc', { defaultValue: 'Choose a project from the sidebar to view field reports.' })}
-        />
+        <RequiresProject
+          emptyHint={t('fieldreports.no_project_desc', { defaultValue: 'Choose a project from the sidebar to view field reports.' })}
+        >{null}</RequiresProject>
       </div>
     );
   }
@@ -567,12 +574,7 @@ export function FieldReportsPage() {
 
             {/* Calendar loading state */}
             {isCalendarLoading && (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 size={24} className="animate-spin text-oe-blue" />
-                <span className="ml-2 text-sm text-content-tertiary">
-                  {t('common.loading', { defaultValue: 'Loading...' })}
-                </span>
-              </div>
+              <SkeletonGrid items={14} gridCols="grid-cols-7" className="rounded-lg" />
             )}
 
             {/* Calendar grid */}
@@ -692,6 +694,10 @@ export function FieldReportsPage() {
               {Array.from({ length: 5 }).map((_, i) => (
                 <div key={i} className="h-12 animate-pulse rounded-lg bg-surface-secondary" />
               ))}
+            </div>
+          ) : isListError ? (
+            <div className="p-4">
+              <RecoveryCard error={listError} onRetry={() => refetchList()} />
             </div>
           ) : listReports.length === 0 ? (
             <div className="p-8">

@@ -16,10 +16,27 @@ so new integrations can use the unambiguous name. The old key stays in
 """
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # ── Create ────────────────────────────────────────────────────────────────
 
@@ -32,14 +49,19 @@ class CatalogResourceCreate(BaseModel):
     resource_type: str = Field(..., min_length=1, max_length=20, description="material, equipment, labor, operator")
     category: str = Field(..., min_length=1, max_length=100)
     unit: str = Field(..., min_length=1, max_length=20)
-    base_price: float = Field(..., ge=0)
-    min_price: float = Field(default=0, ge=0)
-    max_price: float = Field(default=0, ge=0)
+    # v3 §10 — money is Decimal-in / Decimal-as-string out.
+    base_price: Decimal = Field(..., ge=0)
+    min_price: Decimal = Field(default=Decimal("0"), ge=0)
+    max_price: Decimal = Field(default=Decimal("0"), ge=0)
     currency: str = Field(default="EUR", max_length=10)
     source: str = Field(default="manual", max_length=50)
     region: str | None = Field(default=None, max_length=50)
     specifications: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer("base_price", "min_price", "max_price", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
     @model_validator(mode="after")
     def _check_price_band(self) -> "CatalogResourceCreate":
@@ -102,9 +124,10 @@ class CatalogResourceResponse(BaseModel):
     resource_type: str
     category: str
     unit: str
-    base_price: float
-    min_price: float
-    max_price: float
+    # v3 §10 — money is Decimal-as-string in JSON.
+    base_price: Decimal = Decimal("0")
+    min_price: Decimal = Decimal("0")
+    max_price: Decimal = Decimal("0")
     currency: str
     usage_count: int
     used_in_cost_items: int = Field(
@@ -123,6 +146,10 @@ class CatalogResourceResponse(BaseModel):
     metadata: dict[str, Any] = Field(alias="metadata_")
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("base_price", "min_price", "max_price", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
     @model_validator(mode="after")
     def _populate_used_in_cost_items(self) -> "CatalogResourceResponse":
@@ -155,10 +182,16 @@ class CatalogSearchQuery(BaseModel):
     category: str | None = Field(default=None, description="Filter by category")
     region: str | None = Field(default=None, description="Filter by region")
     unit: str | None = Field(default=None, description="Filter by unit")
-    min_price: float | None = Field(default=None, ge=0)
-    max_price: float | None = Field(default=None, ge=0)
+    # v3 §10 — money is Decimal-in / Decimal-as-string out. Query params
+    # arrive as strings via FastAPI; Pydantic v2 coerces to Decimal.
+    min_price: Decimal | None = Field(default=None, ge=0)
+    max_price: Decimal | None = Field(default=None, ge=0)
     limit: int = Field(default=50, ge=1, le=500)
     offset: int = Field(default=0, ge=0)
+
+    @field_serializer("min_price", "max_price", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
 
 
 class CatalogSearchResponse(BaseModel):

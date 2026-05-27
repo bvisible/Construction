@@ -346,7 +346,7 @@ export function AssembliesPage() {
               icon={<Download size={14} />}
               onClick={() => setShowExportMenu((p) => !p)}
             >
-              {t('common.export', { defaultValue: 'Export‌⁠‍' })}
+              {t('common.export')}
             </Button>
             {showExportMenu && (
               <div className="absolute right-0 top-full mt-1 z-50 w-44 rounded-lg border border-border-light bg-surface-elevated shadow-md animate-fade-in">
@@ -362,9 +362,9 @@ export function AssembliesPage() {
                         rows.push([csvEscape(a.name), a.category, a.unit || '', String(a.total_rate ?? ''), '', '', '', ''].join(','));
                       }
                       downloadFile(rows.join('\n'), `assemblies_${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv');
-                      addToast({ type: 'success', title: t('assemblies.exported_csv', { defaultValue: 'CSV exported‌⁠‍' }) });
+                      addToast({ type: 'success', title: t('assemblies.exported_csv', { defaultValue: 'CSV exported' }) });
                     } catch {
-                      addToast({ type: 'error', title: t('common.export_failed', { defaultValue: 'Export failed‌⁠‍' }) });
+                      addToast({ type: 'error', title: t('common.export_failed', { defaultValue: 'Export failed' }) });
                     }
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-content-primary hover:bg-surface-secondary transition-colors rounded-t-lg"
@@ -378,9 +378,9 @@ export function AssembliesPage() {
                     try {
                       const resp = await apiGet<AssemblySearchResponse>('/v1/assemblies/?limit=500');
                       downloadFile(JSON.stringify(resp.items, null, 2), `assemblies_${new Date().toISOString().slice(0, 10)}.json`, 'application/json');
-                      addToast({ type: 'success', title: t('assemblies.exported_json', { defaultValue: 'JSON exported‌⁠‍' }) });
+                      addToast({ type: 'success', title: t('assemblies.exported_json', { defaultValue: 'JSON exported' }) });
                     } catch {
-                      addToast({ type: 'error', title: t('common.export_failed', { defaultValue: 'Export failed‌⁠‍' }) });
+                      addToast({ type: 'error', title: t('common.export_failed', { defaultValue: 'Export failed' }) });
                     }
                   }}
                   className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-content-primary hover:bg-surface-secondary transition-colors rounded-b-lg"
@@ -581,6 +581,9 @@ export function AssembliesPage() {
             <select
               value={category}
               onChange={(e) => handleCategoryChange(e.target.value)}
+              aria-label={t('a11y.assemblies.category_filter', {
+                defaultValue: 'Filter assemblies by category',
+              })}
               className="h-10 w-full appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent hover:border-content-tertiary sm:w-44"
             >
               {CATEGORY_VALUES.map((c) => (
@@ -1044,7 +1047,7 @@ function AssemblyTable({
                 <BulkCheckbox checked={allSelected} indeterminate={someSelected} onChange={onToggleAll} />
               </th>
               <th className={headerCellBase}>{sortBtn('name', t('assemblies.col_name', { defaultValue: 'Name' }))}</th>
-              <th className={headerCellBase}>{sortBtn('code', t('assemblies.col_code', { defaultValue: 'Code' }))}</th>
+              <th className={headerCellBase}>{sortBtn('code', t('common.code'))}</th>
               <th className={headerCellBase}>{t('assemblies.col_category', { defaultValue: 'Category' })}</th>
               <th className={headerCellBase}>{t('assemblies.col_unit', { defaultValue: 'Unit' })}</th>
               <th className={`${headerCellBase} text-right`}>{sortBtn('total_rate', t('assemblies.col_rate', { defaultValue: 'Rate' }), 'right')}</th>
@@ -1241,7 +1244,7 @@ function BulkDeleteConfirm({
             {t('common.cancel', { defaultValue: 'Cancel' })}
           </Button>
           <Button variant="danger" size="sm" onClick={onConfirm}>
-            {t('common.delete', { defaultValue: 'Delete' })}
+            {t('common.delete')}
           </Button>
         </div>
       </div>
@@ -1607,7 +1610,7 @@ function AssemblyCard({
             <p className="text-xs text-content-tertiary mb-4 max-w-[180px] mx-auto line-clamp-1">{assembly.name}</p>
             <div className="flex items-center justify-center gap-2">
               <Button variant="danger" size="sm" onClick={() => { onDelete(); setConfirmDelete(false); }}>
-                {t('common.delete', { defaultValue: 'Delete' })}
+                {t('common.delete')}
               </Button>
               <Button variant="secondary" size="sm" onClick={() => setConfirmDelete(false)}>
                 {t('common.cancel', { defaultValue: 'Cancel' })}
@@ -1647,15 +1650,27 @@ function AssemblyCard({
           </div>
           <div className="flex items-center gap-1">
             <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); setPreviewOpen(true); }}
               className="opacity-0 group-hover:opacity-100 flex h-6 w-6 items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-all"
               title={t('assemblies.quick_preview', { defaultValue: 'Quick preview' })}
+              aria-label={t('a11y.assemblies.quick_preview', {
+                defaultValue: 'Quick preview of {{name}}',
+                name: assembly.name,
+              })}
             >
               <Eye size={14} />
             </button>
             <button
+              type="button"
               onClick={(e) => { e.stopPropagation(); setMenuOpen(!menuOpen); }}
               className="opacity-0 group-hover:opacity-100 flex h-6 w-6 items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-all"
+              aria-label={t('a11y.assemblies.card_actions', {
+                defaultValue: 'Actions for assembly {{name}}',
+                name: assembly.name,
+              })}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
             >
               <MoreHorizontal size={14} />
             </button>
@@ -1885,7 +1900,7 @@ function HoverComponentsPopover({
       {isLoading ? (
         <div className="flex items-center gap-2 py-1 text-xs text-content-tertiary">
           <Loader2 size={11} className="animate-spin" />
-          {t('common.loading', { defaultValue: 'Loading...' })}
+          {t('common.loading')}
         </div>
       ) : top.length === 0 ? (
         <p className="text-xs text-content-tertiary">

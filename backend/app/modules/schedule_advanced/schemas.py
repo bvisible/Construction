@@ -422,6 +422,12 @@ class BaselineDeltaEntry(BaseModel):
     planned_finish_baseline: date | None = None
     planned_finish_current: date | None = None
     schedule_variance_days: int = 0
+    # Carried through from the snapshot row when present (e.g. phase plans
+    # captured via the front-end's ``captureBaseline`` helper include the
+    # phase name). Lets the UI render "Foundation +5d" instead of a raw
+    # UUID. Optional + tolerant so legacy snapshots without ``name`` keep
+    # validating cleanly.
+    name: str | None = None
 
 
 class BaselineDeltaResponse(BaseModel):

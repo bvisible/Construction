@@ -1,0 +1,14 @@
+{
+  "route": "/crm",
+  "totalViolations": 0,
+  "buttonName": 0,
+  "colorContrast": 0,
+  "bySeverity": {
+    "critical": 0,
+    "serious": 0,
+    "moderate": 0,
+    "minor": 0
+  },
+  "ruleSummary": [],
+  "colorContrastNodes": []
+}

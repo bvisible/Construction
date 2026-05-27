@@ -1,5 +1,6 @@
 """‌⁠‍Regional configuration for DACH (Germany, Austria, Switzerland)."""
 
+from decimal import Decimal
 from typing import Any
 
 PACK_CONFIG: dict[str, Any] = {
@@ -274,5 +275,25 @@ PACK_CONFIG: dict[str, Any] = {
         "volume": "m³",
         "weight": "kg",
         "temperature": "°C",
+    },
+    # ── VAT rates (Wave 25) ──────────────────────────────────────────────────
+    # ISO-2 country code → kind → Decimal rate (0.19 = 19 %).
+    # Mirrored into ``app.core.tax._RAW`` for centralised lookup.
+    "vat_rates": {
+        "DE": {
+            "standard": Decimal("0.19"),
+            "reduced": Decimal("0.07"),
+            "zero": Decimal("0.00"),
+        },
+        "AT": {
+            "standard": Decimal("0.20"),
+            "reduced": Decimal("0.10"),
+            "zero": Decimal("0.00"),
+        },
+        "CH": {
+            "standard": Decimal("0.081"),
+            "reduced": Decimal("0.026"),
+            "zero": Decimal("0.00"),
+        },
     },
 }

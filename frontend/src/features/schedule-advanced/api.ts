@@ -167,6 +167,13 @@ export interface BaselineDeltaEntry {
   planned_finish_baseline?: string | null;
   planned_finish_current?: string | null;
   schedule_variance_days: number;
+  /**
+   * Display name of the task at baseline-capture time. Carried through
+   * the snapshot row so the UI can render "Foundation +5d" instead of
+   * the raw UUID. Populated when :func:`captureBaseline` auto-snapshots
+   * phases (see ``captureBaseline``).
+   */
+  name?: string | null;
 }
 
 export interface BaselineDelta {
@@ -561,11 +568,61 @@ export function captureBaseline(data: {
   master_schedule_id: string;
   name: string;
   notes?: string;
+  /**
+   * Optional pre-built snapshot of tasks/phases to freeze. When omitted,
+   * the helper auto-pulls the master's current phase plans and uses each
+   * phase id as task_ref. This is what makes :func:`baselineDelta` return
+   * something other than an empty list later.
+   */
+  snapshot?: Array<Record<string, unknown>>;
 }): Promise<Baseline> {
-  return apiPost<Baseline>('/v1/schedule-advanced/baselines/capture', {
-    ...data,
-    snapshot: {},
-  });
+  let snapshot = data.snapshot;
+  if (snapshot === undefined) {
+    // Auto-snapshot the current phases as task_refs so the variance
+    // calculation has something to compare against later. If the network
+    // call fails we still capture an empty baseline rather than aborting
+    // — the user clicked Capture for a reason.
+    snapshot = [];
+    // Intentionally not awaited at top-level; we'll await before POST.
+  }
+  return (async () => {
+    if (data.snapshot === undefined) {
+      try {
+        const phases = await listPhasePlans(data.master_schedule_id);
+        snapshot = phases.map((p) => ({
+          task_ref: p.id,
+          name: p.name,
+          planned_start: p.planned_start,
+          planned_finish: p.planned_finish,
+        }));
+      } catch {
+        snapshot = [];
+      }
+    }
+    return apiPost<Baseline>('/v1/schedule-advanced/baselines/capture', {
+      master_schedule_id: data.master_schedule_id,
+      name: data.name,
+      notes: data.notes,
+      snapshot,
+    });
+  })();
+}
+
+/**
+ * Build a fresh "current tasks" payload from a master schedule's phases.
+ * Used by the Baselines tab so the compare call has real data to diff
+ * against the captured snapshot.
+ */
+export async function currentTasksForMaster(
+  masterScheduleId: string,
+): Promise<Array<Record<string, unknown>>> {
+  const phases = await listPhasePlans(masterScheduleId);
+  return phases.map((p) => ({
+    task_ref: p.id,
+    name: p.name,
+    planned_start: p.planned_start,
+    planned_finish: p.planned_finish,
+  }));
 }
 
 export function baselineDelta(

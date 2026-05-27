@@ -277,6 +277,71 @@ async def test_complete_scheduled_meeting_succeeds() -> None:
 
 
 @pytest.mark.asyncio
+async def test_complete_meeting_event_carries_stable_event_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``meeting.action_items_created`` payload must carry a stable
+    ``event_key`` so downstream subscribers can dedupe defensively
+    against at-least-once delivery semantics.
+
+    Pre-fix the payload contained the action items + counts but no
+    natural idempotency token, so a bus retry would re-fire the
+    notification handler and double-notify each task owner.
+    """
+    from app.core import events as _events
+
+    published: list[tuple[str, dict, str | None]] = []
+
+    def _capture(
+        topic: str,
+        data: dict,
+        *,
+        source_module: str | None = None,
+    ) -> None:
+        published.append((topic, data, source_module))
+
+    monkeypatch.setattr(_events.event_bus, "publish_detached", _capture)
+
+    service = _make_service()
+    pid = uuid.uuid4()
+    meeting = await service.create_meeting(
+        MeetingCreate(
+            project_id=pid,
+            meeting_type="progress",
+            title="Has action items",
+            meeting_date="2026-04-15",
+            action_items=[
+                ActionItemEntry(
+                    description="Send minutes to client",
+                    owner_id=str(uuid.uuid4()),
+                ),
+            ],
+        )
+    )
+    meeting.status = "scheduled"
+    meeting.action_items = [
+        {
+            "description": "Send minutes to client",
+            "owner_id": str(uuid.uuid4()),
+            "due_date": None,
+            "status": "open",
+        }
+    ]
+
+    await service.complete_meeting(meeting.id, user_id="u1")
+
+    # At least one publish landed and one carries the meetings event.
+    meeting_events = [
+        d for topic, d, _ in published if topic == "meeting.action_items_created"
+    ]
+    assert meeting_events, f"event never fired; published={published!r}"
+    payload = meeting_events[-1]
+    assert payload.get("event_key") == f"meeting:complete:{meeting.id}", (
+        f"event_key missing or wrong: {payload!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_complete_draft_meeting_raises_400() -> None:
     """Draft meetings must be scheduled first."""
     from fastapi import HTTPException

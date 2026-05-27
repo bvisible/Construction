@@ -3,11 +3,33 @@
 from __future__ import annotations
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+# ── R7 money serialization helper ───────────────────────────────────────
+#
+# Pydantic v2 serializes ``Decimal`` to a JSON *number* by default, which
+# JS truncates to ``Number`` (~15 sig-digit float). The platform-wide
+# convention (mirrors property_dev / boq / contracts R7 audits) is to
+# emit money fields as plain-decimal *strings* so the wire format is
+# locale-neutral and exact. NaN/Infinity collapse to "0" rather than
+# crashing the encoder.
+
+def _serialize_money_string(value: Any) -> str | None:
+    """Render a Decimal-ish value as a plain-decimal string, or ``None``."""
+    if value is None:
+        return None
+    if not isinstance(value, Decimal):
+        try:
+            value = Decimal(str(value))
+        except (InvalidOperation, ValueError, TypeError):
+            return "0"
+    if not value.is_finite():
+        return "0"
+    return format(value, "f")
 
 # Status / category patterns
 _NOTICE_STATUS = r"^(issued|acknowledged|responded|closed)$"
@@ -155,6 +177,11 @@ class VariationRequestResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("estimated_cost_impact", when_used="json")
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
+
 
 # ── VariationOrder ────────────────────────────────────────────────────────
 
@@ -221,6 +248,11 @@ class VariationOrderResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("final_cost_impact", when_used="json")
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
+
 
 # ── Cost impact ───────────────────────────────────────────────────────────
 
@@ -265,6 +297,11 @@ class VariationCostImpactResponse(BaseModel):
     source: str = "manual"
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("quantity", "unit_rate", "total", when_used="json")
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
 
 
 # ── Schedule impact ───────────────────────────────────────────────────────
@@ -365,6 +402,11 @@ class SiteMeasurementResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("measured_quantity", when_used="json")
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
+
 
 # ── Daywork sheet ─────────────────────────────────────────────────────────
 
@@ -415,6 +457,13 @@ class DayworkSheetResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer(
+        "subtotal_amount", "markup_percent", "total_amount", when_used="json",
+    )
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
+
 
 class DayworkSheetLineCreate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -456,6 +505,11 @@ class DayworkSheetLineResponse(BaseModel):
     equipment_code: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("quantity", "unit_rate", "total", when_used="json")
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
 
 
 # ── Disruption claim ──────────────────────────────────────────────────────
@@ -527,6 +581,18 @@ class DisruptionClaimResponse(BaseModel):
     labour_hours_lost: Decimal | None = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer(
+        "cost_amount",
+        "decided_amount",
+        "baseline_productivity",
+        "impacted_productivity",
+        "labour_hours_lost",
+        when_used="json",
+    )
+    @classmethod
+    def _ser_money(cls, v: Decimal | None) -> str | None:
+        return _serialize_money_string(v)
 
 
 # ── EOT claim ─────────────────────────────────────────────────────────────
@@ -655,6 +721,20 @@ class FinalAccountResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer(
+        "original_contract_value",
+        "variations_total",
+        "daywork_total",
+        "claims_total",
+        "retention_held",
+        "retention_released",
+        "final_value",
+        when_used="json",
+    )
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
+
 
 # ── Aggregated/summary responses ──────────────────────────────────────────
 
@@ -681,6 +761,11 @@ class VariationDashboardResponse(BaseModel):
     eot_claims_open: int = 0
     final_account_status: str = "none"
     currency: str = ""
+
+    @field_serializer("cost_impact_total", "daywork_value_signed", when_used="json")
+    @classmethod
+    def _ser_money(cls, v: Decimal) -> str:
+        return _serialize_money_string(v) or "0"
 
 
 class FinalAccountSummary(BaseModel):

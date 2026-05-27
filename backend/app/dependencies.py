@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 if TYPE_CHECKING:
     from app.modules.users.models import User
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -443,9 +443,108 @@ async def verify_project_access(
         )
 
 
+# ── Locale resolution (per-request, for HTTPException i18n) ────────────────
+
+
+def get_lang(request: Request) -> str:
+    """Resolve the request's preferred locale as a 2-letter ISO 639-1 code.
+
+    Priority:
+        1. ``?locale=XX`` query parameter (explicit override)
+        2. First language tag of the ``Accept-Language`` header
+        3. ``"en"`` fallback
+
+    The full RFC 7231 parser lives in
+    :mod:`app.middleware.accept_language` and already runs on every
+    request; this helper exists so router handlers can ask for the same
+    resolved code without going through the context variable when they
+    want to render an HTTPException detail via
+    :func:`app.core.validation.messages.translate`.
+
+    Args:
+        request: Incoming FastAPI/Starlette request.
+
+    Returns:
+        A 2-letter locale code, e.g. ``"de"`` / ``"ru"`` / ``"en"``.
+    """
+    # 1. Explicit query override
+    qs_locale = request.query_params.get("locale")
+    if qs_locale:
+        code = qs_locale.strip().lower()[:2]
+        if code:
+            return code
+
+    # 2. Accept-Language header (first tag, region stripped)
+    header = request.headers.get("accept-language", "")
+    if header:
+        first = header.split(",", 1)[0].strip()
+        # Strip ;q=... suffix, then language-region → language
+        first = first.split(";", 1)[0].strip()
+        code = first.split("-", 1)[0].lower()[:2]
+        if code and code.isalpha():
+            return code
+
+    # 3. Default
+    return "en"
+
+
+LangDep = Annotated[str, Depends(get_lang)]
+
+
 # ── Convenience type aliases ───────────────────────────────────────────────
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 CurrentUserPayload = Annotated[dict[str, Any], Depends(get_current_user_payload)]
 CurrentUserId = Annotated[str, Depends(get_current_user_id)]
 OptionalUserPayload = Annotated[dict[str, Any] | None, Depends(get_optional_user_payload)]
+
+
+# ── Epic H — universal audit context dependency ────────────────────────────
+
+
+async def audit_context_dep(
+    payload: Annotated[
+        dict[str, Any] | None, Depends(get_optional_user_payload),
+    ] = None,
+) -> None:
+    """Enrich the per-request :class:`AuditContext` with resolved identity.
+
+    The :class:`app.middleware.actor_context.ActorContextMiddleware`
+    already populated the ContextVar with IP / UA / request-id at the top
+    of the request. By the time a router handler resolves dependencies,
+    the JWT has been decoded and we can layer the actor/tenant IDs onto
+    the same ContextVar so :func:`app.core.audit_log.log_activity` calls
+    deeper in the call stack pick them up automatically.
+
+    Mounting this dependency on every router (or via a global router
+    dependency) is optional — service-layer callers that pass
+    ``actor_id=`` / ``tenant_id=`` explicitly continue to work unchanged.
+    Using the dep just spares them the boilerplate.
+    """
+    from app.core.audit_log import (
+        AuditContext,
+        get_audit_context,
+        set_audit_context,
+    )
+
+    if payload is None:
+        return  # anonymous request — middleware capture is enough
+
+    current = get_audit_context() or AuditContext()
+    actor_id = payload.get("sub")
+    tenant_id = payload.get("tenant_id")
+    if actor_id is None and tenant_id is None:
+        return
+
+    import dataclasses as _dc
+
+    set_audit_context(
+        _dc.replace(
+            current,
+            actor_id=str(actor_id) if actor_id else current.actor_id,
+            tenant_id=str(tenant_id) if tenant_id else current.tenant_id,
+        ),
+    )
+
+
+AuditContextDep = Annotated[None, Depends(audit_context_dep)]

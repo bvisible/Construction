@@ -48,7 +48,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 
 from app.core.csv_safety import neutralise_formula
+from app.core.i18n import get_locale
 from app.core.rate_limiter import upload_limiter
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.takeoff.manifest_verifier import (
     InstallNotSupported,
@@ -1551,7 +1553,7 @@ async def _verify_cad_session_access(
     if owner and owner != str(user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found.",
+            detail=translate("errors.session_not_found", locale=get_locale()),
         )
 
 
@@ -2361,8 +2363,13 @@ async def cad_data_describe(
 
     cad_session = await _get_cad_session(db_session, body.session_id)
     if not cad_session:
+        # 410 Gone is the correct HTTP semantic for an expired/discarded
+        # resource that the client previously held. 404 would be wrong —
+        # the endpoint exists; only this specific session is no longer
+        # available. Letting the frontend distinguish 410 lets it auto-
+        # prompt re-upload instead of treating this as a routing error.
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_410_GONE,
             detail=("Session not found or expired. Please re-upload the CAD file via POST /cad-columns."),
         )
 
@@ -2729,8 +2736,10 @@ async def cad_data_elements(
 
     cad_session = await _get_cad_session(db_session, session_id)
     if not cad_session:
+        # 410 Gone — see /cad-data/describe/ for the rationale. The
+        # endpoint is fine; this particular session is just gone.
         raise HTTPException(
-            status_code=404,
+            status_code=status.HTTP_410_GONE,
             detail=("Session not found or expired. Please re-upload the CAD file via POST /cad-columns."),
         )
 
@@ -3297,7 +3306,7 @@ async def cad_data_delete_session(
     if not cad_session:
         # Match the historic "Session not found." string (some callers
         # branch on it) instead of the more verbose memory message.
-        raise HTTPException(status_code=404, detail="Session not found.")
+        raise HTTPException(status_code=404, detail=translate("errors.session_not_found", locale=get_locale()))
 
     await _verify_cad_session_access(cad_session, str(user_id) if user_id else "", db_session)
 
@@ -3306,7 +3315,7 @@ async def cad_data_delete_session(
     await db_session.commit()
 
     if result.rowcount == 0:  # type: ignore[union-attr]
-        raise HTTPException(status_code=404, detail="Session not found.")
+        raise HTTPException(status_code=404, detail=translate("errors.session_not_found", locale=get_locale()))
 
     # Also remove from memory cache
     _cad_sessions.pop(session_id, None)
@@ -3633,10 +3642,14 @@ async def _verify_takeoff_doc_access(
     owner = str(
         getattr(doc, "owner_id", None) or getattr(doc, "user_id", "") or ""
     )
-    if owner and owner != str(user_id):
+    # R7 deep-improve: a document with NO owner (NULL on both columns)
+    # must block everyone — otherwise the empty-owner branch silently
+    # opens orphaned rows to any caller. Match by string after trimming
+    # both sides so UUID-vs-str drift doesn't bypass the gate.
+    if owner != str(user_id):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Document not found",
+            detail=translate("errors.document_not_found", locale=get_locale()),
         )
 
 
@@ -3706,7 +3719,7 @@ async def get_document(
     """
     doc = await service.get_document(doc_id)
     if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
 
     await _verify_takeoff_doc_access(doc, str(user_id) if user_id else "", session)
 
@@ -3745,7 +3758,7 @@ async def extract_tables(
     """
     doc = await service.get_document(doc_id)
     if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
 
     await _verify_takeoff_doc_access(doc, str(user_id) if user_id else "", session)
 
@@ -3774,7 +3787,7 @@ async def download_document(
     """
     doc = await service.get_document(doc_id)
     if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
 
     await _verify_takeoff_doc_access(doc, str(user_id) if user_id else "", session)
 
@@ -3831,7 +3844,7 @@ async def analyze_document(
     # 1. Get the document
     doc = await service.get_document(doc_id)
     if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
 
     # Audit B5 — IDOR. AI analysis dispatches the PDF text to a third
     # party LLM and bills tokens; without this check, any user could
@@ -3997,7 +4010,7 @@ async def delete_document(
     """
     doc = await service.get_document(doc_id)
     if doc is None:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(status_code=404, detail=translate("errors.document_not_found", locale=get_locale()))
 
     await _verify_takeoff_doc_access(doc, str(user_id) if user_id else "", session)
 
@@ -4278,10 +4291,15 @@ async def update_measurement(
     target row and gate via ``verify_project_access`` before any
     mutation. We check ownership *before* calling the update service
     so we don't leak existence via different error codes.
+
+    Round-6 audit (2026-05-22) — pass the pre-fetched row into the
+    service to skip the redundant ``get_by_id`` query that used to
+    happen inside ``update_measurement`` (one query per PATCH instead
+    of two).
     """
     existing = await service.get_measurement(measurement_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    item = await service.update_measurement(measurement_id, data)
+    item = await service.update_measurement(measurement_id, data, existing=existing)
     return _measurement_to_response(item)
 
 
@@ -4305,10 +4323,13 @@ async def delete_measurement(
     ``takeoff.delete`` could destroy another tenant's measurements by
     UUID. We resolve the owning project from the target row and gate
     via ``verify_project_access``.
+
+    Round-6 audit (2026-05-22) — pass the pre-fetched row into the
+    service to skip the redundant ``get_by_id`` query.
     """
     existing = await service.get_measurement(measurement_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    await service.delete_measurement(measurement_id)
+    await service.delete_measurement(measurement_id, existing=existing)
 
 
 # ── Link to BOQ ──────────────────────────────────────────────────────────
@@ -4332,8 +4353,13 @@ async def link_measurement_to_boq(
     tenant's measurement at their own BOQ position (or vice versa)
     without permission on the measurement side. Gate on the
     measurement's owning project before performing the link.
+
+    Round-6 audit (2026-05-22) — pass the pre-fetched row into the
+    service to skip the redundant ``get_by_id`` query.
     """
     existing = await service.get_measurement(measurement_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    item = await service.link_measurement_to_boq(measurement_id, data.boq_position_id)
+    item = await service.link_measurement_to_boq(
+        measurement_id, data.boq_position_id, existing=existing,
+    )
     return _measurement_to_response(item)

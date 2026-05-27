@@ -17,7 +17,15 @@ from app.core.permissions import Role, permission_registry
 
 
 def register_reporting_permissions() -> None:
-    """‌⁠‍Register permissions for the reporting module."""
+    """‌⁠‍Register permissions for the reporting module.
+
+    R7 audit (2026-05-24) added ``reporting.distribute`` for the
+    schedule + recipient-list endpoints. Distribution is elevated to
+    MANAGER because a scheduled template can email arbitrary recipients
+    on a cron — a compromised EDITOR account could otherwise turn the
+    platform into a spam/phishing relay tied to legitimate project
+    data.
+    """
     permission_registry.register_module_permissions(
         "reporting",
         {
@@ -25,5 +33,9 @@ def register_reporting_permissions() -> None:
             "reporting.read": Role.VIEWER,
             "reporting.update": Role.EDITOR,
             "reporting.delete": Role.MANAGER,
+            # Scheduling + recipient mgmt = MANAGER (can fan out PDFs to
+            # arbitrary email addresses on a cron, so blast radius >>
+            # plain BOQ editing).
+            "reporting.distribute": Role.MANAGER,
         },
     )

@@ -249,7 +249,7 @@ export default function TakeoffViewerModule({
   const [activeTool, setActiveTool] = useState<MeasureTool>('select');
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [activePoints, setActivePoints] = useState<Point[]>([]);
-  const [countLabel, setCountLabel] = useState(t('takeoff_viewer.default_count_label', { defaultValue: 'Element‌⁠‍' }));
+  const [countLabel, setCountLabel] = useState(t('takeoff_viewer.default_count_label', { defaultValue: 'Element' }));
 
   // Scale
   const [scale, setScale] = useState<ScaleConfig>({ pixelsPerUnit: 100, unitLabel: 'm' });
@@ -409,8 +409,8 @@ export default function TakeoffViewerModule({
       console.error('Failed to load PDF:', err);
       addToast({
         type: 'error',
-        title: t('takeoff_viewer.pdf_load_failed', { defaultValue: 'Failed to load PDF‌⁠‍' }),
-        message: err instanceof Error ? err.message : t('takeoff_viewer.pdf_load_error_hint', { defaultValue: 'The file may be corrupted or not a valid PDF.‌⁠‍' }),
+        title: t('takeoff_viewer.pdf_load_failed', { defaultValue: 'Failed to load PDF' }),
+        message: err instanceof Error ? err.message : t('takeoff_viewer.pdf_load_error_hint', { defaultValue: 'The file may be corrupted or not a valid PDF.' }),
       });
     } finally {
       setIsLoading(false);
@@ -484,8 +484,8 @@ export default function TakeoffViewerModule({
         console.error('Failed to load PDF from URL:', err);
         addToast({
           type: 'error',
-          title: t('takeoff_viewer.pdf_load_failed', { defaultValue: 'Failed to load PDF‌⁠‍' }),
-          message: err instanceof Error ? err.message : t('takeoff_viewer.pdf_load_error_hint', { defaultValue: 'The file may be corrupted or not a valid PDF.‌⁠‍' }),
+          title: t('takeoff_viewer.pdf_load_failed', { defaultValue: 'Failed to load PDF' }),
+          message: err instanceof Error ? err.message : t('takeoff_viewer.pdf_load_error_hint', { defaultValue: 'The file may be corrupted or not a valid PDF.' }),
         });
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -539,6 +539,7 @@ export default function TakeoffViewerModule({
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
     let cancelled = false;
+    let activeTask: { cancel: () => void } | null = null;
 
     (async () => {
       const page = await pdfDoc.getPage(currentPage);
@@ -553,18 +554,27 @@ export default function TakeoffViewerModule({
       canvas.style.width = `${viewport.width / window.devicePixelRatio}px`;
       canvas.style.height = `${viewport.height / window.devicePixelRatio}px`;
 
-      // Size overlay to match
       if (overlayRef.current) {
         overlayRef.current.width = viewport.width;
         overlayRef.current.height = viewport.height;
         overlayRef.current.style.width = canvas.style.width;
         overlayRef.current.style.height = canvas.style.height;
+        overlayRef.current.getContext('2d')?.clearRect(0, 0, viewport.width, viewport.height);
       }
 
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      const task = page.render({ canvasContext: ctx, viewport });
+      activeTask = task;
+      try {
+        await task.promise;
+      } catch (err: any) {
+        if (err?.name !== 'RenderingCancelledException') throw err;
+      }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      try { activeTask?.cancel(); } catch { /* ignore */ }
+    };
   }, [pdfDoc, currentPage, zoom]);
 
   /* ── Draw overlay (measurements + active drawing) ────────────────── */

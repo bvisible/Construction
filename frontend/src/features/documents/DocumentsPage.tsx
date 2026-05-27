@@ -6,7 +6,8 @@ import {
   Search, X, Loader2, FolderOpen, ChevronDown, HardDrive, Eye,
   MoreHorizontal, Pencil, Tag, Ruler, Send,
 } from 'lucide-react';
-import { Button, Badge, EmptyState, Breadcrumb, ViewInBIMButton } from '@/shared/ui';
+import { Button, Badge, EmptyState, Breadcrumb, RecoveryCard, ViewInBIMButton } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import SimilarItemsPanel from '@/shared/ui/SimilarItemsPanel';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { apiGet, apiDelete, apiPatch } from '@/shared/lib/api';
@@ -254,7 +255,7 @@ function PreviewModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label={t('documents.preview_title', { defaultValue: 'Document preview‌⁠‍' })}
+      aria-label={t('documents.preview_title', { defaultValue: 'Document preview' })}
     >
       <div
         className="relative w-full max-w-4xl max-h-[90vh] mx-4 rounded-xl bg-surface-elevated shadow-xl border border-border-light overflow-hidden flex flex-col"
@@ -271,7 +272,7 @@ function PreviewModal({
             <a
               href={`/api/v1/documents/${doc.id}/download`}
               className="flex h-8 w-8 items-center justify-center rounded-lg text-content-secondary hover:bg-surface-secondary hover:text-oe-blue transition-colors"
-              aria-label={t('documents.download', { defaultValue: 'Download‌⁠‍' })}
+              aria-label={t('documents.download', { defaultValue: 'Download' })}
             >
               <Download size={16} />
             </a>
@@ -317,7 +318,7 @@ function PreviewModal({
           <div className="border-t border-border-light px-5 py-3 bg-surface-primary shrink-0">
             <h4 className="text-[10px] font-semibold uppercase tracking-wider text-content-tertiary mb-2">
               {t('documents.linked_bim_elements', {
-                defaultValue: 'Linked BIM elements‌⁠‍',
+                defaultValue: 'Linked BIM elements',
               })}
               <span className="ms-2 text-content-quaternary normal-case font-normal">
                 ({linkedElements.items.length})
@@ -385,11 +386,11 @@ function SortDropdown({
       <button
         onClick={() => setOpen((p) => !p)}
         className="flex items-center gap-1.5 h-10 px-3 text-xs font-medium rounded-lg border border-border-light text-content-secondary hover:bg-surface-secondary transition-colors"
-        aria-label={t('documents.sort_by', { defaultValue: 'Sort by‌⁠‍' })}
+        aria-label={t('documents.sort_by', { defaultValue: 'Sort by' })}
         aria-expanded={open}
         aria-haspopup="listbox"
       >
-        {t('documents.sort_by', { defaultValue: 'Sort by‌⁠‍' })}: {labels[value]}
+        {t('documents.sort_by', { defaultValue: 'Sort by' })}: {labels[value]}
         <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
@@ -462,7 +463,7 @@ export function DocumentsPage() {
 
   /* ── Data fetching ──────────────────────────────────────────────────── */
 
-  const { data: documents, isLoading } = useQuery({
+  const { data: documents, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['documents', projectId, category, debouncedQuery],
     queryFn: () => {
       const params = new URLSearchParams();
@@ -616,7 +617,7 @@ export function DocumentsPage() {
     if (!projectId) {
       addToast({
         type: 'error',
-        title: t('documents.no_project_error', { defaultValue: 'No project selected' }),
+        title: t('requiresProject.title'),
         message: t('documents.select_project_first', { defaultValue: 'Please select a project first before uploading.' }),
       });
       return;
@@ -803,17 +804,15 @@ export function DocumentsPage() {
     setEditForm((prev) => ({ ...prev, tags: prev.tags.filter((t) => t !== tag) }));
   }, []);
 
-  /* ── No project selected ────────────────────────────────────────────── */
+  /* Project gate */
 
   if (!projectId) {
     return (
       <div className="w-full px-5 py-4 space-y-4 animate-fade-in">
         <Breadcrumb items={[{ label: t('nav.dashboard', 'Dashboard'), to: '/' }, { label: t('nav.documents', 'Documents') }]} />
-        <EmptyState
-          icon={<FolderOpen size={28} strokeWidth={1.5} />}
-          title={t('documents.select_project', { defaultValue: 'Select a project' })}
-          description={t('documents.select_project_hint', { defaultValue: 'Use the project switcher in the header to select a project first.' })}
-        />
+        <RequiresProject
+          emptyHint={t('documents.select_project_hint', { defaultValue: 'Use the project switcher in the header to select a project first.' })}
+        >{null}</RequiresProject>
       </div>
     );
   }
@@ -1176,6 +1175,8 @@ export function DocumentsPage() {
             </div>
           ))}
         </div>
+      ) : isError ? (
+        <RecoveryCard error={error} onRetry={() => refetch()} />
       ) : sortedDocuments.length === 0 ? (
         debouncedQuery.trim() ? (
           <EmptyState

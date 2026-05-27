@@ -11,7 +11,6 @@ import {
   Database,
   Bot,
   Layers,
-  Library,
   Boxes,
   Box,
   ShieldCheck,
@@ -51,6 +50,10 @@ import {
   Search,
   Pin,
   PinOff,
+  Eye,
+  EyeOff,
+  Pencil,
+  Check,
   Github,
   HardDrive,
   Link2,
@@ -84,6 +87,7 @@ import { getModuleNavItems } from '@/modules/_registry';
 import { APP_VERSION } from '@/shared/lib/version';
 import { useSidebarBadges } from '@/shared/hooks/useSidebarBadges';
 import { useModulePresence } from '@/shared/hooks/useModulePresence';
+import { useHiddenModules } from '@/shared/hooks/useHiddenModules';
 import { useIsRTL } from '@/shared/hooks/useIsRTL';
 import {
   useSidebarCollapseStore,
@@ -110,6 +114,13 @@ interface NavItem {
    *  Used for admin-only items like the Audit Log (`audit.view`
    *  permission, MANAGER+ on the backend). */
   roleGate?: ('admin' | 'manager' | 'editor' | 'viewer')[];
+  /** Hide entirely unless the current JWT role is `admin`. Distinct
+   *  from `roleGate` (which is a multi-role allow-list) — `adminOnly`
+   *  is the simple "developer / internal tool" gate matched to the
+   *  `<AdminOnly>` route wrapper in App.tsx. Used for surfaces like
+   *  the Architecture Map that should never appear in a customer's
+   *  sidebar. */
+  adminOnly?: boolean;
 }
 
 interface NavGroup {
@@ -125,9 +136,20 @@ interface NavGroup {
   separator?: boolean;
 }
 
-// Navigation groups — collapsible sections
+// Navigation groups — collapsible sections.
+//
+// Source-of-truth audit (2026-05-23): every `to` here is cross-checked
+// against `App.tsx` <Route path="…"/> entries — no broken links. New
+// surfaces that already had routes but were never reachable from the
+// sidebar (Architecture Map, EIR Matrix, Reporting Dashboards, Property
+// Dev Dashboards, BOQ Templates, Snapshots, Integrations) are now
+// surfaced in the most relevant group. Old `descriptionKey`s are kept
+// where the locale already has the translated string so we don't churn
+// 20 locale files; new groups skip `descriptionKey` (it isn't rendered).
 const navGroups: NavGroup[] = [
-  // ── CORE (always visible) ──────────────────────────────────────────
+  // ── OVERVIEW (always visible) ──────────────────────────────────────
+  // The few entry points every user touches every session: dashboard,
+  // project list, the unified file manager.
   {
     id: 'overview',
     labelKey: 'nav.group_overview',
@@ -135,17 +157,14 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'nav.dashboard', to: '/', icon: LayoutDashboard },
       { labelKey: 'projects.title', to: '/projects', icon: FolderOpen, tourId: 'projects' },
-      // Files lives in Overview because it's the unified entry point
-      // into a project's documents, photos, BIM and DWG — users land
-      // here to pick what to work on, just like the dashboard.
       { labelKey: 'nav.project_files', to: '/files', icon: HardDrive },
     ],
   },
   // ── ESTIMATING ─────────────────────────────────────────────────────
-  // The project's actual cost work-product: BOQ, AI-driven estimate,
-  // and the BIM↔catalogue link that powers both. Catalogues themselves
-  // live in the next group ("Catalogues & Reference") so they don't
-  // crowd the day-to-day estimating surface.
+  // The project's actual cost work-product: BOQ + templates, AI-driven
+  // estimate, and the BIM↔catalogue link that powers both. Catalogues
+  // themselves live in the next group so they don't crowd the day-to-day
+  // estimating surface.
   {
     id: 'estimation',
     labelKey: 'nav.group_estimation',
@@ -159,9 +178,8 @@ const navGroups: NavGroup[] = [
     ],
   },
   // ── CATALOGUES & REFERENCE ─────────────────────────────────────────
-  // Cross-project reference data: cost databases, regional catalogues
-  // and assembly templates. Live next to Estimating but separate so
-  // database curators have their own home.
+  // Cross-project reference data: cost databases, regional catalogues,
+  // assembly templates.
   {
     id: 'catalogues',
     labelKey: 'nav.group_catalogues',
@@ -171,9 +189,12 @@ const navGroups: NavGroup[] = [
       { labelKey: 'costs.title', to: '/costs', icon: Database, tourId: 'costs' },
       { labelKey: 'catalog.title', to: '/catalog', icon: Boxes },
       { labelKey: 'nav.assemblies', to: '/assemblies', icon: Layers },
-      { labelKey: 'nav.assembly_library', to: '/assemblies/library', icon: Library, badge: 'BETA' },
     ],
   },
+  // ── TAKEOFF ────────────────────────────────────────────────────────
+  // Quantity extraction from drawings + 3D models. CAD-BIM Explorer
+  // (data view of CAD imports) moved here from CAD-BIM Analytics — it
+  // is a takeoff-adjacent surface, not a coordination surface.
   {
     id: 'takeoff',
     labelKey: 'nav.group_takeoff',
@@ -181,30 +202,39 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'nav.pdf_measurements', to: '/takeoff?tab=measurements', icon: Ruler },
       { labelKey: 'nav.dwg_takeoff', to: '/dwg-takeoff', icon: PencilRuler },
-      { labelKey: 'nav.cad_bim_explorer', to: '/data-explorer', icon: TableProperties },
       { labelKey: 'nav.bim_viewer', to: '/bim', icon: Box },
+      { labelKey: 'nav.cad_bim_explorer', to: '/data-explorer', icon: TableProperties, advancedOnly: true },
     ],
   },
-  // ── CAD-BIM ANALYTICS ──────────────────────────────────────────────
-  // Coordinated multi-model analyses live in their own group so users
-  // who only need quantity takeoff don't have to scroll past clash
-  // detection / federations / rule packs every time.
+  // ── MODEL COORDINATION ─────────────────────────────────────────────
+  // Multi-model BIM/CAD analyses: federations, clash detection, rule
+  // packs, EIR matrix, geo overlays. Distinct from Takeoff so users
+  // who only quantify a model don't have to scroll past coordination
+  // every time.
   {
     id: 'cad_bim_analytics',
     labelKey: 'nav.group_cad_bim_analytics',
     descriptionKey: 'nav.group_cad_bim_analytics_desc',
-    defaultOpen: true,
+    defaultOpen: false,
     items: [
       { labelKey: 'nav.coordination_hub', to: '/coordination', icon: LayoutDashboard, badge: 'NEW' },
       { labelKey: 'nav.bim_federations', to: '/bim/federations', icon: Layers, badge: 'NEW' },
       { labelKey: 'nav.clash_detection', to: '/clash', icon: Radar, badge: 'BETA' },
       { labelKey: 'nav.bim_rules', to: '/bim/rules?mode=requirements', icon: SlidersHorizontal, badge: 'BETA' },
+      // EIR Matrix (ISO 19650) — was orphan; surface it here next to
+      // BIM Rules where it logically belongs.
+      {
+        labelKey: 'nav.eir_matrix',
+        to: '/requirements/matrix',
+        icon: FileCheck,
+        advancedOnly: true,
+      },
+      { labelKey: 'sidebar.geo_hub', to: '/geo', icon: Globe, badge: 'NEW' },
     ],
   },
   // ── AI & TOOLS ─────────────────────────────────────────────────────
-  // AI agents, advisor, project intelligence and ERP chat. AI Estimate
-  // moved to the Estimating group above (it's estimation work, not
-  // a standalone tool).
+  // AI agents, advisor, ERP chat. AI Estimate lives in Estimating
+  // (it produces estimation work, not standalone chat output).
   {
     id: 'ai',
     labelKey: 'nav.group_ai_estimation',
@@ -218,11 +248,8 @@ const navGroups: NavGroup[] = [
     ],
   },
   // ── COMMERCIAL ─────────────────────────────────────────────────────
-  // Commercial pipeline — CRM lead → contract award → variations,
-  // subcontractor management, bid management, supplier catalogs,
-  // property/asset development. Moved up to sit next to Estimating
-  // because it's the same "before-construction" phase: sales, bidding,
-  // commit.
+  // Pre-construction commercial pipeline — CRM lead → contract award →
+  // variations, subcontractor management, bid management, suppliers.
   {
     id: 'commercial',
     labelKey: 'nav.group_commercial',
@@ -234,12 +261,50 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.contracts', to: '/contracts', icon: FileSignature },
       { labelKey: 'nav.subcontractors', to: '/subcontractors', icon: HardHat },
       { labelKey: 'nav.bid_management', to: '/bid-management', icon: Scale },
+      { labelKey: 'tendering.title', to: '/tendering', icon: FileText, moduleKey: 'tendering', advancedOnly: true },
       { labelKey: 'nav.variations', to: '/variations', icon: GitBranch },
       { labelKey: 'nav.supplier_catalogs', to: '/supplier-catalogs', icon: ShoppingCart },
-      { labelKey: 'nav.property_dev', to: '/property-dev', icon: Building2 },
     ],
   },
-  // ── PLANNING & CONTROL (advanced) ──────────────────────────────────
+  // ── REAL ESTATE DEVELOPMENT ────────────────────────────────────────
+  // Dedicated home for developer workflows: plots, buyers, reservations,
+  // SPAs, handovers, warranties (mostly tabs inside /property-dev) plus
+  // the two long-lived settings catalogues. Now also exposes the
+  // dashboards landing page that was previously orphan.
+  {
+    id: 'property',
+    labelKey: 'nav.group_property',
+    descriptionKey: 'nav.group_property_desc',
+    defaultOpen: false,
+    hideInSimple: true,
+    items: [
+      { labelKey: 'nav.property_dev', to: '/property-dev', icon: Building2 },
+      {
+        labelKey: 'nav.accommodation',
+        to: '/accommodation',
+        icon: Building2,
+      },
+      {
+        labelKey: 'nav.property_dev_dashboards',
+        to: '/property-dev/dashboards',
+        icon: BarChart3,
+        advancedOnly: true,
+      },
+      {
+        labelKey: 'nav.property_dev_house_types',
+        to: '/property-dev/settings/house-types',
+        icon: Building2,
+        advancedOnly: true,
+      },
+      {
+        labelKey: 'nav.property_dev_doc_templates',
+        to: '/property-dev/settings/document-templates',
+        icon: FileText,
+        advancedOnly: true,
+      },
+    ],
+  },
+  // ── SCHEDULING & COST CONTROL ──────────────────────────────────────
   // After the deal closes: schedule, tasks, 5D cost model, risk.
   {
     id: 'planning',
@@ -252,14 +317,12 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.schedule_advanced', to: '/schedule-advanced', icon: LineChart, advancedOnly: true },
       { labelKey: 'tasks.title', to: '/tasks', icon: ClipboardList },
       { labelKey: 'nav.5d_cost_model', to: '/5d', icon: TrendingUp, moduleKey: '5d', advancedOnly: true },
-      // Requirements merged into /bim/rules — sidebar entry removed
       { labelKey: 'nav.risk_register', to: '/risks', icon: ShieldAlert, advancedOnly: true },
     ],
   },
   // ── FIELD OPERATIONS ───────────────────────────────────────────────
-  // Day-to-day site operations: service tickets, equipment, diary,
-  // sub portal, resources, and the physical assets register. Most
-  // useful to PMs, site engineers, and field supervisors.
+  // Day-to-day site operations: diary, equipment, crew, sub portal,
+  // service tickets, the physical assets register.
   {
     id: 'operations',
     labelKey: 'nav.group_operations',
@@ -273,46 +336,14 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.resources', to: '/resources', icon: Users },
       { labelKey: 'nav.service', to: '/service', icon: Wrench },
       { labelKey: 'nav.portal', to: '/portal', icon: Globe },
-      // Assets live here (not Documents) — they're physical inventory,
-      // not paperwork. The /assets page already mirrors equipment-style
-      // detail views, not a document viewer.
       { labelKey: 'nav.assets', to: '/assets', icon: Package, badge: 'BETA' },
-    ],
-  },
-  // ── COMMUNICATION ──────────────────────────────────────────────────
-  {
-    id: 'communication',
-    labelKey: 'nav.group_communication',
-    defaultOpen: false,
-    hideInSimple: true,
-    items: [
-      { labelKey: 'contacts.title', to: '/contacts', icon: Users },
-      { labelKey: 'meetings.title', to: '/meetings', icon: CalendarDays },
-      { labelKey: 'rfi.title', to: '/rfi', icon: HelpCircle, advancedOnly: true },
-      { labelKey: 'submittals.title', to: '/submittals', icon: FileCheck, advancedOnly: true },
-      { labelKey: 'transmittals.title', to: '/transmittals', icon: Send, advancedOnly: true },
-      { labelKey: 'correspondence.title', to: '/correspondence', icon: Mail, advancedOnly: true },
-    ],
-  },
-  // ── DOCUMENTS ──────────────────────────────────────────────────────
-  // Paperwork: CDE binder, project photos, drawing markups. Assets
-  // moved up to Field Operations (they're physical things, not docs).
-  {
-    id: 'documentation',
-    labelKey: 'nav.group_documentation',
-    defaultOpen: false,
-    hideInSimple: true,
-    items: [
-      { labelKey: 'cde.title', to: '/cde', icon: Database },
-      { labelKey: 'nav.photos', to: '/photos', icon: Camera },
-      { labelKey: 'nav.markups', to: '/markups', icon: PenTool },
     ],
   },
   // ── QUALITY ────────────────────────────────────────────────────────
   // Validation, inspections, NCR, QMS, punchlist — anything that
-  // certifies "the work passes". Safety/HSE/ESG is split into its own
-  // sibling group below so site supervisors don't have to scroll past
-  // QA paperwork to log a hazard.
+  // certifies "the work passes". Safety/HSE/ESG is a sibling group
+  // below so safety officers don't have to scroll past QA paperwork
+  // to log a hazard.
   {
     id: 'quality',
     labelKey: 'nav.group_quality',
@@ -328,9 +359,6 @@ const navGroups: NavGroup[] = [
     ],
   },
   // ── SAFETY & HSE ───────────────────────────────────────────────────
-  // Site safety, HSE management, carbon/sustainability tracking. Lives
-  // next to Quality but its own collapsible header so HSE officers can
-  // bookmark just this group.
   {
     id: 'safety',
     labelKey: 'nav.group_safety',
@@ -342,10 +370,41 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.carbon', to: '/carbon', icon: Leaf, advancedOnly: true },
     ],
   },
+  // ── COMMUNICATION ──────────────────────────────────────────────────
+  // Contacts + outbound paperwork (RFI / submittals / transmittals /
+  // correspondence) + meetings.
+  {
+    id: 'communication',
+    labelKey: 'nav.group_communication',
+    defaultOpen: false,
+    hideInSimple: true,
+    items: [
+      { labelKey: 'contacts.title', to: '/contacts', icon: Users },
+      { labelKey: 'meetings.title', to: '/meetings', icon: CalendarDays },
+      { labelKey: 'rfi.title', to: '/rfi', icon: HelpCircle, advancedOnly: true },
+      { labelKey: 'submittals.title', to: '/submittals', icon: FileCheck, advancedOnly: true },
+      { labelKey: 'transmittals.title', to: '/transmittals', icon: Send, advancedOnly: true },
+      { labelKey: 'correspondence.title', to: '/correspondence', icon: Mail, advancedOnly: true },
+    ],
+  },
+  // ── DOCUMENTS ──────────────────────────────────────────────────────
+  // Paperwork that lives outside the unified file-manager: the CDE
+  // binder, project photos, drawing markups. Assets moved to Field
+  // Operations (physical inventory, not paperwork).
+  {
+    id: 'documentation',
+    labelKey: 'nav.group_documentation',
+    defaultOpen: false,
+    hideInSimple: true,
+    items: [
+      { labelKey: 'cde.title', to: '/cde', icon: Database },
+      { labelKey: 'nav.photos', to: '/photos', icon: Camera },
+      { labelKey: 'nav.markups', to: '/markups', icon: PenTool },
+    ],
+  },
   // ── FINANCE & PROCUREMENT ──────────────────────────────────────────
-  // Money roll-up: finance, procurement, tendering, change orders.
-  // Sits near the bottom because it's the close-out / accounting view
-  // of work done elsewhere — not the daily action surface.
+  // Money roll-up: finance, procurement, change orders. Tendering moved
+  // to Commercial (it's the bid-collection phase, not accounting).
   {
     id: 'finance',
     labelKey: 'nav.group_finance',
@@ -354,13 +413,13 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'finance.title', to: '/finance', icon: Wallet, advancedOnly: true },
       { labelKey: 'procurement.title', to: '/procurement', icon: Package, advancedOnly: true },
-      { labelKey: 'tendering.title', to: '/tendering', icon: FileText, moduleKey: 'tendering', advancedOnly: true },
       { labelKey: 'nav.change_orders', to: '/changeorders', icon: FileEdit, advancedOnly: true },
     ],
   },
   // ── ANALYTICS & REPORTS ────────────────────────────────────────────
-  // Cross-module reporting + BI. End of the lifecycle: everything else
-  // has happened, this is where you look at the result.
+  // Cross-module reporting, dashboards, snapshots, BI, architecture
+  // map. End of the lifecycle: everything else has happened — this is
+  // where you look at the result.
   {
     id: 'analytics',
     labelKey: 'nav.group_analytics',
@@ -370,12 +429,20 @@ const navGroups: NavGroup[] = [
     items: [
       { labelKey: 'nav.reports', to: '/reports', icon: FileBarChart, advancedOnly: true },
       { labelKey: 'nav.bi_dashboards', to: '/bi-dashboards', icon: BarChart3, advancedOnly: true },
+      // Newly surfaced: Snapshots, Reporting Dashboards, Architecture Map.
+      // All three already routed in App.tsx but were unreachable from
+      // the sidebar before this redesign.
+      { labelKey: 'nav.snapshots', to: '/dashboards', icon: TrendingUp, advancedOnly: true },
+      { labelKey: 'nav.reporting_dashboards', to: '/reporting', icon: BarChart3, advancedOnly: true },
+      // Architecture Map — internal/dev tool, admin-only so a regular
+      // customer's analytics group isn't cluttered with the module
+      // dependency graph. Backend route is also gated via <AdminOnly>.
+      { labelKey: 'nav.architecture_map', to: '/architecture', icon: GitBranch, advancedOnly: true, adminOnly: true },
     ],
   },
   // ── REGIONAL EXCHANGE (setup-only, dynamic) ────────────────────────
-  // A visual separator marks the boundary between the project-work
-  // surface (Overview … Analytics) and reference/setup surfaces (this
-  // group + Modules + Settings in the admin grid below).
+  // Visual separator marks the boundary between project-work surfaces
+  // above and reference/setup surfaces below.
   {
     id: 'regional',
     labelKey: 'modules.cat_regional',
@@ -418,6 +485,11 @@ const adminGridItems: NavItem[] = [
     icon: ShieldCheck,
     roleGate: ['admin', 'manager'],
   },
+  {
+    labelKey: 'sidebar.admin_grid.validation_rules',
+    to: '/admin/validation-rules',
+    icon: ShieldCheck,
+  },
   { labelKey: 'sidebar.admin_grid.modules', to: '/modules', icon: Package },
   { labelKey: 'sidebar.admin_grid.settings', to: '/settings', icon: Settings },
   { labelKey: 'sidebar.admin_grid.about', to: '/about', icon: Info },
@@ -437,6 +509,11 @@ const ALL_NAV_ITEMS: Record<string, NavItem> = (() => {
 // localStorage key for collapsed state
 const COLLAPSED_KEY = 'oe_sidebar_collapsed';
 const PINNED_KEY = 'oe_sidebar_pinned';
+// Hidden-modules persistence is owned by `useHiddenModules()` — it stores
+// the per-user list server-side under `metadata_.sidebar_hidden_modules`
+// with localStorage as instant cache + offline fallback. The legacy global
+// key `oe.sidebar_hidden_modules` was per-browser, leaked across user
+// switches in the same browser, and is no longer read or written here.
 
 function readCollapsedState(): Record<string, boolean> {
   try {
@@ -476,6 +553,19 @@ function writePinned(arr: string[]) {
     /* ignore */
   }
 }
+
+// Stable data-testid map for the ProductTour spotlight. Tests + the
+// onboarding walk-through query the sidebar by these attributes
+// rather than by label, so they survive i18n changes. Only routes the
+// tour actually targets need an entry here; everything else falls
+// through to the default `data-tour` attribute (if any).
+const PRODUCT_TOUR_NAV_TESTIDS: Record<string, string> = {
+  '/boq': 'sidebar-nav-boq',
+  '/bim': 'sidebar-nav-bim',
+  '/property-dev': 'sidebar-nav-property-dev',
+  '/accommodation': 'sidebar-nav-accommodation',
+  '/geo': 'sidebar-nav-geo-hub',
+};
 
 // Two-key keyboard shortcuts for the most-trafficked routes. The
 // sequence is `G` then a single letter — same convention Linear and
@@ -614,6 +704,46 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   // pin/unpin via the small icon-button that appears on item hover.
   const [pinned, setPinned] = useState<string[]>(() => readPinned());
 
+  // ── Menu editor state ───────────────────────────────────────────────
+  // `hiddenModules` is the *persisted* set — drives which rows are
+  // filtered out of the rendered nav in normal mode. Persistence is
+  // owned by `useHiddenModules()`: server-side per-user with localStorage
+  // as instant cache + offline fallback (multi-device safe).
+  // `editMode` is the transient "Edit menu" toggle.
+  // `editingHidden` is the in-memory working copy users edit while in
+  // edit mode; only committed to `hiddenModules` on Save.
+  const { hiddenModules, setHiddenModules } = useHiddenModules();
+  const [editMode, setEditMode] = useState(false);
+  const [editingHidden, setEditingHidden] = useState<string[]>([]);
+
+  const enterEditMode = useCallback(() => {
+    setEditingHidden(hiddenModules);
+    setEditMode(true);
+  }, [hiddenModules]);
+
+  const cancelEditMode = useCallback(() => {
+    setEditMode(false);
+    setEditingHidden([]);
+  }, []);
+
+  const saveEditMode = useCallback(() => {
+    setHiddenModules(editingHidden);
+    setEditMode(false);
+    setEditingHidden([]);
+  }, [editingHidden, setHiddenModules]);
+
+  const toggleItemHidden = useCallback((route: string) => {
+    setEditingHidden((prev) =>
+      prev.includes(route) ? prev.filter((r) => r !== route) : [...prev, route],
+    );
+  }, []);
+
+  // Set used by the render loop to decide whether to hide a row. In edit
+  // mode the user sees EVERYTHING (so they can re-enable items) — only
+  // normal mode actually filters. The visual "muted" state is driven by
+  // `editingHidden` so re-enabled rows visually un-mute immediately.
+  const effectiveHidden = editMode ? [] : hiddenModules;
+
   // Custom-module request dialog — opens from the "Request a custom
   // module" CTA at the bottom of the nav (below the "+ Add module"
   // developer-guide tile). The dialog itself handles community vs
@@ -706,10 +836,13 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
 
   // Resolve pinned route strings into full NavItems (skipping any
   // routes that are no longer in the registry — e.g. a module the user
-  // pinned earlier has been disabled).
+  // pinned earlier has been disabled, or hidden via the menu editor).
+  // In edit mode we show the full pinned list so users can also see
+  // them; in normal mode we drop hidden routes.
   const pinnedItems: NavItem[] = pinned
     .map((route) => ALL_NAV_ITEMS[route])
-    .filter((item): item is NavItem => Boolean(item));
+    .filter((item): item is NavItem => Boolean(item))
+    .filter((item) => editMode || !hiddenModules.includes(item.to));
 
   // Pick a single winning route for highlighting. Without this, both
   // `/bim` (parent) and `/bim/rules` (child) would render as "active"
@@ -737,6 +870,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   return (
     <aside
       data-tour="sidebar"
+      data-testid="app-sidebar"
       className="oe-sidebar relative flex h-full w-sidebar flex-col bg-surface-primary"
       style={{
         // Right-edge depth — 1px hairline + a soft 12px fade. Replaces
@@ -801,7 +935,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           <button
             onClick={onClose}
             className="lg:hidden flex h-7 w-7 min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
-            aria-label={t('common.close', { defaultValue: 'Close' })}
+            aria-label={t('common.close')}
           >
             <X size={16} />
           </button>
@@ -942,6 +1076,9 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                     onTogglePin={togglePin}
                     activeRoute={activeRoute}
                     iconified={iconified}
+                    editMode={editMode}
+                    isItemHidden={editingHidden.includes(item.to)}
+                    onToggleHidden={toggleItemHidden}
                   />
                 </li>
               ))}
@@ -974,17 +1111,31 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
               advancedOnly: mi.advancedOnly,
             }));
 
-          // Filter by module-enabled + advanced mode ONLY. The menu
-          // keeps its original shape and order; project focus never
-          // removes or reorders rows — it only annotates them below.
+          // Filter by module-enabled + advanced mode + admin gate. The
+          // menu keeps its original shape and order; project focus
+          // never removes or reorders rows — it only annotates them
+          // below. `adminOnly` items disappear for non-admin JWTs so
+          // dev / internal surfaces (Architecture Map) don't clutter
+          // a regular customer's sidebar — the route itself is also
+          // wrapped in <AdminOnly> in App.tsx, so this is just keeping
+          // the menu tidy.
           const allItems = [...group.items, ...dynamicItems];
           const visibleItems = allItems.filter(
             (item) =>
               (!item.moduleKey || isModuleEnabled(item.moduleKey)) &&
-              (!item.advancedOnly || isAdvanced),
+              (!item.advancedOnly || isAdvanced) &&
+              (!item.adminOnly || userRole === 'admin') &&
+              // Menu-editor filter — in normal mode, drop user-hidden
+              // rows; in edit mode `effectiveHidden` is empty so every
+              // row renders (muted via the editingHidden state below).
+              !effectiveHidden.includes(item.to),
           );
 
-          // Skip group if no visible items
+          // Skip group if no visible items. In normal mode this means
+          // "every item in this group is user-hidden or unavailable" —
+          // so the group header itself disappears (per spec). In edit
+          // mode `effectiveHidden` is empty, so users can always reach
+          // any group to re-enable rows inside it.
           if (visibleItems.length === 0) return null;
 
           const isCollapsed = collapsed[group.id] ?? false;
@@ -1043,6 +1194,9 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                         onTogglePin={togglePin}
                         activeRoute={activeRoute}
                         iconified={iconified}
+                        editMode={editMode}
+                        isItemHidden={editingHidden.includes(item.to)}
+                        onToggleHidden={toggleItemHidden}
                       />
                     </li>
                   );
@@ -1052,6 +1206,70 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             </Fragment>
           );
         })}
+        {/* Menu editor controls — sit just above the add-module tiles so
+             users see them after scanning their actual menu. Iconified
+             mode hides this row entirely (no room for text and the
+             editor is mouse-driven on the visible labels anyway). In
+             normal mode: a small "Edit menu" ghost button + a "{N}
+             hidden" badge when applicable. In edit mode the buttons
+             flip to Save / Cancel. */}
+        {!iconified && (
+          <div className="pt-3 pb-1 px-3">
+            {editMode ? (
+              <div className="flex items-center gap-1.5 w-full">
+                <button
+                  type="button"
+                  onClick={saveEditMode}
+                  className="flex-1 flex items-center justify-center gap-1 rounded-lg border border-oe-blue/30 bg-oe-blue/10 px-2.5 py-2 text-xs font-medium text-oe-blue hover:bg-oe-blue/15 transition-colors"
+                >
+                  <Check size={12} strokeWidth={2.25} />
+                  <span>{t('sidebar.save', { defaultValue: 'Save' })}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelEditMode}
+                  className="flex-1 flex items-center justify-center gap-1 rounded-lg border border-border-light bg-surface-secondary/60 px-2.5 py-2 text-xs font-medium text-content-secondary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+                >
+                  <X size={12} strokeWidth={2.25} />
+                  <span>{t('sidebar.cancel', { defaultValue: 'Cancel' })}</span>
+                </button>
+                {editingHidden.length > 0 && (
+                  <span className="shrink-0 text-2xs text-content-tertiary tabular-nums">
+                    {t('sidebar.hidden_count', {
+                      defaultValue: '{{count}} hidden',
+                      count: editingHidden.length,
+                    })}
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 w-full">
+                <button
+                  type="button"
+                  onClick={enterEditMode}
+                  className="flex-1 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-border-light bg-surface-secondary/30 px-2.5 py-2 text-xs font-medium text-content-secondary hover:border-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+                  title={t('sidebar.edit_menu_hint', {
+                    defaultValue: "Hide items you don't use",
+                  })}
+                >
+                  <Pencil size={12} strokeWidth={2} />
+                  <span>{t('sidebar.edit_menu', { defaultValue: 'Edit menu' })}</span>
+                </button>
+                {hiddenModules.length > 0 && (
+                  <span
+                    className="shrink-0 rounded-full bg-surface-tertiary/70 px-1.5 py-px text-[10px] font-medium text-content-tertiary tabular-nums"
+                    title={t('sidebar.show_hidden', { defaultValue: 'Show hidden' })}
+                  >
+                    {t('sidebar.hidden_count', {
+                      defaultValue: '{{count}} hidden',
+                      count: hiddenModules.length,
+                    })}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {/* Add-a-module CTA — dashed-border tile with a plus icon. Sits at
              the very end of the main nav groups so it reads as "keep going,
              there's more — build your own". Navigates into the in-app
@@ -1059,7 +1277,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
              contributors a clearer first step. When iconified, shrinks
              to a centred icon-only square — the dashed border still
              signals "add something". */}
-        <li className={clsx('pt-2 pb-1', iconified ? 'px-0 flex justify-center' : 'px-3')}>
+        <div className={clsx('pt-2 pb-1', iconified ? 'px-0 flex justify-center' : 'px-3')}>
           <NavLink
             to="/modules/developer-guide"
             onClick={onClose}
@@ -1075,15 +1293,15 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             {!iconified && (
               <span className="min-w-0 flex-1">
                 <span className="block text-xs font-semibold text-content-primary leading-tight">
-                  {t('nav.add_module', { defaultValue: 'Add module‌⁠‍' })}
+                  {t('nav.add_module', { defaultValue: 'Add module' })}
                 </span>
                 <span className="block text-[10px] text-content-tertiary leading-tight mt-0.5 truncate">
-                  {t('nav.add_module_hint', { defaultValue: 'Build your own · developer guide‌⁠‍' })}
+                  {t('nav.add_module_hint', { defaultValue: 'Build your own · developer guide' })}
                 </span>
               </span>
             )}
           </NavLink>
-        </li>
+        </div>
         {/* Request-a-custom-module CTA — second dashed tile, purple
              accent, opens a popup instead of navigating. The popup
              routes the request to two destinations depending on the
@@ -1096,7 +1314,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
              on purpose: contributors who want to build a module
              themselves use the guide; users who want us to build it
              for them use this dialog. */}
-        <li className={clsx('pt-1 pb-3', iconified ? 'px-0 flex justify-center' : 'px-3')}>
+        <div className={clsx('pt-1 pb-3', iconified ? 'px-0 flex justify-center' : 'px-3')}>
           <button
             type="button"
             onClick={() => {
@@ -1122,18 +1340,18 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
               <span className="min-w-0 flex-1">
                 <span className="block text-xs font-semibold text-content-primary leading-tight">
                   {t('nav.request_custom_module', {
-                    defaultValue: 'Request a custom module‌⁠‍',
+                    defaultValue: 'Request a custom module',
                   })}
                 </span>
                 <span className="block text-[10px] text-content-tertiary leading-tight mt-0.5 truncate">
                   {t('nav.request_custom_module_hint', {
-                    defaultValue: 'Missing something? Tell us what you need‌⁠‍',
+                    defaultValue: 'Missing something? Tell us what you need',
                   })}
                 </span>
               </span>
             )}
           </button>
-        </li>
+        </div>
       </nav>
 
       {/* Admin / setup surfaces — rendered as a 2-column button grid
@@ -1206,15 +1424,24 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
             </a>
           </div>
         ) : (
-          <div className="px-2 pb-2 pt-1 flex flex-col gap-1.5">
-            <div className="flex items-center gap-1.5">
+          // GitHub / Community / version row.
+          //
+          // The horizontal padding here MUST mirror AdminGrid's column geometry
+          // (the parent `<div>` already gives us `px-2`; AdminGrid's `<ul>` uses
+          // `grid-cols-2 gap-1` with no extra inner padding). Earlier this row
+          // wrapped its buttons in another `px-2`, which made each button
+          // ~8 px narrower than every admin tile above. The buttons are now
+          // siblings of the admin grid in the layout coordinate space:
+          // same outer `px-2`, same `gap-1` between the two cards.
+          <div className="pb-2 pt-1 flex flex-col gap-1.5">
+            <div className="grid grid-cols-2 gap-1">
               <a
                 href="https://github.com/datadrivenconstruction/OpenConstructionERP"
                 target="_blank"
                 rel="noopener noreferrer"
                 title="GitHub repository"
                 aria-label="GitHub repository"
-                className="flex-1 flex items-center justify-center gap-1.5 rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated hover:border-border-medium px-2 py-1.5 transition-all"
+                className="flex items-center justify-center gap-1.5 rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated hover:border-border-medium px-2 py-1.5 transition-all"
               >
                 <Github size={13} strokeWidth={1.75} className="text-content-secondary" />
                 <span className="text-xs font-medium text-content-secondary">GitHub</span>
@@ -1225,7 +1452,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                 rel="noopener noreferrer"
                 title="Join the Telegram community"
                 aria-label="Telegram community"
-                className="flex-1 flex items-center justify-center gap-1.5 rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated hover:border-border-medium px-2 py-1.5 transition-all"
+                className="flex items-center justify-center gap-1.5 rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated hover:border-border-medium px-2 py-1.5 transition-all"
               >
                 <svg viewBox="0 0 24 24" fill="currentColor" className="h-[13px] w-[13px] text-content-secondary" aria-hidden>
                   <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71l-4.14-3.06-1.99 1.93c-.23.23-.42.42-.83.42z" />
@@ -1288,25 +1515,55 @@ function NavGroupSection({
       </div>
     );
   }
+  // Expanded sidebar — render a clear section header with a subtle dot
+  // glyph on the leading edge (Linear-style "rest" indicator) so the
+  // grouping reads as a list, not a wall of indistinguishable rows.
+  // Header is a real button so the entire row toggles the section, and
+  // keyboard focus shows a clean ring without bleeding outside the
+  // padded box.
   return (
-    <div className="mb-0.5">
+    <div className="mt-3 mb-0.5">
       <button
         onClick={onToggle}
         aria-expanded={!isCollapsed}
-        aria-label={isCollapsed ? t('common.expand_section', { defaultValue: 'Expand {{label}}‌⁠‍', label }) : t('common.collapse_section', { defaultValue: 'Collapse {{label}}‌⁠‍', label })}
-        className="mt-3 mb-0.5 flex w-full items-center justify-between px-2.5 group cursor-pointer"
+        aria-label={
+          isCollapsed
+            ? t('common.expand_section', { defaultValue: 'Expand {{label}}', label })
+            : t('common.collapse_section', { defaultValue: 'Collapse {{label}}', label })
+        }
+        className={clsx(
+          'mb-0.5 flex w-full items-center justify-between gap-2 rounded-md',
+          'px-2 py-1 group cursor-pointer text-left',
+          'hover:bg-surface-secondary/60 focus-visible:outline-none',
+          'focus-visible:ring-1 focus-visible:ring-oe-blue/40',
+          'transition-colors duration-150',
+        )}
       >
-        <span className="text-2xs font-medium uppercase tracking-wider text-content-tertiary group-hover:text-content-secondary transition-colors">
-          {label}
+        <span className="flex items-center gap-1.5 min-w-0">
+          {/* Small leading dot — provides a calm visual rhythm down the
+              sidebar so users can pick out group starts at a glance. */}
+          <span
+            className={clsx(
+              'h-1 w-1 rounded-full shrink-0 transition-colors duration-150',
+              isCollapsed
+                ? 'bg-content-quaternary/45 group-hover:bg-content-tertiary'
+                : 'bg-oe-blue/55 group-hover:bg-oe-blue',
+            )}
+            aria-hidden
+          />
+          <span className="text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate">
+            {label}
+          </span>
         </span>
         <ChevronDown
-          size={12}
+          size={11}
           strokeWidth={2}
           className={clsx(
-            'text-content-quaternary group-hover:text-content-secondary',
+            'shrink-0 text-content-quaternary group-hover:text-content-secondary',
             'transition-transform duration-200 ease-[cubic-bezier(0.2,0.8,0.2,1)]',
             isCollapsed && '-rotate-90',
           )}
+          aria-hidden
         />
       </button>
       {!isCollapsed && children}
@@ -1325,6 +1582,9 @@ function SidebarItem({
   activeRoute,
   iconified,
   compact,
+  editMode,
+  isItemHidden,
+  onToggleHidden,
 }: {
   item: NavItem;
   label: string;
@@ -1336,15 +1596,31 @@ function SidebarItem({
   activeRoute?: string | null;
   iconified?: boolean;
   compact?: boolean;
+  /** When true, the row is in menu-editor mode and shows an Eye / EyeOff
+   *  toggle instead of the pin button. Hidden rows render dimmed so the
+   *  user can see at a glance what will be filtered out on Save. */
+  editMode?: boolean;
+  isItemHidden?: boolean;
+  onToggleHidden?: (route: string) => void;
 }) {
   const { t } = useTranslation();
   const Icon = item.icon;
   const kbdHint = KBD_HINTS[item.to];
+  const tourTestId = PRODUCT_TOUR_NAV_TESTIDS[item.to];
 
   const handlePinClick = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
     onTogglePin?.(item.to);
+  };
+
+  const handleHiddenClick = (e: React.MouseEvent) => {
+    // Eye-toggle inside the row must NEVER navigate — the row is still
+    // a NavLink so a bubbled click would otherwise route the user away
+    // from wherever they're currently editing the menu.
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleHidden?.(item.to);
   };
 
   // Single source of truth for active state — Sidebar picks one winning
@@ -1367,12 +1643,14 @@ function SidebarItem({
         title={label}
         aria-label={label}
         {...(item.tourId ? { 'data-tour': item.tourId } : {})}
+        {...(tourTestId ? { 'data-testid': tourTestId } : {})}
         className={() =>
           clsx(
             'relative mx-auto flex h-9 w-9 items-center justify-center rounded-md transition-colors duration-fast ease-oe',
             isActive
               ? 'bg-oe-blue/[0.14] text-oe-blue shadow-[inset_0_0_0_1px_rgba(0,122,255,0.18)] dark:bg-oe-blue/25'
               : 'text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
+            editMode && isItemHidden && 'opacity-50',
           )
         }
       >
@@ -1394,9 +1672,22 @@ function SidebarItem({
       <NavLink
         to={item.to}
         end={item.to === '/' || hasQuery}
-        onClick={onClick}
+        onClick={(e) => {
+          // In edit mode the row is a "hide/show this item" target —
+          // navigating away while the user is curating the menu would
+          // be jarring and lose the unsaved working set. We swallow
+          // navigation here and let the trailing eye-toggle handle
+          // the actual state change instead.
+          if (editMode) {
+            e.preventDefault();
+            onToggleHidden?.(item.to);
+            return;
+          }
+          onClick?.();
+        }}
         title={label}
         {...(item.tourId ? { 'data-tour': item.tourId } : {})}
+        {...(tourTestId ? { 'data-testid': tourTestId } : {})}
         className={() => {
           const active = isActive;
           return clsx(
@@ -1415,6 +1706,7 @@ function SidebarItem({
               : active
                 ? 'font-semibold border-oe-blue bg-oe-blue/[0.14] text-oe-blue shadow-[inset_0_0_0_1px_rgba(0,122,255,0.06)] dark:bg-oe-blue/25'
                 : 'font-medium text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
+            editMode && isItemHidden && 'opacity-50',
           );
         }}
       >
@@ -1494,28 +1786,61 @@ function SidebarItem({
             </span>
           )}
         </span>
-        {/* Pin / unpin button — only shown when the item supports it
-            (any item with an onTogglePin handler). Visible on hover or
-            persistently when pinned. Click does not navigate. */}
-        {onTogglePin && (
+        {/* Edit-mode wins over pin — when the user is curating the menu,
+            the trailing slot becomes a persistent Eye/EyeOff toggle so
+            they can hide/show every item in one click. Normal mode
+            falls back to the pin button. */}
+        {editMode && onToggleHidden ? (
           <button
             type="button"
-            onClick={handlePinClick}
-            data-pinned={isPinned ? 'true' : undefined}
+            onClick={handleHiddenClick}
+            data-pinned="true"
             aria-label={
-              isPinned
-                ? t('nav.unpin', { defaultValue: 'Unpin {{label}}', label })
-                : t('nav.pin', { defaultValue: 'Pin {{label}}', label })
+              isItemHidden
+                ? t('sidebar.show_item', { defaultValue: 'Show {{label}}', label })
+                : t('sidebar.hide_item', { defaultValue: 'Hide {{label}}', label })
             }
-            title={isPinned ? t('nav.unpin', { defaultValue: 'Unpin' }) : t('nav.pin', { defaultValue: 'Pin' })}
+            title={
+              isItemHidden
+                ? t('sidebar.show_item', { defaultValue: 'Show {{label}}', label })
+                : t('sidebar.hide_item', { defaultValue: 'Hide {{label}}', label })
+            }
             className={clsx(
               'oe-pin-btn ms-1 flex h-4 w-4 shrink-0 items-center justify-center rounded',
               'text-content-quaternary hover:text-oe-blue hover:bg-oe-blue/10',
-              isPinned && 'text-oe-blue',
+              isItemHidden && 'text-content-quaternary/70',
             )}
           >
-            {isPinned ? <PinOff size={10} strokeWidth={2} /> : <Pin size={10} strokeWidth={2} />}
+            {isItemHidden ? (
+              <EyeOff size={10} strokeWidth={2} />
+            ) : (
+              <Eye size={10} strokeWidth={2} />
+            )}
           </button>
+        ) : (
+          /* Pin / unpin button — only shown when the item supports it
+             (any item with an onTogglePin handler). Visible on hover or
+             persistently when pinned. Click does not navigate. */
+          onTogglePin && (
+            <button
+              type="button"
+              onClick={handlePinClick}
+              data-pinned={isPinned ? 'true' : undefined}
+              aria-label={
+                isPinned
+                  ? t('nav.unpin', { defaultValue: 'Unpin {{label}}', label })
+                  : t('nav.pin', { defaultValue: 'Pin {{label}}', label })
+              }
+              title={isPinned ? t('nav.unpin', { defaultValue: 'Unpin' }) : t('nav.pin', { defaultValue: 'Pin' })}
+              className={clsx(
+                'oe-pin-btn ms-1 flex h-4 w-4 shrink-0 items-center justify-center rounded',
+                'text-content-quaternary hover:text-oe-blue hover:bg-oe-blue/10',
+                isPinned && 'text-oe-blue',
+              )}
+            >
+              {isPinned ? <PinOff size={10} strokeWidth={2} /> : <Pin size={10} strokeWidth={2} />}
+            </button>
+          )
         )}
       </NavLink>
   );
@@ -1648,9 +1973,14 @@ export function FloatingRecentButton() {
       {open && (
         <div className="absolute bottom-12 end-0 w-72 rounded-xl border border-border-light bg-surface-primary shadow-xl overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-150">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-border-light">
-            <span className="text-xs font-semibold text-content-primary">{t('nav.recent', { defaultValue: 'Recent‌⁠‍' })}</span>
-            <button onClick={() => setOpen(false)} className="p-0.5 rounded text-content-tertiary hover:text-content-primary">
-              <X size={14} />
+            <span className="text-xs font-semibold text-content-primary">{t('nav.recent', { defaultValue: 'Recent' })}</span>
+            <button
+              onClick={() => setOpen(false)}
+              aria-label={t('common.close', { defaultValue: 'Close' })}
+              title={t('common.close', { defaultValue: 'Close' })}
+              className="p-0.5 rounded text-content-tertiary hover:text-content-primary"
+            >
+              <X size={14} aria-hidden="true" />
             </button>
           </div>
           <ul className="py-1.5 max-h-60 overflow-y-auto">
@@ -1680,6 +2010,9 @@ export function FloatingRecentButton() {
       {/* FAB button */}
       <button
         onClick={() => setOpen((p) => !p)}
+        aria-label={t('nav.recent', { defaultValue: 'Recent' })}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className={clsx(
           'w-10 h-10 rounded-full flex items-center justify-center shadow-lg border transition-all duration-200 hover:scale-105 active:scale-95',
           open
@@ -1688,7 +2021,7 @@ export function FloatingRecentButton() {
         )}
         title={t('nav.recent', { defaultValue: 'Recent' })}
       >
-        <History size={18} strokeWidth={2} />
+        <History size={18} strokeWidth={2} aria-hidden="true" />
       </button>
     </div>
   );

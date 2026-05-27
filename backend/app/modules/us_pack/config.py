@@ -165,4 +165,8 @@ PACK_CONFIG: dict[str, Any] = {
         "temperature": "°F",
         "pressure": "psi",
     },
+    # ── VAT rates (Wave 25) ──────────────────────────────────────────────────
+    # US has no federal VAT — per-state sales tax is modelled in tax_rules.
+    # Empty dict is the explicit signal that this pack opts out of VAT.
+    "vat_rates": {},
 }

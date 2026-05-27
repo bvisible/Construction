@@ -567,6 +567,431 @@ def detect_converter_version(extension: str) -> dict[str, str | None]:
     return result
 
 
+# ── Per-binary CLI capability matrix ──────────────────────────────────────
+#
+# Different DDC RvtExporter / IfcExporter builds accept different positional
+# arguments and flags.  Older releases (the ones a user already has installed
+# on disk) reject anything beyond ``<input> <output>``; newer releases accept
+# a depth-mode token (``standard`` / ``complete``) and the ``-no-collada``
+# flag we use to skip the geometry pass.
+#
+# The platform's invocation has historically appended those extra tokens
+# unconditionally — which produces a ``The following arguments were not
+# expected`` failure on old binaries even though they could otherwise
+# convert the file just fine.  This matrix records what each installed
+# binary actually understands so ``ifc_processor._run_ddc`` can build a
+# version-tolerant command line.
+#
+# Cache key is the resolved binary path (str), so a user with two
+# extensions sharing the same install dir gets one probe per binary.  We
+# also keep a per-extension "negative" sentinel so we don't re-probe a
+# missing converter on every call.
+_CONVERTER_CAPABILITIES: dict[str, dict[str, Any]] = {}
+
+
+# ── CLI profile identifiers ───────────────────────────────────────────────
+#
+# DDC has shipped three distinct CLI shapes that we have to deal with:
+#
+#   * ``v18_flag``       — v18.x.x: flag-driven, e.g.
+#                          ``RvtExporter input -x out.xlsx -d out.dae
+#                          -m standard --force-path --no-dae --no-xlsx``.
+#                          New keys: -x/--xlsx, -d/--dae, --no-dae,
+#                          --no-xlsx, -m/--mode, --force-path.
+#                          REJECTS the legacy positional ``standard`` and
+#                          flag ``-no-collada`` with ``exit 15``.
+#
+#   * ``v17_positional`` — v17.x.x: positional + a couple of optional flags.
+#                          ``RvtExporter input output [standard|complete]
+#                          [-no-collada]``. Modern enough to advertise
+#                          ``-no-collada`` in --help; pre-v18 so doesn't
+#                          know ``--no-dae`` or ``--force-path``.
+#
+#   * ``legacy``         — pre-v17 / unknown old binary. Only accepts the
+#                          bare ``[exe, input, output]`` shape.
+#
+#   * ``unknown``        — no binary installed (sentinel for "don't cache").
+#
+# ``cli_profile`` is the canonical key; the legacy booleans
+# (``accepts_depth_mode`` / ``accepts_no_collada_flag``) are kept for
+# back-compat with code paths that pre-date v18.
+CLI_PROFILE_V18_FLAG = "v18_flag"
+CLI_PROFILE_V17_POSITIONAL = "v17_positional"
+CLI_PROFILE_LEGACY = "legacy"
+CLI_PROFILE_UNKNOWN = "unknown"
+
+
+def _default_capabilities() -> dict[str, Any]:
+    """‌⁠‍Conservative defaults for an unknown/old binary.
+
+    Old DDC CLIs only accept ``[converter, input, output]`` — they reject
+    the depth-mode positional and the ``-no-collada`` flag.  When the probe
+    fails we fall back to this profile so the retry path matches what
+    ``_run_ddc`` would have emitted as its second-attempt fallback.
+    """
+    return {
+        "accepts_depth_mode": False,
+        "accepts_no_collada_flag": False,
+        # v18-specific flag capabilities — all False on the legacy profile.
+        "accepts_flag_xlsx": False,
+        "accepts_flag_dae": False,
+        "accepts_flag_no_dae": False,
+        "accepts_flag_no_xlsx": False,
+        "accepts_flag_mode": False,
+        "accepts_flag_force_path": False,
+        "legacy_positional_input_output": True,
+        "cli_profile": CLI_PROFILE_LEGACY,
+        "version_text": None,
+        "probed": True,
+    }
+
+
+def _modern_capabilities(version_text: str | None = None) -> dict[str, Any]:
+    """‌⁠‍Capability profile for a confirmed v17-era DDC binary.
+
+    "Modern" historically meant v17.x (positional CLI that DID accept
+    ``standard`` and ``-no-collada``). v18+ uses a different shape — see
+    ``_v18_capabilities`` and ``CLI_PROFILE_V18_FLAG``. This constructor
+    is retained for back-compat with tests and any external caller that
+    has the v17 banner in hand.
+    """
+    return {
+        "accepts_depth_mode": True,
+        "accepts_no_collada_flag": True,
+        "accepts_flag_xlsx": False,
+        "accepts_flag_dae": False,
+        "accepts_flag_no_dae": False,
+        "accepts_flag_no_xlsx": False,
+        "accepts_flag_mode": False,
+        "accepts_flag_force_path": False,
+        "legacy_positional_input_output": True,
+        "cli_profile": CLI_PROFILE_V17_POSITIONAL,
+        "version_text": version_text,
+        "probed": True,
+    }
+
+
+def _v18_capabilities(version_text: str | None = None) -> dict[str, Any]:
+    """‌⁠‍Capability profile for a confirmed DDC v18.x flag-driven binary.
+
+    v18 dropped the legacy positional output path AND the ``-no-collada``
+    flag in favour of:
+
+      ``RvtExporter <input> -x <xlsx> -d <dae> -m {basic|standard|complete}
+       --force-path [--no-dae] [--no-xlsx]``
+
+    The legacy boolean flags (``accepts_depth_mode`` /
+    ``accepts_no_collada_flag``) are set to False here because the
+    pre-v18 invocation builder must NOT try to emit those tokens —
+    v18 rejects them with ``exit 15: arguments were not expected``.
+    """
+    return {
+        "accepts_depth_mode": False,
+        "accepts_no_collada_flag": False,
+        "accepts_flag_xlsx": True,
+        "accepts_flag_dae": True,
+        "accepts_flag_no_dae": True,
+        "accepts_flag_no_xlsx": True,
+        "accepts_flag_mode": True,
+        "accepts_flag_force_path": True,
+        "legacy_positional_input_output": False,
+        "cli_profile": CLI_PROFILE_V18_FLAG,
+        "version_text": version_text,
+        "probed": True,
+    }
+
+
+# ── Help-text parsing ─────────────────────────────────────────────────────
+#
+# The v18 help text contains the word ``complete`` (in the mode-preset
+# enum ``{basic,standard,complete,custom}``), which historically caused a
+# false-positive against the substring-based ``_MODERN_HELP_MARKERS`` —
+# the conversion path would then emit ``standard`` + ``-no-collada`` and
+# eat ``exit 15`` from the v18 binary.
+#
+# Token-based detection avoids that trap: we split the help text into
+# whitespace-delimited tokens and check for the LITERAL flag spellings
+# that v18 (and only v18) advertises. ``--force-path``, ``--no-dae`` and
+# ``--no-xlsx`` are all v18-exclusive — none of them appear in any v17 or
+# older help text. ``-no-collada`` is v17-exclusive: v18 dropped it.
+
+_V18_EXCLUSIVE_TOKENS = (
+    "--force-path",
+    "--no-dae",
+    "--no-xlsx",
+)
+# Tokens that prove v17-era CLI (positional + ``-no-collada``). The leading
+# single dash is intentional — v17 used the GNU long-style ``-no-collada``
+# (not ``--no-collada``).
+_V17_EXCLUSIVE_TOKENS = (
+    "-no-collada",
+)
+
+
+def _tokenize_help(text: str) -> set[str]:
+    """‌⁠‍Split DDC --help output into a set of whitespace-delimited tokens.
+
+    Strips trailing punctuation that the CLI11 / Qt help formatter
+    sometimes appends (``,`` / ``.`` / ``;``) so an exact-match lookup
+    against ``"--no-dae"`` finds the token even when it appears mid-line
+    as ``--no-dae,`` in a comma-separated alias list. Lower-cases the
+    output because DDC has shipped both ``--No-Dae`` and ``--no-dae`` in
+    different builds.
+    """
+    tokens: set[str] = set()
+    for raw in text.split():
+        tok = raw.strip().lower().strip(",.;:()[]{}")
+        if tok:
+            tokens.add(tok)
+    return tokens
+
+
+def _classify_help_text(text: str) -> str:
+    """‌⁠‍Pick the CLI profile from a probed --help / --version blob.
+
+    Returns one of the ``CLI_PROFILE_*`` constants. Resolution order:
+
+      1. Any v18-exclusive token present → ``v18_flag`` (highest precedence
+         because v18 binaries also mention ``complete`` in their mode enum
+         which would otherwise hit the v17 heuristic).
+      2. Any v17-exclusive token present → ``v17_positional``.
+      3. Otherwise → ``legacy``.
+
+    Lower-cased input is expected — the probe already normalises.
+    """
+    tokens = _tokenize_help(text)
+    if any(tok in tokens for tok in _V18_EXCLUSIVE_TOKENS):
+        return CLI_PROFILE_V18_FLAG
+    if any(tok in tokens for tok in _V17_EXCLUSIVE_TOKENS):
+        return CLI_PROFILE_V17_POSITIONAL
+    return CLI_PROFILE_LEGACY
+
+
+# Substrings in ``--help`` / ``--version`` output that confirm the CLI
+# understands the modern argument shape.  Retained for back-compat with
+# tests that import this constant directly; new code should call
+# ``_classify_help_text`` which is token-based and false-positive-free.
+_MODERN_HELP_MARKERS = (
+    "-no-collada",
+    "--no-collada",
+    "no-collada",
+    "complete",       # the depth-mode token only newer CLIs document
+)
+
+
+def build_ddc_args(
+    converter: Path,
+    input_path: Path,
+    *,
+    caps: dict[str, Any],
+    xlsx_out: Path | None = None,
+    dae_out: Path | None = None,
+    mode: str = "standard",
+    include_no_dae: bool = False,
+    include_no_xlsx: bool = False,
+) -> list[str]:
+    """‌⁠‍Compose a DDC converter command line that matches the binary's CLI shape.
+
+    Single source of truth for the v18-flag / v17-positional split. The
+    caller picks which outputs it wants by passing ``xlsx_out`` / ``dae_out``;
+    ``include_no_dae`` / ``include_no_xlsx`` let the v18 path actively
+    suppress the OTHER output so the converter doesn't spend time writing
+    something the caller will discard. The v17 path approximates the same
+    optimisation via the older ``-no-collada`` flag.
+
+    The legacy (``v17_positional`` / ``legacy``) path keeps the historical
+    behaviour: one output path per invocation as the third positional
+    arg. Callers who need both outputs run two invocations (XLSX pass +
+    DAE pass), which is exactly what ``ifc_processor._try_cad2data``
+    already does in parallel.
+
+    For ``v18_flag`` we DO emit both ``-x`` and ``-d`` in the same call
+    when both are requested — saves loading the RVT a second time. Callers
+    that want sequential passes (matching the v17 codepath) can still do
+    so by calling this twice with only one of ``xlsx_out`` / ``dae_out``
+    populated each time.
+    """
+    profile = caps.get("cli_profile", CLI_PROFILE_LEGACY)
+    args: list[str] = [str(converter), str(input_path)]
+
+    if profile == CLI_PROFILE_V18_FLAG:
+        if xlsx_out is not None:
+            args.extend(["-x", str(xlsx_out)])
+        if dae_out is not None:
+            args.extend(["-d", str(dae_out)])
+        if include_no_dae and caps.get("accepts_flag_no_dae"):
+            args.append("--no-dae")
+        if include_no_xlsx and caps.get("accepts_flag_no_xlsx"):
+            args.append("--no-xlsx")
+        if caps.get("accepts_flag_mode"):
+            args.extend(["-m", mode])
+        if caps.get("accepts_flag_force_path"):
+            args.append("--force-path")
+        return args
+
+    # Legacy / v17 positional path — single output target per call.
+    out_path = xlsx_out if xlsx_out is not None else dae_out
+    if out_path is None:
+        raise ValueError(
+            "build_ddc_args (legacy profile) requires at least one of "
+            "xlsx_out or dae_out"
+        )
+    args.append(str(out_path))
+    if caps.get("accepts_depth_mode"):
+        args.append(mode)
+    # v17 only knows how to *skip* COLLADA; it has no flag to skip XLSX.
+    # ``include_no_dae=True`` on the legacy path maps to the v17 spelling
+    # ``-no-collada``.
+    if include_no_dae and caps.get("accepts_no_collada_flag"):
+        args.append("-no-collada")
+    return args
+
+
+def detect_converter_capabilities(extension: str) -> dict[str, Any]:
+    """‌⁠‍Probe the installed DDC converter to learn which CLI args it accepts.
+
+    The probe runs the binary with ``--help`` (and falls back to
+    ``--version``); both calls are cheap (sub-second, no file IO).
+    Results are cached per-binary-path for the lifetime of the process so
+    subsequent conversions don't pay the probe cost.
+
+    Returns a dict with the keys:
+      * ``accepts_depth_mode`` (bool) — append ``standard`` / ``complete``?
+      * ``accepts_no_collada_flag`` (bool) — append ``-no-collada``?
+      * ``version_text`` (str | None) — raw probe output (debug only)
+      * ``probed`` (bool) — True once the binary was actually executed
+
+    If the probe itself fails (non-zero exit, no recognizable output,
+    process never started), the conservative "old CLI" profile is
+    returned and cached — so the conversion path skips the extra args
+    and avoids the exit-15 trap.
+    """
+    exe = find_converter(extension)
+    if exe is None:
+        # No binary installed at all — nothing to probe; mark as not-probed
+        # so a later install can trigger a fresh detect.
+        return {
+            "accepts_depth_mode": False,
+            "accepts_no_collada_flag": False,
+            "accepts_flag_xlsx": False,
+            "accepts_flag_dae": False,
+            "accepts_flag_no_dae": False,
+            "accepts_flag_no_xlsx": False,
+            "accepts_flag_mode": False,
+            "accepts_flag_force_path": False,
+            "legacy_positional_input_output": False,
+            "cli_profile": CLI_PROFILE_UNKNOWN,
+            "version_text": None,
+            "probed": False,
+        }
+
+    cache_key = str(exe)
+    cached = _CONVERTER_CAPABILITIES.get(cache_key)
+    if cached is not None:
+        return cached
+
+    import subprocess
+
+    probe_text = ""
+    probe_ok = False
+    for flag in ("--help", "-h", "--version"):
+        try:
+            proc = subprocess.run(
+                [str(exe), flag],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=str(exe.parent),
+                input=b"\n",
+                timeout=8,
+            )
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            logger.debug("Converter probe (%s %s) failed to start: %s", exe, flag, exc)
+            continue
+        except subprocess.TimeoutExpired:
+            logger.debug("Converter probe (%s %s) timed out", exe, flag)
+            continue
+
+        # DDC binaries occasionally emit their banner on stderr instead of
+        # stdout; combine both so the marker scan doesn't miss it.
+        out = (proc.stdout or b"") + b"\n" + (proc.stderr or b"")
+        try:
+            text = out.decode("utf-8", errors="replace").lower()
+        except UnicodeError:
+            text = ""
+        if text.strip():
+            probe_text = text
+            # Any non-empty banner counts as "we successfully spoke to the
+            # binary" — even an exit-1 from ``-h`` on a CLI that wants
+            # ``--help``.  The marker scan below decides the actual profile.
+            probe_ok = True
+            break
+
+    if not probe_ok or not probe_text:
+        # Probe failed entirely → assume old CLI.  This is the SAFE branch:
+        # if we're wrong and the binary is actually modern, we just lose
+        # the COLLADA-skip optimisation but conversion still succeeds.
+        caps = _default_capabilities()
+        _CONVERTER_CAPABILITIES[cache_key] = caps
+        logger.info(
+            "DDC capability probe for %s produced no usable output — "
+            "assuming legacy CLI (no depth-mode, no -no-collada)",
+            exe.name,
+        )
+        return caps
+
+    # Classify the probed help text against the v18 / v17 / legacy
+    # decision tree.  Token-based — see ``_classify_help_text`` for why
+    # substring matching was retired (v18 mentions ``complete`` in its
+    # mode-preset enum, which used to false-positive the legacy
+    # ``_MODERN_HELP_MARKERS`` substring check and emit ``-no-collada``
+    # against a v18 binary that rejects it with exit 15).
+    profile = _classify_help_text(probe_text)
+    if profile == CLI_PROFILE_V18_FLAG:
+        caps = _v18_capabilities(version_text=probe_text[:512])
+        _CONVERTER_CAPABILITIES[cache_key] = caps
+        logger.info(
+            "DDC capability probe for %s detected v18 flag CLI "
+            "(--no-dae / --no-xlsx / --force-path / -m mode)",
+            exe.name,
+        )
+        return caps
+    if profile == CLI_PROFILE_V17_POSITIONAL:
+        caps = _modern_capabilities(version_text=probe_text[:512])
+        _CONVERTER_CAPABILITIES[cache_key] = caps
+        logger.info(
+            "DDC capability probe for %s detected v17 positional CLI "
+            "(depth-mode + -no-collada accepted)",
+            exe.name,
+        )
+        return caps
+
+    # Help worked but no modern marker → treat as legacy.  Surfaced at INFO
+    # because this is the path the v4.6.2 user-reported bug originally hit.
+    caps = _default_capabilities()
+    _CONVERTER_CAPABILITIES[cache_key] = caps
+    logger.info(
+        "DDC capability probe for %s did not advertise modern flags — "
+        "assuming legacy CLI (no depth-mode, no -no-collada)",
+        exe.name,
+    )
+    return caps
+
+
+def invalidate_converter_capabilities(extension: str | None = None) -> None:
+    """‌⁠‍Drop the cached capability profile so the next conversion re-probes.
+
+    Call this after a reinstall / update so an upgraded binary's new
+    argument shape is picked up without a service restart.  Matches the
+    sibling ``invalidate_converter_health`` API.
+    """
+    if extension is None:
+        _CONVERTER_CAPABILITIES.clear()
+        return
+    exe = find_converter(extension)
+    if exe is not None:
+        _CONVERTER_CAPABILITIES.pop(str(exe), None)
+
+
 def invalidate_converter_health(extension: str | None = None) -> None:
     """Drop cached health for one or all converters.
 
@@ -578,6 +1003,9 @@ def invalidate_converter_health(extension: str | None = None) -> None:
         _HEALTH_CACHE.clear()
     else:
         _HEALTH_CACHE.pop(extension, None)
+    # Capabilities are tied 1:1 to the installed binary — drop them in
+    # lock-step so a reinstall picks up the new CLI shape immediately.
+    invalidate_converter_capabilities(extension)
 
 
 async def convert_cad_to_excel(

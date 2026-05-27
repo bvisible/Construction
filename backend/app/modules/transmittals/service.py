@@ -212,6 +212,7 @@ class TransmittalService:
             if r.recipient_user_id is not None
         ]
 
+        prior_status = transmittal.status
         await self.repo.update_fields(
             transmittal_id,
             status="issued",
@@ -220,6 +221,30 @@ class TransmittalService:
         )
 
         updated = await self.repo.get(transmittal_id)
+
+        # Epic H — universal audit trail.
+        from app.core.audit_log import log_activity as _log_activity
+
+        await _log_activity(
+            self.session,
+            actor_id=str(transmittal.created_by) if transmittal.created_by else None,
+            entity_type="transmittal",
+            entity_id=str(transmittal_id),
+            action="status_changed",
+            from_status=prior_status,
+            to_status="issued",
+            reason="Transmittal issued",
+            metadata={
+                "transmittal_number": transmittal_number_s,
+                "recipient_count": len(recipient_user_ids),
+            },
+            module="transmittals",
+            parent_entity_type="project",
+            parent_entity_id=project_id_s,
+            before_state={"status": prior_status, "is_locked": False},
+            after_state={"status": "issued", "is_locked": True},
+        )
+
         logger.info("Transmittal issued: %s", transmittal.transmittal_number)
 
         for recipient_user_id in recipient_user_ids:

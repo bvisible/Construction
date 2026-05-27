@@ -72,11 +72,11 @@ type FilterMode = 'all' | 'errors' | 'warnings' | 'info' | 'passed';
 
 function getRuleDescriptions(t: (key: string, opts?: Record<string, unknown>) => string): Record<string, string> {
   return {
-    'boq_quality.position_has_quantity': t('validation.rule_position_has_quantity', { defaultValue: 'Checks that every BOQ position has a quantity greater than zero.‌⁠‍' }),
-    'boq_quality.position_has_unit_rate': t('validation.rule_position_has_unit_rate', { defaultValue: 'Checks that every position has a unit rate assigned.‌⁠‍' }),
-    'boq_quality.position_has_description': t('validation.rule_position_has_description', { defaultValue: 'Checks that every position has a meaningful description.‌⁠‍' }),
-    'boq_quality.no_duplicate_ordinals': t('validation.rule_no_duplicate_ordinals', { defaultValue: 'Ensures all ordinal numbers within the BOQ are unique.‌⁠‍' }),
-    'boq_quality.unit_rate_in_range': t('validation.rule_unit_rate_in_range', { defaultValue: 'Flags unit rates that deviate more than 5x from median.‌⁠‍' }),
+    'boq_quality.position_has_quantity': t('validation.rule_position_has_quantity', { defaultValue: 'Checks that every BOQ position has a quantity greater than zero.' }),
+    'boq_quality.position_has_unit_rate': t('validation.rule_position_has_unit_rate', { defaultValue: 'Checks that every position has a unit rate assigned.' }),
+    'boq_quality.position_has_description': t('validation.rule_position_has_description', { defaultValue: 'Checks that every position has a meaningful description.' }),
+    'boq_quality.no_duplicate_ordinals': t('validation.rule_no_duplicate_ordinals', { defaultValue: 'Ensures all ordinal numbers within the BOQ are unique.' }),
+    'boq_quality.unit_rate_in_range': t('validation.rule_unit_rate_in_range', { defaultValue: 'Flags unit rates that deviate more than 5x from median.' }),
     'din276.cost_group_required': t('validation.rule_cost_group_required', { defaultValue: 'Ensures every position has a DIN 276 Kostengruppe assigned.' }),
     'din276.valid_cost_group': t('validation.rule_valid_cost_group', { defaultValue: 'Validates that DIN 276 codes are proper 3-digit codes.' }),
     'gaeb.ordinal_format': t('validation.rule_ordinal_format', { defaultValue: 'Checks ordinal numbers follow GAEB LV format XX.XX.XXXX.' }),
@@ -623,7 +623,7 @@ export function ValidationPage() {
         .join(','),
     );
     const csv = [header.join(','), ...lines].join('\r\n');
-    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['' + csv], { type: 'text/csv;charset=utf-8;' });
     triggerDownload(blob, `validation_findings_${selectedBoqId.slice(0, 8)}.csv`);
     addToast({
       type: 'success',
@@ -830,7 +830,7 @@ export function ValidationPage() {
             </div>
 
             {/* All passed banner */}
-            {report.counts.errors === 0 && report.counts.warnings === 0 && (
+            {report.counts.total > 0 && report.counts.errors === 0 && report.counts.warnings === 0 && (
               <div className="mb-4 flex items-center gap-3 rounded-xl bg-semantic-success-bg px-5 py-4">
                 <CheckCircle2 size={20} className="shrink-0 text-semantic-success" />
                 <p className="text-sm font-medium text-semantic-success">

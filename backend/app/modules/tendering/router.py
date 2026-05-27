@@ -20,6 +20,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, CurrentUserPayload, SessionDep, verify_project_access
 from app.modules.tendering.schemas import (
     BidAnalysisResponse,
@@ -56,7 +58,7 @@ async def _verify_tender_project_owner(
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail=translate("errors.project_not_found", locale=get_locale()))
     if str(project.owner_id) != user_id:
         raise HTTPException(status_code=403, detail="You do not have access to this project")
 
@@ -77,7 +79,7 @@ async def _verify_package_owner(
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(package.project_id)
     if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+        raise HTTPException(status_code=404, detail=translate("errors.project_not_found", locale=get_locale()))
     if str(project.owner_id) != user_id:
         raise HTTPException(status_code=403, detail="You do not have access to this tender package")
     return package

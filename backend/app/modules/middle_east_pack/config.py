@@ -1,5 +1,6 @@
 """‌⁠‍Regional configuration for the Middle East and GCC countries."""
 
+from decimal import Decimal
 from typing import Any
 
 PACK_CONFIG: dict[str, Any] = {
@@ -173,5 +174,14 @@ PACK_CONFIG: dict[str, Any] = {
         "volume": "m³",
         "weight": "kg",
         "temperature": "°C",
+    },
+    # ── VAT rates (Wave 25 — GCC + AE / SA / BH / OM; QA & KW no VAT yet) ────
+    "vat_rates": {
+        "AE": {"standard": Decimal("0.05"), "zero": Decimal("0.00")},
+        "SA": {"standard": Decimal("0.15"), "zero": Decimal("0.00")},
+        "BH": {"standard": Decimal("0.10"), "zero": Decimal("0.00")},
+        "OM": {"standard": Decimal("0.05"), "zero": Decimal("0.00")},
+        "QA": {"standard": Decimal("0.00")},
+        "KW": {"standard": Decimal("0.00")},
     },
 }

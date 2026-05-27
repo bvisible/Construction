@@ -30,6 +30,9 @@ export interface FileCommentResponse {
   file_kind: FileKind;
   file_id: string;
   file_version_snapshot: string | null;
+  /** Epic C — unified version-chain FK. NULL = pre-Epic-C comment;
+   *  treat as current. */
+  file_version_id: string | null;
   parent_id: string | null;
   author_id: string;
   body: string;
@@ -65,6 +68,9 @@ export interface FileCommentCreatePayload {
   anchor_x?: number | null;
   anchor_y?: number | null;
   file_version_snapshot?: string | null;
+  /** Epic C — explicit version pin. Omit to default to the current
+   *  chain head (the usual behaviour). */
+  file_version_id?: string | null;
 }
 
 export interface FileCommentUpdatePayload {

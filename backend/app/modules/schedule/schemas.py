@@ -1,15 +1,34 @@
 """‌⁠‍Schedule Pydantic schemas — request/response models.
 
 Defines create, update, and response schemas for schedules, activities,
-and work orders.  Numeric values (costs, progress) are exposed as floats
-in the API but stored as strings in SQLite-compatible models.
+and work orders.  Numeric values are stored as strings in SQLite-compatible
+models. v3 §10 money fields (work order ``planned_cost`` / ``actual_cost``,
+labour-by-phase ``labor_cost`` / ``total_cost``) are emitted as
+Decimal-as-string in JSON.
 """
 
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # Bound ints at PostgreSQL INT4 max.
 _INT32_MAX = 2_147_483_647
@@ -298,7 +317,11 @@ class ProgressUpdateRequest(BaseModel):
 
 
 class WorkOrderCreate(BaseModel):
-    """Create a new work order."""
+    """Create a new work order.
+
+    v3 §10 — ``planned_cost`` / ``actual_cost`` are money;
+    Decimal-as-string in JSON.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
 
@@ -312,13 +335,24 @@ class WorkOrderCreate(BaseModel):
     planned_end: str | None = Field(default=None, max_length=20)
     actual_start: str | None = Field(default=None, max_length=20)
     actual_end: str | None = Field(default=None, max_length=20)
-    planned_cost: float = Field(default=0.0, ge=0.0, le=1e12, allow_inf_nan=False)
-    actual_cost: float = Field(default=0.0, ge=0.0, le=1e12, allow_inf_nan=False)
+    planned_cost: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("1e12"))
+    actual_cost: Decimal = Field(default=Decimal("0"), ge=0, le=Decimal("1e12"))
     status: str = Field(
         default="planned",
         pattern=r"^(planned|issued|in_progress|completed|cancelled)$",
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("planned_cost", "actual_cost", mode="after")
+    @classmethod
+    def _reject_non_finite(cls, v: Decimal) -> Decimal:
+        if not v.is_finite():
+            raise ValueError("cost must be finite (no NaN / Infinity)")
+        return v
+
+    @field_serializer("planned_cost", "actual_cost", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class WorkOrderUpdate(BaseModel):
@@ -335,13 +369,26 @@ class WorkOrderUpdate(BaseModel):
     planned_end: str | None = Field(default=None, max_length=20)
     actual_start: str | None = Field(default=None, max_length=20)
     actual_end: str | None = Field(default=None, max_length=20)
-    planned_cost: float | None = Field(default=None, ge=0.0, le=1e12, allow_inf_nan=False)
-    actual_cost: float | None = Field(default=None, ge=0.0, le=1e12, allow_inf_nan=False)
+    planned_cost: Decimal | None = Field(default=None, ge=0, le=Decimal("1e12"))
+    actual_cost: Decimal | None = Field(default=None, ge=0, le=Decimal("1e12"))
     status: str | None = Field(
         default=None,
         pattern=r"^(planned|issued|in_progress|completed|cancelled)$",
     )
     metadata: dict[str, Any] | None = None
+
+    @field_validator("planned_cost", "actual_cost", mode="after")
+    @classmethod
+    def _reject_non_finite(cls, v: Decimal | None) -> Decimal | None:
+        if v is None:
+            return None
+        if not v.is_finite():
+            raise ValueError("cost must be finite (no NaN / Infinity)")
+        return v
+
+    @field_serializer("planned_cost", "actual_cost", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
 
 
 class WorkOrderStatusUpdate(BaseModel):
@@ -351,7 +398,11 @@ class WorkOrderStatusUpdate(BaseModel):
 
 
 class WorkOrderResponse(BaseModel):
-    """Work order returned from the API."""
+    """Work order returned from the API.
+
+    v3 §10 — ``planned_cost`` / ``actual_cost`` are money;
+    Decimal-as-string in JSON.
+    """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -366,12 +417,16 @@ class WorkOrderResponse(BaseModel):
     planned_end: str | None
     actual_start: str | None
     actual_end: str | None
-    planned_cost: float
-    actual_cost: float
+    planned_cost: Decimal = Decimal("0")
+    actual_cost: Decimal = Decimal("0")
     status: str
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("planned_cost", "actual_cost", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Composite schemas ────────────────────────────────────────────────────────
@@ -678,14 +733,22 @@ class ProgressUpdateResponse(BaseModel):
 
 
 class LaborCostByPhaseRow(BaseModel):
-    """Rolled-up labour cost for a single schedule phase / WBS group."""
+    """Rolled-up labour cost for a single schedule phase / WBS group.
+
+    v3 §10 — ``labor_cost`` and ``total_cost`` are money;
+    Decimal-as-string in JSON.
+    """
 
     phase: str = Field("", description="Phase label — wbs_code prefix or activity_type")
     activity_count: int = 0
-    labor_cost: float = 0.0
-    total_cost: float = 0.0
+    labor_cost: Decimal = Decimal("0")
+    total_cost: Decimal = Decimal("0")
     start_date: str | None = None
     end_date: str | None = None
+
+    @field_serializer("labor_cost", "total_cost", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class LaborCostByPhaseResponse(BaseModel):

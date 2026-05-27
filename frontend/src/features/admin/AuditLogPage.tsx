@@ -807,7 +807,10 @@ export function AuditLogPage() {
 
   const usersQuery = useQuery({
     queryKey: ['audit-log', 'users'],
-    queryFn: () => fetchUsers({ limit: 200 }),
+    // Backend caps /v1/users/?limit at 100 (422 above it). The audit-log
+    // page only uses this list to resolve user IDs to display names — 100
+    // is plenty and avoids a 422 every time /admin/audit-log mounts.
+    queryFn: () => fetchUsers({ limit: 100 }),
     staleTime: 60_000,
   });
 
@@ -1125,7 +1128,7 @@ export function AuditLogPage() {
                     : t('audit.error_generic', { defaultValue: 'Please try again or refine the filters.' })
                 }
                 action={{
-                  label: t('common.retry', { defaultValue: 'Retry' }),
+                  label: t('common.retry'),
                   onClick: () => void entriesQuery.refetch(),
                 }}
               />

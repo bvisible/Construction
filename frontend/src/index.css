@@ -30,11 +30,20 @@
   --oe-border-light: #e8e8ed;
   --oe-border-focus: var(--oe-blue);
 
-  /* Text */
+  /* Text — WCAG AA compliant against every light surface we render on.
+     Picked 2026-05-25 to clear axe-core color-contrast wherever the
+     token is composed with bg-surface-primary / -secondary / -tertiary
+     and the brand tints (oe-blue-subtle #e8f2fe, semantic-error-bg
+     #fef2f2). Was: tertiary #86868b (3.62:1 on white, fail),
+     quaternary #aeaeb2 (2.21:1 on white, fail). Now:
+       tertiary  #666b78 → 5.33:1 on #fff, 4.90:1 on #f5f5f7,
+                            4.71:1 on #e8f2fe, 4.87:1 on #fef2f2 — all pass
+       quaternary #696c78 → 5.23:1 on #fff, 4.80:1 on #f5f5f7,
+                            4.62:1 on #e8f2fe, 4.78:1 on #fef2f2 — all pass */
   --oe-text-primary: #1d1d1f;
   --oe-text-secondary: #6e6e73;
-  --oe-text-tertiary: #86868b;
-  --oe-text-quaternary: #aeaeb2;
+  --oe-text-tertiary: #666b78;
+  --oe-text-quaternary: #696c78;
   --oe-text-inverse: #ffffff;
 
   /* Semantic */
@@ -118,11 +127,18 @@
   --oe-border-light: #232638;
   --oe-border-focus: var(--oe-blue);
 
-  /* Text — high contrast on dark */
+  /* Text — high contrast on dark, WCAG AA compliant against every
+     surface (bg, bg-secondary, bg-tertiary, bg-elevated #1e2130).
+     Quaternary intentionally barely-distinct from tertiary because
+     "more muted on dark = closer to bg = sub-AA"; both still pass.
+     Was: tertiary #6b6e80 (3.74:1 on bg, borderline; failed on lifted
+     surfaces), quaternary #4a4d5e (2.26:1, fail).
+     Now: tertiary #9499a8 → 5.61:1 on #1e2130 (worst dark surface).
+          quaternary #8b8e9d → 4.91:1 on #1e2130 (just over AA). */
   --oe-text-primary: #f0f0f5;
   --oe-text-secondary: #a0a3b5;
-  --oe-text-tertiary: #6b6e80;
-  --oe-text-quaternary: #4a4d5e;
+  --oe-text-tertiary: #9499a8;
+  --oe-text-quaternary: #8b8e9d;
   --oe-text-inverse: #0f1117;
 
   /* Semantic — adjusted for dark backgrounds */

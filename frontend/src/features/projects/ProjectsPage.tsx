@@ -1,14 +1,14 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   FolderPlus, FolderOpen, ArrowRight, MoreHorizontal, Copy, Trash2, Archive, ArchiveRestore, ExternalLink,
   Search, ChevronDown, ArrowUpDown, Star, Map as MapIcon, CloudSun,
   Building2, DollarSign, Euro, PoundSterling, Globe2, MapPin, Layers, AlertTriangle,
 } from 'lucide-react';
 import { formatDistanceToNowStrict, isValid as isValidDate, parseISO } from 'date-fns';
-import { Button, Card, Badge, EmptyState, SkeletonGrid, Breadcrumb, ProjectMap, ProjectWeather, FileTypeChips, type LatLng } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Skeleton, SkeletonGrid, Breadcrumb, ProjectMap, ProjectWeather, FileTypeChips, type LatLng } from '@/shared/ui';
 import { useWidgetSettingsStore } from '@/stores/useWidgetSettingsStore';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { projectsApi, type Project } from './api';
@@ -118,7 +118,12 @@ export function ProjectsPage() {
     () => (projects ? projects.map((p) => p.id).join(',') : ''),
     [projects],
   );
-  const { data: boqStats, error: boqStatsError } = useQuery({
+  const {
+    data: boqStats,
+    error: boqStatsError,
+    refetch: refetchBoqStats,
+    isFetching: isFetchingBoqStats,
+  } = useQuery({
     queryKey: ['projects-dashboard-cards', projectIdsKey],
     queryFn: async () => {
       const cards = await apiGet<DashboardCard[]>('/v1/projects/dashboard/cards/');
@@ -137,7 +142,12 @@ export function ProjectsPage() {
     staleTime: 60_000,
   });
 
-  // Show a persistent warning if BOQ stats failed to load at the top level
+  // Show a persistent warning if BOQ stats failed to load at the top level.
+  // The cards still render via per-project fallback (boqStatsMap.get(id) →
+  // undefined → ProjectCard's own fetcher fills in), so the whole page
+  // doesn't blank out on a 500 from the rollup endpoint — but the warning
+  // banner below makes the partial-data state explicit instead of leaving
+  // the cards looking like "no BOQs / €0 value".
   useEffect(() => {
     if (boqStatsError) {
       if (import.meta.env.DEV) console.error('BOQ stats query failed:', boqStatsError);
@@ -289,9 +299,9 @@ export function ProjectsPage() {
   /* ── Sort labels ──────────────────────────────────────────────────── */
 
   const sortOptions: { value: SortOption; label: string }[] = [
-    { value: 'name_asc', label: t('projects.sort_name', { defaultValue: 'Name A-Z‌⁠‍' }) },
-    { value: 'newest', label: t('projects.sort_newest', { defaultValue: 'Newest‌⁠‍' }) },
-    { value: 'oldest', label: t('projects.sort_oldest', { defaultValue: 'Oldest‌⁠‍' }) },
+    { value: 'name_asc', label: t('projects.sort_name', { defaultValue: 'Name A-Z' }) },
+    { value: 'newest', label: t('projects.sort_newest', { defaultValue: 'Newest' }) },
+    { value: 'oldest', label: t('projects.sort_oldest', { defaultValue: 'Oldest' }) },
     { value: 'value', label: t('projects.sort_value', { defaultValue: 'Value' }) },
   ];
 
@@ -305,10 +315,10 @@ export function ProjectsPage() {
           <p className="mt-1 text-sm text-content-secondary">
             {projects
               ? t('projects.subtitle_count', {
-                  defaultValue: 'Manage your construction estimation projects ({{count}} total)‌⁠‍',
+                  defaultValue: 'Manage your construction estimation projects ({{count}} total)',
                   count: projects.length,
                 })
-              : t('common.loading', { defaultValue: 'Loading...‌⁠‍' })}
+              : t('common.loading', { defaultValue: 'Loading...' })}
           </p>
         </div>
         <Button
@@ -358,7 +368,7 @@ export function ProjectsPage() {
               </div>
               <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
                 {boqStats ? stats.totalBoqs.toLocaleString() : (
-                  <span className="inline-block h-5 w-10 animate-pulse rounded bg-surface-tertiary" />
+                  <Skeleton width={40} height={20} className="inline-block align-middle" />
                 )}
               </div>
               <div className="mt-2 text-2xs text-content-tertiary">
@@ -378,7 +388,7 @@ export function ProjectsPage() {
               </div>
               <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
                 {boqStats ? formatBigValue(stats.totalValue) : (
-                  <span className="inline-block h-5 w-16 animate-pulse rounded bg-surface-tertiary" />
+                  <Skeleton width={64} height={20} className="inline-block align-middle" />
                 )}
               </div>
               <div className="mt-2 text-2xs text-content-tertiary">
@@ -400,7 +410,7 @@ export function ProjectsPage() {
               </div>
               <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
                 {boqStats ? formatBigValue(stats.avgValue) : (
-                  <span className="inline-block h-5 w-16 animate-pulse rounded bg-surface-tertiary" />
+                  <Skeleton width={64} height={20} className="inline-block align-middle" />
                 )}
               </div>
               <div className="mt-2 text-2xs text-content-tertiary">
@@ -443,6 +453,9 @@ export function ProjectsPage() {
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+                aria-label={t('a11y.projects.status_filter', {
+                  defaultValue: 'Filter projects by status',
+                })}
                 className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-36"
               >
                 <option value="all">
@@ -465,6 +478,9 @@ export function ProjectsPage() {
               <select
                 value={regionFilter}
                 onChange={(e) => setRegionFilter(e.target.value)}
+                aria-label={t('a11y.projects.region_filter', {
+                  defaultValue: 'Filter projects by region',
+                })}
                 className="h-10 appearance-none rounded-lg border border-border bg-surface-primary pl-3 pr-9 text-sm text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue sm:w-40"
               >
                 {availableRegions.map((r) => (
@@ -543,6 +559,41 @@ export function ProjectsPage() {
         </div>
       ) : (
         <>
+          {/* Rollup-failure banner. The aggregated /v1/projects/dashboard/
+              cards endpoint feeds every card's BOQ count + value. When it
+              500s the cards still render via per-project fallback (the
+              card fetches its own stats), but the user has no idea the
+              numbers are partial — they look identical to a zero-data
+              project. Surface the failure explicitly with a Retry CTA. */}
+          {boqStatsError && (
+            <div
+              role="status"
+              className="mb-4 flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 px-3 py-2"
+            >
+              <AlertTriangle
+                size={16}
+                className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5"
+              />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-amber-900 dark:text-amber-100">
+                  {t('projects.rollup_error', {
+                    defaultValue:
+                      'Could not load aggregated stats. Showing individual project data only.',
+                  })}
+                </p>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => refetchBoqStats()}
+                disabled={isFetchingBoqStats}
+              >
+                {isFetchingBoqStats
+                  ? t('common.loading', { defaultValue: 'Loading...' })
+                  : t('common.retry', { defaultValue: 'Retry' })}
+              </Button>
+            </div>
+          )}
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {paginatedProjects.map((project, i) => (
               <ProjectCard
@@ -799,12 +850,12 @@ function ProjectCard({
     <Card
       hoverable
       padding="none"
-      className="group cursor-pointer relative animate-card-in overflow-hidden rounded-2xl bg-gradient-to-b from-surface-elevated to-surface-primary hover:shadow-xl hover:border-oe-blue/40 focus-within:ring-2 focus-within:ring-oe-blue/30 motion-safe:transition-all"
+      className="group cursor-pointer relative animate-card-in overflow-hidden rounded-xl bg-gradient-to-b from-surface-elevated to-surface-primary hover:shadow-xl hover:border-oe-blue/40 focus-within:ring-2 focus-within:ring-oe-blue/30 motion-safe:transition-all"
       style={style}
       onClick={() => navigate(`/projects/${project.id}`)}
     >
       {mapEnabled && project.address && (
-        <div onClick={(e) => e.stopPropagation()}>
+        <div className="relative" onClick={(e) => e.stopPropagation()}>
           <ProjectMap
             variant="card"
             lat={project.address?.lat ?? null}
@@ -818,6 +869,29 @@ function ProjectCard({
             className="rounded-none border-none"
             onResolved={setCardCoords}
           />
+          {/* Geo Hub overlay CTA — only when coords are resolved so we
+              never ship a deeplink to an unanchored project. Sits over
+              the map (top-right) with a glass pill so the underlying
+              tiles remain visible. */}
+          {cardCoords && (
+            <Link
+              to={`/projects/${project.id}/geo`}
+              onClick={(e) => e.stopPropagation()}
+              className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 rounded-full border border-white/40 bg-white/85 px-2.5 py-1 text-2xs font-semibold text-oe-blue shadow-sm backdrop-blur-md transition-all hover:bg-white hover:shadow-md hover:scale-[1.03] focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/60 dark:border-white/10 dark:bg-slate-900/70 dark:text-sky-300 dark:hover:bg-slate-900/90"
+              title={t('projects.card.fly_to_on_map', {
+                defaultValue: 'Fly camera to {{name}} on the globe',
+                name: project.name,
+              })}
+              aria-label={t('projects.card.fly_to_on_map', {
+                defaultValue: 'Fly camera to {{name}} on the globe',
+                name: project.name,
+              })}
+              data-testid="project-card-view-on-map"
+            >
+              <Globe2 size={11} strokeWidth={2.25} />
+              {t('projects.card.view_on_map', { defaultValue: 'On map' })}
+            </Link>
+          )}
         </div>
       )}
       <div className="p-5">
@@ -833,11 +907,18 @@ function ProjectCard({
             )}
             <PinButton projectId={project.id} />
             <button
+              type="button"
               className="flex h-7 w-7 min-h-[44px] min-w-[44px] items-center justify-center rounded-md text-content-tertiary hover:bg-surface-secondary transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
                 setMenuOpen(!menuOpen);
               }}
+              aria-label={t('a11y.projects.card_actions', {
+                defaultValue: 'Project actions for {{name}}',
+                name: project.name,
+              })}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
             >
               <MoreHorizontal size={14} />
             </button>
@@ -964,6 +1045,28 @@ function ProjectCard({
               <MapPin size={11} strokeWidth={2.25} />
               {project.address.city}
             </span>
+          )}
+          {/* Inline fallback: when the map widget is OFF we still want a
+              discoverable jump-to-Geo affordance on geo-anchored projects.
+              Hidden when the overlay version is already shown above. */}
+          {!mapEnabled && cardCoords && (
+            <Link
+              to={`/projects/${project.id}/geo`}
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center gap-1 rounded-full border border-oe-blue/30 bg-oe-blue-subtle px-2 py-0.5 text-2xs font-semibold text-oe-blue transition-all hover:bg-oe-blue hover:text-white hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/60"
+              title={t('projects.card.fly_to_on_map', {
+                defaultValue: 'Fly camera to {{name}} on the globe',
+                name: project.name,
+              })}
+              aria-label={t('projects.card.fly_to_on_map', {
+                defaultValue: 'Fly camera to {{name}} on the globe',
+                name: project.name,
+              })}
+              data-testid="project-card-view-on-map-inline"
+            >
+              <Globe2 size={11} strokeWidth={2.25} />
+              {t('projects.card.view_on_map', { defaultValue: 'On map' })}
+            </Link>
           )}
           {fileTypes && fileTypes.length > 0 && (
             <div className="ml-auto">

@@ -26,12 +26,14 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { BIMElementData } from '@/shared/ui/BIMViewer';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import BIMFilterPanel from './BIMFilterPanel';
 import BIMGroupsPanel from './BIMGroupsPanel';
 import type { BIMElementGroup } from './api';
 import type { BIMFilterState } from './BIMFilterPanel';
 
 type TabId = 'filters' | 'groups';
+const FILTER_GROUPS_TAB_IDS: readonly TabId[] = ['filters', 'groups'];
 
 export interface BIMFilterGroupsPanelProps {
   /* ── Shared ────────────────────────────────────────────────── */
@@ -74,17 +76,23 @@ export interface BIMFilterGroupsPanelProps {
 export default function BIMFilterGroupsPanel(props: BIMFilterGroupsPanelProps) {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabId>('filters');
+  const onTabKeyDown = useTabKeyboardNav<TabId>({
+    ids: FILTER_GROUPS_TAB_IDS,
+    activeId: activeTab,
+    onChange: setActiveTab,
+    orientation: 'horizontal',
+  });
 
   const groupsCount = props.savedGroups.length;
 
   const tabs: { id: TabId; label: string }[] = [
     {
       id: 'filters',
-      label: t('bim.tab_filters', { defaultValue: 'Filters‌⁠‍' }),
+      label: t('bim.tab_filters', { defaultValue: 'Filters' }),
     },
     {
       id: 'groups',
-      label: t('bim.tab_groups', { defaultValue: 'Groups‌⁠‍' }),
+      label: t('bim.tab_groups', { defaultValue: 'Groups' }),
     },
   ];
 
@@ -94,8 +102,9 @@ export default function BIMFilterGroupsPanel(props: BIMFilterGroupsPanelProps) {
       <div
         role="tablist"
         aria-label={t('bim.filter_groups_tabs_aria', {
-          defaultValue: 'Filter and groups tabs‌⁠‍',
+          defaultValue: 'Filter and groups tabs',
         })}
+        onKeyDown={onTabKeyDown}
         className="flex items-stretch border-b border-border-light bg-surface-secondary"
       >
         {tabs.map(({ id, label }) => {
@@ -106,7 +115,10 @@ export default function BIMFilterGroupsPanel(props: BIMFilterGroupsPanelProps) {
               key={id}
               type="button"
               role="tab"
+              id={`bim-filter-groups-tab-${id}`}
               aria-selected={isActive}
+              aria-controls={`bim-filter-groups-panel-${id}`}
+              tabIndex={isActive ? 0 : -1}
               onClick={() => setActiveTab(id)}
               data-testid={`bim-filter-groups-tab-${id}`}
               className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[11px] font-medium transition-colors ${
@@ -124,7 +136,7 @@ export default function BIMFilterGroupsPanel(props: BIMFilterGroupsPanelProps) {
                       : 'bg-surface-tertiary text-content-secondary'
                   }`}
                   aria-label={t('bim.groups_count_badge', {
-                    defaultValue: '{{count}} saved groups‌⁠‍',
+                    defaultValue: '{{count}} saved groups',
                     count: groupsCount,
                   })}
                 >

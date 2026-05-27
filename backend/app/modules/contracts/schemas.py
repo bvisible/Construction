@@ -163,6 +163,39 @@ class ContractLineBulkCreate(BaseModel):
     lines: list[ContractLineCreate] = Field(default_factory=list)
 
 
+class ContractCloneRequest(BaseModel):
+    """Clone an existing contract into the same or a different project.
+
+    The clone is always created in ``draft`` status: a copy of a live
+    contract must be re-signed before becoming commercially binding,
+    otherwise the cloned signed_at would falsely represent a wet
+    signature on the new instrument.
+
+    Body fields:
+        target_project_id: destination project — defaults to the source
+            contract's project. When supplied, the caller must have
+            project-level access on the DESTINATION (else 404), in
+            addition to read access on the SOURCE (also 404).
+        new_code: contract code for the clone — required and must be
+            unique (``oe_contracts_contract.code`` is a UNIQUE column).
+        new_title: human title; defaults to ``"<source.title> (clone)"``.
+        include_lines: copy all Schedule-of-Values lines (default True).
+        copy_subconfigs: copy retention schedule / fee structure /
+            gainshare config / LD clauses (default True). Progress
+            claims, final accounts, lien waivers and retention-release
+            audit entries are NEVER cloned — those belong to the
+            original contract's payment history.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    target_project_id: UUID | None = None
+    new_code: str = Field(..., min_length=1, max_length=80)
+    new_title: str | None = Field(default=None, max_length=500)
+    include_lines: bool = True
+    copy_subconfigs: bool = True
+
+
 # ── ContractTypeConfiguration ────────────────────────────────────────────
 
 

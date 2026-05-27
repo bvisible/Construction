@@ -24,8 +24,10 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Query, status
 
+from app.core.i18n import get_locale
 from app.core.pipeline.executor import GraphValidationError
 from app.core.pipeline.registry import list_node_specs
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, SessionDep, verify_project_access
 from app.modules.pipelines.models import Pipeline
 from app.modules.pipelines.schemas import (
@@ -153,7 +155,8 @@ async def create_pipeline(
             pid = uuid.UUID(str(body.project_id))
         except (ValueError, TypeError) as exc:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=translate("errors.project_not_found", locale=get_locale()),
             ) from exc
         await verify_project_access(pid, user_id, session)
     service = PipelineService(session)

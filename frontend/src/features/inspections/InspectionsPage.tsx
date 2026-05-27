@@ -27,7 +27,8 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, SkeletonTable } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { SectionIntro } from '@/features/validation';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
@@ -195,8 +196,8 @@ function CreateInspectionModal({
         aria-modal="true"
         aria-label={
           isEdit
-            ? t('inspections.edit_inspection', { defaultValue: 'Edit Inspection‌⁠‍' })
-            : t('inspections.new_inspection', { defaultValue: 'New Inspection‌⁠‍' })
+            ? t('inspections.edit_inspection', { defaultValue: 'Edit Inspection' })
+            : t('inspections.new_inspection', { defaultValue: 'New Inspection' })
         }
       >
         {/* Header */}
@@ -204,13 +205,13 @@ function CreateInspectionModal({
           <div>
             <h2 className="text-lg font-semibold text-content-primary">
               {isEdit
-                ? t('inspections.edit_inspection', { defaultValue: 'Edit Inspection‌⁠‍' })
-                : t('inspections.new_inspection', { defaultValue: 'New Inspection‌⁠‍' })}
+                ? t('inspections.edit_inspection', { defaultValue: 'Edit Inspection' })
+                : t('inspections.new_inspection', { defaultValue: 'New Inspection' })}
             </h2>
             {projectName && (
               <p className="text-xs text-content-tertiary mt-0.5">
                 {t('common.creating_in_project', {
-                  defaultValue: 'In {{project}}‌⁠‍',
+                  defaultValue: 'In {{project}}',
                   project: projectName,
                 })}
               </p>
@@ -230,7 +231,7 @@ function CreateInspectionModal({
           {/* ── Inspection Type ── */}
           <div>
             <label className="block text-sm font-medium text-content-primary mb-2">
-              {t('inspections.field_type', { defaultValue: 'Inspection Type‌⁠‍' })}
+              {t('inspections.field_type', { defaultValue: 'Inspection Type' })}
             </label>
             <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
               {INSPECTION_TYPES.map((it) => {
@@ -265,7 +266,7 @@ function CreateInspectionModal({
           <div className="flex items-center gap-2 pt-2 pb-1">
             <ClipboardCheck size={14} className="text-content-tertiary" />
             <span className="text-xs font-semibold uppercase tracking-wider text-content-tertiary">
-              {t('inspections.section_details', { defaultValue: 'Inspection Details‌⁠‍' })}
+              {t('inspections.section_details', { defaultValue: 'Inspection Details' })}
             </span>
             <div className="flex-1 h-px bg-border-light" />
           </div>
@@ -697,7 +698,7 @@ export function InspectionsPage() {
   const projectId = routeProjectId || activeProjectId || projects[0]?.id || '';
   const projectName = projects.find((p) => p.id === projectId)?.name || '';
 
-  const { data: inspections = [], isLoading } = useQuery({
+  const { data: inspections = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['inspections', projectId, statusFilter],
     queryFn: () =>
       fetchInspections({
@@ -1029,17 +1030,6 @@ export function InspectionsPage() {
         })}
       </SectionIntro>
 
-      {/* No-project warning */}
-      {!projectId && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3">
-          <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">{t('common.no_project_selected', { defaultValue: 'No project selected' })}</p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">{t('common.select_project_hint', { defaultValue: 'Select a project from the header to view and manage items.' })}</p>
-          </div>
-        </div>
-      )}
-
       {projectId ? (
       <>
       {/* Stats */}
@@ -1127,6 +1117,8 @@ export function InspectionsPage() {
       <div>
         {isLoading ? (
           <SkeletonTable rows={5} columns={6} />
+        ) : isError ? (
+          <RecoveryCard error={error} onRetry={() => refetch()} />
         ) : filtered.length === 0 ? (
           <EmptyState
             icon={<ClipboardCheck size={28} strokeWidth={1.5} />}
@@ -1205,11 +1197,9 @@ export function InspectionsPage() {
       </div>
       </>
       ) : (
-        <EmptyState
-          icon={<ClipboardCheck size={28} strokeWidth={1.5} />}
-          title={t('inspections.no_project', { defaultValue: 'No project selected' })}
-          description={t('inspections.select_project', { defaultValue: 'Open a project first to view and manage inspections.' })}
-        />
+        <RequiresProject
+          emptyHint={t('inspections.select_project', { defaultValue: 'Open a project first to view and manage inspections.' })}
+        >{null}</RequiresProject>
       )}
 
       {/* Create / Edit Modal — same form, prefilled in edit mode */}

@@ -28,8 +28,10 @@ import {
   Image as ImageIcon,
   CheckSquare,
 } from 'lucide-react';
-import { Card, Button, Badge, EmptyState, Breadcrumb, AuthImage } from '@/shared/ui';
+import { Card, Button, Badge, ConfirmDialog, EmptyState, Breadcrumb, AuthImage, SkeletonGrid } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { apiGet } from '@/shared/lib/api';
+import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import {
@@ -202,7 +204,7 @@ function Lightbox({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label={t('photos.lightbox', { defaultValue: 'Photo viewer‌⁠‍' })}
+      aria-label={t('photos.lightbox', { defaultValue: 'Photo viewer' })}
     >
       {/* Close button */}
       <button
@@ -218,7 +220,7 @@ function Lightbox({
         <button
           onClick={(e) => { e.stopPropagation(); onNavigate(currentIndex - 1); }}
           className="absolute left-4 top-1/2 -translate-y-1/2 z-10 flex h-12 w-12 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
-          aria-label={t('photos.previous', { defaultValue: 'Previous photo‌⁠‍' })}
+          aria-label={t('photos.previous', { defaultValue: 'Previous photo' })}
         >
           <ChevronLeft size={24} />
         </button>
@@ -227,7 +229,7 @@ function Lightbox({
         <button
           onClick={(e) => { e.stopPropagation(); onNavigate(currentIndex + 1); }}
           className="absolute right-4 top-1/2 -translate-y-1/2 z-10 flex h-12 w-12 items-center justify-center rounded-full bg-black/50 text-white hover:bg-black/70 transition-colors"
-          aria-label={t('photos.next', { defaultValue: 'Next photo‌⁠‍' })}
+          aria-label={t('photos.next', { defaultValue: 'Next photo' })}
         >
           <ChevronRight size={24} />
         </button>
@@ -302,7 +304,7 @@ function Lightbox({
               <button
                 onClick={() => onDelete(photo)}
                 className="flex h-8 w-8 items-center justify-center rounded-lg text-white/70 hover:bg-red-500/30 hover:text-red-300 transition-colors"
-                aria-label={t('common.delete', { defaultValue: 'Delete‌⁠‍' })}
+                aria-label={t('common.delete', { defaultValue: 'Delete' })}
               >
                 <Trash2 size={16} />
               </button>
@@ -370,7 +372,7 @@ function EditPhotoModal({
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-label={t('photos.edit_photo', { defaultValue: 'Edit photo‌⁠‍' })}
+      aria-label={t('photos.edit_photo', { defaultValue: 'Edit photo' })}
     >
       <div
         className="w-full max-w-md mx-4 rounded-xl bg-surface-elevated shadow-xl border border-border-light overflow-hidden"
@@ -902,6 +904,7 @@ export function PhotoGalleryPage() {
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  const { confirm, ...confirmProps } = useConfirm();
 
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -1065,12 +1068,17 @@ export function PhotoGalleryPage() {
 
   const handleBatchDelete = useCallback(async () => {
     if (selectedIds.size === 0) return;
-    const confirmed = window.confirm(
-      t('photos.batch_delete_confirm', {
+    const confirmed = await confirm({
+      title: t('photos.batch_delete_title', {
+        defaultValue: 'Delete photos?',
+      }),
+      message: t('photos.batch_delete_confirm', {
         defaultValue: 'Delete {{count}} photo(s)? This cannot be undone.',
         count: selectedIds.size,
       }),
-    );
+      confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+      variant: 'danger',
+    });
     if (!confirmed) return;
     setBatchDeleting(true);
     let ok = 0;
@@ -1099,7 +1107,7 @@ export function PhotoGalleryPage() {
     queryClient.invalidateQueries({ queryKey: ['photos'] });
     queryClient.invalidateQueries({ queryKey: ['photos-timeline'] });
     exitSelectMode();
-  }, [selectedIds, addToast, t, queryClient, exitSelectMode]);
+  }, [selectedIds, confirm, addToast, t, queryClient, exitSelectMode]);
 
   // Stats
   const categoryStats = useMemo(() => {
@@ -1115,13 +1123,11 @@ export function PhotoGalleryPage() {
   if (!projectId) {
     return (
       <div className="space-y-6 p-6 max-w-7xl mx-auto">
-        <EmptyState
-          icon={<Camera size={28} strokeWidth={1.5} />}
-          title={t('photos.no_project', { defaultValue: 'No project selected' })}
-          description={t('photos.select_project', {
+        <RequiresProject
+          emptyHint={t('photos.select_project', {
             defaultValue: 'Select a project from the header to view its photo documentation.',
           })}
-        />
+        >{null}</RequiresProject>
       </div>
     );
   }
@@ -1301,9 +1307,7 @@ export function PhotoGalleryPage() {
 
       {/* Content */}
       {isLoading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 size={32} className="text-oe-blue animate-spin" />
-        </div>
+        <SkeletonGrid items={8} gridCols="grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" />
       ) : photoList.length === 0 && viewMode === 'grid' ? (
         <EmptyState
           icon={<ImageIcon size={28} strokeWidth={1.5} />}
@@ -1441,6 +1445,7 @@ export function PhotoGalleryPage() {
       >
         <Upload size={22} />
       </button>
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

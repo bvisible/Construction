@@ -19,6 +19,8 @@ from fastapi import status as http_status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.variations.models import (
     DayworkSheet,
     DayworkSheetLine,
@@ -938,6 +940,9 @@ class VariationsService:
                 status_code=http_status.HTTP_409_CONFLICT,
                 detail=f"Cannot transition VR from {vr.status} to {to_status}",
             )
+        # Snapshot immutable fields before update_fields() may expire ORM state.
+        from_status_snapshot = vr.status
+        code_snapshot = vr.code
         fields: dict[str, Any] = {"status": to_status}
         if to_status == "submitted":
             fields["submitted_at"] = _now_iso()
@@ -976,6 +981,28 @@ class VariationsService:
                 currency=vr.currency or None,
                 code=vr.code,
                 decision_notes=decision_notes,
+            )
+        # R7 audit trail: persist every status change to ActivityLog in the
+        # same transaction so the trail is atomic with the status write.
+        try:
+            from app.core.audit_log import log_activity as _log_act
+            await _log_act(
+                self.session,
+                actor_id=user_id,
+                entity_type="variation_request",
+                entity_id=str(vr_id),
+                action="status_changed",
+                from_status=from_status_snapshot,
+                to_status=to_status,
+                reason=decision_notes,
+                metadata={"code": code_snapshot},
+            )
+        except Exception:
+            logger.warning(
+                "ActivityLog write skipped for variation_request %s (%s)",
+                vr_id,
+                to_status,
+                exc_info=True,
             )
         return vr
 
@@ -1137,8 +1164,22 @@ class VariationsService:
     ) -> VariationOrder:
         """Promote an approved VariationRequest into a VariationOrder.
 
-        Emits ``variations.vo.issued`` and ``variations.change_order.requested``
-        — the latter is what oe_changeorders subscribes to.
+        R7 audit: in addition to creating the VariationOrder we now
+        atomically mirror it into oe_changeorders as a draft ChangeOrder
+        and stamp the cross-module soft link
+        (``vo.reference_change_order_id``). All three writes (VO insert,
+        VR.status flip, CO insert) share the calling AsyncSession so a
+        failure in any rolls back the entire promotion — previously the
+        only cross-module linkage was an event publish, which made the CO
+        eventually-consistent at best and silently-dropped at worst when
+        the subscriber wasn't wired up.
+
+        Currency consistency: the CO inherits the VO's currency (which
+        itself inherited from the project on create). Money figures
+        propagate as Decimal throughout — no float coercion.
+
+        Emits ``variations.vo.issued`` and ``variations.change_order.created``
+        once the writes have flushed.
         """
         vr = await self.get_request(vr_id)
         if vr.status != "approved":
@@ -1153,16 +1194,71 @@ class VariationsService:
         forced = VariationOrderCreate(**payload_dict)
         vo = await self.create_order(forced, user_id=user_id)
 
+        # R7 audit: mirror into oe_changeorders inside the same txn. Both
+        # writes share ``self.session`` so a rollback unwinds both. The
+        # CO carries the VO's cost impact + currency so the two rows are
+        # immediately reconcilable; subsequent VO completion can transition
+        # the CO through its own approval chain.
+        co_id: uuid.UUID | None = None
+        try:
+            from app.modules.changeorders.schemas import ChangeOrderCreate
+            from app.modules.changeorders.service import ChangeOrderService
+
+            co_service = ChangeOrderService(self.session)
+            co_payload = ChangeOrderCreate(
+                project_id=vr.project_id,
+                title=vo.title or vr.title or f"VO {vo.code}",
+                description=(
+                    f"Auto-created from variation order {vo.code} "
+                    f"(VR {vr.code}). Cost impact mirrors the VO."
+                ),
+                reason_category="design_change",
+                schedule_impact_days=max(0, int(vo.final_schedule_days or 0)),
+                currency=vo.currency or vr.currency or "",
+                cost_impact=str(_to_decimal(vo.final_cost_impact)),
+                metadata={
+                    "origin": "variations.convert_vr_to_vo",
+                    "variation_request_id": str(vr_id),
+                    "variation_order_id": str(vo.id),
+                },
+            )
+            co = await co_service.create_order(co_payload)
+            co_id = co.id
+            await self.vo_repo.update_fields(
+                vo.id, reference_change_order_id=co_id,
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            # Mirror failure must roll back the whole promotion — the
+            # whole point of doing it in the same txn is to avoid an
+            # orphan VO with no CO. Re-raise as 500.
+            logger.exception(
+                "Failed to mirror VR %s -> VO %s into ChangeOrder; "
+                "rolling back the promotion",
+                vr_id, vo.id,
+            )
+            await self.session.rollback()
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    "Failed to mirror variation order into change orders "
+                    "module; promotion rolled back."
+                ),
+            )
+
         # Flip VR.status -> converted_to_vo
         await self.vr_repo.update_fields(vr_id, status="converted_to_vo")
         await self.session.refresh(vr)
+        await self.session.refresh(vo)
 
         _safe_publish(
-            "variations.change_order.requested",
+            "variations.change_order.created",
             {
                 "project_id": str(vr.project_id),
                 "request_id": str(vr_id),
                 "vo_id": str(vo.id),
+                "change_order_id": str(co_id) if co_id else None,
                 "title": vo.title,
                 "cost_impact": str(vo.final_cost_impact),
                 "schedule_days": vo.final_schedule_days,
@@ -1323,7 +1419,7 @@ class VariationsService:
     async def get_site_measurement(self, sm_id: uuid.UUID) -> SiteMeasurement:
         row = await self.site_measurement_repo.get_by_id(sm_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="Site measurement not found")
+            raise HTTPException(status_code=404, detail=translate("errors.measurement_not_found", locale=get_locale()))
         return row
 
     async def update_site_measurement(
@@ -1333,7 +1429,7 @@ class VariationsService:
     ) -> SiteMeasurement:
         sm = await self.site_measurement_repo.get_by_id(sm_id)
         if sm is None:
-            raise HTTPException(status_code=404, detail="Site measurement not found")
+            raise HTTPException(status_code=404, detail=translate("errors.measurement_not_found", locale=get_locale()))
         fields = data.model_dump(exclude_unset=True)
         if "measured_quantity" in fields and fields["measured_quantity"] is not None:
             fields["measured_quantity"] = _to_decimal(fields["measured_quantity"])
@@ -1348,7 +1444,7 @@ class VariationsService:
     ) -> SiteMeasurement:
         sm = await self.site_measurement_repo.get_by_id(sm_id)
         if sm is None:
-            raise HTTPException(status_code=404, detail="Site measurement not found")
+            raise HTTPException(status_code=404, detail=translate("errors.measurement_not_found", locale=get_locale()))
         await self.site_measurement_repo.update_fields(
             sm_id, agreed_with_owner_at=_now_iso(),
         )
@@ -1372,7 +1468,7 @@ class VariationsService:
     async def delete_site_measurement(self, sm_id: uuid.UUID) -> None:
         sm = await self.site_measurement_repo.get_by_id(sm_id)
         if sm is None:
-            raise HTTPException(status_code=404, detail="Site measurement not found")
+            raise HTTPException(status_code=404, detail=translate("errors.measurement_not_found", locale=get_locale()))
         await self.site_measurement_repo.delete(sm_id)
 
     # ── Daywork sheets ───────────────────────────────────────────────────
@@ -1850,7 +1946,7 @@ class VariationsService:
     async def get_final_account(self, fa_id: uuid.UUID) -> FinalAccount:
         row = await self.final_account_repo.get_by_id(fa_id)
         if row is None:
-            raise HTTPException(status_code=404, detail="Final account not found")
+            raise HTTPException(status_code=404, detail=translate("errors.final_account_not_found", locale=get_locale()))
         return row
 
     async def update_final_account(
@@ -1929,7 +2025,7 @@ class VariationsService:
             # should never have asked.
             raise HTTPException(
                 status_code=http_status.HTTP_404_NOT_FOUND,
-                detail="Final account not found",
+                detail=translate("errors.final_account_not_found", locale=get_locale()),
             )
         vo_currency = (vo.currency or "").strip()
         fa_currency = (fa.currency or "").strip()

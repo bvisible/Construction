@@ -35,6 +35,8 @@ vi.mock('./api', async () => {
     listWeeklyPlans: vi.fn(),
     listCommitments: vi.fn(),
     listBaselines: vi.fn(),
+    baselineDelta: vi.fn(),
+    currentTasksForMaster: vi.fn(),
   };
 });
 
@@ -49,6 +51,9 @@ import {
   listPhasePlans,
   createPhasePlan,
   deletePhasePlan,
+  listBaselines,
+  baselineDelta,
+  currentTasksForMaster,
 } from './api';
 import { ScheduleAdvancedPage } from './ScheduleAdvancedPage';
 
@@ -99,6 +104,17 @@ describe('PhasePlans tab', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     (listMasterSchedules as any).mockResolvedValue([masterSchedule]);
+    // Variance subsystem stays inert unless a test wires real baselines.
+    (listBaselines as any).mockResolvedValue([]);
+    (baselineDelta as any).mockResolvedValue({
+      baseline_id: 'b1',
+      current_master_id: 'ms1',
+      entries: [],
+      total_tasks: 0,
+      delayed_tasks: 0,
+      accelerated_tasks: 0,
+    });
+    (currentTasksForMaster as any).mockResolvedValue([]);
   });
 
   it('renders the empty-state CTAs when there are no phases', async () => {
@@ -188,6 +204,77 @@ describe('PhasePlans tab', () => {
     });
   });
 
+  it('shows the look-ahead horizon chips with counts', async () => {
+    // Two phases: one starts today, one starts ~6 months out. The "1
+    // week" chip count should be 1, the "All" chip count should be 2.
+    const today = new Date().toISOString().slice(0, 10);
+    const farOut = new Date(Date.now() + 180 * 86_400_000).toISOString().slice(0, 10);
+    (listPhasePlans as any).mockResolvedValue([
+      { ...samplePhase, id: 'pn1', name: 'Near', planned_start: today, planned_finish: today },
+      { ...samplePhase, id: 'pf1', name: 'Far', planned_start: farOut, planned_finish: farOut },
+    ]);
+    renderPage();
+    await gotoPhasesTab();
+    await screen.findByText('Near');
+    const chips = await screen.findByTestId('phase-horizon-chips');
+    expect(chips).toBeInTheDocument();
+    expect(chips.textContent).toMatch(/1 week/i);
+    expect(chips.textContent).toMatch(/2 weeks/i);
+    expect(chips.textContent).toMatch(/4 weeks/i);
+  });
+
+  it('marks the longest-duration phase as critical (CP badge)', async () => {
+    // The 90-day phase outweighs the 30-day phase, so the CP badge
+    // should appear on it via computeCriticalPhaseIds.
+    const longStart = new Date().toISOString().slice(0, 10);
+    const longEnd = new Date(Date.now() + 90 * 86_400_000).toISOString().slice(0, 10);
+    (listPhasePlans as any).mockResolvedValue([
+      { ...samplePhase, id: 'sh', name: 'Short', planned_start: longStart, planned_finish: new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10) },
+      { ...samplePhase, id: 'lo', name: 'LongCritical', planned_start: longStart, planned_finish: longEnd },
+    ]);
+    renderPage();
+    await gotoPhasesTab();
+    await screen.findByText('LongCritical');
+    // At least one CP badge must render.
+    const cpBadges = await screen.findAllByTestId('phase-cp-badge');
+    expect(cpBadges.length).toBeGreaterThan(0);
+  });
+
+  it('renders variance badge when baseline delta is present', async () => {
+    (listPhasePlans as any).mockResolvedValue([samplePhase]);
+    (listBaselines as any).mockResolvedValue([
+      { id: 'b1', master_schedule_id: 'ms1', name: 'Contract', status: 'active', snapshot: [], notes: '', captured_at: null, created_at: '2026-05-01T00:00:00Z', updated_at: '2026-05-01T00:00:00Z' },
+    ]);
+    (baselineDelta as any).mockResolvedValue({
+      baseline_id: 'b1',
+      current_master_id: 'ms1',
+      entries: [
+        {
+          task_ref: 'ph1',
+          name: 'Foundation',
+          planned_start_baseline: '2026-06-01',
+          planned_start_current: '2026-06-06',
+          planned_finish_baseline: '2026-06-30',
+          planned_finish_current: '2026-07-05',
+          schedule_variance_days: 5,
+        },
+      ],
+      total_tasks: 1,
+      delayed_tasks: 1,
+      accelerated_tasks: 0,
+    });
+    (currentTasksForMaster as any).mockResolvedValue([
+      { task_ref: 'ph1', planned_start: '2026-06-06', planned_finish: '2026-07-05', name: 'Foundation' },
+    ]);
+    renderPage();
+    await gotoPhasesTab();
+    await screen.findByText('Foundation');
+    // Variance badge should appear (+5d) once the delta query resolves.
+    await waitFor(() => {
+      expect(screen.queryByTestId('phase-variance-late')).toBeInTheDocument();
+    });
+  });
+
   it('opens delete-confirm before calling deletePhasePlan', async () => {
     (listPhasePlans as any).mockResolvedValue([samplePhase]);
     (deletePhasePlan as any).mockResolvedValue(undefined);
@@ -202,7 +289,7 @@ describe('PhasePlans tab', () => {
     expect(dialog).toBeInTheDocument();
     expect(screen.getByText(/delete phase/i)).toBeInTheDocument();
     // Cancel — must NOT call delete. ConfirmDialog's "Cancel" label embeds
-    // zero-width steganography chars so the visible string is e.g. "Cancel‌⁠‍".
+    // zero-width steganography chars so the visible string is e.g. "Cancel".
     // Match the first button inside the dialog (cancel is left of confirm).
     const dialogButtons = dialog.querySelectorAll('button');
     fireEvent.click(dialogButtons[0]);

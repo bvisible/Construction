@@ -42,6 +42,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import String
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import (
     CurrentUserId,
     OptionalUserPayload,
@@ -571,7 +573,10 @@ async def list_cost_positions_using_resource(
         select(CatalogResource).where(CatalogResource.id == resource_id)
     )).scalar_one_or_none()
     if resource is None:
-        raise HTTPException(status_code=404, detail="Resource not found")
+        raise HTTPException(
+            status_code=404,
+            detail=translate("errors.resource_not_found", locale=get_locale()),
+        )
 
     code = resource.resource_code
     # JSON column stored as text — match the code as a quoted substring so

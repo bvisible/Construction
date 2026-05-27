@@ -261,7 +261,17 @@ export function FileManagerPage() {
     [sort, selectedKind, query, extension],
   );
 
-  const { data: tree, isLoading: treeLoading } = useFileTree(projectId);
+  // Tree counts mirror the same q/extension filters as the list so the
+  // sidebar can't show "Documents 9" while a free-text query is hiding
+  // every row in the right pane.
+  const treeFilters = useMemo(
+    () => ({
+      ...(query.trim() ? { q: query.trim() } : {}),
+      ...(extension ? { extension } : {}),
+    }),
+    [query, extension],
+  );
+  const { data: tree, isLoading: treeLoading } = useFileTree(projectId, treeFilters);
   const { data: locations, isLoading: locLoading } = useStorageLocations(projectId);
   // The list query is only needed when a category is selected; the
   // folder-grid view reads counts straight off the tree and skips the
@@ -450,13 +460,13 @@ export function FileManagerPage() {
       <div className="flex items-center justify-center h-full">
         <EmptyState
           icon={<HardDrive size={28} />}
-          title={t('files.no_project_title', { defaultValue: 'No active project‌⁠‍' })}
+          title={t('files.no_project_title', { defaultValue: 'No active project' })}
           description={t('files.no_project_desc', {
             defaultValue:
-              'Pick a project from the dashboard to see all of its documents, photos, BIM and DWG files in one place.‌⁠‍',
+              'Pick a project from the dashboard to see all of its documents, photos, BIM and DWG files in one place.',
           })}
           action={{
-            label: t('files.go_to_projects', { defaultValue: 'Go to projects‌⁠‍' }),
+            label: t('files.go_to_projects', { defaultValue: 'Go to projects' }),
             onClick: () => navigate('/projects'),
           }}
         />
@@ -493,7 +503,7 @@ export function FileManagerPage() {
       <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border-light bg-surface-elevated">
         <nav
           className="flex items-center gap-1.5 text-sm min-w-0"
-          aria-label={t('common.breadcrumb', { defaultValue: 'Breadcrumb‌⁠‍' })}
+          aria-label={t('common.breadcrumb', { defaultValue: 'Breadcrumb' })}
         >
           <button
             type="button"
@@ -507,7 +517,7 @@ export function FileManagerPage() {
             disabled={showFolderGrid}
           >
             {!showFolderGrid && <ArrowLeft size={13} />}
-            {t('files.title_all', { defaultValue: 'All files‌⁠‍' })}
+            {t('files.title_all', { defaultValue: 'All files' })}
           </button>
           {!showFolderGrid && (
             <>

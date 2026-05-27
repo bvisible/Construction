@@ -18,6 +18,10 @@ export interface Markup {
   id: string;
   project_id: string;
   document_id: string | null;
+  /** Epic C — chain row this markup was authored against. NULL on
+   *  pre-Epic-C rows; the viewer treats NULL as "current" so legacy
+   *  markups render at full opacity. */
+  file_version_id: string | null;
   page: number;
   type: MarkupType;
   geometry: Record<string, unknown>;

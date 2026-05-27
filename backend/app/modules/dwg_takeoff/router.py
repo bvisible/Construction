@@ -28,8 +28,13 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 
-from app.core.rate_limiter import approval_limiter, upload_limiter
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep
+from app.core.rate_limiter import upload_limiter
+from app.dependencies import (
+    CurrentUserId,
+    RequirePermission,
+    SessionDep,
+    verify_project_access,
+)
 from app.modules.dwg_takeoff.schemas import (
     BoqLinkRequest,
     DwgAnnotationCreate,
@@ -51,6 +56,57 @@ logger = logging.getLogger(__name__)
 
 def _get_service(session: SessionDep) -> DwgTakeoffService:
     return DwgTakeoffService(session)
+
+
+# ── IDOR helpers (Round-6 audit) ───────────────────────────────────────────
+#
+# Every read/write endpoint in this module must funnel through one of these
+# helpers so that no resource is reachable by guessing a UUID. They resolve
+# the resource's owning ``project_id`` and delegate to
+# ``verify_project_access`` (404 on both missing and forbidden — never 403,
+# never silent 200).
+
+
+async def _gate_by_drawing(
+    drawing_id: uuid.UUID,
+    user_id: str | None,
+    service: DwgTakeoffService,
+    session: SessionDep,
+) -> "object":
+    """Resolve a DwgDrawing and gate the caller on its project.
+
+    Returns the drawing so callers don't re-fetch (one less round trip).
+    A missing drawing or one in a foreign tenant's project both 404 —
+    the response is indistinguishable, preventing UUID-existence probes.
+    """
+    drawing = await service.get_drawing(drawing_id)
+    await verify_project_access(drawing.project_id, str(user_id or ""), session)
+    return drawing
+
+
+async def _gate_by_annotation(
+    annotation_id: uuid.UUID,
+    user_id: str | None,
+    service: DwgTakeoffService,
+    session: SessionDep,
+) -> "object":
+    """Resolve a DwgAnnotation and gate the caller on its project."""
+    annotation = await service.get_annotation(annotation_id)
+    await verify_project_access(annotation.project_id, str(user_id or ""), session)
+    return annotation
+
+
+async def _gate_by_group(
+    group_id: uuid.UUID,
+    user_id: str | None,
+    service: DwgTakeoffService,
+    session: SessionDep,
+) -> "object":
+    """Resolve a DwgEntityGroup → drawing → project, then gate."""
+    group = await service.get_entity_group(group_id)
+    drawing = await service.get_drawing(group.drawing_id)
+    await verify_project_access(drawing.project_id, str(user_id or ""), session)
+    return group
 
 
 def _drawing_to_response(
@@ -137,10 +193,19 @@ async def upload_drawing(
     discipline: str | None = Query(default=None),
     sheet_number: str | None = Query(default=None),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.create")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgDrawingResponse:
-    """Upload a DWG/DXF file and trigger processing."""
+    """Upload a DWG/DXF file and trigger processing.
+
+    Audit B-DWG-IDOR — was IDOR-on-write. ``project_id`` came in as a
+    free-form query parameter and was persisted verbatim, so anyone with
+    ``dwg_takeoff.create`` could attach a DWG to another tenant's project.
+    We verify access *before* reading the upload body to fail fast.
+    """
+    await verify_project_access(project_id, str(user_id or ""), session)
+
     # Use upload_limiter (30/min — matches BIM / documents / takeoff)
     # rather than approval_limiter (20/min, intended for financial
     # mutations). Bench-driven fix: 30-file batch uploads were tripping
@@ -196,9 +261,16 @@ async def list_drawings(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[DwgDrawingResponse]:
-    """List drawings for a project."""
+    """List drawings for a project.
+
+    Audit B-DWG-IDOR — was IDOR. Any user could pass a foreign tenant's
+    ``project_id`` and enumerate their drawings. Gated by
+    ``verify_project_access`` so foreign projects 404.
+    """
+    await verify_project_access(project_id, str(user_id or ""), session)
     items, _ = await service.list_drawings(
         project_id,
         offset=offset,
@@ -212,11 +284,15 @@ async def list_drawings(
 async def get_drawing(
     drawing_id: uuid.UUID,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgDrawingResponse:
-    """Get a single drawing with its latest version."""
-    drawing = await service.get_drawing(drawing_id)
+    """Get a single drawing with its latest version.
+
+    Audit B-DWG-IDOR — was IDOR. The ``drawing_id`` was trusted blindly.
+    """
+    drawing = await _gate_by_drawing(drawing_id, user_id, service, session)
     version = await service.get_latest_version(drawing_id)
     return _drawing_to_response(drawing, version)
 
@@ -225,10 +301,16 @@ async def get_drawing(
 async def delete_drawing(
     drawing_id: uuid.UUID,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.delete")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> None:
-    """Delete a drawing."""
+    """Delete a drawing.
+
+    Audit B-DWG-IDOR — was IDOR-on-write. Anyone with ``dwg_takeoff.delete``
+    could blow away another tenant's drawing by UUID.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     await service.delete_drawing(drawing_id)
 
 
@@ -240,10 +322,17 @@ async def get_entities(
     drawing_id: uuid.UUID,
     layers: str | None = Query(default=None, description="Comma-separated visible layer names"),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[dict]:
-    """Get parsed entities for a drawing, optionally filtered by visible layers."""
+    """Get parsed entities for a drawing, optionally filtered by visible layers.
+
+    Audit B-DWG-IDOR — was IDOR. Entities expose layer geometry that
+    contains takeoff measurements — a juicy target for competitive
+    enumeration.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     visible_layers = None
     if layers:
         visible_layers = [layer.strip() for layer in layers.split(",") if layer.strip()]
@@ -254,10 +343,16 @@ async def get_entities(
 async def get_thumbnail(
     drawing_id: uuid.UUID,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> Response:
-    """Get SVG thumbnail for a drawing."""
+    """Get SVG thumbnail for a drawing.
+
+    Audit B-DWG-IDOR — was IDOR. SVG thumbnails leak both layout and
+    proprietary symbology.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     svg_content = await service.get_thumbnail_svg(drawing_id)
     if svg_content is None:
         raise HTTPException(
@@ -275,10 +370,17 @@ async def update_drawing_scale(
     drawing_id: uuid.UUID,
     data: DwgDrawingScaleUpdate,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.create")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgDrawingResponse:
-    """Persist the drawing's scale denominator + active scale mode."""
+    """Persist the drawing's scale denominator + active scale mode.
+
+    Audit B-DWG-IDOR — was IDOR-on-write. Scale tampering flips every
+    derived measurement on the drawing — a 1:50 plan rescaled to 1:5
+    inflates BOQ totals 100×.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     drawing = await service.update_drawing_scale(
         drawing_id,
         scale_denominator=data.scale_denominator,
@@ -293,10 +395,15 @@ async def update_layer_visibility(
     drawing_id: uuid.UUID,
     data: DwgLayerVisibilityUpdate,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgDrawingVersionResponse:
-    """Toggle layer visibility in the latest drawing version."""
+    """Toggle layer visibility in the latest drawing version.
+
+    Audit B-DWG-IDOR — was IDOR-on-write.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     version = await service.update_layer_visibility(drawing_id, data.layers)
     return _version_to_response(version)
 
@@ -308,10 +415,29 @@ async def update_layer_visibility(
 async def create_annotation(
     data: DwgAnnotationCreate,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("dwg_takeoff.create")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgAnnotationResponse:
-    """Create a new annotation on a drawing."""
+    """Create a new annotation on a drawing.
+
+    Audit B-DWG-IDOR — was IDOR-on-write. ``project_id`` + ``drawing_id``
+    were trusted blindly from the body, so anyone with ``dwg_takeoff.create``
+    could plant annotations (including measurement values) onto a
+    foreign tenant's drawing. Gate both the project and confirm the
+    drawing actually belongs to it.
+    """
+    # First gate the asserted project, then resolve the drawing and
+    # confirm consistency. We accept BOTH paths so a body that
+    # references a foreign drawing inside the caller's own project 404s
+    # (instead of silently linking to the wrong drawing).
+    await verify_project_access(data.project_id, str(user_id or ""), session)
+    drawing = await service.get_drawing(data.drawing_id)
+    if str(drawing.project_id) != str(data.project_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Drawing not found",
+        )
     try:
         item = await service.create_annotation(data, user_id)
         return _annotation_to_response(item)
@@ -332,9 +458,15 @@ async def list_annotations(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[DwgAnnotationResponse]:
-    """List annotations for a drawing."""
+    """List annotations for a drawing.
+
+    Audit B-DWG-IDOR — was IDOR. Annotations carry measurement_value
+    fields that flow into BOQ totals via link-boq.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     items, _ = await service.list_annotations(
         drawing_id,
         offset=offset,
@@ -349,10 +481,15 @@ async def update_annotation(
     annotation_id: uuid.UUID,
     data: DwgAnnotationUpdate,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.update")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgAnnotationResponse:
-    """Update an annotation."""
+    """Update an annotation.
+
+    Audit B-DWG-IDOR — was IDOR-on-write.
+    """
+    await _gate_by_annotation(annotation_id, user_id, service, session)
     item = await service.update_annotation(annotation_id, data)
     return _annotation_to_response(item)
 
@@ -361,10 +498,15 @@ async def update_annotation(
 async def delete_annotation(
     annotation_id: uuid.UUID,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.delete")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> None:
-    """Delete an annotation."""
+    """Delete an annotation.
+
+    Audit B-DWG-IDOR — was IDOR-on-write.
+    """
+    await _gate_by_annotation(annotation_id, user_id, service, session)
     await service.delete_annotation(annotation_id)
 
 
@@ -376,10 +518,17 @@ async def link_to_boq(
     annotation_id: uuid.UUID,
     data: BoqLinkRequest,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.update")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgAnnotationResponse:
-    """Link an annotation to a BOQ position."""
+    """Link an annotation to a BOQ position.
+
+    Audit B-DWG-IDOR — was IDOR-on-write. Without the gate, a user could
+    redirect a foreign tenant's measurement at their own BOQ position
+    (poisoning their estimate) or vice versa.
+    """
+    await _gate_by_annotation(annotation_id, user_id, service, session)
     item = await service.link_annotation_to_boq(annotation_id, data.position_id)
     return _annotation_to_response(item)
 
@@ -391,9 +540,15 @@ async def link_to_boq(
 async def get_pins(
     drawing_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[DwgAnnotationResponse]:
-    """Get task/punchlist pins for a drawing."""
+    """Get task/punchlist pins for a drawing.
+
+    Audit B-DWG-IDOR — was IDOR. Pin coordinates + task linkage are
+    sensitive (locations of incidents, defect counts).
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     items = await service.get_pins(drawing_id)
     return [_annotation_to_response(i) for i in items]
 
@@ -418,10 +573,16 @@ def _group_to_response(item: object) -> DwgEntityGroupResponse:
 async def create_entity_group(
     data: DwgEntityGroupCreate,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("dwg_takeoff.create")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> DwgEntityGroupResponse:
-    """Create a saved group of DWG entities."""
+    """Create a saved group of DWG entities.
+
+    Audit B-DWG-IDOR — was IDOR-on-write. Anyone could attach a saved
+    group to another tenant's drawing.
+    """
+    await _gate_by_drawing(data.drawing_id, user_id, service, session)
     try:
         item = await service.create_entity_group(data, user_id)
         return _group_to_response(item)
@@ -441,10 +602,15 @@ async def list_entity_groups(
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[DwgEntityGroupResponse]:
-    """List saved entity groups for a drawing."""
+    """List saved entity groups for a drawing.
+
+    Audit B-DWG-IDOR — was IDOR.
+    """
+    await _gate_by_drawing(drawing_id, user_id, service, session)
     items, _ = await service.list_entity_groups(drawing_id, offset=offset, limit=limit)
     return [_group_to_response(i) for i in items]
 
@@ -453,10 +619,15 @@ async def list_entity_groups(
 async def delete_entity_group(
     group_id: uuid.UUID,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("dwg_takeoff.delete")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> None:
-    """Delete an entity group."""
+    """Delete an entity group.
+
+    Audit B-DWG-IDOR — was IDOR-on-write.
+    """
+    await _gate_by_group(group_id, user_id, service, session)
     await service.delete_entity_group(group_id)
 
 

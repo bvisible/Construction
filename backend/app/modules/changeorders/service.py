@@ -62,12 +62,56 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
         logger.debug("Event publish skipped: %s", name)
 
 
-# Valid status transitions
+async def _safe_audit(
+    session: AsyncSession,
+    *,
+    actor_id: str | uuid.UUID | None,
+    order_id: uuid.UUID,
+    from_status: str,
+    to_status: str,
+    reason: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    """Write an ActivityLog row for a CO status transition.
+
+    Wrapped in try/except so an audit-log failure (e.g. a partially
+    migrated DB without ``oe_activity_log``) never rolls back the
+    business transition. The audit row sits in the same SQLAlchemy
+    session as the status write, so commit semantics are atomic: both
+    or neither land.
+    """
+    try:
+        from app.core.audit_log import log_activity
+
+        await log_activity(
+            session,
+            actor_id=actor_id,
+            entity_type="change_order",
+            entity_id=str(order_id),
+            action="status_changed",
+            from_status=from_status,
+            to_status=to_status,
+            reason=reason,
+            metadata=dict(metadata or {}),
+        )
+    except Exception:
+        logger.warning(
+            "ActivityLog write skipped for change_order %s (%s → %s)",
+            order_id, from_status, to_status,
+            exc_info=True,
+        )
+
+
+# Valid status transitions.
+# ``executed`` is a terminal state added in R7 hardening: after an approved CO
+# is actually executed on site, it moves to ``executed`` so dashboards can
+# distinguish "approved in principle" from "work done / cost committed."
 VALID_TRANSITIONS: dict[str, list[str]] = {
     "draft": ["submitted"],
     "submitted": ["approved", "rejected", "draft"],
-    "approved": [],
+    "approved": ["executed"],
     "rejected": ["draft"],
+    "executed": [],
 }
 
 
@@ -318,6 +362,11 @@ class ChangeOrderService:
         """Submit a change order for approval."""
         order = await self.get_order(order_id)
         self._validate_transition(order.status, "submitted")
+        # Snapshot the from-status so the audit row records the
+        # transition accurately even after update_fields() expires the
+        # in-memory order.
+        from_status = order.status
+        code_snapshot = order.code
 
         now = datetime.now(UTC).isoformat()[:19]
         await self.repo.update_fields(
@@ -326,9 +375,21 @@ class ChangeOrderService:
             submitted_by=user_id,
             submitted_at=now,
         )
+        # Audit trail: every CO status transition writes an
+        # ActivityLog row so dispute timelines (FIDIC, ISO 9001, SCL
+        # Protocol) can be reproduced byte-for-byte. The session ties
+        # the audit row to the same transaction as the status write.
+        await _safe_audit(
+            self.session,
+            actor_id=user_id,
+            order_id=order_id,
+            from_status=from_status,
+            to_status="submitted",
+            metadata={"code": code_snapshot},
+        )
         await self.session.refresh(order)
 
-        logger.info("Change order submitted: %s by %s", order.code, user_id)
+        logger.info("Change order submitted: %s by %s", code_snapshot, user_id)
         return order
 
     async def approve_order(
@@ -400,11 +461,25 @@ class ChangeOrderService:
         currency_s = order.currency
 
         now = datetime.now(UTC).isoformat()[:19]
+        from_status_snapshot = order.status
         await self.repo.update_fields(
             order_id,
             status="approved",
             approved_by=user_id,
             approved_at=now,
+        )
+        await _safe_audit(
+            self.session,
+            actor_id=user_id,
+            order_id=order_id,
+            from_status=from_status_snapshot,
+            to_status="approved",
+            metadata={
+                "code": code_s,
+                "cost_impact": str(cost_impact_s),
+                "currency": currency_s,
+                "via_chain": _from_chain,
+            },
         )
 
         # Writeback: project.budget_estimate += cost_impact. Stored as string
@@ -787,6 +862,9 @@ class ChangeOrderService:
         order = await self.get_order(order_id)
         await self._assert_not_self_approval(order, user_id, "reject")
         self._validate_transition(order.status, "rejected")
+        # Snapshot pre-transition state for the audit row.
+        from_status = order.status
+        code_snapshot = order.code
 
         now = datetime.now(UTC).isoformat()[:19]
         await self.repo.update_fields(
@@ -795,6 +873,14 @@ class ChangeOrderService:
             rejected_by=user_id,
             rejected_at=now,
         )
+        await _safe_audit(
+            self.session,
+            actor_id=user_id,
+            order_id=order_id,
+            from_status=from_status,
+            to_status="rejected",
+            metadata={"code": code_snapshot},
+        )
         fresh = await self.repo.get_by_id(order_id)
 
         logger.info(
@@ -802,6 +888,33 @@ class ChangeOrderService:
             (fresh or order).code,
             user_id,
         )
+        return fresh or order
+
+    async def execute_order(self, order_id: uuid.UUID, user_id: str) -> ChangeOrder:
+        """Mark an approved change order as executed (work completed on site).
+
+        R7 hardening: the ``executed`` terminal state distinguishes COs that
+        have been approved-in-principle from those where the scope change has
+        actually been carried out, giving project controllers an accurate view
+        of committed vs. realised cost impact.
+        """
+        order = await self.get_order(order_id)
+        self._validate_transition(order.status, "executed")
+        from_status = order.status
+        code_snapshot = order.code
+
+        now = datetime.now(UTC).isoformat()[:19]
+        await self.repo.update_fields(order_id, status="executed")
+        await _safe_audit(
+            self.session,
+            actor_id=user_id,
+            order_id=order_id,
+            from_status=from_status,
+            to_status="executed",
+            metadata={"code": code_snapshot},
+        )
+        fresh = await self.repo.get_by_id(order_id)
+        logger.info("Change order executed: %s by %s", code_snapshot, user_id)
         return fresh or order
 
     def _validate_transition(self, current: str, target: str) -> None:
@@ -1055,6 +1168,26 @@ class ChangeOrderService:
                 ),
             )
 
+        # Four-eyes principle (extends BUG-353): the submitter cannot
+        # also be an approver on their own CO's chain. The single-step
+        # ``approve_order`` / ``reject_order`` paths enforce this via
+        # ``_assert_not_self_approval``; without the equivalent guard
+        # here a scope author could discreetly slot themselves into the
+        # chain (e.g. as step 2 of 3) and silently rubber-stamp their
+        # own change — defeating the multi-approver requirement that
+        # the chain exists to encode.
+        if order.submitted_by:
+            submitter_s = str(order.submitted_by)
+            if any(str(aid) == submitter_s for aid in approver_user_ids):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=(
+                        "The change-order submitter cannot be an approver "
+                        "on their own chain (four-eyes principle). Remove "
+                        "the submitter from the approver list."
+                    ),
+                )
+
         rows: list[ChangeOrderApproval] = []
         for step, approver_id in enumerate(approver_user_ids, start=1):
             row = ChangeOrderApproval(
@@ -1067,7 +1200,26 @@ class ChangeOrderService:
             rows.append(row)
 
         await self.repo.update_fields(order_id, current_approval_step=1)
-        await self.session.flush()
+        # Race-safety: ``_has_approval_chain`` is a TOCTOU check — two
+        # concurrent callers can both pass the probe and then both
+        # attempt to write step 1. The unique index
+        # ``uq_oe_changeorder_approval_change_order_id_step_order``
+        # catches the second writer at flush time; surface that to the
+        # caller as a 409 (matches the "already exists" path above) and
+        # roll back so the partially-built chain doesn't leak.
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            await self.session.flush()
+        except IntegrityError as exc:
+            await self.session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "An approval chain was concurrently started for this "
+                    "change order. Use /advance-approval to drive it forward."
+                ),
+            ) from exc
 
         await _safe_publish(
             "changeorders.approval.started",
@@ -1174,9 +1326,52 @@ class ChangeOrderService:
                 ),
             )
 
-        # Stamp the row.
+        # Race-safety: the python-side "set active_row.decision" pattern
+        # is a TOCTOU window when two approvers click at the same moment.
+        # Both fetch the row with decision='pending' before either commits,
+        # both then overwrite the column and both bump the cursor — the
+        # CO advances two steps at once and the last write wins on
+        # decided_at / comments.
+        #
+        # The conditional UPDATE below pushes the win condition to the
+        # database: only ONE caller's WHERE clause can match a row that
+        # is still ``pending``; the loser sees rowcount==0 and 409s
+        # cleanly. Combined with the existing cursor read this gives
+        # single-winner semantics without a SELECT … FOR UPDATE round
+        # trip (works the same on SQLite dev and Postgres prod).
+        from sqlalchemy import update as sa_update
+
+        decided_at = datetime.now(UTC)
+        update_stmt = (
+            sa_update(ChangeOrderApproval)
+            .where(ChangeOrderApproval.id == active_row.id)
+            .where(ChangeOrderApproval.decision == "pending")
+            .values(
+                decision=decision,
+                decided_at=decided_at,
+                **({"comments": comments} if comments is not None else {}),
+            )
+        )
+        result = await self.session.execute(update_stmt)
+        # rowcount is None on some dialects when the connection didn't
+        # report it (e.g. async drivers in autocommit). Treat that as a
+        # success only when ``active_row`` reflects pending (we just
+        # checked it above) — but if the driver reports 0, fail hard so
+        # we never silently drop the loser.
+        affected = getattr(result, "rowcount", None)
+        if affected == 0:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "This approval step was concurrently decided by another "
+                    "approver — refresh and retry."
+                ),
+            )
+        # Keep the in-memory row in sync for the rest of this method so
+        # downstream code (event payload, return value) sees the new
+        # decision / timestamp.
         active_row.decision = decision
-        active_row.decided_at = datetime.now(UTC)
+        active_row.decided_at = decided_at
         if comments is not None:
             active_row.comments = comments
         await self.session.flush()
@@ -1200,6 +1395,20 @@ class ChangeOrderService:
                 rejected_by=user_id,
                 rejected_at=now,
                 current_approval_step=None,
+            )
+            # Audit row records the rejection point so the chain
+            # timeline shows exactly which step killed the CO.
+            await _safe_audit(
+                self.session,
+                actor_id=user_id,
+                order_id=order_id,
+                from_status="submitted",
+                to_status="rejected",
+                reason=comments,
+                metadata={
+                    "via_chain": True,
+                    "step_order": cursor,
+                },
             )
             await _safe_publish(
                 "changeorders.approval.advanced",

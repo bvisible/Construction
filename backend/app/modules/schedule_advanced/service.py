@@ -27,6 +27,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.schedule_advanced.models import (
     Baseline,
     BaselineDelta,
@@ -187,6 +189,11 @@ def compute_baseline_delta(
                 "planned_finish_baseline": b_finish,
                 "planned_finish_current": c_finish,
                 "schedule_variance_days": variance,
+                # Carry-through display name from snapshot (or current row
+                # as fallback) so the UI doesn't render bare UUIDs. The
+                # whole field is optional in the response schema, so this
+                # is purely additive.
+                "name": (b.get("name") or (cur.get("name") if cur else None)),
             }
         )
     return out
@@ -909,8 +916,29 @@ class ScheduleAdvancedService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Phase cannot transition to completed from {p.pulled_status}",
             )
+        prior_status = p.pulled_status
         await self.phase_repo.update_fields(phase_id, pulled_status="completed")
         await self.session.refresh(p)
+
+        # Epic H — universal audit trail.
+        from app.core.audit_log import log_activity as _log_activity
+
+        await _log_activity(
+            self.session,
+            actor_id=None,
+            entity_type="phase_plan",
+            entity_id=str(phase_id),
+            action="status_changed",
+            from_status=prior_status,
+            to_status="completed",
+            reason="Phase completed",
+            module="schedule_advanced",
+            parent_entity_type="project",
+            parent_entity_id=str(p.project_id) if getattr(p, "project_id", None) else None,
+            before_state={"pulled_status": prior_status},
+            after_state={"pulled_status": "completed"},
+        )
+
         return p
 
     # ── Look-ahead plan ────────────────────────────────────────────────
@@ -1130,8 +1158,31 @@ class ScheduleAdvancedService:
             for c in commitments
             if c.status == "missed"
         ]
+        prior_status = w.status
         await self.weekly_repo.update_fields(wp_id, status="closed", ppc_percent=ppc)
         await self.session.refresh(w)
+
+        # Epic H — universal audit trail.
+        from app.core.audit_log import log_activity as _log_activity
+
+        await _log_activity(
+            self.session,
+            actor_id=None,
+            entity_type="weekly_work_plan",
+            entity_id=str(wp_id),
+            action="status_changed",
+            from_status=prior_status,
+            to_status="closed",
+            reason="Weekly work plan closed",
+            metadata={
+                "ppc_percent": str(ppc),
+                "missed_count": len(missed_payload),
+            },
+            module="schedule_advanced",
+            before_state={"status": prior_status},
+            after_state={"status": "closed", "ppc_percent": str(ppc)},
+        )
+
         event_bus.publish_detached(
             "schedule_advanced.weekly_plan.closed",
             {
@@ -1393,7 +1444,7 @@ class ScheduleAdvancedService:
     async def get_baseline(self, bid: uuid.UUID) -> Baseline:
         b = await self.baseline_repo.get_by_id(bid)
         if b is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Baseline not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.baseline_not_found", locale=get_locale()))
         return b
 
     async def update_baseline(

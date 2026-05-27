@@ -8,7 +8,8 @@ import {
   AlertTriangle, Shield, Trash2, X, Search, Filter, CalendarDays, TrendingUp,
   LayoutGrid, Activity,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, InfoHint } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, InfoHint, RecoveryCard, SkeletonTable, SkeletonCard } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import SimilarItemsPanel from '@/shared/ui/SimilarItemsPanel';
 import { UserSearchInput } from '@/shared/ui/UserSearchInput';
@@ -16,9 +17,11 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { MonteCarloTab } from './MonteCarloTab';
 
-type RiskTab = 'register' | 'montecarlo';
+const RISK_TAB_IDS = ['register', 'montecarlo'] as const;
+type RiskTab = (typeof RISK_TAB_IDS)[number];
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -52,11 +55,11 @@ const STATUSES = ['identified', 'assessed', 'mitigating', 'closed', 'occurred'];
 const PROB_LEVELS = ['0.9', '0.7', '0.5', '0.3', '0.1'];
 function getProbLabels(t: (key: string, opts?: Record<string, unknown>) => string): Record<string, string> {
   return {
-    '0.9': t('risk.probability_very_high', { defaultValue: 'Very High‌⁠‍' }),
+    '0.9': t('risk.probability_very_high', { defaultValue: 'Very High' }),
     '0.7': t('risk.probability_high', { defaultValue: 'High' }),
-    '0.5': t('risk.probability_medium', { defaultValue: 'Medium‌⁠‍' }),
+    '0.5': t('risk.probability_medium', { defaultValue: 'Medium' }),
     '0.3': t('risk.probability_low', { defaultValue: 'Low' }),
-    '0.1': t('risk.probability_very_low', { defaultValue: 'Very Low‌⁠‍' }),
+    '0.1': t('risk.probability_very_low', { defaultValue: 'Very Low' }),
   };
 }
 // Must mirror the backend `/matrix/` canonical impact axis exactly
@@ -107,12 +110,12 @@ function RiskMatrix({ cells }: { cells: MatrixCell[] }) {
 
   return (
     <Card className="p-4">
-      <h3 className="text-sm font-semibold text-content-primary mb-3">{t('risk.matrix', { defaultValue: 'Risk Matrix‌⁠‍' })}</h3>
+      <h3 className="text-sm font-semibold text-content-primary mb-3">{t('risk.matrix', { defaultValue: 'Risk Matrix' })}</h3>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr>
-              <th className="p-1 text-left text-content-tertiary w-20">{t('risk.probability', { defaultValue: 'Probability‌⁠‍' })}</th>
+              <th className="p-1 text-left text-content-tertiary w-20">{t('risk.probability', { defaultValue: 'Probability' })}</th>
               {IMPACT_LEVELS.map((i) => <th key={i} className="p-1 text-center text-content-tertiary">{t(`risk.impact_${i}`, { defaultValue: IMPACT_LABEL_FALLBACK[i] ?? i })}</th>)}
             </tr>
           </thead>
@@ -352,7 +355,7 @@ function DetailView({ riskId, onBack }: { riskId: string; onBack: () => void }) 
     onError: (e: Error) => addToast({ type: 'error', title: t('common.error', { defaultValue: 'Error' }), message: e.message }),
   });
 
-  if (isLoading || !risk) return <div className="flex items-center justify-center py-20"><div className="h-6 w-6 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" /></div>;
+  if (isLoading || !risk) return <SkeletonCard className="my-6" />;
 
   return (
     <div>
@@ -500,6 +503,13 @@ export function RiskRegisterPage() {
   // qualitative register so the 5x5 matrix view stays the default — most
   // users land here to triage and edit risks, not to re-run simulations.
   const [activeTab, setActiveTab] = useState<RiskTab>('register');
+  // Arrow-key navigation across the Register / Monte Carlo tabs (WCAG 2.1.1).
+  const onTabKeyDown = useTabKeyboardNav<RiskTab>({
+    ids: RISK_TAB_IDS,
+    activeId: activeTab,
+    onChange: setActiveTab,
+    orientation: 'horizontal',
+  });
 
   // Deep-link auto-select: Cmd+Shift+K global search lands here with
   // ?id=<risk_id> — open the matching risk detail view immediately and
@@ -519,7 +529,7 @@ export function RiskRegisterPage() {
   const projectId = activeProjectId || projects[0]?.id || '';
   const project = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
-  const { data: risks = [], isLoading } = useQuery({ queryKey: ['risks', projectId], queryFn: () => apiGet<RiskItem[]>(`/v1/risk/?project_id=${projectId}`), select: (d): RiskItem[] => normalizeListResponse(d), enabled: !!projectId });
+  const { data: risks = [], isLoading, isError, error, refetch } = useQuery({ queryKey: ['risks', projectId], queryFn: () => apiGet<RiskItem[]>(`/v1/risk/?project_id=${projectId}`), select: (d): RiskItem[] => normalizeListResponse(d), enabled: !!projectId });
   const { data: summary } = useQuery({ queryKey: ['risk-summary', projectId], queryFn: () => apiGet<RiskSummary>(`/v1/risk/summary/?project_id=${projectId}`), enabled: !!projectId });
   const { data: matrixData } = useQuery({ queryKey: ['risk-matrix', projectId], queryFn: () => apiGet<{ cells: MatrixCell[] }>(`/v1/risk/matrix/?project_id=${projectId}`), enabled: !!projectId });
 
@@ -586,17 +596,6 @@ export function RiskRegisterPage() {
         </div>
       </div>
 
-      {/* No-project warning */}
-      {!projectId && (
-        <div className="mb-4 mt-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3">
-          <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">{t('common.no_project_selected', { defaultValue: 'No project selected' })}</p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">{t('common.select_project_hint', { defaultValue: 'Select a project from the header to view and manage items.' })}</p>
-          </div>
-        </div>
-      )}
-
       {/* How the Risk Register connects to the rest of the platform */}
       <InfoHint
         className="mt-4"
@@ -635,12 +634,16 @@ export function RiskRegisterPage() {
         <div
           role="tablist"
           aria-label={t('risk.tabs_aria', { defaultValue: 'Risk register tabs' })}
+          onKeyDown={onTabKeyDown}
           className="mt-6 flex items-center gap-1 border-b border-border-light"
         >
           <button
             type="button"
             role="tab"
+            id="risk-tab-register"
             aria-selected={activeTab === 'register'}
+            aria-controls="risk-panel-register"
+            tabIndex={activeTab === 'register' ? 0 : -1}
             onClick={() => setActiveTab('register')}
             className={`inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium ${
               activeTab === 'register'
@@ -654,7 +657,10 @@ export function RiskRegisterPage() {
           <button
             type="button"
             role="tab"
+            id="risk-tab-montecarlo"
             aria-selected={activeTab === 'montecarlo'}
+            aria-controls="risk-panel-montecarlo"
+            tabIndex={activeTab === 'montecarlo' ? 0 : -1}
             onClick={() => setActiveTab('montecarlo')}
             className={`inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium ${
               activeTab === 'montecarlo'
@@ -722,13 +728,13 @@ export function RiskRegisterPage() {
 
       {activeTab === 'register' && <div className="mt-4">
         {!projectId ? (
-          <Card><EmptyState
-            icon={<ShieldAlert size={28} strokeWidth={1.5} />}
-            title={t('risk.no_project', { defaultValue: 'No project selected' })}
-            description={t('risk.no_project_desc', { defaultValue: 'Open a project first to view and manage risks.' })}
-          /></Card>
+          <Card><RequiresProject
+            emptyHint={t('risk.no_project_desc', { defaultValue: 'Open a project first to view and manage risks.' })}
+          >{null}</RequiresProject></Card>
         ) : isLoading ? (
-          <div className="flex items-center justify-center py-20"><div className="h-6 w-6 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" /></div>
+          <SkeletonTable rows={6} columns={5} />
+        ) : isError ? (
+          <Card className="py-12"><RecoveryCard error={error} onRetry={() => refetch()} /></Card>
         ) : filteredRisks.length === 0 ? (
           <Card><EmptyState
             icon={<ShieldAlert size={28} strokeWidth={1.5} />}

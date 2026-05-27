@@ -12,30 +12,58 @@ Preferences + digest (Wave 3 / T9):
     POST   /preferences/                  — upsert a pref row
     POST   /digest/flush                  — admin manual digest flush
     GET    /event-types/                  — known event-type catalogue
+
+Epic B (Notifications Dispatcher):
+    WS     /ws/                           — real-time push for current user
+    GET    /webhooks/                     — admin list webhook targets
+    POST   /webhooks/                     — admin create webhook target
+    PATCH  /webhooks/{id}/                — admin update webhook target
+    DELETE /webhooks/{id}/                — admin delete webhook target
 """
+
+from __future__ import annotations
 
 import logging
 import uuid
+from datetime import UTC, datetime
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from sqlalchemy import select
 
+from app.config import get_settings
+from app.database import async_session_factory
 from app.dependencies import (
     CurrentUserId,
     CurrentUserPayload,
     SessionDep,
+    decode_access_token,
 )
+from app.modules.notifications.models import WebhookTarget
 from app.modules.notifications.schemas import (
     EventTypeCatalogEntry,
     NotificationListResponse,
     NotificationResponse,
     PreferenceRequest,
     PreferenceResponse,
+    WebhookTargetCreate,
+    WebhookTargetResponse,
+    WebhookTargetUpdate,
 )
 from app.modules.notifications.service import (
     _DIGEST_FLUSHER,
     KNOWN_EVENT_TYPES,
     NotificationService,
 )
+from app.modules.notifications.ws_hub import notifications_ws_hub
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -222,3 +250,216 @@ async def flush_digest(
 
     count = await _DIGEST_FLUSHER(channel)
     return {"channel": channel, "rows_sent": count}
+
+
+# ── WebSocket: real-time notification push (Epic B / B6) ──────────────────
+
+
+async def _authenticate_ws(token: str | None) -> dict[str, Any] | None:
+    """‌⁠‍Decode a JWT passed as ``?token=`` on a WebSocket upgrade.
+
+    Matches the collab-locks pattern: returns the payload on success,
+    or ``None`` on any failure (the caller closes the socket with
+    1008).  The user-id is re-hydrated against the DB so a forged
+    token with a fake UUID cannot open a socket.
+    """
+    if not token:
+        return None
+    try:
+        payload = decode_access_token(token, get_settings())
+    except HTTPException:
+        return None
+    except Exception:  # noqa: BLE001 — never crash the WS on auth
+        logger.exception("notifications WS token decode failed")
+        return None
+
+    try:
+        from app.dependencies import verify_user_exists_and_active
+
+        user = await verify_user_exists_and_active(payload["sub"])
+        payload["role"] = user.role
+        return payload
+    except HTTPException:
+        return None
+    except Exception:  # noqa: BLE001
+        logger.exception("notifications WS user re-hydration failed")
+        return None
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+@router.websocket("/ws/")
+async def notifications_ws(
+    websocket: WebSocket,
+    token: str | None = Query(default=None),
+) -> None:
+    """Real-time push channel for the calling user's notifications.
+
+    Wire frame (server → client)::
+
+        {"event": "notification.created", "data": {...}, "ts": "..."}
+
+    The hub is keyed by user-id (taken from the JWT), so a user with
+    multiple tabs gets the same fan-out on every open socket.  No
+    server-bound traffic is expected; ``ping`` text frames are echoed
+    as ``pong`` so a client can keep the socket warm through proxies.
+    """
+    payload = await _authenticate_ws(token)
+    if payload is None:
+        await websocket.close(code=1008, reason="unauthenticated")
+        return
+
+    user_id_str = payload.get("sub")
+    if not isinstance(user_id_str, str):
+        await websocket.close(code=1008, reason="invalid token subject")
+        return
+    try:
+        user_id = uuid.UUID(user_id_str)
+    except (ValueError, TypeError):
+        await websocket.close(code=1008, reason="invalid user id")
+        return
+
+    await websocket.accept()
+    await notifications_ws_hub.join(user_id, websocket)
+
+    try:
+        # First frame: hello so the client knows the channel is live
+        # without waiting for the first notification to fire.
+        await websocket.send_json(
+            {
+                "event": "notifications.hello",
+                "user_id": str(user_id),
+                "ts": _now_iso(),
+            }
+        )
+        while True:
+            msg = await websocket.receive_text()
+            if msg == "ping":
+                await websocket.send_json({"event": "pong", "ts": _now_iso()})
+    except WebSocketDisconnect:
+        pass
+    except Exception:  # noqa: BLE001
+        logger.exception("notifications websocket crashed")
+    finally:
+        await notifications_ws_hub.leave(user_id, websocket)
+
+
+# ── Webhook target CRUD (Epic B / B8) ─────────────────────────────────────
+
+
+def _require_admin(payload: CurrentUserPayload) -> None:
+    role = payload.get("role", "")
+    perms = payload.get("permissions", []) or []
+    if role != "admin" and "notifications.admin" not in perms:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin permission required",
+        )
+
+
+def _webhook_to_response(t: WebhookTarget) -> WebhookTargetResponse:
+    """Build the response model with ``has_secret`` derived; never leak
+    the secret value.
+    """
+    return WebhookTargetResponse(
+        id=t.id,
+        name=t.name,
+        url=t.url,
+        event_filter=t.event_filter,
+        has_secret=bool(t.secret),
+        active=t.active,
+        last_status=t.last_status,
+        last_attempt_at=t.last_attempt_at,
+        failure_count=t.failure_count,
+        created_at=t.created_at,
+        updated_at=t.updated_at,
+    )
+
+
+@router.get("/webhooks/", response_model=list[WebhookTargetResponse])
+async def list_webhook_targets(
+    payload: CurrentUserPayload,
+    session: SessionDep,
+) -> list[WebhookTargetResponse]:
+    """‌⁠‍Admin-only: list every registered webhook target."""
+    _require_admin(payload)
+    stmt = select(WebhookTarget).order_by(WebhookTarget.created_at.desc())
+    rows = list((await session.execute(stmt)).scalars().all())
+    return [_webhook_to_response(t) for t in rows]
+
+
+@router.post(
+    "/webhooks/",
+    response_model=WebhookTargetResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_webhook_target(
+    body: WebhookTargetCreate,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+) -> WebhookTargetResponse:
+    """‌⁠‍Admin-only: register a new webhook target."""
+    _require_admin(payload)
+    target = WebhookTarget(
+        name=body.name,
+        url=body.url,
+        event_filter=body.event_filter or "*",
+        secret=body.secret,
+        active=body.active,
+    )
+    session.add(target)
+    await session.flush()
+    await session.commit()
+    return _webhook_to_response(target)
+
+
+@router.patch("/webhooks/{target_id}/", response_model=WebhookTargetResponse)
+async def update_webhook_target(
+    target_id: uuid.UUID,
+    body: WebhookTargetUpdate,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+) -> WebhookTargetResponse:
+    """‌⁠‍Admin-only: partial update on an existing webhook target."""
+    _require_admin(payload)
+    target = await session.get(WebhookTarget, target_id)
+    if target is None:
+        # IDOR-as-404 per project security convention.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Webhook target not found",
+        )
+    if body.name is not None:
+        target.name = body.name
+    if body.url is not None:
+        target.url = body.url
+    if body.event_filter is not None:
+        target.event_filter = body.event_filter
+    if body.secret is not None:
+        # Pass empty string to clear; non-empty to set.
+        target.secret = body.secret or None
+    if body.active is not None:
+        target.active = body.active
+    await session.flush()
+    await session.commit()
+    return _webhook_to_response(target)
+
+
+@router.delete("/webhooks/{target_id}/", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_webhook_target(
+    target_id: uuid.UUID,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+) -> None:
+    """‌⁠‍Admin-only: delete a webhook target."""
+    _require_admin(payload)
+    target = await session.get(WebhookTarget, target_id)
+    if target is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Webhook target not found",
+        )
+    await session.delete(target)
+    await session.commit()

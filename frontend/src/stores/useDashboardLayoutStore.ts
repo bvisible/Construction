@@ -3,8 +3,21 @@
  *
  * The dashboard is a stack of independent content widgets (KPI ribbon,
  * project cards, analytics, …). This store lets the user reorder them and
- * hide the ones they don't care about. Purely presentational, no server
- * round-trip — persisted to localStorage so the layout sticks per browser.
+ * hide the ones they don't care about.
+ *
+ * Persistence strategy (2026-05-23):
+ *   1. localStorage — written eagerly via zustand `persist` for an instant
+ *      first-paint offline fallback.
+ *   2. Server (`/api/v1/users/me/dashboard-layout/`) — fetched once on
+ *      app boot via ``hydrateFromServer()``; subsequent mutations to
+ *      ``order`` / ``hidden`` are debounced 500 ms and PUT back. The
+ *      server-side row follows the user across browsers and devices, just
+ *      like the sidebar visibility preferences.
+ *
+ * On boot the server value wins when it has any rows; otherwise the
+ * localStorage value is kept (so a brand-new user with a previously
+ * customised browser doesn't lose their layout the first time they sign
+ * in). Network failures degrade silently — the offline fallback is enough.
  *
  * The persisted `order` is reconciled against the live widget registry at
  * render time via `reconcileOrder`, so adding a new widget in code (or
@@ -13,6 +26,7 @@
  */
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { apiGet, apiPut } from '@/shared/lib/api';
 
 interface DashboardLayoutState {
   /** Widget ids in display order. Empty until the user customises. */
@@ -26,13 +40,33 @@ interface DashboardLayoutState {
   hide: (id: string) => void;
   /** Wipe all customisation — back to registry default order, nothing hidden. */
   reset: () => void;
+
+  /** Internal: true once we've successfully fetched server-side state. */
+  hydrated: boolean;
+  /** Internal: replace local state from server without re-PUTting it. */
+  _setFromServer: (order: string[], hidden: string[]) => void;
 }
+
+interface ServerLayoutPayload {
+  order: string[];
+  hidden: string[];
+}
+
+/**
+ * Suppression flag so the server-driven hydration doesn't immediately
+ * fire a PUT back. We flip it ON before calling ``_setFromServer`` and
+ * OFF in a microtask, so the debounced syncer (registered via
+ * ``zustand.subscribe`` below) sees ``suppressSync = true`` and skips
+ * the request.
+ */
+let suppressSync = false;
 
 export const useDashboardLayoutStore = create<DashboardLayoutState>()(
   persist(
     (set) => ({
       order: [],
       hidden: [],
+      hydrated: false,
 
       setOrder: (ids) => set({ order: ids }),
       toggleHidden: (id) =>
@@ -45,8 +79,22 @@ export const useDashboardLayoutStore = create<DashboardLayoutState>()(
       hide: (id) =>
         set((s) => (s.hidden.includes(id) ? s : { hidden: [...s.hidden, id] })),
       reset: () => set({ order: [], hidden: [] }),
+
+      _setFromServer: (order, hidden) => {
+        suppressSync = true;
+        set({ order, hidden, hydrated: true });
+        // Release the suppression on the next microtask so that any user
+        // mutation in the same tick still triggers a sync.
+        queueMicrotask(() => {
+          suppressSync = false;
+        });
+      },
     }),
-    { name: 'oe.dashboard-layout' },
+    {
+      name: 'oe.dashboard-layout',
+      // ``hydrated`` is runtime-only state, never persist it to localStorage.
+      partialize: (state) => ({ order: state.order, hidden: state.hidden }),
+    },
   ),
 );
 
@@ -79,4 +127,96 @@ export function reconcileOrder(
   });
 
   return result;
+}
+
+/* ── Server hydration + debounced sync ─────────────────────────────────── */
+
+let hydrationStarted = false;
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+let lastSentPayload = '';
+
+async function syncToServer(state: DashboardLayoutState): Promise<void> {
+  const payload: ServerLayoutPayload = {
+    order: state.order,
+    hidden: state.hidden,
+  };
+  const serialised = JSON.stringify(payload);
+  if (serialised === lastSentPayload) return;
+  try {
+    await apiPut<ServerLayoutPayload, ServerLayoutPayload>(
+      '/v1/users/me/dashboard-layout/',
+      payload,
+    );
+    lastSentPayload = serialised;
+  } catch {
+    // Network failures degrade silently; localStorage already has the change.
+  }
+}
+
+/**
+ * Subscribe to store changes; debounce writes by 500 ms so a drag-and-drop
+ * (which may fire many `setOrder` calls) collapses to one PUT.
+ */
+useDashboardLayoutStore.subscribe((state, prev) => {
+  if (suppressSync) return;
+  // Skip if nothing meaningful changed (e.g. ``hydrated`` flag flip).
+  if (
+    state.order === prev.order &&
+    state.hidden === prev.hidden
+  ) {
+    return;
+  }
+  if (pendingTimer) clearTimeout(pendingTimer);
+  pendingTimer = setTimeout(() => {
+    pendingTimer = null;
+    void syncToServer(useDashboardLayoutStore.getState());
+  }, 500);
+});
+
+/**
+ * Pull the server-side layout once at app boot.
+ *
+ * Behaviour:
+ *   - If the server returns a non-empty layout, it overwrites the local
+ *     state (server wins on initial load — this is what makes the layout
+ *     follow the user across browsers).
+ *   - If the server returns empty defaults but the user has a local
+ *     customisation, the local one is preserved AND pushed up so future
+ *     devices see it.
+ *   - Network errors / 401 are silent — we keep the localStorage state.
+ *
+ * Idempotent: safe to call from multiple effects; only the first call
+ * actually fires.
+ */
+export async function hydrateDashboardLayoutFromServer(): Promise<void> {
+  if (hydrationStarted) return;
+  hydrationStarted = true;
+
+  try {
+    const remote = await apiGet<ServerLayoutPayload>(
+      '/v1/users/me/dashboard-layout/',
+    );
+    const remoteHasContent =
+      (remote?.order?.length ?? 0) > 0 || (remote?.hidden?.length ?? 0) > 0;
+    if (remoteHasContent) {
+      useDashboardLayoutStore
+        .getState()
+        ._setFromServer(remote.order ?? [], remote.hidden ?? []);
+      lastSentPayload = JSON.stringify({
+        order: remote.order ?? [],
+        hidden: remote.hidden ?? [],
+      });
+      return;
+    }
+    // Server is empty: if we have a local customisation, push it up so this
+    // is the layout the next browser sees.
+    const local = useDashboardLayoutStore.getState();
+    if (local.order.length > 0 || local.hidden.length > 0) {
+      void syncToServer(local);
+    }
+    useDashboardLayoutStore.setState({ hydrated: true });
+  } catch {
+    // Anonymous / offline — leave localStorage alone.
+    useDashboardLayoutStore.setState({ hydrated: true });
+  }
 }

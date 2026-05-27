@@ -18,6 +18,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.collaboration.models import Comment, Viewpoint
 from app.modules.opencde_api.schemas import (
     BCFComment,
@@ -61,7 +63,7 @@ class OpenCDEService:
         if project is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
+                detail=translate("errors.project_not_found", locale=get_locale()),
             )
         return BCFProject(project_id=str(project.id), name=project.name)
 
@@ -116,7 +118,7 @@ class OpenCDEService:
         if project is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
+                detail=translate("errors.project_not_found", locale=get_locale()),
             )
 
         metadata = {

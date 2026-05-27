@@ -13,9 +13,13 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { DateDisplay, EmptyState, StatusDot } from '@/shared/ui';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 
 import { usePipelineStore } from '../usePipelineStore';
 import type { PipelineRunSummary, RunStatus } from '../api';
+
+type RunDockTab = 'run' | 'history';
+const RUN_DOCK_TAB_IDS: readonly RunDockTab[] = ['run', 'history'];
 
 export interface RunDockProps {
   runs: PipelineRunSummary[];
@@ -52,7 +56,13 @@ export function RunDock({
   testId,
 }: RunDockProps) {
   const { t } = useTranslation();
-  const [tab, setTab] = useState<'run' | 'history'>('run');
+  const [tab, setTab] = useState<RunDockTab>('run');
+  const onTabKeyDown = useTabKeyboardNav<RunDockTab>({
+    ids: RUN_DOCK_TAB_IDS,
+    activeId: tab,
+    onChange: setTab,
+    orientation: 'horizontal',
+  });
   const run = usePipelineStore((s) => s.run);
   const nodes = usePipelineStore((s) => s.nodes);
 
@@ -73,8 +83,8 @@ export function RunDock({
           aria-expanded={expanded}
           aria-label={
             expanded
-              ? t('pipeline.dock.collapse', { defaultValue: 'Collapse run dock‌⁠‍' })
-              : t('pipeline.dock.expand', { defaultValue: 'Expand run dock‌⁠‍' })
+              ? t('pipeline.dock.collapse', { defaultValue: 'Collapse run dock' })
+              : t('pipeline.dock.expand', { defaultValue: 'Expand run dock' })
           }
           className="flex items-center gap-1.5 rounded px-1 py-0.5 font-medium text-content-secondary hover:bg-surface-secondary"
         >
@@ -100,7 +110,7 @@ export function RunDock({
           {run.status && run.status !== 'done' && run.status !== 'success' && (
             <span className="tabular-nums text-content-tertiary">
               {t('pipeline.dock.progress', {
-                defaultValue: '{{pct}}%‌⁠‍',
+                defaultValue: '{{pct}}%',
                 pct: Math.round(run.progress),
               })}
             </span>
@@ -123,13 +133,21 @@ export function RunDock({
         <div className="flex min-h-0 flex-1 flex-col">
           <div
             role="tablist"
+            aria-label={t('pipeline.dock.tabs_aria', {
+              defaultValue: 'Run dock sections',
+            })}
+            onKeyDown={onTabKeyDown}
             className="flex shrink-0 gap-1 border-b border-border px-3 py-1.5"
           >
-            {(['run', 'history'] as const).map((k) => (
+            {RUN_DOCK_TAB_IDS.map((k) => (
               <button
                 key={k}
+                type="button"
                 role="tab"
+                id={`pipeline-rundock-tab-${k}`}
                 aria-selected={tab === k}
+                aria-controls={`pipeline-rundock-panel-${k}`}
+                tabIndex={tab === k ? 0 : -1}
                 onClick={() => setTab(k)}
                 className={clsx(
                   'rounded px-2 py-1 text-xs font-medium',
@@ -141,7 +159,7 @@ export function RunDock({
                 {k === 'run'
                   ? t('pipeline.dock.tab_run', { defaultValue: 'Run' })
                   : t('pipeline.dock.tab_history', {
-                      defaultValue: 'History‌⁠‍',
+                      defaultValue: 'History',
                     })}
               </button>
             ))}
@@ -153,7 +171,7 @@ export function RunDock({
                 <p className="py-6 text-center text-xs text-content-tertiary">
                   {t('pipeline.dock.no_steps', {
                     defaultValue:
-                      'Add steps and press Run to watch data flow through your pipeline.‌⁠‍',
+                      'Add steps and press Run to watch data flow through your pipeline.',
                   })}
                 </p>
               ) : (

@@ -10,6 +10,8 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
 
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.supplier_catalogs.schemas import (
     CatalogItemCreate,
@@ -113,7 +115,10 @@ async def get_vendor(
 
     vendor = await service.vendors.get(vendor_id)
     if vendor is None:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+        raise HTTPException(
+            status_code=404,
+            detail=translate("errors.vendor_not_found", locale=get_locale()),
+        )
     return VendorResponse.model_validate(vendor)
 
 

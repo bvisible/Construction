@@ -23,11 +23,13 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   SkeletonTable,
   WideModal,
   WideModalSection,
   WideModalField,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { SectionIntro } from '@/features/validation';
@@ -210,16 +212,16 @@ export function QMSPage() {
 
   return (
     <div className="space-y-5">
-      <Breadcrumb items={[{ label: t('qms.title', { defaultValue: 'Quality Management‌⁠‍' }) }]} />
+      <Breadcrumb items={[{ label: t('qms.title', { defaultValue: 'Quality Management' }) }]} />
 
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-content-primary">
-            {t('qms.title', { defaultValue: 'Quality Management‌⁠‍' })}
+            {t('qms.title', { defaultValue: 'Quality Management' })}
           </h1>
           <p className="mt-1 text-sm text-content-secondary">
             {t('qms.subtitle', {
-              defaultValue: 'ITP plans, inspections, NCRs, punch list and audits in one place.‌⁠‍',
+              defaultValue: 'ITP plans, inspections, NCRs, punch list and audits in one place.',
             })}
           </p>
         </div>
@@ -231,12 +233,12 @@ export function QMSPage() {
       <SectionIntro
         storageKey="qms"
         title={t('qms.intro_title', {
-          defaultValue: 'One quality system, five linked registers‌⁠‍',
+          defaultValue: 'One quality system, five linked registers',
         })}
       >
         {t('qms.intro_body', {
           defaultValue:
-            'QMS ties together the full ISO 9001 quality chain: ITP plans define hold/witness points → Inspections sign them off → failed checks raise NCRs → NCRs with cost impact escalate to a Variation and feed the Cost of Poor Quality (COPQ) rollup → Punch items track close-out → Audits cover the management system. Pick a project, then move through the tabs left-to-right.‌⁠‍',
+            'QMS ties together the full ISO 9001 quality chain: ITP plans define hold/witness points → Inspections sign them off → failed checks raise NCRs → NCRs with cost impact escalate to a Variation and feed the Cost of Poor Quality (COPQ) rollup → Punch items track close-out → Audits cover the management system. Pick a project, then move through the tabs left-to-right.',
         })}
       </SectionIntro>
 
@@ -360,25 +362,15 @@ export function QMSPage() {
 
       <Card padding="none">
         {!projectId ? (
-          <EmptyState
-            icon={<ClipboardCheck size={22} />}
-            title={t('common.no_project', { defaultValue: 'No project selected' })}
-            description={t('common.no_project_desc', { defaultValue: 'Create or select a project to view QMS data.' })}
-          />
+          <RequiresProject
+            emptyHint={t('common.no_project_desc', { defaultValue: 'Create or select a project to view QMS data.' })}
+          >{null}</RequiresProject>
         ) : isLoading ? (
           <div className="p-4">
             <SkeletonTable rows={8} columns={5} />
           </div>
         ) : loadError ? (
-          <EmptyState
-            icon={<AlertOctagon size={22} />}
-            title={t('qms.load_error', { defaultValue: 'Could not load QMS data' })}
-            description={getErrorMessage(loadError)}
-            action={{
-              label: t('common.retry', { defaultValue: 'Retry' }),
-              onClick: () => activeQuery.refetch(),
-            }}
-          />
+          <RecoveryCard error={loadError} onRetry={() => activeQuery.refetch()} />
         ) : tab === 'itp' ? (
           <ITPTable rows={filteredItp} onAction={() => setCreateOpen(true)} />
         ) : tab === 'inspections' ? (

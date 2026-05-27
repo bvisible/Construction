@@ -111,20 +111,52 @@ class CostModelService:
         Computes SPI and CPI from the provided planned/earned/actual values
         if they are not explicitly set.
 
+        R5 audit (May 2026): ``(project_id, period)`` must be unique.
+        Pre-audit two snapshots for the same period silently coexisted —
+        ``get_latest_for_project`` then picked one arbitrarily and EVM
+        rollups flapped between them. The DB-level unique index added in
+        migration v3108 is the belt to this in-process suspenders.
+
         Args:
             data: Snapshot creation payload.
 
         Returns:
             The newly created snapshot.
+
+        Raises:
+            HTTPException: 409 if a snapshot already exists for
+                ``(project_id, period)``.
         """
+        # ── Duplicate-period guard (R5 audit) ────────────────────────────
+        existing = await self.snapshot_repo.get_for_project_period(
+            data.project_id, data.period
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Snapshot for period {data.period} already exists for "
+                    "this project. Update the existing snapshot instead "
+                    "(PATCH /5d/snapshots/{snapshot_id})."
+                ),
+            )
+
         spi = data.spi
         cpi = data.cpi
 
-        # Auto-compute indices if not provided (left at default 0)
-        if spi == 0.0 and data.planned_cost > 0.0:
-            spi = round(_safe_divide(data.earned_value, data.planned_cost), 4)
-        if cpi == 0.0 and data.actual_cost > 0.0:
-            cpi = round(_safe_divide(data.earned_value, data.actual_cost), 4)
+        # Auto-compute indices if not provided (left at default 0).
+        # v3 §10 — money fields are Decimal; cast to float at this
+        # boundary because SPI/CPI are unitless ratios stored as float.
+        if spi == 0.0 and float(data.planned_cost) > 0.0:
+            spi = round(
+                _safe_divide(float(data.earned_value), float(data.planned_cost)),
+                4,
+            )
+        if cpi == 0.0 and float(data.actual_cost) > 0.0:
+            cpi = round(
+                _safe_divide(float(data.earned_value), float(data.actual_cost)),
+                4,
+            )
 
         snapshot = CostSnapshot(
             project_id=data.project_id,
@@ -755,7 +787,17 @@ class CostModelService:
         eac = _safe_divide(bac, cpi) if cpi != 0.0 else bac
         etc = max(0.0, eac - ac)
         vac = bac - eac
-        tcpi = _safe_divide(bac - ev, bac - ac)
+        # TCPI is mathematically undefined when (BAC - AC) <= 0: the
+        # project is at-or-over budget so "work remaining vs cash
+        # remaining" has no finite answer. Pre-audit this returned 0.0
+        # via _safe_divide, which dashboards mis-rendered as "perfect
+        # efficiency required". Surface None so the UI can label N/A.
+        tcpi: float | None
+        remaining_budget = bac - ac
+        if remaining_budget <= 0.0:
+            tcpi = None
+        else:
+            tcpi = (bac - ev) / remaining_budget
 
         # ── Step 4: Determine project health status ────────────────────────
         # When we have no schedule signal at all, any SPI-based classification
@@ -796,7 +838,7 @@ class CostModelService:
             eac=round(eac, 2),
             etc=round(etc, 2),
             vac=round(vac, 2),
-            tcpi=round(tcpi, 4),
+            tcpi=round(tcpi, 4) if tcpi is not None else None,
             time_elapsed_pct=round(time_elapsed_pct, 2),
             schedule_progress_pct=round(schedule_progress_pct, 2),
             status=evm_status,
@@ -870,10 +912,14 @@ class CostModelService:
         delta_pct = _variance_pct(original_eac, adjusted_eac) * -1.0 if original_eac > 0.0 else 0.0
 
         # ── Step 5: Create a snapshot recording the scenario ───────────────
+        # Scenarios use a 'wif:<short-id>:YYYY-MM' period so the unique
+        # (project_id, period) index added in v3108 cannot reject a
+        # legitimate what-if just because the real monthly snapshot also
+        # exists for this calendar month.
         from datetime import date
 
         today = date.today()
-        period = f"{today.year:04d}-{today.month:02d}"
+        period = f"wif:{uuid.uuid4().hex[:8]}:{today.year:04d}-{today.month:02d}"
 
         snapshot = CostSnapshot(
             project_id=project_id,
@@ -961,12 +1007,20 @@ class CostModelService:
         Each BOQ position becomes a budget line with planned_amount = position total.
         Existing budget lines for the project are NOT deleted — new lines are appended.
 
+        Idempotency (R5 audit, May 2026):
+            Positions already wired to a budget line for this project are
+            skipped. Re-running the endpoint after editing the BOQ creates
+            lines only for the *new* positions. Pre-audit each call appended
+            a fresh duplicate row per position, silently doubling BAC and
+            poisoning every downstream EVM rollup.
+
         Args:
             project_id: Target project.
             boq_id: Source BOQ to generate budget from.
 
         Returns:
-            List of newly created budget lines.
+            List of newly created budget lines (empty if every position is
+            already represented).
         """
         from app.modules.boq.repository import PositionRepository
 
@@ -979,8 +1033,17 @@ class CostModelService:
                 detail="No positions found in the specified BOQ",
             )
 
+        # ── Idempotency guard ────────────────────────────────────────────
+        # Skip positions that already have a budget line for this project.
+        # This makes the endpoint safe to re-run after a BOQ edit; the
+        # DB-level unique index added in the same migration is the belt to
+        # this in-process suspenders.
+        existing = await self.budget_repo.existing_position_ids(project_id)
+
         lines: list[BudgetLine] = []
         for pos in positions:
+            if pos.id in existing:
+                continue
             total = _str_to_float(pos.total)
             line = BudgetLine(
                 project_id=project_id,
@@ -994,6 +1057,15 @@ class CostModelService:
                 currency="",
             )
             lines.append(line)
+
+        if not lines:
+            logger.info(
+                "generate_budget_from_boq: every BOQ position already wired "
+                "(project=%s boq=%s); no-op.",
+                project_id,
+                boq_id,
+            )
+            return []
 
         created = await self.budget_repo.bulk_create(lines)
 
@@ -1022,6 +1094,13 @@ class CostModelService:
         is evenly distributed across the months in that range.  Lines without a
         schedule are placed into a single 'unscheduled' entry.
 
+        Currency handling (R5 audit, May 2026): every line is converted to
+        the project base currency via ``fx_rates`` before being added to
+        the period bucket. Pre-audit cash flow totals silently mixed USD,
+        EUR, JPY values into one ``Decimal`` and the S-curve plotted the
+        result as if they were all base — a 100 % bug for any multi-
+        currency project.
+
         Args:
             project_id: Target project.
 
@@ -1036,11 +1115,17 @@ class CostModelService:
                 detail="No budget lines found for the project",
             )
 
-        # Aggregate outflows per period
+        # FX context for currency conversion below.
+        base_currency, fx_map = await self.budget_repo._project_fx_context(project_id)
+
+        # Aggregate outflows per period (Decimal end-to-end, base currency)
+        from app.modules.costmodel.repository import _amount_in_base
+
         period_outflows: dict[str, Decimal] = {}
 
         for bl in budget_lines:
-            amount = Decimal(str(_str_to_float(bl.planned_amount)))
+            line_ccy = (bl.currency or "").strip().upper()
+            amount = _amount_in_base(bl.planned_amount, line_ccy, base_currency, fx_map)
             if amount == 0:
                 continue
 

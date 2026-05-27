@@ -1,16 +1,34 @@
 """‌⁠‍Risk Register Pydantic schemas — request/response models.
 
 Defines create, update, and response schemas for risk register items.
-Numeric values (probability, impact_cost, risk_score, response_cost) are exposed
-as floats in the API but stored as strings in SQLite-compatible models.
+Numeric values (probability, impact_cost, risk_score, response_cost) are stored
+as strings in SQLite-compatible models; v3 §10 money fields
+(``impact_cost``, ``response_cost``, ``total_exposure``) are emitted as
+Decimal-as-string in JSON.
 """
 
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # ── Shared controlled vocabularies (single source of truth) ──────────────
 #
@@ -74,7 +92,7 @@ class RiskCreate(BaseModel):
         pattern=r"^(technical|financial|schedule|regulatory|environmental|safety)$",
     )
     probability: float = Field(default=0.5, ge=0.0, le=1.0)
-    impact_cost: float = Field(default=0.0, ge=0.0)
+    impact_cost: Decimal = Field(default=Decimal("0"), ge=0)
     impact_schedule_days: int = Field(default=0, ge=0)
     impact_severity: str = Field(
         default="medium",
@@ -88,12 +106,16 @@ class RiskCreate(BaseModel):
     contingency_plan: str = Field(default="", max_length=5000)
     owner_name: str = Field(default="", max_length=255)
     owner_user_id: UUID | None = None
-    response_cost: float = Field(default=0.0, ge=0.0)
+    response_cost: Decimal = Field(default=Decimal("0"), ge=0)
     # Currency is data-driven: resolved from the owning project at create
     # time (see RiskService.create_risk). An explicit value here overrides
     # the project default; "" means "inherit from project / unknown".
     currency: str = Field(default="", max_length=10)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer("impact_cost", "response_cost", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class RiskUpdate(BaseModel):
@@ -108,7 +130,7 @@ class RiskUpdate(BaseModel):
         pattern=r"^(technical|financial|schedule|regulatory|environmental|safety)$",
     )
     probability: float | None = Field(default=None, ge=0.0, le=1.0)
-    impact_cost: float | None = Field(default=None, ge=0.0)
+    impact_cost: Decimal | None = Field(default=None, ge=0)
     impact_schedule_days: int | None = Field(default=None, ge=0)
     impact_severity: str | None = Field(
         default=None,
@@ -122,9 +144,13 @@ class RiskUpdate(BaseModel):
     contingency_plan: str | None = Field(default=None, max_length=5000)
     owner_name: str | None = Field(default=None, max_length=255)
     owner_user_id: UUID | None = None
-    response_cost: float | None = Field(default=None, ge=0.0)
+    response_cost: Decimal | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, max_length=10)
     metadata: dict[str, Any] | None = None
+
+    @field_serializer("impact_cost", "response_cost", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
 
 
 class RiskResponse(BaseModel):
@@ -139,7 +165,7 @@ class RiskResponse(BaseModel):
     description: str
     category: str
     probability: float = 0.5
-    impact_cost: float = 0.0
+    impact_cost: Decimal = Decimal("0")
     impact_schedule_days: int = 0
     impact_severity: str = "medium"
     risk_score: float = 0.0
@@ -154,11 +180,15 @@ class RiskResponse(BaseModel):
     contingency_plan: str = ""
     owner_name: str = ""
     owner_user_id: UUID | None = None
-    response_cost: float = 0.0
+    response_cost: Decimal = Decimal("0")
     currency: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("impact_cost", "response_cost", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Summary schema ───────────────────────────────────────────────────────
@@ -181,7 +211,7 @@ class RiskSummary(BaseModel):
     by_category: dict[str, int] = Field(default_factory=dict)
     high_critical_count: int = 0
     avg_risk_score: float = 0.0
-    total_exposure: float = 0.0
+    total_exposure: Decimal = Decimal("0")
     with_mitigation: int = 0
     without_mitigation: int = 0
     mitigated_count: int = 0
@@ -195,6 +225,10 @@ class RiskSummary(BaseModel):
     # this map keeps each currency's exposure separate instead of summing
     # heterogeneous amounts under one last-wins label (F-PFO-RISK-04).
     exposure_by_currency: dict[str, float] = Field(default_factory=dict)
+
+    @field_serializer("total_exposure", when_used="json")
+    def _ser_total_exposure(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Risk Matrix schema ───────────────────────────────────────────────────

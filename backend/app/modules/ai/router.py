@@ -28,7 +28,15 @@ from app.core.file_signature import (
     FileSignatureMismatch,
     require as require_signature,
 )
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep, check_ai_rate_limit
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
+from app.dependencies import (
+    CurrentUserId,
+    RequirePermission,
+    SessionDep,
+    check_ai_rate_limit,
+    verify_project_access,
+)
 from app.modules.ai.ai_client import (
     call_ai,
     default_model_for,
@@ -120,6 +128,9 @@ _AI_PROVIDERS: list[dict[str, Any]] = [
     {"id": "cohere", "display_name": "Cohere", "supports_streaming": True, "model_choices": []},
     {"id": "ai21", "display_name": "AI21 Labs", "supports_streaming": False, "model_choices": []},
     {"id": "xai", "display_name": "xAI Grok", "supports_streaming": True, "model_choices": []},
+    {"id": "ollama", "display_name": "Ollama (Local)", "supports_streaming": True, "model_choices": []},
+    {"id": "kimi", "display_name": "Kimi (Moonshot AI)", "supports_streaming": True, "model_choices": []},
+    {"id": "vllm", "display_name": "vLLM (Local)", "supports_streaming": True, "model_choices": []},
 ]
 
 
@@ -208,6 +219,7 @@ async def test_ai_connection(
     _VALID_PROVIDERS = (
         "anthropic", "openai", "gemini", "openrouter", "mistral", "groq", "deepseek",
         "together", "fireworks", "perplexity", "cohere", "ai21", "xai",
+        "ollama", "kimi", "vllm",
     )
     provider = body.get("provider", "").strip()
     if provider not in _VALID_PROVIDERS:
@@ -253,6 +265,18 @@ async def test_ai_connection(
     model_override = _model_override_for(settings, provider)
     effective_model = model_override or default_model_for(provider)
 
+    # Resolve custom base URL for local providers (Ollama, vLLM)
+    meta = settings.metadata_ or {}
+    base_url = None
+    if provider in ("ollama", "vllm"):
+        url_key = f"{provider}_base_url"
+        raw_url = meta.get(url_key) if isinstance(meta, dict) else None
+        if isinstance(raw_url, str) and raw_url.strip():
+            base = raw_url.strip().rstrip("/")
+            if not base.endswith("/v1/chat/completions"):
+                base += "/v1/chat/completions"
+            base_url = base
+
     # Make a minimal test call
     try:
         t0 = time.monotonic()
@@ -263,6 +287,7 @@ async def test_ai_connection(
             prompt="Reply with exactly: OK",
             max_tokens=10,
             model=model_override,
+            base_url=base_url,
         )
         latency_ms = int((time.monotonic() - t0) * 1000)
         return {
@@ -319,6 +344,14 @@ async def quick_estimate(
     - Token usage and processing time
     """
     response.headers["X-RateLimit-Remaining"] = str(remaining)
+    # R7 audit: when the caller links the job to a project we must
+    # verify they actually own / can access that project. Without the
+    # check, any authenticated user could write AI estimate jobs that
+    # reference projects belonging to other tenants — useful for log
+    # poisoning, cross-tenant cost-context smuggling, and as a stepping
+    # stone for the create_boq_from_estimate flow.
+    if request.project_id is not None:
+        await verify_project_access(request.project_id, user_id, service.session)
     return await service.quick_estimate(user_id, request)
 
 
@@ -396,6 +429,9 @@ async def photo_estimate(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid project_id format: {project_id}",
             ) from exc
+        # R7 audit: enforce project access on the linkage (same rationale
+        # as quick_estimate — see comment there).
+        await verify_project_access(parsed_project_id, user_id, service.session)
 
     return await service.photo_estimate(
         user_id=user_id,
@@ -490,6 +526,9 @@ async def file_estimate(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid project_id: {project_id}",
             ) from exc
+        # R7 audit: enforce project access on the linkage (same rationale
+        # as quick_estimate — see comment there).
+        await verify_project_access(parsed_project_id, user_id, service.session)
 
     return await service.file_estimate(
         user_id=user_id,
@@ -571,17 +610,13 @@ async def enrich_estimate(
     job_repo = AIEstimateJobRepository(session)
     job = await job_repo.get_by_id(job_id)
 
-    if job is None:
+    # R7 audit: collapse "missing" + "wrong owner" into a single 404
+    # surface so the response cannot be used as a job-id oracle. The old
+    # 403 distinguished the two cases for any caller with a valid JWT.
+    if job is None or str(job.user_id) != str(uid):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Estimate job not found",
-        )
-
-    # 2. Verify ownership and status
-    if str(job.user_id) != str(uid):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only enrich your own estimate jobs",
+            detail=translate("errors.estimate_job_not_found", locale=get_locale()),
         )
 
     if job.status != "completed":
@@ -745,16 +780,12 @@ async def get_estimate_job(
     uid = uuid.UUID(user_id)
     job = await service.job_repo.get_by_id(job_id)
 
-    if job is None:
+    # R7 audit: collapse missing-vs-wrong-owner into 404 (no enumeration
+    # oracle for job UUIDs).
+    if job is None or str(job.user_id) != str(uid):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Estimate job not found",
-        )
-
-    if str(job.user_id) != str(uid):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You can only view your own estimate jobs",
+            detail=translate("errors.estimate_job_not_found", locale=get_locale()),
         )
 
     return _build_job_response(job)
@@ -793,6 +824,22 @@ async def advisor_chat(
     region = body.get("region", "")
     locale = body.get("locale", "en")
     history: list[dict] = body.get("history", []) or []
+
+    # R7 audit: when project_id is supplied (used to fetch project
+    # name / region / currency below) we must verify the caller can
+    # access it. Without the guard, a user with only ai.estimate could
+    # probe arbitrary project UUIDs and exfiltrate name/region/currency
+    # via the advisor reply text (the system prompt embeds them).
+    parsed_project_id: uuid.UUID | None = None
+    if project_id:
+        try:
+            parsed_project_id = uuid.UUID(str(project_id))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid project_id: {project_id}",
+            ) from exc
+        await verify_project_access(parsed_project_id, user_id, session)
 
     # 1. Search cost database for relevant items
     from sqlalchemy import or_, select

@@ -38,28 +38,26 @@ logger = logging.getLogger(__name__)
 
 
 async def _can_open_isolated_session() -> bool:
-    """‌⁠‍Return True if it is safe to open a write session right now.
+    """‌⁠‍Return True when it is safe to open a write session right now.
 
-    Notification subscribers are invoked synchronously inside the
-    upstream service's transaction.  PostgreSQL handles concurrent
-    writers fine, but SQLite is single-writer per file — opening a
-    second write session inside the upstream transaction blocks on
-    the file lock and turns a 50ms request into a 60-second one.
+    History: pre-Epic-B this returned False on SQLite because notification
+    subscribers were invoked inside the upstream service's transaction,
+    and SQLite is single-writer per file — opening a second write session
+    blocked on the file lock and turned 50ms requests into 60s ones.
 
-    On SQLite we therefore skip the cross-session notification
-    create entirely.  Production deployments use PostgreSQL where
-    this is a non-issue; the dev SQLite path simply does not get
-    in-app notifications until the v1.5 background-task refactor
-    moves notification create out of the upstream transaction
-    altogether.
+    Epic B / B9: upstream callers now publish via
+    :meth:`EventBus.publish_detached`, which schedules the subscriber as
+    an asyncio task that fires *after* the request has committed.  The
+    writer lock is released before the subscriber tries to take it, so
+    SQLite no longer deadlocks.  This helper therefore returns True on
+    every dialect — the legacy skip is gone.
+
+    Kept as a function so the existing call sites remain a no-op
+    boundary; deleting them entirely would create a large unrelated
+    diff and bury the actual Epic B behaviour change.  Future cleanup
+    can collapse the call sites in a separate commit.
     """
-    try:
-        async with async_session_factory() as probe:
-            bind = probe.get_bind()
-            dialect = getattr(getattr(bind, "dialect", None), "name", "") or ""
-        return dialect == "postgresql"
-    except Exception:
-        return False
+    return True
 
 
 # ── Per-event handlers ────────────────────────────────────────────────────
@@ -546,6 +544,52 @@ async def _on_transmittal_responded(event: Event) -> None:
         )
 
 
+async def _on_file_comment_mention(event: Event) -> None:
+    """``file_comments.mention.created`` → notify the mentioned user.
+
+    Epic B / B1.  Fires once per resolved ``@mention`` in a file comment;
+    the upstream service publishes the event detached so a notification
+    failure cannot roll back the comment insert.
+    """
+    data = event.data or {}
+    mentioned_user_id = data.get("mentioned_user_id")
+    comment_id = data.get("comment_id")
+    if not mentioned_user_id or not comment_id:
+        return
+    try:
+        async with async_session_factory() as session:
+            svc = NotificationService(session)
+            file_kind = data.get("file_kind") or "document"
+            file_id = data.get("file_id") or ""
+            project_id = data.get("project_id") or ""
+            action_url = (
+                f"/files/{file_kind}/{file_id}?comment={comment_id}"
+                if file_id
+                else f"/projects/{project_id}/files"
+            )
+            await svc.create(
+                user_id=mentioned_user_id,
+                notification_type="file_comment_mention",
+                title_key="notifications.file_comments.mention.title",
+                body_key="notifications.file_comments.mention.body",
+                body_context={
+                    "excerpt": (data.get("body_excerpt") or "")[:160],
+                },
+                entity_type="file_comment",
+                entity_id=str(comment_id),
+                action_url=action_url,
+                metadata={
+                    "project_id": project_id,
+                    "file_kind": file_kind,
+                    "file_id": file_id,
+                    "mention_id": data.get("mention_id"),
+                },
+            )
+            await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.debug("notifications: _on_file_comment_mention failed", exc_info=True)
+
+
 # Declarative subscription map.  Adding a new event to this list
 # is the ONE place to wire a new notification trigger — keeps the
 # event topology auditable from a single grep.
@@ -564,6 +608,8 @@ _SUBSCRIPTIONS: list[tuple[str, callable]] = [  # type: ignore[type-arg]
     ("transmittal.issued", _on_transmittal_issued),
     ("transmittal.acknowledged", _on_transmittal_acknowledged),
     ("transmittal.responded", _on_transmittal_responded),
+    # Epic B / B1: file-comment @mention bridge
+    ("file_comments.mention.created", _on_file_comment_mention),
 ]
 
 

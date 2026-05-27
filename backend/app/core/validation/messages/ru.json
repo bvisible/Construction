@@ -206,10 +206,86 @@
       "suggestion": "Используйте стандартные метрические единицы: m, m2, m3, kg, t, 式 и т.п."
     }
   },
+  "bc3": {
+    "code_required": {
+      "fail": "У позиции {ordinal} отсутствует код FIEBDC-3",
+      "suggestion": "Назначьте код FIEBDC-3 (например, E04CM040 или 01.02.01)"
+    },
+    "valid_code": {
+      "fail": "Некорректный код FIEBDC-3 '{code}' в позиции {ordinal}",
+      "suggestion": "Используйте формат FIEBDC-3: буквенно-цифровой (например, E04CM040, 01.02.01, CAP01#)"
+    }
+  },
   "pipeline": {
     "side_effecting_requires_gate": {
       "fail": "Узлы с побочными эффектами без шлюза: {nodes}",
       "suggestion": "Добавьте шлюз валидации или ручного подтверждения на каждом пути от триггера/ИИ-узла к каждому записывающему узлу перед публикацией."
     }
+  },
+  "property_dev": {
+    "escrow_account_required": {
+      "fail": "Для проекта требуется активный эскроу-счёт для регулятора '{regulator}'",
+      "suggestion": "Откройте эскроу-счёт в банке, имеющем лицензию регулятора (Compliance → Эскроу-счета)"
+    },
+    "escrow_iban_valid": {
+      "fail": "Эскроу-счёт {account}: IBAN '{iban}' не проходит структурную проверку ISO 13616",
+      "suggestion": "Исправьте IBAN: код страны + длина + контрольная сумма должны соответствовать ISO 13616"
+    },
+    "escrow_balance_reconciled": {
+      "fail": "Эскроу-счёт {account}: остаток {ledger} расходится на {drift} с суммой по {transactions} транзакциям",
+      "suggestion": "Сверьте эскроу-счёт — проверьте неучтённые поступления и пропущенные списания"
+    },
+    "sales_contract_party_ownership_sums_to_100": {
+      "fail": "Договор {contract}: суммарная доля участников {total}% (должна быть ровно 100%)",
+      "suggestion": "Скорректируйте доли участников так, чтобы сумма составляла 100,00%"
+    },
+    "payment_schedule_instalments_sum_to_contract_value": {
+      "fail": "Договор {contract}: сумма платежей {instalments} отличается от стоимости договора {contract_value} (расхождение {drift})",
+      "suggestion": "Пересоберите график платежей: сумма платежей должна совпадать со стоимостью договора"
+    },
+    "reservation_expiry_in_future": {
+      "fail": "Бронь {reservation}: expires_at {expires} не в будущем",
+      "suggestion": "Продлите бронь или переведите её в expired/cancelled"
+    },
+    "broker_commission_rate_within_bounds": {
+      "fail": "Договор о комиссии {agreement}: {issue}",
+      "suggestion": "Используйте процент между 0,1% и 15%, фиксированную сумму или непустой ladder со ступенями"
+    },
+    "price_matrix_no_negative_modifier": {
+      "fail": "Прайс-матрица {matrix}: правило '{factor}' множитель {multiplier} вне диапазона [-0,50; 2,00]",
+      "suggestion": "Ограничьте модификаторы диапазоном от -50% до +200%, чтобы избежать нереалистичных цен"
+    }
+  },
+  "errors": {
+    "resource_not_found": "Ресурс не найден",
+    "project_not_found": "Проект не найден",
+    "vendor_not_found": "Поставщик не найден",
+    "template_not_found": "Шаблон не найден",
+    "position_not_found": "Позиция не найдена",
+    "session_not_found": "Сессия не найдена",
+    "document_not_found": "Документ не найден",
+    "invitation_not_found": "Приглашение не найдено",
+    "agreement_not_found": "Соглашение не найдено",
+    "rejection_not_found": "Отказ не найден",
+    "claim_not_found": "Промежуточный акт не найден",
+    "plot_not_found": "Участок не найден",
+    "survey_not_found": "Дрон-съёмка не найдена",
+    "diary_video_not_found": "Видео из строительного журнала не найдено",
+    "diary_photo_not_found": "Фото из строительного журнала не найдено",
+    "bidder_not_found": "Участник торгов не найден",
+    "webhook_not_found": "Вебхук не найден",
+    "submission_not_found": "Заявка не найдена",
+    "measurement_not_found": "Замер на площадке не найден",
+    "salescontract_not_found": "Договор купли-продажи не найден",
+    "prompt_not_found": "Шаблон промпта не найден",
+    "prequalification_not_found": "Преквалификация не найдена",
+    "purchase_requisition_not_found": "Заявка на закупку не найдена",
+    "purchase_order_not_found": "Заказ на поставку не найден",
+    "group_not_found": "Группа не найдена",
+    "final_account_not_found": "Окончательный расчёт не найден",
+    "estimate_job_not_found": "Задание калькуляции не найдено",
+    "escrow_not_found": "Эскроу-транзакция не найдена",
+    "commission_accrual_not_found": "Начисление комиссии не найдено",
+    "baseline_not_found": "Базовая версия не найдена"
   }
 }

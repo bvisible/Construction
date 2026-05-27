@@ -1,0 +1,136 @@
+{
+  "route": "/finance",
+  "totalViolations": 23,
+  "buttonName": 0,
+  "colorContrast": 22,
+  "bySeverity": {
+    "critical": 1,
+    "serious": 22,
+    "moderate": 0,
+    "minor": 0
+  },
+  "ruleSummary": [
+    {
+      "id": "aria-valid-attr-value",
+      "impact": "critical",
+      "nodeCount": 1
+    },
+    {
+      "id": "color-contrast",
+      "impact": "serious",
+      "nodeCount": 22
+    }
+  ],
+  "colorContrastNodes": [
+    {
+      "target": ".font-semibold.text-content-quaternary",
+      "html": "<span class=\"text-content-quaternary font-semibold\">ERP</span>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 9.8pt (13px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".bg-surface-secondary\\/60 > .truncate",
+      "html": "<span class=\"truncate\">Search…</span>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".sm\\:inline-flex",
+      "html": "<kbd class=\"ms-auto hidden sm:inline-flex items-center gap-0.5 rounded border border-border-light bg-surface-primary px-1 py-px text-[9px] font-medium text-cont",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Collapse Overview\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Overvie",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".border-l-2[title=\"Dashboard\"][href=\"/\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .min-w-\\[26px\\].lg\\:inline-flex.justify-end",
+      "html": "<span class=\"hidden lg:inline-flex justify-end items-center gap-0.5 text-[9px] font-medium tracking-wide tabular-nums min-w-[26px] text-content-quaternary\">G D<",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[data-tour=\"projects\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .min-w-\\[26px\\].lg\\:inline-flex.justify-end",
+      "html": "<span class=\"hidden lg:inline-flex justify-end items-center gap-0.5 text-[9px] font-medium tracking-wide tabular-nums min-w-[26px] text-content-quaternary\">G P<",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Collapse Estimating\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Estimat",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[data-tour=\"boq\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .min-w-\\[26px\\].lg\\:inline-flex.justify-end",
+      "html": "<span class=\"hidden lg:inline-flex justify-end items-center gap-0.5 text-[9px] font-medium tracking-wide tabular-nums min-w-[26px] text-content-quaternary\">G B<",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[href$=\"match-elements\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .px-1\\.5.bg-surface-tertiary\\/60.dark\\:bg-surface-tertiary\\/40",
+      "html": "<span class=\"text-[9px] font-medium uppercase tracking-wide px-1.5 py-px rounded text-content-quaternary bg-surface-tertiary/60 dark:bg-surface-tertiary/40\">bet",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[href$=\"ai-estimate\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .min-w-\\[26px\\].lg\\:inline-flex.justify-end",
+      "html": "<span class=\"hidden lg:inline-flex justify-end items-center gap-0.5 text-[9px] font-medium tracking-wide tabular-nums min-w-[26px] text-content-quaternary\">G A<",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[href$=\"ai-estimate\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .px-1\\.5.bg-surface-tertiary\\/60.dark\\:bg-surface-tertiary\\/40",
+      "html": "<span class=\"text-[9px] font-medium uppercase tracking-wide px-1.5 py-px rounded text-content-quaternary bg-surface-tertiary/60 dark:bg-surface-tertiary/40\">bet",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[href$=\"project-intelligence\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .px-1\\.5.bg-surface-tertiary\\/60.dark\\:bg-surface-tertiary\\/40",
+      "html": "<span class=\"text-[9px] font-medium uppercase tracking-wide px-1.5 py-px rounded text-content-quaternary bg-surface-tertiary/60 dark:bg-surface-tertiary/40\">bet",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Expand Catalogues & Reference\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Catalog",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Collapse Takeoff\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Takeoff",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[data-testid=\"sidebar-nav-bim\"] > .ps-1\\.5.ms-auto.gap-1\\.5 > .min-w-\\[26px\\].lg\\:inline-flex.justify-end",
+      "html": "<span class=\"hidden lg:inline-flex justify-end items-center gap-0.5 text-[9px] font-medium tracking-wide tabular-nums min-w-[26px] text-content-quaternary\">G M<",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.21 (foreground color: #aeaeb2, background color: #ffffff, font size: 6.8pt (9px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Expand Model Coordination\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Model C",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Expand AI & Tools\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">AI &amp",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Expand Commercial\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Commerc",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Expand Real Estate Development\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Real Es",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "button[aria-label=\"Expand Planning\"] > .min-w-0.gap-1\\.5.flex > .tracking-\\[0\\.085em\\].text-\\[10px\\].uppercase",
+      "html": "<span class=\"text-[10px] font-semibold uppercase tracking-[0.085em] text-content-tertiary group-hover:text-content-secondary transition-colors truncate\">Plannin",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.62 (foreground color: #86868b, background color: #ffffff, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": ".text-2xs.text-content-tertiary:nth-child(1)",
+      "html": "<span class=\"text-2xs text-content-tertiary\">v4.8.0</span>",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.47 (foreground color: #86868b, background color: #fafafa, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    },
+    {
+      "target": "a[href$=\"source\"]",
+      "html": "<a href=\"/api/source\" target=\"_blank\" rel=\"noopener noreferrer\" class=\"text-2xs text-content-tertiary hover:text-content-secondary transition-colors\">AGPL-3.0</",
+      "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 3.47 (foreground color: #86868b, background color: #fafafa, font size: 7.5pt (10px), font weight: normal). Expected contrast ratio of 4.5:1"
+    }
+  ]
+}

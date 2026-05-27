@@ -4,7 +4,72 @@ import react from '@vitejs/plugin-react';
 import { visualizer } from 'rollup-plugin-visualizer';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
-import { readFileSync } from 'fs';
+import { cpSync, existsSync, readFileSync, createReadStream, statSync } from 'fs';
+import type { Plugin } from 'vite';
+
+const cesiumSource = path.resolve(__dirname, 'node_modules/cesium/Build/Cesium');
+const cesiumDirs = ['Workers', 'ThirdParty', 'Assets', 'Widgets'] as const;
+
+// Cesium's runtime fetches Workers / Widgets / Assets / ThirdParty from
+// ``window.CESIUM_BASE_URL`` (we set it to ``/cesium/`` in main.tsx). At build
+// time ``writeBundle`` copies the files into ``dist/cesium/``. The dev server
+// needs the same thing — without the middleware below, /cesium/Workers/*.js
+// falls through to Vite's SPA index.html, the Cesium loader gets a 200 with
+// "<!DOCTYPE html>" instead of JS, and the page wedges before the viewer
+// initialises. Middleware streams directly out of node_modules so first paint
+// is instant and HMR keeps working.
+function cesiumAssets(): Plugin {
+  return {
+    name: 'cesium-assets',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url ?? '';
+        if (!url.startsWith('/cesium/')) {
+          next();
+          return;
+        }
+        const rel = decodeURIComponent(url.slice('/cesium/'.length).split('?')[0]);
+        const file = path.join(cesiumSource, rel);
+        if (!file.startsWith(cesiumSource) || !existsSync(file) || statSync(file).isDirectory()) {
+          next();
+          return;
+        }
+        const ext = path.extname(file).toLowerCase();
+        const mime: Record<string, string> = {
+          '.js': 'application/javascript',
+          '.mjs': 'application/javascript',
+          '.json': 'application/json',
+          '.css': 'text/css',
+          '.wasm': 'application/wasm',
+          '.glb': 'model/gltf-binary',
+          '.gltf': 'model/gltf+json',
+          '.svg': 'image/svg+xml',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.xml': 'application/xml',
+          '.ktx2': 'image/ktx2',
+        };
+        if (mime[ext]) {
+          res.setHeader('Content-Type', mime[ext]);
+        }
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        createReadStream(file).pipe(res);
+      });
+    },
+    writeBundle(options) {
+      const outDir = options.dir ?? path.resolve(__dirname, 'dist');
+      if (!existsSync(cesiumSource)) return;
+      for (const sub of cesiumDirs) {
+        const src = path.join(cesiumSource, sub);
+        const dest = path.join(outDir, 'cesium', sub);
+        if (existsSync(src)) {
+          cpSync(src, dest, { recursive: true });
+        }
+      }
+    },
+  };
+}
 
 // Read the version from package.json once at build time so the entire app
 // (sidebar, About page, error reports, update checker) stays in sync.
@@ -37,6 +102,7 @@ export default defineConfig({
       brotliSize: true,
       open: false,
     }),
+    cesiumAssets(),
     // ── Mobile PWA — Slice 1 ────────────────────────────────────────────
     // Installable PWA with offline-app-shell + i18n bundle caching.
     //
@@ -182,18 +248,37 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+    // Without dedupe, recharts can pull a second copy of react/react-dom through
+    // its peer-dep optimize-deps pre-bundle in vite dev mode. The duplicate
+    // instances make useContext return null inside ResponsiveContainer the moment
+    // the Simulator tab mounts after a cold optimize flush — the page hits the
+    // ErrorBoundary with "Cannot read properties of null (reading 'useContext')"
+    // and the production bundle is unaffected (single chunk = single React).
+    // Reported by qa/V3-propdev-pricing-engine.
+    dedupe: ['react', 'react-dom'],
   },
   server: {
     host: '127.0.0.1',
-    port: 5180,
+    // Vite default — matches the README quickstart, default Playwright
+    // config, and every "localhost:5173" link in locales/marketing. Was
+    // hard-coded to 5180 historically; reverted to 5173 in the install
+    // paper-cuts sweep (docs/qa/FRESH_INSTALL_RESULTS.md Issue 4) so the
+    // README's documented URL actually reaches the dev server.
+    port: 5173,
     strictPort: true,
     proxy: {
       '/api': {
-        // Local dev backend. 9090 matches the v4.1.0+ default the user
-        // runs; 8000 was the pre-v4 default and was kept until a stale
-        // v3.11.0 process living on it caused /bim/federations Create to
-        // return "Not Found" (the federations route only exists in v4+).
-        target: 'http://127.0.0.1:9090',
+        // Local dev backend default :8000 — matches the README quickstart
+        // (``uvicorn ... --port 8000``). The previous 9090 default came
+        // from a v4.1.0 local-dev convention nobody else uses and caused
+        // every API call to 502 on a fresh checkout until the user found
+        // the ``VITE_API_TARGET`` override buried in this comment block.
+        // Operators who run on a different port can still override via
+        // ``VITE_API_TARGET=http://127.0.0.1:9090 npm run dev``.
+        target:
+          process.env.VITE_API_TARGET ??
+          process.env.E2E_BACKEND ??
+          'http://127.0.0.1:8000',
         changeOrigin: true,
         timeout: 300000,
       },
@@ -206,13 +291,30 @@ export default defineConfig({
   // and BIM pages.  Including them up-front keeps the version hash stable
   // across the dev session.
   optimizeDeps: {
+    // Single ``include`` array — previously this object had TWO ``include``
+    // keys (cesium-only + everything-else) and esbuild's JS evaluator
+    // silently dropped the first one, plus warned on every Vite boot with
+    // ``Duplicate key "include" in object literal``. Merged into one list
+    // in the install paper-cuts sweep (docs/qa/FRESH_INSTALL_RESULTS.md
+    // Issue 6).
+    //
+    // ``cesium`` ships a mix of ESM + CJS deps (mersenne-twister, urijs,
+    // etc.). Without pre-bundling, Vite's dev server fails the dynamic
+    // import with "does not provide an export named 'default'" the moment
+    // Cesium pulls in a CJS interop. Including it here forces esbuild to
+    // bundle cesium up front so CJS named-exports become real default
+    // exports. The Rollup ``manualChunks`` rule still keeps it in its own
+    // production chunk.
+    //
+    // The rest of the list — pdfjs-dist, three, ag-grid, etc. — are heavy
+    // deps reached only via lazy route chunks. Without pre-bundling, Vite
+    // discovers them mid-navigation and the in-flight import 504s with
+    // "Failed to fetch dynamically imported module".
     include: [
+      'cesium',
       'pdfjs-dist',
       'pdfjs-dist/build/pdf.worker.min.mjs',
       'three',
-      // High-risk: heavy deps reached only via lazy route chunks.  Without
-      // pre-bundling, Vite discovers them mid-navigation and the in-flight
-      // import 504s with "Failed to fetch dynamically imported module".
       'ag-grid-react',
       'ag-grid-community',
       'recharts',
@@ -270,6 +372,14 @@ export default defineConfig({
           if (id.includes('node_modules/@xyflow/')) return 'vendor-flow';
           if (id.includes('node_modules/@dnd-kit/')) return 'vendor-dnd';
           if (id.includes('node_modules/three')) return 'vendor-three';
+          // CesiumJS — Geo Hub. Optional dep (~3 MB minified). Lives
+          // in its own chunk so the main bundle never pays the cost
+          // when the user never visits /geo.
+          if (
+            id.includes('node_modules/cesium') ||
+            id.includes('node_modules/@cesium/')
+          )
+            return 'vendor-cesium';
           if (id.includes('node_modules/pdfjs-dist')) return 'vendor-pdf';
           // jsPDF + html2canvas (PDF report export) — distinct from the
           // recharts charting stack so a page that only charts doesn't

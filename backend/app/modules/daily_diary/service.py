@@ -28,6 +28,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 from app.modules.daily_diary.models import (
     DailyDiary,
     DiaryArchiveSignature,
@@ -90,6 +92,39 @@ def _ensure_can_transition(current: str, target: str) -> None:
                 "status flow is open→closed→signed→archived and is one-way."
             ),
         )
+
+
+def _diary_signed_immutable_detail(diary_id: uuid.UUID, status_str: str) -> dict[str, Any]:
+    """‌⁠‍Return the structured 409 detail body for signed-immutable rejections.
+
+    The ``code`` field is the i18n key the frontend renders against the
+    user's locale. Inlining the english ``message`` keeps API consumers
+    that don't speak the i18n dict happy.
+    """
+    return {
+        "code": "diary_signed_immutable",
+        "message": (
+            f"Diary {diary_id} is {status_str}; the signed snapshot is "
+            "immutable. Use POST /diaries/{diary_id}/unlock (manager+) "
+            "to re-open before editing."
+        ),
+        "diary_id": str(diary_id),
+        "status": status_str,
+    }
+
+
+def _entry_signed_immutable_detail(diary_id: uuid.UUID, status_str: str) -> dict[str, Any]:
+    """‌⁠‍Structured 409 detail when a child entry/photo's parent diary is sealed."""
+    return {
+        "code": "entry_signed_immutable",
+        "message": (
+            f"Cannot modify entries of a {status_str} diary — the signed "
+            "snapshot would be invalidated. Use POST /diaries/{diary_id}/"
+            "unlock (manager+) first."
+        ),
+        "diary_id": str(diary_id),
+        "status": status_str,
+    }
 
 
 # ── Pure helpers ─────────────────────────────────────────────────────────
@@ -549,10 +584,7 @@ class DailyDiaryService:
             # Enforce immutability for signed/archived diaries.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Diary {diary_id} is {diary.status}; edits would invalidate "
-                    "the signature. Create a new diary or amend before signing."
-                ),
+                detail=_diary_signed_immutable_detail(diary_id, diary.status),
             )
         fields: dict[str, Any] = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
@@ -568,9 +600,77 @@ class DailyDiaryService:
         if diary.status in ("signed", "archived"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cannot delete a {diary.status} diary",
+                detail=_diary_signed_immutable_detail(diary_id, diary.status),
             )
         await self.diary_repo.delete(diary_id)
+
+    async def unlock_diary(
+        self,
+        diary_id: uuid.UUID,
+        *,
+        user_id: str | None = None,
+        reason: str | None = None,
+    ) -> DailyDiary:
+        """‌⁠‍Re-open a signed diary so manager-+ can amend it.
+
+        The archive signature is preserved (with its hash) so the
+        original sealed snapshot remains forensically traceable. After
+        editing, a fresh ``sign_diary`` call produces a new revision —
+        the integrity audit thus sees two signatures with two different
+        hashes against the same diary_id.
+
+        Archived diaries cannot be unlocked: an archived diary is the
+        final legal record; re-opening it would invalidate the
+        ``daily_diary.archived`` event already consumed downstream.
+        """
+        diary = await self.get_diary(diary_id)
+        if diary.status == "open":
+            return diary  # idempotent
+        if diary.status == "archived":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "diary_archived_cannot_unlock",
+                    "message": (
+                        "Cannot unlock an archived diary — archive is "
+                        "terminal. Open a new diary instead."
+                    ),
+                    "diary_id": str(diary_id),
+                    "status": "archived",
+                },
+            )
+        # signed → open. Stamp an audit row on the diary metadata.
+        meta = dict(getattr(diary, "metadata_", {}) or {})
+        history = list(meta.get("unlock_history") or [])
+        history.append(
+            {
+                "unlocked_by": user_id,
+                "unlocked_at": datetime.now(UTC).isoformat(),
+                "previous_status": diary.status,
+                "reason": reason,
+            }
+        )
+        meta["unlock_history"] = history
+        await self.diary_repo.update_fields(
+            diary_id, status="open", metadata_=meta,
+        )
+        await self.session.refresh(diary)
+        event_bus.publish_detached(
+            "daily_diary.unlocked",
+            {
+                "diary_id": str(diary_id),
+                "project_id": str(diary.project_id),
+                "unlocked_by": user_id,
+                "reason": reason,
+            },
+            source_module="daily_diary",
+        )
+        logger.warning(
+            "Daily diary unlocked: %s by %s (broke signed snapshot, "
+            "previous signatures retained for audit)",
+            diary_id, user_id,
+        )
+        return diary
 
     # ── State transitions ────────────────────────────────────────────────
 
@@ -580,19 +680,25 @@ class DailyDiaryService:
         *,
         user_id: str | None = None,
     ) -> DailyDiary:
-        """Transition diary open→closed; emit ``daily_diary.closed``."""
+        """Transition diary open→closed; emit ``daily_diary.closed``.
+
+        ``labour_count`` / ``equipment_count`` on the diary row are the
+        site-supervisor's HEADER counts and are intentionally NOT mutated
+        here. The authoritative roll-up (header + entries) is computed
+        on demand by :meth:`workforce_summary_for_diary` so that:
+
+            * closing is idempotent — re-running it does not silently
+              keep inflating the counts;
+            * the workforce summary is internally consistent (header +
+              entries) regardless of whether the diary is open or closed.
+
+        Mutating the field here previously double-counted entries when
+        :meth:`workforce_summary_for_diary` ran after close: the diary
+        base was already inflated, and the summary then added the same
+        entries on top of it again.
+        """
         diary = await self.get_diary(diary_id)
         _ensure_can_transition(diary.status, "closed")
-
-        entries = await self.entry_repo.list_for_diary(diary_id)
-        # Aggregate labour/equipment counts from entries metadata if present.
-        labour_count = diary.labour_count
-        equipment_count = diary.equipment_count
-        for entry in entries:
-            meta = entry.metadata_ or {}
-            if isinstance(meta, dict):
-                labour_count += int(meta.get("labour_count", 0) or 0)
-                equipment_count += int(meta.get("equipment_count", 0) or 0)
 
         now = datetime.now(UTC)
         closed_by_uuid: uuid.UUID | None = None
@@ -607,8 +713,6 @@ class DailyDiaryService:
             status="closed",
             closed_at=now,
             closed_by=closed_by_uuid,
-            labour_count=labour_count,
-            equipment_count=equipment_count,
         )
         await self.session.refresh(diary)
         event_bus.publish_detached(
@@ -653,11 +757,10 @@ class DailyDiaryService:
             )
 
         entries = await self.entry_repo.list_for_diary(diary_id)
-        photos_stmt = await self.photo_repo.photos_for_project_in_range(
-            diary.project_id,
-            limit=10_000,
-        )
-        photos = [p for p in photos_stmt[0] if getattr(p, "diary_id", None) == diary_id]
+        # Single indexed query scoped to the diary — previously we fetched
+        # every photo in the entire project (limit=10 000) and filtered in
+        # Python, which scaled O(project size) per signature operation.
+        photos = await self.photo_repo.photos_for_diary(diary_id)
 
         payload = compute_immutable_payload(diary, entries, photos)
         content_hash = compute_content_sha256(payload)
@@ -827,7 +930,7 @@ class DailyDiaryService:
         if diary.status in ("signed", "archived"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cannot add entries to a {diary.status} diary",
+                detail=_entry_signed_immutable_detail(data.diary_id, diary.status),
             )
         entry = DiaryEntry(
             diary_id=data.diary_id,
@@ -852,7 +955,7 @@ class DailyDiaryService:
         if diary.status in ("signed", "archived"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Cannot bulk-add entries to a {diary.status} diary",
+                detail=_entry_signed_immutable_detail(diary_id, diary.status),
             )
         entries: list[DiaryEntry] = []
         for raw in payloads:
@@ -896,10 +999,7 @@ class DailyDiaryService:
         if diary.status in ("signed", "archived"):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Cannot modify entries of a {diary.status} diary — the "
-                    "signed snapshot would be invalidated."
-                ),
+                detail=_entry_signed_immutable_detail(entry.diary_id, diary.status),
             )
         return diary
 
@@ -931,6 +1031,22 @@ class DailyDiaryService:
             )
             if diary is not None:
                 diary_id = diary.id
+        # R7 signed-immutable: a photo linked to a signed/archived diary
+        # changes the immutable payload (photos participate in the hash),
+        # which would break the archival signature. Refuse with the same
+        # structured 409 used for entries.
+        if diary_id is not None:
+            parent = await self.diary_repo.get_by_id(diary_id)
+            if (
+                parent is not None
+                and getattr(parent, "status", "open") in ("signed", "archived")
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_entry_signed_immutable_detail(
+                        diary_id, parent.status,
+                    ),
+                )
 
         photo = DiaryPhoto(
             diary_id=diary_id,
@@ -967,7 +1083,25 @@ class DailyDiaryService:
     ) -> DiaryPhoto:
         photo = await self.photo_repo.get_by_id(photo_id)
         if photo is None:
-            raise HTTPException(status_code=404, detail="Diary photo not found")
+            raise HTTPException(
+                status_code=404,
+                detail=translate("errors.diary_photo_not_found", locale=get_locale()),
+            )
+        # R7 signed-immutable: mutating a photo on a sealed diary breaks the
+        # archival hash.
+        parent_diary_id = getattr(photo, "diary_id", None)
+        if parent_diary_id is not None:
+            parent = await self.diary_repo.get_by_id(parent_diary_id)
+            if (
+                parent is not None
+                and getattr(parent, "status", "open") in ("signed", "archived")
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_entry_signed_immutable_detail(
+                        parent_diary_id, parent.status,
+                    ),
+                )
         fields = data.model_dump(exclude_unset=True)
         if fields:
             await self.photo_repo.update_fields(photo_id, **fields)
@@ -976,7 +1110,26 @@ class DailyDiaryService:
     async def delete_photo(self, photo_id: uuid.UUID) -> None:
         photo = await self.photo_repo.get_by_id(photo_id)
         if photo is None:
-            raise HTTPException(status_code=404, detail="Diary photo not found")
+            raise HTTPException(
+                status_code=404,
+                detail=translate("errors.diary_photo_not_found", locale=get_locale()),
+            )
+        # R7 signed-immutable: deleting a photo on a sealed diary is also
+        # a hash-breaking change. Reject with the structured 409 so the
+        # UI can prompt for unlock.
+        parent_diary_id = getattr(photo, "diary_id", None)
+        if parent_diary_id is not None:
+            parent = await self.diary_repo.get_by_id(parent_diary_id)
+            if (
+                parent is not None
+                and getattr(parent, "status", "open") in ("signed", "archived")
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=_entry_signed_immutable_detail(
+                        parent_diary_id, parent.status,
+                    ),
+                )
         await self.photo_repo.delete(photo_id)
 
     # ── Videos ───────────────────────────────────────────────────────────
@@ -1000,7 +1153,7 @@ class DailyDiaryService:
     ) -> DiaryVideo:
         video = await self.video_repo.get_by_id(video_id)
         if video is None:
-            raise HTTPException(status_code=404, detail="Diary video not found")
+            raise HTTPException(status_code=404, detail=translate("errors.diary_video_not_found", locale=get_locale()))
         fields = data.model_dump(exclude_unset=True)
         if fields:
             await self.video_repo.update_fields(video_id, **fields)
@@ -1009,7 +1162,7 @@ class DailyDiaryService:
     async def delete_video(self, video_id: uuid.UUID) -> None:
         video = await self.video_repo.get_by_id(video_id)
         if video is None:
-            raise HTTPException(status_code=404, detail="Diary video not found")
+            raise HTTPException(status_code=404, detail=translate("errors.diary_video_not_found", locale=get_locale()))
         await self.video_repo.delete(video_id)
 
     # ── Drone surveys ────────────────────────────────────────────────────
@@ -1045,8 +1198,23 @@ class DailyDiaryService:
     ) -> DroneSurvey:
         survey = await self.drone_repo.get_by_id(survey_id)
         if survey is None:
-            raise HTTPException(status_code=404, detail="Drone survey not found")
+            raise HTTPException(status_code=404, detail=translate("errors.survey_not_found", locale=get_locale()))
         fields = data.model_dump(exclude_unset=True)
+        # Cross-field invariant: elevation_min_m ≤ elevation_max_m. The
+        # schema validator catches the case where BOTH come in the same
+        # request; here we cover the partial PATCH that updates only one
+        # side — the existing row supplies the missing end of the range.
+        if "elevation_min_m" in fields or "elevation_max_m" in fields:
+            new_lo = fields.get("elevation_min_m", survey.elevation_min_m)  # type: ignore[attr-defined]
+            new_hi = fields.get("elevation_max_m", survey.elevation_max_m)  # type: ignore[attr-defined]
+            if new_lo is not None and new_hi is not None and new_lo > new_hi:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "elevation_min_m must be less than or equal to "
+                        "elevation_max_m (would conflict with stored value)"
+                    ),
+                )
         if fields:
             await self.drone_repo.update_fields(survey_id, **fields)
         return await self.drone_repo.get_by_id(survey_id)  # type: ignore[return-value]
@@ -1054,7 +1222,7 @@ class DailyDiaryService:
     async def delete_drone_survey(self, survey_id: uuid.UUID) -> None:
         survey = await self.drone_repo.get_by_id(survey_id)
         if survey is None:
-            raise HTTPException(status_code=404, detail="Drone survey not found")
+            raise HTTPException(status_code=404, detail=translate("errors.survey_not_found", locale=get_locale()))
         await self.drone_repo.delete(survey_id)
 
     # ── Reality capture ──────────────────────────────────────────────────
@@ -1126,10 +1294,10 @@ class DailyDiaryService:
     async def immutable_payload_hash(self, diary_id: uuid.UUID) -> dict[str, Any]:
         diary = await self.get_diary(diary_id)
         entries = await self.entry_repo.list_for_diary(diary_id)
-        photos_stmt = await self.photo_repo.photos_for_project_in_range(
-            diary.project_id, limit=10_000,
-        )
-        photos = [p for p in photos_stmt[0] if getattr(p, "diary_id", None) == diary_id]
+        # Single indexed query scoped to the diary (see ``sign_diary`` for
+        # rationale). The previous project-wide fetch was an O(N) hit per
+        # hash computation.
+        photos = await self.photo_repo.photos_for_diary(diary_id)
         payload = compute_immutable_payload(diary, entries, photos)
         return {
             "diary_id": diary_id,

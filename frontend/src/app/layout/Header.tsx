@@ -12,11 +12,17 @@ import { useThemeStore } from '@/stores/useThemeStore';
 import { CountryFlag } from '@/shared/ui';
 import { NotificationBell } from '@/shared/ui/NotificationBell';
 import { apiGet } from '@/shared/lib/api';
-import { exportErrorReport, getErrorCount, getLastError } from '@/shared/lib/errorLogger';
+import {
+  exportErrorReport,
+  getErrorCount,
+  getLastError,
+  isLastErrorNetworkOnly,
+} from '@/shared/lib/errorLogger';
 import { APP_VERSION, APP_BUILD_FINGERPRINT } from '@/shared/lib/version';
 import { useToastStore } from '@/stores/useToastStore';
 import { useI18nReady } from '@/shared/lib/useI18nReady';
 import { SupportUsButton } from './SupportUsButton';
+import { SubscribeButton } from './SubscribeButton';
 
 /** Map English page titles (passed from App.tsx routes) to i18n keys. */
 const TITLE_I18N_MAP: Record<string, string> = {
@@ -99,7 +105,7 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         {onMenuClick && (
           <button
             onClick={onMenuClick}
-            aria-label={t('common.open_menu', { defaultValue: 'Open menu‌⁠‍' })}
+            aria-label={t('common.open_menu', { defaultValue: 'Open menu' })}
             className="flex h-9 w-9 items-center justify-center rounded-lg text-content-secondary hover:bg-surface-secondary lg:hidden"
           >
             <Menu size={20} />
@@ -129,7 +135,14 @@ export function Header({ title, onMenuClick }: HeaderProps) {
       {/* Right side — three zones separated by hairline dividers.
           Zone 2: Search · Zone 3: Notifications + Help · Zone 4: Account
           (Upload + Language + User). Each zone has internal `gap-1`,
-          dividers between zones are 1px hairlines. */}
+          dividers between zones are 1px hairlines.
+
+          SubscribeButton lives in Zone 3 next to HelpMenu (sized to
+          match the Support pill — same h-8 icon-with-label format on
+          desktop, icon-only on mobile). It used to sit absolutely
+          centred across the header but that created awkward visual
+          tension with the project switcher on the left; planted next
+          to Support/Help, the two CTAs read as a coherent cluster. */}
       <div className="flex items-center gap-2">
         {/* ── Zone 2 (Search) ──────────────────────────────────────── */}
         <button
@@ -157,7 +170,7 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         {/* Mobile search icon — collapses the search bar on tiny screens. */}
         <button
           onClick={openCommandPalette}
-          aria-label={t('common.search', { defaultValue: 'Search‌⁠‍' })}
+          aria-label={t('common.search', { defaultValue: 'Search' })}
           className="flex sm:hidden h-8 w-8 items-center justify-center rounded-lg text-content-secondary hover:bg-surface-secondary transition-colors"
         >
           <Search size={16} />
@@ -166,13 +179,14 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         {/* Hairline divider between Zone 2 and Zone 3. */}
         <div className="hidden sm:block h-4 w-px bg-border-light/70" aria-hidden />
 
-        {/* ── Zone 3 (Notifications + Bug + Help) ──────────────────
-            BugReportMenu is its own button (not buried inside Help) so a
-            user can fire off a report in one click without scanning the
-            help dropdown. The little red dot turns on when errors were
-            captured this session. */}
+        {/* ── Zone 3 (Notifications + Subscribe + Bug + Help) ──────
+            Order: NotificationBell · SupportUs · Subscribe · BugReport · Help.
+            The "ask the user for something" CTAs (Support / Subscribe) stay
+            adjacent; Bug + Help sit on the right edge so a user filing a
+            report doesn't have to scan past the marketing CTAs. */}
         <NotificationBell />
         <SupportUsButton />
+        <SubscribeButton />
         <BugReportMenu />
         <HelpMenu />
 
@@ -250,8 +264,16 @@ function BugReportMenu() {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
   const [open, setOpen] = useState(false);
+  // Once the user clicks "report anyway" we stop nagging them with the
+  // network-only banner for the rest of the popover lifetime.
+  const [overrodeNetworkWarning, setOverrodeNetworkWarning] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const errorCount = getErrorCount();
+  // Re-evaluated each open of the popover. ``isLastErrorNetworkOnly``
+  // returns true when every recent level=error entry is a transport
+  // blip (Failed to fetch, AbortError, 502/503/504, …) — i.e. nothing
+  // actionable for a GitHub issue. See errorLogger#155.
+  const networkOnly = open && !overrodeNetworkWarning && isLastErrorNetworkOnly();
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -268,6 +290,12 @@ function BugReportMenu() {
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
+  }, [open]);
+
+  // Reset the network-only override each time the popover is dismissed
+  // so the next open shows the banner again if nothing new has happened.
+  useEffect(() => {
+    if (!open) setOverrodeNetworkWarning(false);
   }, [open]);
 
   const handleGithub = () => {
@@ -358,7 +386,7 @@ function BugReportMenu() {
     },
     {
       icon: Mail,
-      iconColor: 'text-blue-500',
+      iconColor: 'text-oe-blue',
       title: t('bug.channel_email', { defaultValue: 'Email the team' }),
       desc: t('bug.channel_email_desc', { defaultValue: 'Opens your mail client with the report attached.' }),
       onClick: handleEmail,
@@ -434,7 +462,35 @@ function BugReportMenu() {
             </p>
           </div>
 
-          <div className="py-1">
+          {networkOnly && (
+            <div
+              role="alert"
+              className="mx-3 my-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2"
+            >
+              <p className="text-2xs font-semibold text-amber-600 dark:text-amber-400">
+                {t('bug.network_only_title', {
+                  defaultValue: 'Looks like a network issue, not a bug',
+                })}
+              </p>
+              <p className="mt-1 text-2xs text-amber-700/90 dark:text-amber-300/90 leading-snug">
+                {t('bug.network_only_desc', {
+                  defaultValue:
+                    'Recent errors look like the backend was unreachable (offline, restarting, or VPN dropped). Check your connection and reload — if the problem persists, you can still file a report.',
+                })}
+              </p>
+              <button
+                type="button"
+                onClick={() => setOverrodeNetworkWarning(true)}
+                className="mt-1.5 text-2xs font-medium text-amber-700 dark:text-amber-300 underline-offset-2 hover:underline"
+              >
+                {t('bug.network_only_override', {
+                  defaultValue: 'Report anyway →',
+                })}
+              </button>
+            </div>
+          )}
+
+          <div className={clsx('py-1', networkOnly && 'opacity-40 pointer-events-none')}>
             {channels.map((ch, idx) => {
               const Icon = ch.icon;
               return (
@@ -565,7 +621,7 @@ function HelpMenu() {
   };
 
   return (
-    <div className="relative hidden sm:block" ref={ref}>
+    <div className="relative hidden sm:block" ref={ref} data-testid="header-help-menu">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -694,6 +750,8 @@ function LanguageSwitcher({
         onClick={() => setOpen(!open)}
         aria-expanded={open}
         aria-haspopup="true"
+        aria-label={`Language: ${currentLang.name}`}
+        title={currentLang.name}
         className={clsx(
           'flex h-8 items-center gap-1.5 rounded-lg px-2',
           'text-xs font-medium text-content-secondary',
@@ -703,7 +761,7 @@ function LanguageSwitcher({
         )}
       >
         <CountryFlag code={currentLang.country} size={16} />
-        <ChevronDown size={11} className={clsx('transition-transform duration-fast', open && 'rotate-180')} />
+        <ChevronDown size={11} className={clsx('transition-transform duration-fast', open && 'rotate-180')} aria-hidden="true" />
       </button>
 
       {open && (
@@ -1020,7 +1078,7 @@ function ProjectSwitcher() {
   }, [projects, activeProjectId, clearProject]);
 
   return (
-    <div className="relative hidden sm:block" ref={ref}>
+    <div className="relative hidden sm:block" ref={ref} data-testid="header-project-picker">
       {/* Split-button — visibly the most-used surface in the app. Left half
           opens the active project's detail; right half (chevron) opens
           the switcher dropdown. Two distinct visual modes:
@@ -1123,14 +1181,14 @@ function ProjectSwitcher() {
             )}
             {!isLoading && isError && (
               <div className="px-4 py-4 text-sm text-content-tertiary text-center">
-                <p className="text-red-500 mb-2">
+                <p className="text-semantic-error mb-2">
                   {t('common.load_failed', { defaultValue: 'Could not load projects' })}
                 </p>
                 <button
                   onClick={() => refetch()}
                   className="text-xs text-oe-blue hover:underline"
                 >
-                  {t('common.retry', { defaultValue: 'Retry' })}
+                  {t('common.retry')}
                 </button>
               </div>
             )}
@@ -1242,6 +1300,9 @@ function UploadQueueIndicator() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
+        aria-label={t('queue.title', { defaultValue: 'Upload Queue' })}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className={clsx(
           'relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
           totalActive > 0 ? 'text-oe-blue bg-oe-blue-subtle' : 'text-content-tertiary hover:bg-surface-secondary',
@@ -1249,9 +1310,9 @@ function UploadQueueIndicator() {
         title={t('queue.title', { defaultValue: 'Upload Queue' })}
       >
         {totalActive > 0 ? (
-          <Loader2 size={16} className="animate-spin" />
+          <Loader2 size={16} className="animate-spin" aria-hidden="true" />
         ) : (
-          <Upload size={16} />
+          <Upload size={16} aria-hidden="true" />
         )}
         {(totalActive > 0 || errorTasks.length > 0) && (
           <span className={`absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full text-[9px] font-bold text-white ${
@@ -1285,7 +1346,7 @@ function UploadQueueIndicator() {
                   <div className="shrink-0">
                     {task.status === 'processing' && <Loader2 size={14} className="text-oe-blue animate-spin" />}
                     {task.status === 'queued' && <Upload size={14} className="text-content-tertiary" />}
-                    {task.status === 'completed' && <CheckCircle2 size={14} className="text-green-500" />}
+                    {task.status === 'completed' && <CheckCircle2 size={14} className="text-semantic-success" />}
                     {task.status === 'error' && <XCircle size={14} className="text-semantic-error" />}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -1313,8 +1374,13 @@ function UploadQueueIndicator() {
                     </div>
                   </div>
                   {(task.status === 'completed' || task.status === 'error') && (
-                    <button onClick={() => removeTask(task.id)} className="shrink-0 p-1 rounded hover:bg-surface-secondary text-content-quaternary">
-                      <XCircle size={12} />
+                    <button
+                      onClick={() => removeTask(task.id)}
+                      aria-label={t('queue.remove_task', { defaultValue: 'Remove {{filename}} from queue', filename: task.filename })}
+                      title={t('queue.remove_task_short', { defaultValue: 'Remove from queue' })}
+                      className="shrink-0 p-1 rounded hover:bg-surface-secondary text-content-quaternary"
+                    >
+                      <XCircle size={12} aria-hidden="true" />
                     </button>
                   )}
                 </div>

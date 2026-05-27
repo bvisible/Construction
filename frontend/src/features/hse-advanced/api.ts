@@ -92,6 +92,14 @@ export interface PermitToWork {
   issued_at?: string | null;
   expires_at?: string | null;
   status: PermitStatus;
+  // Pre-activation safety prerequisites — these gate the requested → active
+  // transition. Surface them in the detail drawer so supervisors can read
+  // the audit trail of "what was checked before we let work start".
+  prereq_jsa_approved?: boolean;
+  prereq_supervisor_present?: boolean;
+  prereq_fire_watch_assigned?: boolean;
+  prereq_extinguisher_present?: boolean;
+  prereq_atmospheric_test_passed?: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -501,4 +501,6 @@ KNOWN_EVENT_TYPES: list[dict[str, str]] = [
     # Tendering
     {"event_type": "tendering.bid.received", "module": "tendering", "description": "Tender bid received"},
     {"event_type": "tendering.addendum.published", "module": "tendering", "description": "Tender addendum published"},
+    # File comments (Epic B / B1)
+    {"event_type": "file_comments.mention.created", "module": "file_comments", "description": "You were @mentioned in a file comment"},
 ]

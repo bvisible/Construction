@@ -21,6 +21,10 @@ import {
   CheckCircle2,
   BarChart3,
   Activity,
+  // Wave 2 (added 2026-05-23) — consolidated into Operations snapshot
+  // on 2026-05-25; only ClipboardList + CloudSun remain in active use.
+  ClipboardList,
+  CloudSun,
 } from 'lucide-react';
 
 export interface DashboardWidgetMeta {
@@ -35,6 +39,7 @@ export interface DashboardWidgetMeta {
 }
 
 export const DASHBOARD_WIDGETS: readonly DashboardWidgetMeta[] = [
+  // ── Core (existing 12) ────────────────────────────────────────────────
   {
     id: 'continue_work',
     labelKey: 'dashboard.layout.w_continue',
@@ -130,6 +135,33 @@ export const DASHBOARD_WIDGETS: readonly DashboardWidgetMeta[] = [
     descKey: 'dashboard.layout.w_activity_desc',
     descDefault: 'Recent cross-module activity feed and system health',
     icon: Activity,
+  },
+
+  // ── Operations snapshot (consolidates 9 wave-2 widgets, 2026-05-25) ───
+  // Replaces the previous nine individual widgets (boq_summary,
+  // validation_score, clash_health, schedule_critical, risk_top,
+  // hse_scorecard, procurement_pipeline, budget_variance,
+  // change_orders) that each rendered as a full-width empty card on
+  // fresh installs. Single card with a 3-column grid of compact tiles;
+  // each tile clicks through to the relevant module and lights up with
+  // data automatically.
+  {
+    id: 'operations_snapshot',
+    labelKey: 'dashboard.layout.w_operations_snapshot',
+    labelDefault: 'Operations snapshot',
+    descKey: 'dashboard.layout.w_operations_snapshot_desc',
+    descDefault: 'BOQ · Validation · Clash · Schedule · Risks · HSE · Procurement · Budget · Change orders',
+    icon: ClipboardList,
+  },
+
+  // ── Field ──────────────────────────────────────────────────────────────
+  {
+    id: 'weather_site',
+    labelKey: 'dashboard.layout.w_weather',
+    labelDefault: 'Weather & Site',
+    descKey: 'dashboard.layout.w_weather_desc',
+    descDefault: "Today's weather at your first project site",
+    icon: CloudSun,
   },
 ] as const;
 

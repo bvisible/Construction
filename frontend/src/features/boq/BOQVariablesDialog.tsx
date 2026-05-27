@@ -12,8 +12,9 @@
 import { useEffect, useMemo, useState, type FormEvent, type ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { X, Plus, Trash2, Variable as VariableIcon, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, AlertCircle } from 'lucide-react';
 import { Button } from '@/shared/ui';
+import { WideModal } from '@/shared/ui/WideModal';
 import { useToastStore } from '@/stores/useToastStore';
 import { boqApi, type BOQVariable } from './api';
 import { getErrorMessage } from '@/shared/lib/api';
@@ -123,7 +124,7 @@ export function BOQVariablesDialog({ open, onClose, boqId }: BOQVariablesDialogP
       setServerError(null);
       addToast({
         type: 'success',
-        title: t('boq.variables_saved', { defaultValue: 'Variables saved‌⁠‍' }),
+        title: t('boq.variables_saved', { defaultValue: 'Variables saved' }),
       });
     },
     onError: (err) => {
@@ -163,59 +164,48 @@ export function BOQVariablesDialog({ open, onClose, boqId }: BOQVariablesDialogP
     replaceMutation.mutate(drafts.map(toPayload));
   }
 
-  if (!open) return null;
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-      onClick={onClose}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="boq-variables-dialog-title"
-        className="w-full max-w-3xl max-h-[88vh] overflow-hidden rounded-2xl bg-surface-elevated shadow-xl flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between gap-3 border-b border-border-light px-5 py-3">
-          <div className="flex items-center gap-2">
-            <VariableIcon size={18} className="text-oe-blue" />
-            <h2 id="boq-variables-dialog-title" className="text-base font-semibold text-content-primary">
-              {t('boq.variables_title', { defaultValue: 'BOQ variables‌⁠‍' })}
-            </h2>
-            <span className="rounded-full bg-surface-secondary px-2 py-0.5 text-2xs font-medium text-content-tertiary">
-              {drafts.length}/{MAX_VARIABLES}
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary"
-            aria-label={t('common.close', { defaultValue: 'Close' })}
+    <WideModal
+      open={open}
+      onClose={onClose}
+      title={t('boq.variables_title', { defaultValue: 'BOQ variables' })}
+      subtitle={`${drafts.length} / ${MAX_VARIABLES}`}
+      size="lg"
+      busy={replaceMutation.isPending}
+      footer={
+        <>
+          <Button type="button" variant="ghost" onClick={onClose}>
+            {t('common.cancel', { defaultValue: 'Cancel' })}
+          </Button>
+          <Button
+            type="button"
+            onClick={(e) => handleSave(e as unknown as FormEvent)}
+            disabled={hasErrors || overCap || replaceMutation.isPending}
           >
-            <X size={16} />
-          </button>
-        </div>
-
-        <form onSubmit={handleSave} className="flex flex-1 flex-col overflow-hidden">
-          {/* Body */}
-          <div className="flex-1 overflow-auto px-5 py-4 space-y-3">
-            <p className="text-xs text-content-tertiary">
-              {t('boq.variables_help', {
-                defaultValue:
-                  'Define named values you can reference in formulas. e.g. set $GFA = 1500, then write =$GFA * 0.15 in any quantity or rate cell.‌⁠‍',
-              })}
-            </p>
+            {replaceMutation.isPending
+              ? t('common.saving', { defaultValue: 'Saving…' })
+              : t('common.save', { defaultValue: 'Save' })}
+          </Button>
+        </>
+      }
+    >
+      <form onSubmit={handleSave} className="space-y-3">
+        <p className="text-xs text-content-tertiary">
+          {t('boq.variables_help', {
+            defaultValue:
+              'Define named values you can reference in formulas. e.g. set $GFA = 1500, then write =$GFA * 0.15 in any quantity or rate cell.',
+          })}
+        </p>
 
             {variablesQuery.isLoading && (
-              <p className="text-sm text-content-tertiary">{t('common.loading', { defaultValue: 'Loading…‌⁠‍' })}</p>
+              <p className="text-sm text-content-tertiary">{t('common.loading', { defaultValue: 'Loading…' })}</p>
             )}
 
             {drafts.length === 0 && !variablesQuery.isLoading && (
               <div className="rounded-xl border border-dashed border-border-light bg-surface-secondary/40 px-4 py-8 text-center">
                 <p className="text-sm text-content-secondary">
                   {t('boq.variables_empty', {
-                    defaultValue: 'No variables yet. Add the first one below.‌⁠‍',
+                    defaultValue: 'No variables yet. Add the first one below.',
                   })}
                 </p>
               </div>
@@ -348,30 +338,20 @@ export function BOQVariablesDialog({ open, onClose, boqId }: BOQVariablesDialogP
               </p>
             )}
 
-            {serverError && (
-              <div className="flex items-start gap-2 rounded-xl bg-semantic-error-bg/40 px-3 py-2 text-sm text-semantic-error">
-                <AlertCircle size={14} className="mt-0.5 shrink-0" />
-                <span>{serverError}</span>
-              </div>
-            )}
+        {serverError && (
+          <div className="flex items-start gap-2 rounded-xl bg-semantic-error-bg/40 px-3 py-2 text-sm text-semantic-error">
+            <AlertCircle size={14} className="mt-0.5 shrink-0" />
+            <span>{serverError}</span>
           </div>
+        )}
 
-          {/* Footer */}
-          <div className="flex items-center justify-end gap-2 border-t border-border-light bg-surface-secondary/30 px-5 py-3">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              {t('common.cancel', { defaultValue: 'Cancel' })}
-            </Button>
-            <Button
-              type="submit"
-              disabled={hasErrors || overCap || replaceMutation.isPending}
-            >
-              {replaceMutation.isPending
-                ? t('common.saving', { defaultValue: 'Saving…' })
-                : t('common.save', { defaultValue: 'Save' })}
-            </Button>
-          </div>
-        </form>
-      </div>
-    </div>
+        {/* Submit shortcut: keeps the original <form>'s Enter-to-submit
+            behaviour even though the visible Save button now lives in the
+            WideModal footer outside the <form>. */}
+        <button type="submit" className="sr-only" aria-hidden tabIndex={-1}>
+          {t('common.save', { defaultValue: 'Save' })}
+        </button>
+      </form>
+    </WideModal>
   );
 }

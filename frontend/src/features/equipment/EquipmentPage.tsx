@@ -35,6 +35,7 @@ import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import {
   listEquipment,
   getEquipment,
@@ -71,7 +72,8 @@ import { DamageReportFormModal } from './modals/DamageReportFormModal';
 import { TypeFormModal } from './modals/TypeFormModal';
 
 type DrawerTab = 'utilization' | 'maintenance' | 'certifications' | 'damage';
-type PageTab = 'assets' | 'types';
+const EQUIPMENT_TAB_IDS = ['assets', 'types'] as const;
+type PageTab = (typeof EQUIPMENT_TAB_IDS)[number];
 
 const STATUS_VARIANT: Record<
   EquipmentStatus,
@@ -149,18 +151,18 @@ function WorkflowIntro() {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-content-primary">
             {t('equipment.intro_title', {
-              defaultValue: 'Track utilisation, cost and safety per asset‌⁠‍',
+              defaultValue: 'Track utilisation, cost and safety per asset',
             })}
           </p>
           <p className="mt-1 text-xs leading-relaxed text-content-secondary">
             {t('equipment.intro_body', {
               defaultValue:
-                'Register every owned, rented or leased machine. Open an asset to see utilisation, fuel cost month-to-date, open maintenance work orders and certification expiry. An asset whose status is not "active", or whose required inspection has expired, is automatically blocked from new resource assignments — keeping unsafe plant off site.‌⁠‍',
+                'Register every owned, rented or leased machine. Open an asset to see utilisation, fuel cost month-to-date, open maintenance work orders and certification expiry. An asset whose status is not "active", or whose required inspection has expired, is automatically blocked from new resource assignments — keeping unsafe plant off site.',
             })}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
-              {t('equipment.intro_connects', { defaultValue: 'Connects to‌⁠‍' })}
+              {t('equipment.intro_connects', { defaultValue: 'Connects to' })}
             </span>
             <button
               type="button"
@@ -168,7 +170,7 @@ function WorkflowIntro() {
               className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
             >
               {t('equipment.intro_link_resources', {
-                defaultValue: 'Resource assignments‌⁠‍',
+                defaultValue: 'Resource assignments',
               })}
               <ArrowRight size={11} />
             </button>
@@ -178,7 +180,7 @@ function WorkflowIntro() {
               className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-primary px-2.5 py-1 text-xs font-medium text-content-secondary transition-colors hover:border-oe-blue hover:text-oe-blue"
             >
               {t('equipment.intro_link_finance', {
-                defaultValue: 'Cost & Finance‌⁠‍',
+                defaultValue: 'Cost & Finance',
               })}
               <ArrowRight size={11} />
             </button>
@@ -200,6 +202,12 @@ function WorkflowIntro() {
 export function EquipmentPage() {
   const { t } = useTranslation();
   const [pageTab, setPageTab] = useState<PageTab>('assets');
+  const onTabKeyDown = useTabKeyboardNav<PageTab>({
+    ids: EQUIPMENT_TAB_IDS,
+    activeId: pageTab,
+    onChange: setPageTab,
+    orientation: 'horizontal',
+  });
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [ownershipFilter, setOwnershipFilter] = useState<string>('');
@@ -264,7 +272,12 @@ export function EquipmentPage() {
       <WorkflowIntro />
 
       <div className="border-b border-border-light">
-        <nav className="flex gap-1 -mb-px" role="tablist">
+        <nav
+          className="flex gap-1 -mb-px"
+          role="tablist"
+          aria-label={t('equipment.tabs_aria', { defaultValue: 'Equipment sections' })}
+          onKeyDown={onTabKeyDown}
+        >
           {(
             [
               { id: 'assets', label: t('equipment.tab_assets', { defaultValue: 'Assets' }), icon: Truck },
@@ -278,7 +291,10 @@ export function EquipmentPage() {
                 key={pt.id}
                 type="button"
                 role="tab"
+                id={`equipment-tab-${pt.id}`}
                 aria-selected={active}
+                aria-controls={`equipment-panel-${pt.id}`}
+                tabIndex={active ? 0 : -1}
                 onClick={() => setPageTab(pt.id)}
                 className={clsx(
                   'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',

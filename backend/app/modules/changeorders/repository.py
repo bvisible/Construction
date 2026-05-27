@@ -5,12 +5,31 @@ No business logic — pure data access.
 """
 
 import uuid
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.modules.changeorders.models import ChangeOrder, ChangeOrderItem
+
+
+def _to_decimal(value: object) -> Decimal:
+    """Coerce a stored money value (Decimal / str / None) to exact Decimal.
+
+    Routes via ``str()`` so a stray legacy float doesn't poison the
+    rollup with 0.1 → 0.10000000000000000555… imprecision. Bad input
+    silently degrades to ``Decimal('0')`` so a single malformed row
+    doesn't blow up a project-wide summary endpoint.
+    """
+    if value is None:
+        return Decimal("0")
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return Decimal("0")
 
 
 class ChangeOrderRepository:
@@ -129,8 +148,11 @@ class ChangeOrderRepository:
         submitted_count = 0
         approved_count = 0
         rejected_count = 0
-        total_cost_impact = 0.0
-        total_approved_amount = 0.0
+        # Money rollups stay in Decimal end-to-end: a CO summary feeds
+        # both KPI dashboards and procurement reports, where a single
+        # float-arithmetic drift becomes a contract dispute.
+        total_cost_impact: Decimal = Decimal("0")
+        total_approved_amount: Decimal = Decimal("0")
         total_schedule_impact_days = 0
         total_time_impact_days = 0
         by_status: dict[str, int] = {}
@@ -156,12 +178,15 @@ class ChangeOrderRepository:
                 submitted_count += 1
             elif order.status == "approved":
                 approved_count += 1
-                # Only approved orders count toward total cost/schedule impact
-                try:
-                    total_cost_impact += float(order.cost_impact)
-                    total_approved_amount += float(order.cost_impact)
-                except (ValueError, TypeError):
-                    pass
+                # Only approved orders count toward total cost/schedule impact.
+                # Decimal — never ``float`` — because a CO summary is the
+                # signed-off scope-change KPI that flows into the project
+                # budget and downstream reporting; a binary-float drift
+                # (e.g. 0.1 + 0.2 → 0.30000000000000004) here becomes a
+                # KPI/UI mismatch a project manager can't reconcile.
+                delta = _to_decimal(order.cost_impact)
+                total_cost_impact += delta
+                total_approved_amount += delta
                 total_schedule_impact_days += order.schedule_impact_days or 0
                 # ``time_impact_days`` is the dedicated variation column;
                 # it was previously (incorrectly) summing
@@ -179,6 +204,13 @@ class ChangeOrderRepository:
             if order.currency:
                 currency = order.currency
 
+        # Money values stay as exact Decimals — the schema layer formats
+        # them as canonical decimal strings ("100.35"). Quantising to 2dp
+        # at the persist/expose boundary mirrors finance / procurement
+        # conventions and keeps the wire format stable.
+        from decimal import ROUND_HALF_UP
+
+        _CENTS = Decimal("0.01")
         return {
             "total": len(orders),
             "total_orders": len(orders),
@@ -188,8 +220,12 @@ class ChangeOrderRepository:
             "submitted_count": submitted_count,
             "approved_count": approved_count,
             "rejected_count": rejected_count,
-            "total_approved_amount": round(total_approved_amount, 2),
-            "total_cost_impact": round(total_cost_impact, 2),
+            "total_approved_amount": total_approved_amount.quantize(
+                _CENTS, rounding=ROUND_HALF_UP
+            ),
+            "total_cost_impact": total_cost_impact.quantize(
+                _CENTS, rounding=ROUND_HALF_UP
+            ),
             "total_time_impact_days": total_time_impact_days,
             "total_schedule_impact_days": total_schedule_impact_days,
             "currency": currency,

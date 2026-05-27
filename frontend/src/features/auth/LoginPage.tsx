@@ -368,12 +368,12 @@ export function LoginPage() {
         {/* Stats row */}
         <div className="mt-5 flex items-center gap-5 animate-stagger-in" style={{ animationDelay: '180ms' }}>
           {[
-            { value: '55K+', label: t('login.stat_costs', { defaultValue: 'cost items‌⁠‍' }) },
-            { value: '24', label: t('login.stat_langs', { defaultValue: 'languages‌⁠‍' }) },
-            { value: '48', label: t('login.stat_regions', { defaultValue: 'regions‌⁠‍' }) },
-            { value: '6', label: t('login.stat_cad', { defaultValue: 'CAD formats‌⁠‍' }) },
-            { value: '100+', label: t('login.stat_modules', { defaultValue: 'modules‌⁠‍' }) },
-            { value: '12', label: t('login.stat_sections', { defaultValue: 'sections‌⁠‍' }) },
+            { value: '55K+', label: t('login.stat_costs', { defaultValue: 'cost items' }) },
+            { value: '24', label: t('login.stat_langs', { defaultValue: 'languages' }) },
+            { value: '48', label: t('login.stat_regions', { defaultValue: 'regions' }) },
+            { value: '6', label: t('login.stat_cad', { defaultValue: 'CAD formats' }) },
+            { value: '100+', label: t('login.stat_modules', { defaultValue: 'modules' }) },
+            { value: '12', label: t('login.stat_sections', { defaultValue: 'sections' }) },
           ].map((s) => (
             <div key={s.label} className="text-center">
               <div className="text-[22px] font-semibold text-content-primary tracking-tight">{s.value}</div>
@@ -408,7 +408,7 @@ export function LoginPage() {
             { x:  220, y: -75, icon: TrendingUp,      label: t('login.mod.cost5d',   { defaultValue: '5D' }) },
             // Mid row (y = 0) — 5 cells aligned on the same axis.
             { x: -176, y:  0,  icon: Database,        label: t('login.mod.costs',    { defaultValue: 'Costs' }) },
-            { x:  -88, y:  0,  icon: FileSpreadsheet, label: t('login.mod.boq',      { defaultValue: 'BOQ' }) },
+            { x:  -88, y:  0,  icon: FileSpreadsheet, label: t('common.boq') },
             { x:    0, y:  0,  icon: Layers,          label: t('login.mod.core',     { defaultValue: 'Workspace' }), accent: true },
             { x:   88, y:  0,  icon: CalendarClock,   label: t('login.mod.schedule', { defaultValue: 'Schedule' }) },
             { x:  176, y:  0,  icon: BarChart3,       label: t('login.mod.tender',   { defaultValue: 'Tendering' }) },
@@ -642,7 +642,7 @@ export function LoginPage() {
 
             <form onSubmit={handleSubmit} className="space-y-3" aria-label={t('auth.login', 'Sign in')}>
               <div className="animate-stagger-in" style={{ animationDelay: '280ms' }}>
-                <Input id="login-email" name="email" label={t('auth.email', 'Email')} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" required autoFocus icon={<Mail size={15} />} />
+                <Input id="login-email" name="email" label={t('auth.email', 'Email')} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" required aria-required="true" autoFocus icon={<Mail size={15} />} />
               </div>
 
               <div className="flex flex-col gap-1 animate-stagger-in" style={{ animationDelay: '340ms' }}>
@@ -652,7 +652,7 @@ export function LoginPage() {
                 </div>
                 <div className="relative">
                   <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-content-tertiary"><Lock size={15} /></div>
-                  <input id="login-password" name="password" type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t('auth.password_placeholder', 'Enter your password')} autoComplete="current-password" required minLength={8} className="h-9 w-full rounded-lg border border-border bg-surface-primary pl-9 pr-9 text-sm text-content-primary placeholder:text-content-tertiary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent hover:border-content-tertiary" />
+                  <input id="login-password" name="password" type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t('auth.password_placeholder', 'Enter your password')} autoComplete="current-password" required aria-required="true" minLength={8} className="h-9 w-full rounded-lg border border-border bg-surface-primary pl-9 pr-9 text-sm text-content-primary placeholder:text-content-tertiary transition-all duration-fast ease-oe focus:outline-none focus:ring-2 focus:ring-oe-blue focus:border-transparent hover:border-content-tertiary" />
                   <button type="button" onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? t('auth.hide_password', 'Hide password') : t('auth.show_password', 'Show password')} className="absolute inset-y-0 right-0 flex items-center pr-3 text-content-tertiary hover:text-content-secondary transition-colors" tabIndex={-1}>
                     {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
@@ -770,22 +770,22 @@ export function LoginPage() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label={`${t('login.community', { defaultValue: 'Community' })} — ${t('login.community_sub', { defaultValue: 'Get help & discuss' })}`}
-              className="group relative flex items-center gap-3 overflow-hidden rounded-xl border border-oe-blue/25 bg-white/70 dark:bg-transparent bg-gradient-to-br from-oe-blue/[0.10] to-sky-500/[0.05] px-3.5 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/85 dark:hover:bg-transparent hover:border-oe-blue/45 hover:from-oe-blue/[0.16] hover:to-sky-500/[0.09] hover:shadow-lg"
+              className="group relative flex items-center gap-3 overflow-hidden rounded-xl border border-border-light/70 bg-white/75 dark:bg-surface-elevated/80 backdrop-blur-sm px-3.5 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/90 dark:hover:bg-surface-elevated/90 hover:border-content-primary/25 hover:shadow-lg"
             >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-oe-blue/12 text-oe-blue transition-colors group-hover:bg-oe-blue/20">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-content-primary/[0.06] text-content-primary transition-colors group-hover:bg-content-primary/10">
                 <Users size={17} strokeWidth={1.9} />
               </span>
               <span className="min-w-0 flex-1 leading-tight">
-                <span className="block text-[13px] font-semibold text-oe-blue">
+                <span className="block text-[13px] font-semibold text-content-primary">
                   {t('login.community', { defaultValue: 'Community' })}
                 </span>
-                <span className="block truncate text-[11px] text-oe-blue/65">
+                <span className="block truncate text-[11px] text-content-tertiary">
                   {t('login.community_sub', { defaultValue: 'Get help & discuss' })}
                 </span>
               </span>
               <ArrowUpRight
                 size={15}
-                className="shrink-0 text-oe-blue/55 transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-oe-blue"
+                className="shrink-0 text-content-quaternary transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-content-secondary"
               />
             </a>
           </div>

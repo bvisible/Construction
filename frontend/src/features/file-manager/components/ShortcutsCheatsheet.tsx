@@ -41,7 +41,7 @@ export function ShortcutsCheatsheet({ open, onClose }: ShortcutsCheatsheetProps)
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-md rounded-2xl border border-border-light bg-surface-elevated shadow-2xl p-5"
+        className="w-full max-w-md rounded-xl border border-border-light bg-surface-elevated shadow-2xl p-5"
       >
         <div className="flex items-center gap-2 mb-3">
           <Keyboard size={18} className="text-content-tertiary" />

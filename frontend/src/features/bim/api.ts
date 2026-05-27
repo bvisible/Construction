@@ -288,15 +288,35 @@ export async function fetchConverterVersionCheck(): Promise<ConverterVersionChec
  *  and re-download even when a binary is already present — used by the
  *  "Update" button when the version-check banner reports an outdated
  *  converter SHA.
+ *
+ *  The shared ``apiPost`` request helper has its own 5-minute default
+ *  abort timer for POSTs, but in some browsers / proxy setups the
+ *  default fetch ``AbortSignal`` ends up bound to a much shorter
+ *  window (the user error log for v4.3.2 captured 4 ``AbortError``
+ *  exceptions on these endpoints). Bind an explicit 120 s signal so
+ *  the timeout is deterministic and long enough for the slowest
+ *  converter (RVT) to extract.
  */
 export async function installBIMConverter(
   converterId: string,
   options: { force?: boolean } = {},
 ): Promise<BIMConverterInstallResult> {
   const qs = options.force ? '?force=true' : '';
+  // AbortSignal.timeout is available in all evergreen browsers we
+  // support (Chrome 103+, FF 100+, Safari 16+). We guard for SSR /
+  // test environments that may stub fetch without it.
+  const signal: AbortSignal | undefined =
+    typeof AbortSignal !== 'undefined' &&
+    typeof (AbortSignal as { timeout?: (ms: number) => AbortSignal }).timeout ===
+      'function'
+      ? (AbortSignal as unknown as { timeout: (ms: number) => AbortSignal }).timeout(
+          120_000,
+        )
+      : undefined;
   return apiPost<BIMConverterInstallResult>(
     `/v1/takeoff/converters/${encodeURIComponent(converterId)}/install/${qs}`,
     {},
+    signal ? { signal } : undefined,
   );
 }
 

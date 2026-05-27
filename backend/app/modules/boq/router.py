@@ -66,13 +66,25 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Response,
+    UploadFile,
+    status,
+)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.csv_safety import neutralise_formula
 from app.core.file_signature import detect as detect_signature
+from app.core.i18n import get_locale
 from app.core.upload_guards import reject_if_xlsx_bomb
+from app.core.validation.messages import translate
 from app.dependencies import (
     CurrentUserId,
     CurrentUserPayload,
@@ -192,7 +204,7 @@ async def _verify_boq_owner(
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(boq.project_id)
     if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale()))
     if str(project.owner_id) != user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -217,7 +229,7 @@ async def _verify_project_owner_for_boq(
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(project_id)
     if project is None or project.status == "archived":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale()))
     if is_admin:
         return
     if str(project.owner_id) != user_id:
@@ -368,6 +380,17 @@ async def _position_to_response_with_links(
 
 def _markup_to_response(markup: object) -> MarkupResponse:
     """Build a MarkupResponse from a BOQMarkup ORM object."""
+    from decimal import Decimal as _Decimal
+    from decimal import InvalidOperation as _InvOp
+
+    raw_amount = getattr(markup, "fixed_amount", "0")
+    try:
+        fixed_amount = _Decimal(str(raw_amount or "0"))
+        if not fixed_amount.is_finite():
+            fixed_amount = _Decimal("0")
+    except (_InvOp, ValueError):
+        fixed_amount = _Decimal("0")
+
     return MarkupResponse(
         id=markup.id,  # type: ignore[attr-defined]
         boq_id=markup.boq_id,  # type: ignore[attr-defined]
@@ -375,7 +398,7 @@ def _markup_to_response(markup: object) -> MarkupResponse:
         markup_type=markup.markup_type,  # type: ignore[attr-defined]
         category=markup.category,  # type: ignore[attr-defined]
         percentage=float(markup.percentage),  # type: ignore[attr-defined]
-        fixed_amount=float(markup.fixed_amount),  # type: ignore[attr-defined]
+        fixed_amount=fixed_amount,  # v3 §10 — Decimal
         apply_to=markup.apply_to,  # type: ignore[attr-defined]
         sort_order=markup.sort_order,  # type: ignore[attr-defined]
         is_active=markup.is_active,  # type: ignore[attr-defined]
@@ -1714,7 +1737,7 @@ async def get_position(
     # IDOR guard: load position → derive boq_id → verify ownership chain
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     return await _position_to_response_with_links(service, existing)
 
@@ -1737,7 +1760,7 @@ async def update_position(
     # IDOR guard: load position → derive boq_id → verify ownership chain
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     # Pass actor_id through so the audit log records who made the change
     # (BUG-AUDIT01).  Without it the service falls back to anonymous and
@@ -1900,7 +1923,7 @@ async def repick_resource_variant(
     # IDOR guard: load position → derive boq_id → verify ownership chain.
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
 
     position = await service.repick_resource_variant(
@@ -1936,7 +1959,7 @@ async def list_position_links(
     """
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     return await service.list_links(position_id)
 
@@ -1963,7 +1986,7 @@ async def unlink_position(
     """
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     position = await service.unlink_position(position_id, actor_id=user_id)
     return await _position_to_response_with_links(service, position)
@@ -1990,7 +2013,7 @@ async def delete_position(
     # IDOR guard: load position → derive boq_id → verify ownership chain
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Position not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     await _log_activity(
         service,
@@ -2212,7 +2235,8 @@ async def list_quantity_links(
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Position not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.position_not_found", locale=get_locale()),
         )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     return await service.list_quantity_links(position_id)
@@ -2242,7 +2266,8 @@ async def create_quantity_link(
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Position not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.position_not_found", locale=get_locale()),
         )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     link = await service.create_quantity_link(
@@ -2281,7 +2306,8 @@ async def delete_quantity_link(
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Position not found"
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.position_not_found", locale=get_locale()),
         )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     link = await service.quantity_link_repo.get_by_id(link_id)
@@ -2482,12 +2508,17 @@ def _build_rule_sets(
         "cpwd": "cpwd",
         "birimfiyat": "birimfiyat",
         "sekisan": "sekisan",
+        "bc3": "bc3",
     }
     std_rule = STANDARD_RULES.get(classification_standard)
     if std_rule and std_rule not in rule_sets:
         rule_sets.append(std_rule)
 
-    # Map region → additional rule sets
+    # Map region → additional rule sets. Hispanophone markets (ES + LATAM
+    # via Epic I) pick up BC3 — FIEBDC-3 is the de-facto BOQ format in
+    # Spain (AENOR-mandated for public tenders) and ~70% of LATAM. We
+    # add MasterFormat on the US-/CA-leaning LATAM markets that have
+    # historically adopted CSI classification alongside BC3.
     REGION_RULES: dict[str, list[str]] = {
         "DACH": ["gaeb", "din276"],
         "DE": ["gaeb", "din276"],
@@ -2506,6 +2537,15 @@ def _build_rule_sets(
         "JP": ["sekisan"],
         "UAE": ["nrm"],
         "GCC": ["nrm"],
+        # Epic I8: Spain + Hispanophone LATAM — BC3 first, MasterFormat
+        # second (LATAM exporters increasingly carry both classification
+        # schemes; BC3 is the source-of-truth for the tender format).
+        "ES": ["bc3", "masterformat"],
+        "MX": ["bc3", "masterformat"],
+        "AR": ["bc3", "masterformat"],
+        "CL": ["bc3", "masterformat"],
+        "CO": ["bc3", "masterformat"],
+        "PE": ["bc3", "masterformat"],
     }
     for rs in REGION_RULES.get(region.upper(), []):
         if rs not in rule_sets:
@@ -4466,15 +4506,22 @@ def _parse_rows_from_excel(
 
 @router.post(
     "/boqs/{boq_id}/import/excel/",
-    summary="Import positions from Excel/CSV",
+    summary="Import positions from Excel/CSV (deprecated — use /import/auto/)",
     dependencies=[Depends(RequirePermission("boq.update"))],
 )
 async def import_boq_excel(
     boq_id: uuid.UUID,
+    response: Response,
     file: UploadFile = File(..., description="Excel (.xlsx) or CSV (.csv) file"),
     service: BOQService = Depends(_get_service),
 ) -> dict[str, Any]:
     """Import BOQ positions from an Excel or CSV file.
+
+    .. deprecated::
+        Epic I5 — clients should call ``POST /import/auto/`` and let
+        the dispatcher pick the importer. This route remains supported
+        for backwards compatibility but emits a ``Deprecation: true``
+        response header.
 
     Accepts a multipart file upload. The file must be .xlsx or .csv.
 
@@ -4490,6 +4537,13 @@ async def import_boq_excel(
     Returns:
         Summary with counts of imported, skipped, and error details per row.
     """
+    # Epic I5: deprecation signal — clients should migrate to /import/auto/.
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = (
+        '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
+    )
+    response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
+
     # Verify BOQ exists (raises 404 if not found)
     await service.get_boq(boq_id)
 
@@ -4860,15 +4914,22 @@ async def import_boq_excel(
 
 @router.post(
     "/boqs/{boq_id}/import/gaeb/",
-    summary="Import positions from GAEB XML 3.3 (X83/X84)",
+    summary="Import positions from GAEB XML 3.3 (deprecated — use /import/auto/)",
     dependencies=[Depends(RequirePermission("boq.update"))],
 )
 async def import_boq_gaeb(
     boq_id: uuid.UUID,
+    response: Response,
     file: UploadFile = File(..., description="GAEB XML file (.x83, .x84, .xml)"),
     service: BOQService = Depends(_get_service),
 ) -> dict[str, Any]:
     """Import BOQ positions from a GAEB XML 3.3 file (BUG-153).
+
+    .. deprecated::
+        Epic I5 — clients should call ``POST /import/auto/`` and let
+        the dispatcher pick the importer. This route remains supported
+        for backwards compatibility but emits a ``Deprecation: true``
+        response header.
 
     Supports the GAEB DA XML formats used across DACH tendering:
       - **X83 / DP 83** — Angebotsabgabe (bid submission)
@@ -4885,6 +4946,13 @@ async def import_boq_gaeb(
     import xml.etree.ElementTree as ET
 
     from defusedxml.ElementTree import fromstring as _safe_fromstring
+
+    # Epic I5: deprecation signal — clients should migrate to /import/auto/.
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = (
+        '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
+    )
+    response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
 
     # Verify BOQ exists (raises 404 if not found)
     await service.get_boq(boq_id)
@@ -5212,6 +5280,234 @@ async def import_boq_gaeb(
     }
 
 
+# ── Auto-detect dispatcher (Epic I4) ─────────────────────────────────────────
+
+
+async def _persist_imported_boq(
+    boq_id: uuid.UUID,
+    imported: "ImportedBOQ",
+    *,
+    file_name: str,
+    service: BOQService,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Persist an :class:`ImportedBOQ` via the BOQService.
+
+    Returns ``(imported_count, errors)``. Errors collected on the
+    :class:`ImportedBOQ` (per-row parser errors) are flowed through to
+    the dispatcher response unchanged; this helper appends DB-level
+    persistence errors on top.
+    """
+    from decimal import Decimal
+
+    persistence_errors: list[dict[str, Any]] = []
+    imported_count = 0
+    for row in imported.positions:
+        try:
+            position_data = PositionCreate(
+                boq_id=boq_id,
+                ordinal=row.ordinal or str(imported_count + 1),
+                description=row.description,
+                unit=row.unit,
+                quantity=row.quantity,
+                unit_rate=Decimal(str(row.unit_rate)),
+                classification=row.classification,
+                source=row.source,
+                metadata={**row.metadata, "import_source": file_name},
+            )
+            await service.add_position(position_data)
+            imported_count += 1
+        except Exception as exc:  # noqa: BLE001 — surface row-level errors
+            persistence_errors.append(
+                {
+                    "ordinal": row.ordinal,
+                    "error": str(exc),
+                }
+            )
+            logger.warning(
+                "Auto-import row persistence error (BOQ %s, ord %s): %s",
+                boq_id,
+                row.ordinal,
+                exc,
+            )
+    return imported_count, persistence_errors
+
+
+@router.post(
+    "/boqs/{boq_id}/import/auto/",
+    summary="Auto-detect format and import BOQ positions",
+    dependencies=[Depends(RequirePermission("boq.update"))],
+)
+async def import_boq_auto(
+    boq_id: uuid.UUID,
+    user_id: CurrentUserId,
+    file: UploadFile = File(
+        ...,
+        description=(
+            "Any BOQ file. Dispatcher tries native importers (GAEB XML, "
+            "BC3 / FIEBDC-3, Excel/CSV) first; falls back to smart_import "
+            "(LLM) only on no match."
+        ),
+    ),
+    service: BOQService = Depends(_get_service),
+    session: SessionDep = None,  # type: ignore[assignment]
+) -> dict[str, Any]:
+    """Auto-detect a BOQ upload's format and dispatch to the matching importer.
+
+    Walks :data:`REGISTERED_IMPORTERS` in order, calling ``detect()`` on
+    each with the first 4 KB of the upload + the filename. The first
+    importer whose ``detect()`` returns ``True`` wins; its ``parse()`` is
+    invoked on the full buffer and the resulting positions persisted
+    via :func:`_persist_imported_boq`.
+
+    On no match the route delegates to the existing :func:`smart_import`
+    (LLM) path so legacy ``smart_import`` behaviour remains the
+    last-chance fallback.
+
+    Returns:
+        ``{imported, skipped, errors, warnings, source_format,
+          format_id, currency, validation_report, metadata, method}``.
+    """
+    # Import here to avoid a circular at module load (importers package
+    # depends on ``app.core.file_signature`` which is fine, but the
+    # registry is consulted only at request time).
+    from app.modules.boq.importers import REGISTERED_IMPORTERS, ImportedBOQ, ImporterParseError
+
+    # Verify BOQ exists (raises 404 if not found).
+    await service.get_boq(boq_id)
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty.",
+        )
+    file_name = file.filename or "upload"
+
+    head = content[:4096]
+    chosen: type | None = None
+    for importer in REGISTERED_IMPORTERS:
+        try:
+            if importer.detect(head, file_name):
+                chosen = importer
+                break
+        except Exception as exc:  # noqa: BLE001 — detect() must never raise
+            logger.warning(
+                "Importer %s.detect() raised on %s: %s",
+                importer.__name__,
+                file_name,
+                exc,
+            )
+            continue
+
+    if chosen is None:
+        # No native importer claimed the file — fall back to smart_import
+        # (LLM). Reset the upload buffer's position so smart_import can
+        # re-read it. UploadFile's underlying SpooledTemporaryFile
+        # supports seek() on the in-memory and on-disk variants alike.
+        try:
+            await file.seek(0)
+        except Exception:  # noqa: BLE001 — best-effort, smart_import is robust
+            pass
+        # Smart import owns its own Deprecation header but that is fine —
+        # the dispatcher is the path the caller wanted, so we set our own
+        # method marker on the response.
+        from fastapi import Response as _Response
+
+        fallback_response = _Response()
+        result = await smart_import(
+            boq_id=boq_id,
+            user_id=user_id,
+            response=fallback_response,
+            file=file,
+            service=service,
+            session=session,
+        )
+        result["method"] = "smart_fallback"
+        result["format_id"] = "smart"
+        return result
+
+    try:
+        imported_boq: ImportedBOQ = await chosen.parse(content, locale=get_locale())
+    except ImporterParseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not parse file as {chosen.display_name}: {exc}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 — log + sanitise
+        logger.exception(
+            "Importer %s.parse() unexpected failure on BOQ %s: %s",
+            chosen.__name__,
+            boq_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Could not parse file as {chosen.display_name}: unexpected error.",
+        ) from exc
+
+    imported_count, persistence_errors = await _persist_imported_boq(
+        boq_id,
+        imported_boq,
+        file_name=file_name,
+        service=service,
+    )
+
+    # Persist top-level import metadata so the round-trip exporter can
+    # reproduce the original layout.
+    if imported_count > 0:
+        try:
+            boq_obj = await service.get_boq(boq_id)
+            meta = dict(boq_obj.metadata_) if isinstance(boq_obj.metadata_, dict) else {}
+            meta["last_import"] = {
+                "source_filename": file_name,
+                "source_format": imported_boq.source_format,
+                "format_id": chosen.format_id,
+                "currency": imported_boq.currency,
+                "total_imported": imported_count,
+                "import_date": datetime.now(UTC).isoformat(),
+                **imported_boq.metadata,
+            }
+            boq_obj.metadata_ = meta
+            await service.session.flush()
+            await service.session.commit()
+        except Exception:
+            logger.warning(
+                "Failed to persist auto-import metadata for BOQ %s",
+                boq_id,
+                exc_info=True,
+            )
+
+    # Run inline validation using the importer's declared rule packs
+    # (philosophy: validation is a first-class citizen of every import).
+    validation_report = None
+    if imported_count > 0:
+        validation_report = await _run_import_validation(
+            boq_id, service, service.session
+        )
+
+    logger.info(
+        "Auto-import (%s) for BOQ %s: imported=%d, skipped=%d, errors=%d",
+        chosen.format_id,
+        boq_id,
+        imported_count,
+        imported_boq.skipped,
+        len(imported_boq.errors) + len(persistence_errors),
+    )
+
+    return {
+        "imported": imported_count,
+        "skipped": imported_boq.skipped,
+        "errors": imported_boq.errors + persistence_errors,
+        "warnings": imported_boq.warnings,
+        "source_format": imported_boq.source_format,
+        "format_id": chosen.format_id,
+        "currency": imported_boq.currency,
+        "validation_report": validation_report,
+        "metadata": imported_boq.metadata,
+        "method": "native",
+    }
+
+
 # ── Smart import helpers ─────────────────────────────────────────────────────
 
 
@@ -5415,12 +5711,13 @@ async def _extract_from_cad(content: bytes, ext: str, filename: str) -> dict[str
 
 @router.post(
     "/boqs/{boq_id}/import/smart/",
-    summary="Smart import: any file via AI",
+    summary="Smart import: any file via AI (deprecated — use /import/auto/)",
     dependencies=[Depends(RequirePermission("boq.update"))],
 )
 async def smart_import(
     boq_id: uuid.UUID,
     user_id: CurrentUserId,
+    response: Response,
     file: UploadFile = File(
         ...,
         description="Any document file (Excel, CSV, PDF, image, or CAD/BIM: .rvt, .ifc, .dwg, .dgn)",
@@ -5429,6 +5726,14 @@ async def smart_import(
     session: SessionDep = None,  # type: ignore[assignment]
 ) -> dict[str, Any]:
     """Smart import: parse ANY file into BOQ positions using AI.
+
+    .. deprecated::
+        Epic I5 — clients should call ``POST /import/auto/`` instead.
+        The dispatcher picks a native importer first (GAEB / BC3 /
+        Excel) and only falls back to the LLM smart path on no match,
+        which is usually what callers actually want. This route remains
+        supported for backwards compatibility but emits a
+        ``Deprecation: true`` response header.
 
     Accepts Excel (.xlsx), CSV (.csv), PDF (.pdf), image files
     (.jpg, .jpeg, .png, .tiff, .bmp), and CAD/BIM files
@@ -5441,6 +5746,13 @@ async def smart_import(
     Returns:
         Summary with imported/error counts, method used, and AI model if applicable.
     """
+    # Epic I5: deprecation signal — clients should migrate to /import/auto/.
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = (
+        '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
+    )
+    response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
+
     # Verify BOQ exists, capture project currency for downstream LLM prompts.
     boq_obj = await service.get_boq(boq_id)
     _project_currency: str = ""
@@ -5978,6 +6290,7 @@ async def get_resource_summary(
             )
         )
 
+    # v3 §10 — item.total_cost is Decimal now; sort key still works.
     resource_items.sort(key=lambda r: r.total_cost, reverse=True)
 
     # Dedupe variant pickers across summary rows. Two collapse scenarios:
@@ -6015,13 +6328,24 @@ async def get_resource_summary(
             if label_hash:
                 seen_hashes.add(label_hash)
 
+    # v3 §10 — totals stay in Decimal so cents don't drift. ABC percentages
+    # are ratios (0-100) and stay float — they index into the response's
+    # ``abc_percentage`` field which is still float.
+    from decimal import ROUND_HALF_UP as _RHU
+    from decimal import Decimal as _Dec
+
+    _Q2 = _Dec("0.01")
+    Decimal = _Dec  # alias for clarity in the rest of this block
+
     # Build by_type summary
     by_type: dict[str, ResourceTypeSummary] = {}
     for item in resource_items:
         if item.type not in by_type:
-            by_type[item.type] = ResourceTypeSummary(count=0, total_cost=0.0)
+            by_type[item.type] = ResourceTypeSummary(count=0, total_cost=Decimal("0"))
         by_type[item.type].count += 1
-        by_type[item.type].total_cost = round(by_type[item.type].total_cost + item.total_cost, 2)
+        by_type[item.type].total_cost = (
+            by_type[item.type].total_cost + item.total_cost
+        ).quantize(_Q2, rounding=_RHU)
 
     # Issue #106 — Pareto / ABC analysis. Items are already sorted by total_cost
     # descending above, so we walk the cumulative percentage and assign the
@@ -6030,11 +6354,14 @@ async def get_resource_summary(
     # (A = ~top 20 % of items that drive ~80 % of cost). When grand_total is 0
     # (e.g. fresh BOQ with no rates yet) we skip ABC entirely so we don't
     # divide by zero.
-    grand_total = round(sum(it.total_cost for it in resource_items), 2)
+    grand_total: Decimal = sum(
+        (it.total_cost for it in resource_items), start=Decimal("0")
+    ).quantize(_Q2, rounding=_RHU)
     if grand_total > 0:
         cumulative = 0.0
+        gt_f = float(grand_total)
         for item in resource_items:
-            pct = (item.total_cost / grand_total) * 100.0
+            pct = (float(item.total_cost) / gt_f) * 100.0
             item.abc_percentage = round(pct, 2)
             cumulative += pct
             # Use the cumulative threshold *before* this item rather than
@@ -6249,7 +6576,7 @@ async def assign_position_co2(
 
     pos = await service.position_repo.get_by_id(position_id)
     if not pos:
-        raise HTTPException(status_code=404, detail="Position not found")
+        raise HTTPException(status_code=404, detail=translate("errors.position_not_found", locale=get_locale()))
 
     meta = dict(pos.metadata_) if pos.metadata_ else {}
     qty = float(pos.quantity) if pos.quantity else 0.0
@@ -7319,7 +7646,7 @@ async def boq_position_similar(
     stmt = select(Position).options(selectinload(Position.boq)).where(Position.id == position_id)
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=404, detail="Position not found")
+        raise HTTPException(status_code=404, detail=translate("errors.position_not_found", locale=get_locale()))
 
     project_id = (
         str(row.boq.project_id) if row.boq is not None and row.boq.project_id is not None else None

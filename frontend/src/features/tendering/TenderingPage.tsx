@@ -19,7 +19,8 @@ import {
   FileText,
   AlertTriangle,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Skeleton, InfoHint, SkeletonTable, Breadcrumb, ConfirmDialog } from '@/shared/ui';
+import { Button, Card, Badge, EmptyState, RecoveryCard, Skeleton, InfoHint, SkeletonTable, Breadcrumb, ConfirmDialog } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import {
   WideModal,
   WideModalSection,
@@ -32,6 +33,7 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { BidComparisonChart } from './BidComparisonChart';
 import { AddendumList } from './AddendumList';
 import { LevelingMatrix } from './LevelingMatrix';
+import { classifyCell, recommend } from './analysis';
 import { getIntlLocale } from '@/shared/lib/formatters';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -291,7 +293,7 @@ function CreatePackageDialog({
     onSuccess: () => {
       onCreated();
       onClose();
-      addToast({ type: 'success', title: t('toasts.package_created', { defaultValue: 'Tender package created‌⁠‍' }) });
+      addToast({ type: 'success', title: t('toasts.package_created', { defaultValue: 'Tender package created' }) });
     },
     onError: (error: Error) => {
       addToast({ type: 'error', title: t('toasts.error', { defaultValue: 'Error' }), message: error.message });
@@ -413,7 +415,7 @@ function AddBidDialog({
     onSuccess: () => {
       onCreated();
       onClose();
-      addToast({ type: 'success', title: t('toasts.bid_submitted', { defaultValue: 'Bid submitted‌⁠‍' }) });
+      addToast({ type: 'success', title: t('toasts.bid_submitted', { defaultValue: 'Bid submitted' }) });
     },
     onError: (error: Error) => {
       addToast({ type: 'error', title: t('toasts.error', { defaultValue: 'Error' }), message: error.message });
@@ -531,7 +533,7 @@ function PackageCard({
           <div className="mt-0.5 flex items-center gap-3 text-xs text-content-secondary">
             <span className="flex items-center gap-1">
               <FileText size={12} />
-              {t('tendering.bid_count', { defaultValue: '{{count}} bids‌⁠‍', count: pkg.bid_count })}
+              {t('tendering.bid_count', { defaultValue: '{{count}} bids', count: pkg.bid_count })}
             </span>
             {pkg.deadline && (
               <span className="flex items-center gap-1">
@@ -671,19 +673,42 @@ function BidComparisonTable({
                 <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-content-secondary">
                   {formatNumber(row.budget_rate)}
                 </td>
-                {row.bids.map((bid, bi) => (
-                  <td
-                    key={`bid-${comparison.bid_companies[bi]}`}
-                    className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums"
-                  >
-                    <span className="text-content-primary">{formatNumber(bid.unit_rate)}</span>
-                    {bid.unit_rate > 0 && (
-                      <span className="ml-1.5">
-                        <DeviationBadge pct={bid.deviation_pct} />
-                      </span>
-                    )}
-                  </td>
-                ))}
+                {row.bids.map((bid, bi) => {
+                  const rates = row.bids.map((b) => b.unit_rate);
+                  const flag = classifyCell(bid.unit_rate, rates);
+                  const flagCls =
+                    flag === 'high'
+                      ? 'bg-semantic-error-bg/50'
+                      : flag === 'low'
+                        ? 'bg-semantic-warning-bg/40'
+                        : '';
+                  const flagLabel =
+                    flag === 'high'
+                      ? t('tendering.outlier_high', 'High outlier vs median')
+                      : flag === 'low'
+                        ? t('tendering.outlier_low', 'Low outlier vs median')
+                        : undefined;
+                  return (
+                    <td
+                      key={`bid-${comparison.bid_companies[bi]}`}
+                      className={`whitespace-nowrap px-3 py-2.5 text-right tabular-nums ${flagCls}`}
+                      title={flagLabel}
+                      aria-label={flagLabel}
+                    >
+                      <span className="text-content-primary">{formatNumber(bid.unit_rate)}</span>
+                      {flag && (
+                        <span className="ml-1 text-xs" aria-hidden="true">
+                          {flag === 'high' ? '▲' : '▼'}
+                        </span>
+                      )}
+                      {bid.unit_rate > 0 && (
+                        <span className="ml-1.5">
+                          <DeviationBadge pct={bid.deviation_pct} />
+                        </span>
+                      )}
+                    </td>
+                  );
+                })}
               </tr>
             ))}
           </tbody>
@@ -770,7 +795,7 @@ function PackageDetail({
       queryClient.invalidateQueries({ queryKey: ['tendering-package', packageId] });
       queryClient.invalidateQueries({ queryKey: ['tendering-comparison', packageId] });
       queryClient.invalidateQueries({ queryKey: ['tendering-packages'] });
-      addToast({ type: 'success', title: t('toasts.bid_awarded', { defaultValue: 'Bid awarded‌⁠‍' }) });
+      addToast({ type: 'success', title: t('toasts.bid_awarded', { defaultValue: 'Bid awarded' }) });
     },
     onError: (error: Error) => {
       addToast({ type: 'error', title: t('toasts.error', { defaultValue: 'Error' }), message: error.message });
@@ -786,7 +811,7 @@ function PackageDetail({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tendering-package', packageId] });
       queryClient.invalidateQueries({ queryKey: ['tendering-packages'] });
-      addToast({ type: 'success', title: t('toasts.status_updated', { defaultValue: 'Status updated‌⁠‍' }) });
+      addToast({ type: 'success', title: t('toasts.status_updated', { defaultValue: 'Status updated' }) });
     },
     onError: (error: Error) => {
       addToast({ type: 'error', title: t('toasts.error', { defaultValue: 'Error' }), message: error.message });
@@ -820,14 +845,25 @@ function PackageDetail({
     addToast({ type: 'success', title: t('tendering.exported', { defaultValue: 'Comparison exported' }) });
   }, [comparison, pkg, addToast, t]);
 
-  const lowestBid = useMemo(() => {
-    if (!comparison || comparison.bid_totals.length === 0) return undefined;
-    let min = comparison.bid_totals[0]!;
-    for (const bt of comparison.bid_totals) {
-      if (bt.total < min.total) min = bt;
-    }
-    return min;
+  // Smarter award recommendation: ranks by total but tags confidence so a
+  // suspiciously low bid (>20% under the median) is flagged rather than
+  // silently rubber-stamped. ``recommend()`` is unit-tested in
+  // analysis.test.ts so the heuristic stays auditable.
+  const recommendation = useMemo(() => {
+    if (!comparison || comparison.bid_totals.length === 0) return null;
+    return recommend(comparison.bid_totals);
   }, [comparison]);
+
+  const handleDownloadPdf = useCallback(() => {
+    // Open the protected endpoint in a new tab — apiGet is JSON-only,
+    // so a plain link works (browser carries the auth cookie / Bearer).
+    window.open(`/api/v1/tendering/packages/${packageId}/export/pdf/`, '_blank');
+  }, [packageId]);
+
+  const handleDownloadGaeb = useCallback(() => {
+    if (!pkg?.boq_id) return;
+    window.open(`/api/v1/boq/boqs/${pkg.boq_id}/export/gaeb`, '_blank');
+  }, [pkg?.boq_id]);
 
   if (pkgLoading || (!pkg && !pkgError)) {
     return (
@@ -886,6 +922,26 @@ function PackageDetail({
               onClick={() => setShowAddBid(true)}
             >
               {t('tendering.add_bid', 'Add Bid')}
+            </Button>
+            {pkg.boq_id && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<Download size={14} />}
+                onClick={handleDownloadGaeb}
+                title={t('tendering.export_gaeb_title', 'Export the source BOQ as GAEB XML 3.3 (X83)')}
+              >
+                {t('tendering.export_gaeb', 'GAEB X83')}
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              icon={<FileText size={14} />}
+              onClick={handleDownloadPdf}
+              title={t('tendering.export_pdf_title', 'Download the tender summary PDF')}
+            >
+              {t('tendering.export_pdf', 'PDF')}
             </Button>
             {pkg.status === 'draft' && (
               <Button
@@ -1064,27 +1120,74 @@ function PackageDetail({
         <LevelingMatrix packageId={packageId} currency={currency} />
       )}
 
-      {/* Award recommendation */}
-      {activeTab === 'bids' && lowestBid && comparison && comparison.bid_count >= 2 && (
-        <Card className="border-semantic-success/20 bg-semantic-success-bg/30">
-          <div className="flex items-center gap-3">
-            <Award size={20} className="text-semantic-success" />
-            <div>
-              <p className="text-sm font-semibold text-semantic-success">
-                {t('tendering.recommendation', 'Recommendation')}
-              </p>
-              <p className="text-xs text-content-secondary">
-                {t('tendering.lowest_bid', 'Lowest bid from')}{' '}
-                <strong>{lowestBid.company_name}</strong>{' '}
-                {t('tendering.at', 'at')}{' '}
-                {formatCurrency(lowestBid.total, lowestBid.currency)}{' '}
-                (<DeviationBadge pct={lowestBid.deviation_pct} />
-                {' '}{t('tendering.vs_budget', 'vs budget')})
-              </p>
+      {/* Award recommendation — see analysis.ts for the confidence rules */}
+      {activeTab === 'bids' && recommendation && comparison && (() => {
+        const { winner, runnerUp, confidence, reasonKey, belowMedianPct } =
+          recommendation;
+        const palette =
+          confidence === 'high'
+            ? 'border-semantic-success/20 bg-semantic-success-bg/30 text-semantic-success'
+            : confidence === 'low'
+              ? 'border-semantic-error/20 bg-semantic-error-bg/30 text-semantic-error'
+              : 'border-semantic-warning/20 bg-semantic-warning-bg/30 text-semantic-warning';
+        const Icon = confidence === 'low' ? AlertTriangle : Award;
+        const confidenceLabel =
+          confidence === 'high'
+            ? t('tendering.confidence_high', 'High confidence')
+            : confidence === 'low'
+              ? t('tendering.confidence_low', 'Low confidence — review carefully')
+              : t('tendering.confidence_medium', 'Medium confidence');
+        const reasonText: Record<typeof reasonKey, string> = {
+          single_bid: t('tendering.reason_single_bid', 'Only one eligible bid received.'),
+          clear_winner: t('tendering.reason_clear_winner', 'Clearly the lowest competitive offer.'),
+          narrow_gap: t('tendering.reason_narrow_gap', 'Winner and runner-up are within 2% — consider non-price factors.'),
+          suspicious_low: t('tendering.reason_suspicious_low', 'Lowest bid is {{pct}}% below the median — verify scope and pricing before awarding.', { pct: belowMedianPct }),
+        };
+        return (
+          <Card className={`border ${palette}`}>
+            <div className="flex items-start gap-3">
+              <Icon size={20} className="mt-0.5" />
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold">
+                    {t('tendering.recommendation', 'Recommendation')}
+                  </p>
+                  <Badge
+                    variant={
+                      confidence === 'high'
+                        ? 'success'
+                        : confidence === 'low'
+                          ? 'error'
+                          : 'warning'
+                    }
+                    size="sm"
+                  >
+                    {confidenceLabel}
+                  </Badge>
+                </div>
+                <p className="mt-1 text-xs text-content-secondary">
+                  <strong>{winner.company_name}</strong>{' '}
+                  {t('tendering.at', 'at')}{' '}
+                  {formatCurrency(winner.total, winner.currency)}{' '}
+                  (<DeviationBadge pct={winner.deviation_pct} />{' '}
+                  {t('tendering.vs_budget', 'vs budget')})
+                  {runnerUp && (
+                    <>
+                      {' · '}
+                      {t('tendering.runner_up', 'Runner-up:')}{' '}
+                      {runnerUp.company_name}{' '}
+                      ({formatCurrency(runnerUp.total, runnerUp.currency)})
+                    </>
+                  )}
+                </p>
+                <p className="mt-1 text-xs text-content-tertiary">
+                  {reasonText[reasonKey]}
+                </p>
+              </div>
             </div>
-          </div>
-        </Card>
-      )}
+          </Card>
+        );
+      })()}
 
       {/* Add bid dialog */}
       {showAddBid && (
@@ -1130,6 +1233,8 @@ export function TenderingPage() {
     data: packages,
     isLoading: packagesLoading,
     isError: packagesError,
+    error: packagesErrorObj,
+    refetch: refetchPackages,
   } = useQuery({
     queryKey: ['tendering-packages', selectedProjectId],
     queryFn: () =>
@@ -1227,15 +1332,15 @@ export function TenderingPage() {
         </span>
       </div>
 
-      {/* No project selected */}
+      {/* Empty state when no project chosen (page-internal selector above) */}
       {!selectedProjectId && (
-        <EmptyState
-          icon={<FileText size={28} strokeWidth={1.5} />}
-          title={t('tendering.select_project_title', { defaultValue: 'Select a project' })}
-          description={t('tendering.select_project_desc', {
+        <RequiresProject
+          emptyHint={t('tendering.select_project_desc', {
             defaultValue: 'Select a project and create a tender from a BOQ to get started',
           })}
-        />
+        >
+          {null}
+        </RequiresProject>
       )}
 
       {/* Loading packages */}
@@ -1246,13 +1351,7 @@ export function TenderingPage() {
       {/* Failed to load packages */}
       {selectedProjectId && !packagesLoading && packagesError && (
         <Card className="py-12">
-          <EmptyState
-            icon={<AlertTriangle size={28} strokeWidth={1.5} />}
-            title={t('common.error', { defaultValue: 'Error' })}
-            description={t('tendering.packages_load_error', {
-              defaultValue: 'Failed to load tender packages. Please try again.',
-            })}
-          />
+          <RecoveryCard error={packagesErrorObj} onRetry={() => refetchPackages()} />
         </Card>
       )}
 

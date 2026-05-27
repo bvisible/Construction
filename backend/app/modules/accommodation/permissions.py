@@ -1,0 +1,39 @@
+"""Accommodation module permission definitions.
+
+Coarse RBAC tier — fine-grained gates can be split out later if a
+customer needs to separate "front-desk operator" from "HR housing
+coordinator". For the MVP we keep one read tier (VIEWER) and one write
+tier (EDITOR) with MANAGER gating destructive actions (delete) and
+state-machine escalations.
+"""
+
+from app.core.permissions import Role, permission_registry
+
+ACCOMMODATION_PERMISSIONS: dict[str, Role] = {
+    # Accommodation parent CRUD
+    "accommodation.read": Role.VIEWER,
+    "accommodation.create": Role.EDITOR,
+    "accommodation.update": Role.EDITOR,
+    "accommodation.delete": Role.MANAGER,
+    # Rooms
+    "accommodation.room.create": Role.EDITOR,
+    "accommodation.room.update": Role.EDITOR,
+    # Bookings
+    "accommodation.booking.create": Role.EDITOR,
+    "accommodation.booking.update": Role.EDITOR,
+    "accommodation.booking.cancel": Role.MANAGER,
+    # Charges
+    "accommodation.charge.create": Role.EDITOR,
+    "accommodation.charge.update": Role.EDITOR,
+    # Cross-module integrations
+    "accommodation.bootstrap_from_propdev": Role.EDITOR,
+    "accommodation.suggest_from_hr": Role.VIEWER,
+}
+
+
+def register_accommodation_permissions() -> None:
+    """Register permissions for the accommodation module."""
+    permission_registry.register_module_permissions(
+        "accommodation",
+        ACCOMMODATION_PERMISSIONS,
+    )

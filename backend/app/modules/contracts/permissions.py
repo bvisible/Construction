@@ -12,6 +12,7 @@ def register_contracts_permissions() -> None:
             "contracts.create": Role.EDITOR,
             "contracts.update": Role.EDITOR,
             "contracts.delete": Role.MANAGER,
+            "contracts.clone": Role.MANAGER,
             "contracts.sign": Role.MANAGER,
             "contracts.terminate": Role.MANAGER,
             "contracts.submit_claim": Role.EDITOR,

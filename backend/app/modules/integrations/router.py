@@ -25,7 +25,11 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import PlainTextResponse
 
-from app.dependencies import CurrentUserId, SessionDep
+from app.core.i18n import get_locale
+from app.core.rate_limiter import approval_limiter
+from app.core.url_safety import UnsafeUrlError, resolve_and_validate_external_url
+from app.core.validation.messages import translate
+from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.integrations.models import IntegrationConfig
 from app.modules.integrations.schemas import (
     DeliveryResponse,
@@ -58,6 +62,7 @@ async def list_integration_configs(
     user_id: CurrentUserId,
     session: SessionDep,
     integration_type: str | None = Query(default=None),
+    _perm: None = Depends(RequirePermission("integrations.read")),
 ) -> IntegrationConfigListResponse:
     """‌⁠‍List the current user's integration configs."""
     from sqlalchemy import func, select
@@ -88,6 +93,7 @@ async def create_integration_config(
     body: IntegrationConfigCreate,
     user_id: CurrentUserId,
     session: SessionDep,
+    _perm: None = Depends(RequirePermission("integrations.create")),
 ) -> IntegrationConfigResponse:
     """‌⁠‍Create a new integration config (Teams, Slack, Telegram, etc.)."""
     config = IntegrationConfig(
@@ -117,6 +123,7 @@ async def update_integration_config(
     body: IntegrationConfigUpdate,
     user_id: CurrentUserId,
     session: SessionDep,
+    _perm: None = Depends(RequirePermission("integrations.update")),
 ) -> IntegrationConfigResponse:
     """Update an existing integration config."""
     config = await session.get(IntegrationConfig, config_id)
@@ -137,6 +144,7 @@ async def delete_integration_config(
     config_id: uuid.UUID,
     user_id: CurrentUserId,
     session: SessionDep,
+    _perm: None = Depends(RequirePermission("integrations.delete")),
 ) -> None:
     """Delete (disconnect) an integration config."""
     config = await session.get(IntegrationConfig, config_id)
@@ -152,8 +160,27 @@ async def test_integration_config(
     config_id: uuid.UUID,
     user_id: CurrentUserId,
     session: SessionDep,
+    _perm: None = Depends(RequirePermission("integrations.update")),
 ) -> TestNotificationResponse:
-    """Send a test notification through the integration config."""
+    """Send a test notification through the integration config.
+
+    Rate-limited via ``approval_limiter`` (20 calls/min/user) — without
+    a cap, a compromised account could turn the platform into a cheap
+    DoS amplifier against arbitrary third-party webhook endpoints.
+
+    Outbound URLs are re-validated against the SSRF deny-list right
+    before dispatch so a row that was inserted before a stricter check
+    landed (or one whose DNS rebinds to a private IP) cannot exfiltrate
+    to the metadata API.
+    """
+    # Rate-limit BEFORE the DB lookup so a flood doesn't even hit the row.
+    allowed, _ = approval_limiter.is_allowed(str(user_id))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
+
     config = await session.get(IntegrationConfig, config_id)
     if config is None or str(config.user_id) != str(user_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found")
@@ -172,6 +199,10 @@ async def test_integration_config(
             webhook_url = cfg.get("webhook_url", "")
             if not webhook_url:
                 return TestNotificationResponse(success=False, message="Missing webhook_url in config")
+            try:
+                await resolve_and_validate_external_url(webhook_url)
+            except UnsafeUrlError as exc:
+                return TestNotificationResponse(success=False, message=f"URL blocked: {exc}")
             success = await send_teams_notification(
                 webhook_url=webhook_url,
                 title=title,
@@ -186,6 +217,10 @@ async def test_integration_config(
             webhook_url = cfg.get("webhook_url", "")
             if not webhook_url:
                 return TestNotificationResponse(success=False, message="Missing webhook_url in config")
+            try:
+                await resolve_and_validate_external_url(webhook_url)
+            except UnsafeUrlError as exc:
+                return TestNotificationResponse(success=False, message=f"URL blocked: {exc}")
             success = await send_slack_notification(
                 webhook_url=webhook_url,
                 title=title,
@@ -215,6 +250,10 @@ async def test_integration_config(
             webhook_url = cfg.get("webhook_url", "")
             if not webhook_url:
                 return TestNotificationResponse(success=False, message="Missing webhook_url in config")
+            try:
+                await resolve_and_validate_external_url(webhook_url)
+            except UnsafeUrlError as exc:
+                return TestNotificationResponse(success=False, message=f"URL blocked: {exc}")
             success = await send_discord_notification(
                 webhook_url=webhook_url,
                 title=title,
@@ -259,6 +298,7 @@ async def test_integration_config(
 async def list_webhooks(
     user_id: CurrentUserId,
     svc: WebhookService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("integrations.read")),
 ):
     """List all webhook endpoints owned by the current user."""
     items = await svc.list_webhooks(user_id)
@@ -270,6 +310,7 @@ async def create_webhook(
     body: WebhookCreate,
     user_id: CurrentUserId,
     svc: WebhookService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("integrations.create")),
 ):
     """Create a new webhook endpoint."""
     webhook = await svc.create_webhook(body.model_dump(), user_id)
@@ -282,11 +323,12 @@ async def update_webhook(
     body: WebhookUpdate,
     user_id: CurrentUserId,
     svc: WebhookService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("integrations.update")),
 ):
     """Update an existing webhook endpoint."""
     webhook = await svc.get_webhook(webhook_id)
     if webhook is None or str(webhook.user_id) != str(user_id):
-        raise HTTPException(status_code=404, detail="Webhook not found")
+        raise HTTPException(status_code=404, detail=translate("errors.webhook_not_found", locale=get_locale()))
     updated = await svc.update_webhook(webhook, body.model_dump(exclude_unset=True))
     return WebhookResponse.model_validate(updated)
 
@@ -296,11 +338,12 @@ async def delete_webhook(
     webhook_id: uuid.UUID,
     user_id: CurrentUserId,
     svc: WebhookService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("integrations.delete")),
 ):
     """Delete a webhook endpoint."""
     webhook = await svc.get_webhook(webhook_id)
     if webhook is None or str(webhook.user_id) != str(user_id):
-        raise HTTPException(status_code=404, detail="Webhook not found")
+        raise HTTPException(status_code=404, detail=translate("errors.webhook_not_found", locale=get_locale()))
     await svc.delete_webhook(webhook)
 
 
@@ -312,11 +355,12 @@ async def list_deliveries(
     webhook_id: uuid.UUID,
     user_id: CurrentUserId,
     svc: WebhookService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("integrations.read")),
 ):
     """Return the last 50 delivery log entries for a webhook."""
     webhook = await svc.get_webhook(webhook_id)
     if webhook is None or str(webhook.user_id) != str(user_id):
-        raise HTTPException(status_code=404, detail="Webhook not found")
+        raise HTTPException(status_code=404, detail=translate("errors.webhook_not_found", locale=get_locale()))
     items = await svc.list_deliveries(webhook_id, limit=50)
     return [DeliveryResponse.model_validate(d) for d in items]
 
@@ -329,11 +373,24 @@ async def test_webhook(
     webhook_id: uuid.UUID,
     user_id: CurrentUserId,
     svc: WebhookService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("integrations.update")),
 ):
-    """Send a test payload to the webhook and return the delivery result."""
+    """Send a test payload to the webhook and return the delivery result.
+
+    Rate-limited at 20/min/user via ``approval_limiter`` — without a
+    cap, a compromised account could fan out test deliveries against
+    arbitrary third-party hosts and turn the platform into a DoS
+    amplifier.
+    """
+    allowed, _ = approval_limiter.is_allowed(str(user_id))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
     webhook = await svc.get_webhook(webhook_id)
     if webhook is None or str(webhook.user_id) != str(user_id):
-        raise HTTPException(status_code=404, detail="Webhook not found")
+        raise HTTPException(status_code=404, detail=translate("errors.webhook_not_found", locale=get_locale()))
     delivery = await svc.send_test(webhook)
     return DeliveryResponse.model_validate(delivery)
 

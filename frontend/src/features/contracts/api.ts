@@ -483,6 +483,40 @@ export function listTypeConfigurations(): Promise<ContractTypeConfiguration[]> {
   return safeGetList<ContractTypeConfiguration>('/v1/contracts/type-configurations/');
 }
 
+/* ── Clone (deep-copy a contract into draft) ──────────────────────────── */
+
+export interface ContractClonePayload {
+  new_code: string;
+  new_title?: string | null;
+  target_project_id?: string | null;
+  include_lines?: boolean;
+  copy_subconfigs?: boolean;
+}
+
+export function cloneContract(
+  contractId: string,
+  data: ContractClonePayload,
+): Promise<ContractItem> {
+  return apiPost<ContractItem>(
+    `/v1/contracts/contracts/${contractId}/clone`,
+    data,
+  );
+}
+
+/* ── Clause templates (FIDIC / JCT / NEC / AIA / ConsensusDocs) ───────── */
+
+export interface ClauseTemplate {
+  code: string;
+  name: string;
+  family: string;
+  retention_release_event: string;
+  clause_count: number;
+}
+
+export function listClauseTemplates(): Promise<ClauseTemplate[]> {
+  return safeGetList<ClauseTemplate>('/v1/contracts/contract-templates/');
+}
+
 /* ── Back-compat aliases (old skeleton names) ─────────────────────────── */
 
 export type Contract = ContractItem;

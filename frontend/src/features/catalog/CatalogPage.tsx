@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -29,7 +30,8 @@ import {
   AlertTriangle,
   type LucideIcon,
 } from 'lucide-react';
-import { Button, Card, Badge, EmptyState, Skeleton, InfoHint, CountryFlag } from '@/shared/ui';
+import { Button, Card, Badge, ConfirmDialog, EmptyState, Skeleton, InfoHint, CountryFlag } from '@/shared/ui';
+import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
@@ -197,8 +199,8 @@ function RegionImportGrid({
     onSuccess: (result) => {
       addToast({
         type: 'success',
-        title: t('catalog.import_success', { defaultValue: 'Import complete‌⁠‍' }),
-        message: `${result.imported} ${t('catalog.resources_imported', { defaultValue: 'resources imported‌⁠‍' })}`,
+        title: t('catalog.import_success', { defaultValue: 'Import complete' }),
+        message: `${result.imported} ${t('catalog.resources_imported', { defaultValue: 'resources imported' })}`,
       });
       setImportingId(null);
       onImported();
@@ -206,7 +208,7 @@ function RegionImportGrid({
     onError: (err: Error) => {
       addToast({
         type: 'error',
-        title: t('catalog.import_failed', { defaultValue: 'Import failed‌⁠‍' }),
+        title: t('catalog.import_failed', { defaultValue: 'Import failed' }),
         message: err.message,
       });
       setImportingId(null);
@@ -230,12 +232,12 @@ function RegionImportGrid({
           </div>
           <div>
             <h2 className="text-base font-semibold text-content-primary">
-              {t('catalog.import_regions_title', { defaultValue: 'Import Resource Catalog‌⁠‍' })}
+              {t('catalog.import_regions_title', { defaultValue: 'Import Resource Catalog' })}
             </h2>
             <p className="text-xs text-content-tertiary">
               {t('catalog.import_regions_desc', {
                 defaultValue:
-                  'Download pre-built resource catalogs from CWICR regional databases‌⁠‍',
+                  'Download pre-built resource catalogs from CWICR regional databases',
               })}
             </p>
           </div>
@@ -519,6 +521,62 @@ function PriceBar({
   );
 }
 
+/* ── Hover-tooltip with full text ─────────────────────────────────────
+   Renders via React portal so the popup escapes the table's
+   ``overflow-x-auto`` wrapper (which per CSS spec computes overflow-y
+   to ``auto`` too, clipping any absolutely-positioned descendant).
+   Anchors fixed-position to the wrapped element's bounding rect.
+   Closes the gap left by the CSS-only ``group-hover/name:block``
+   approach which clipped inside the table viewport. */
+function HoverTooltip({
+  text,
+  className,
+  children,
+}: {
+  text: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  const wrapRef = useRef<HTMLSpanElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  const show = useCallback(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, left: r.left });
+  }, []);
+  const hide = useCallback(() => setPos(null), []);
+
+  return (
+    <>
+      <span
+        ref={wrapRef}
+        className={className}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        title={text}
+      >
+        {children}
+      </span>
+      {pos
+        ? createPortal(
+            <div
+              role="tooltip"
+              className="pointer-events-none fixed z-[200] max-w-[640px] whitespace-normal rounded-md border border-border-light bg-surface-elevated px-3 py-2 text-xs font-normal text-content-primary shadow-xl"
+              style={{ top: pos.top, left: pos.left }}
+            >
+              {text}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
 /* ── Resource Row ────────────────────────────────────────────────────── */
 
 function ResourceRow({
@@ -581,10 +639,15 @@ function ResourceRow({
         <td className="px-4 py-3 text-sm text-content-primary font-medium">
           <div className="flex items-center gap-2">
             {regionInfo && <MiniFlag code={regionInfo.flag} size={11} />}
-            <span className="truncate max-w-[280px]">{resource.name}</span>
+            <HoverTooltip text={resource.name} className="truncate max-w-[420px] inline-block">
+              {resource.name}
+            </HoverTooltip>
           </div>
           {resource.source === 'boq_import' && resource.specifications?.source_project_name ? (
-            <div className="text-2xs text-content-quaternary mt-0.5 truncate">
+            <div
+              className="text-2xs text-content-quaternary mt-0.5 truncate"
+              title={String(resource.specifications.source_project_name)}
+            >
               {translate('common.from', { defaultValue: 'from' })}{' '}
               {String(resource.specifications.source_project_name)}
               {resource.specifications.saved_at ? (
@@ -731,6 +794,20 @@ function ResourceDetailPanel({
       )}
 
       <div className="px-6 py-4">
+        {/* Full resource name — always visible, wraps onto multiple lines
+            so users can read disambiguating prefixes/suffixes without
+            relying on the row's hover-tooltip. */}
+        <div className="mb-3">
+          <h3 className="text-sm font-semibold text-content-primary leading-snug break-words">
+            {resource.name}
+          </h3>
+          <div className="mt-0.5 flex items-center gap-2 text-2xs text-content-tertiary">
+            <span className="font-mono">{resource.resource_code}</span>
+            <span className="opacity-40">·</span>
+            <span>{resource.unit}</span>
+          </div>
+        </div>
+
         {/* Top row: Price cards + Identity */}
         <div className="flex gap-4 mb-4">
           {/* Price cards */}
@@ -767,14 +844,7 @@ function ResourceDetailPanel({
         </div>
 
         {/* Info grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {/* Identity */}
-          <div className="rounded-lg bg-surface-primary border border-border-light p-2.5">
-            <div className="text-2xs text-content-quaternary uppercase tracking-wider mb-1">{t('catalog.resource_label', { defaultValue: 'Resource' })}</div>
-            <div className="text-xs font-medium text-content-primary truncate" title={resource.name}>{resource.name}</div>
-            <div className="text-2xs text-content-tertiary font-mono mt-0.5 truncate" title={resource.resource_code}>{resource.resource_code}</div>
-          </div>
-
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {/* Type + Category */}
           <div className="rounded-lg bg-surface-primary border border-border-light p-2.5">
             <div className="text-2xs text-content-quaternary uppercase tracking-wider mb-1">{t('catalog.type_label', { defaultValue: 'Type' })}</div>
@@ -1197,6 +1267,7 @@ export function CatalogPage() {
   const [showCreateResource, setShowCreateResource] = useState(false);
   const [showBuildAssembly, setShowBuildAssembly] = useState(false);
   const [showPriceAdjust, setShowPriceAdjust] = useState(false);
+  const { confirm, ...confirmProps } = useConfirm();
 
   // Debounce search query by 300ms
   useEffect(() => {
@@ -1325,12 +1396,17 @@ export function CatalogPage() {
     async (regionId: string) => {
       // Destructive: wipes every resource in the region. Confirm before firing
       // so a stray click can't nuke a populated region.
-      const confirmed = window.confirm(
-        t('catalog.delete_region_confirm', {
+      const confirmed = await confirm({
+        title: t('catalog.delete_region_title', {
+          defaultValue: 'Delete region?',
+        }),
+        message: t('catalog.delete_region_confirm', {
           defaultValue: 'Delete region "{{region}}" and all its resources? This cannot be undone.',
           region: regionId,
         }),
-      );
+        confirmLabel: t('common.delete', { defaultValue: 'Delete' }),
+        variant: 'danger',
+      });
       if (!confirmed) return;
       try {
         const result = await apiDelete<{ deleted: number; region: string }>(
@@ -1351,7 +1427,7 @@ export function CatalogPage() {
         });
       }
     },
-    [addToast, t, queryClient, region],
+    [addToast, confirm, t, queryClient, region],
   );
 
   const invalidateAll = useCallback(() => {
@@ -2001,6 +2077,7 @@ export function CatalogPage() {
           }}
         />
       )}
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

@@ -1,12 +1,16 @@
 /**
  * `<InspectorPanel>` — right-side contextual editor (320 px, collapsible).
  *
- * Two context modes via a `role="tablist"` (03_ux_visual §2.4):
+ * Two context modes shown via a labelled status pill (03_ux_visual §2.4):
  *   1. **Node** (a single node selected) — a friendly form generated from the
  *      node-type's `params_schema` (string / number / boolean / enum), each
  *      field with a localized label + helper. Not raw JSON.
  *   2. **Pipeline** (nothing / many selected) — name, description, project
  *      binding, published toggle, plus a plain-language summary stub.
+ *
+ * The mode is driven by the canvas selection, not by clicking here, so an
+ * ARIA `tablist` would be a focus trap. The visible pill below is rendered
+ * as a passive status indicator.
  *
  * All strings via `t(...)`. Logical props for RTL. Footer: Duplicate / Delete.
  */
@@ -118,7 +122,7 @@ export function InspectorPanel({
         <button
           type="button"
           aria-label={t('pipeline.inspector.expand', {
-            defaultValue: 'Expand inspector‌⁠‍',
+            defaultValue: 'Expand inspector',
           })}
           onClick={onToggleCollapsed}
           className="flex h-8 w-8 items-center justify-center rounded-md hover:bg-surface-tertiary"
@@ -140,7 +144,7 @@ export function InspectorPanel({
       data-testid={testId ?? 'pipeline-inspector'}
       data-collapsed="false"
       className="flex h-full w-[320px] shrink-0 flex-col border-s border-border bg-surface-secondary"
-      aria-label={t('pipeline.inspector.aria', { defaultValue: 'Inspector‌⁠‍' })}
+      aria-label={t('pipeline.inspector.aria', { defaultValue: 'Inspector' })}
     >
       <header className="flex items-center justify-between border-b border-border px-3 py-2">
         {/* Context indicator (NOT a tablist — the mode is driven by the
@@ -161,7 +165,7 @@ export function InspectorPanel({
         <button
           type="button"
           aria-label={t('pipeline.inspector.collapse', {
-            defaultValue: 'Collapse inspector‌⁠‍',
+            defaultValue: 'Collapse inspector',
           })}
           onClick={onToggleCollapsed}
           className="flex h-6 w-6 items-center justify-center rounded hover:bg-surface-tertiary"
@@ -204,7 +208,7 @@ export function InspectorPanel({
             {fields.length === 0 ? (
               <p className="text-xs text-content-tertiary">
                 {t('pipeline.inspector.no_params', {
-                  defaultValue: 'This step has no settings to configure.‌⁠‍',
+                  defaultValue: 'This step has no settings to configure.',
                 })}
               </p>
             ) : (

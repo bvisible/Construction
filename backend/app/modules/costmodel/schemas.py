@@ -1,34 +1,62 @@
 """‌⁠‍5D Cost Model Pydantic schemas — request/response models.
 
 Defines create, update, and response schemas for cost snapshots,
-budget lines, and cash flow entries.  Monetary values are exposed as
-floats in the API but stored as strings in the database.
+budget lines, and cash flow entries. v3 §10 — monetary values are
+Decimal-in / Decimal-as-string out in JSON; persisted as strings in the
+database for SQLite compatibility.
 """
 
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py — money fields are stored /
+# accepted as Decimal but emitted as plain decimal strings in JSON.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # ── CostSnapshot schemas ─────────────────────────────────────────────────────
 
 
 class SnapshotCreate(BaseModel):
-    """‌⁠‍Create a new EVM cost snapshot."""
+    """‌⁠‍Create a new EVM cost snapshot.
+
+    v3 §10 — ``planned_cost`` / ``earned_value`` / ``actual_cost`` are
+    money; Decimal-as-string in JSON. SPI/CPI/forecast_eac stay float
+    (SPI/CPI are ratios; forecast_eac is a derived metric not yet
+    standardised on Decimal — leave for a future pass).
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     project_id: UUID | None = None  # Set from URL path
     period: str = Field(..., min_length=7, max_length=10, pattern=r"^\d{4}-\d{2}$")
-    planned_cost: float = 0.0
-    earned_value: float = 0.0
-    actual_cost: float = 0.0
+    planned_cost: Decimal = Decimal("0")
+    earned_value: Decimal = Decimal("0")
+    actual_cost: Decimal = Decimal("0")
     forecast_eac: float = 0.0
     spi: float = 0.0
     cpi: float = 0.0
     notes: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer("planned_cost", "earned_value", "actual_cost", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class SnapshotUpdate(BaseModel):
@@ -36,41 +64,55 @@ class SnapshotUpdate(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    planned_cost: float | None = None
-    earned_value: float | None = None
-    actual_cost: float | None = None
+    planned_cost: Decimal | None = None
+    earned_value: Decimal | None = None
+    actual_cost: Decimal | None = None
     forecast_eac: float | None = None
     spi: float | None = None
     cpi: float | None = None
     notes: str | None = None
     metadata: dict[str, Any] | None = None
 
+    @field_serializer("planned_cost", "earned_value", "actual_cost", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
+
 
 class SnapshotResponse(BaseModel):
-    """Cost snapshot returned from the API."""
+    """Cost snapshot returned from the API.
+
+    v3 §10 — money is Decimal-as-string in JSON.
+    """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     project_id: UUID
     period: str
-    planned_cost: float
-    earned_value: float
-    actual_cost: float
-    forecast_eac: float
-    spi: float
-    cpi: float
+    planned_cost: Decimal = Decimal("0")
+    earned_value: Decimal = Decimal("0")
+    actual_cost: Decimal = Decimal("0")
+    forecast_eac: float = 0.0
+    spi: float = 0.0
+    cpi: float = 0.0
     notes: str
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("planned_cost", "earned_value", "actual_cost", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── BudgetLine schemas ───────────────────────────────────────────────────────
 
 
 class BudgetLineCreate(BaseModel):
-    """Create a new budget line."""
+    """Create a new budget line.
+
+    v3 §10 — money fields are Decimal-as-string in JSON.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -84,14 +126,21 @@ class BudgetLineCreate(BaseModel):
         description="material, labor, equipment, subcontractor, overhead, contingency",
     )
     description: str = Field(default="", max_length=500)
-    planned_amount: float = 0.0
-    committed_amount: float = 0.0
-    actual_amount: float = 0.0
-    forecast_amount: float = 0.0
+    planned_amount: Decimal = Decimal("0")
+    committed_amount: Decimal = Decimal("0")
+    actual_amount: Decimal = Decimal("0")
+    forecast_amount: Decimal = Decimal("0")
     period_start: str | None = Field(default=None, max_length=20)
     period_end: str | None = Field(default=None, max_length=20)
     currency: str = Field(default="", max_length=10)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer(
+        "planned_amount", "committed_amount", "actual_amount", "forecast_amount",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class BudgetLineUpdate(BaseModel):
@@ -103,18 +152,28 @@ class BudgetLineUpdate(BaseModel):
     activity_id: UUID | None = None
     category: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=500)
-    planned_amount: float | None = None
-    committed_amount: float | None = None
-    actual_amount: float | None = None
-    forecast_amount: float | None = None
+    planned_amount: Decimal | None = None
+    committed_amount: Decimal | None = None
+    actual_amount: Decimal | None = None
+    forecast_amount: Decimal | None = None
     period_start: str | None = None
     period_end: str | None = None
     currency: str | None = Field(default=None, max_length=10)
     metadata: dict[str, Any] | None = None
 
+    @field_serializer(
+        "planned_amount", "committed_amount", "actual_amount", "forecast_amount",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
+
 
 class BudgetLineResponse(BaseModel):
-    """Budget line returned from the API."""
+    """Budget line returned from the API.
+
+    v3 §10 — money fields are Decimal-as-string in JSON.
+    """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -124,10 +183,10 @@ class BudgetLineResponse(BaseModel):
     activity_id: UUID | None
     category: str
     description: str
-    planned_amount: float
-    committed_amount: float
-    actual_amount: float
-    forecast_amount: float
+    planned_amount: Decimal = Decimal("0")
+    committed_amount: Decimal = Decimal("0")
+    actual_amount: Decimal = Decimal("0")
+    forecast_amount: Decimal = Decimal("0")
     period_start: str | None
     period_end: str | None
     currency: str
@@ -135,25 +194,43 @@ class BudgetLineResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer(
+        "planned_amount", "committed_amount", "actual_amount", "forecast_amount",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
+
 
 # ── CashFlow schemas ─────────────────────────────────────────────────────────
 
 
 class CashFlowCreate(BaseModel):
-    """Create a new cash flow entry."""
+    """Create a new cash flow entry.
+
+    v3 §10 — money fields are Decimal-as-string in JSON.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
     project_id: UUID | None = None  # Set from URL path
     period: str = Field(..., min_length=7, max_length=10, pattern=r"^\d{4}-\d{2}$")
     category: str = Field(default="total", max_length=100)
-    planned_inflow: float = 0.0
-    planned_outflow: float = 0.0
-    actual_inflow: float = 0.0
-    actual_outflow: float = 0.0
-    cumulative_planned: float = 0.0
-    cumulative_actual: float = 0.0
+    planned_inflow: Decimal = Decimal("0")
+    planned_outflow: Decimal = Decimal("0")
+    actual_inflow: Decimal = Decimal("0")
+    actual_outflow: Decimal = Decimal("0")
+    cumulative_planned: Decimal = Decimal("0")
+    cumulative_actual: Decimal = Decimal("0")
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_serializer(
+        "planned_inflow", "planned_outflow", "actual_inflow", "actual_outflow",
+        "cumulative_planned", "cumulative_actual",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class CashFlowUpdate(BaseModel):
@@ -162,17 +239,28 @@ class CashFlowUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     category: str | None = Field(default=None, max_length=100)
-    planned_inflow: float | None = None
-    planned_outflow: float | None = None
-    actual_inflow: float | None = None
-    actual_outflow: float | None = None
-    cumulative_planned: float | None = None
-    cumulative_actual: float | None = None
+    planned_inflow: Decimal | None = None
+    planned_outflow: Decimal | None = None
+    actual_inflow: Decimal | None = None
+    actual_outflow: Decimal | None = None
+    cumulative_planned: Decimal | None = None
+    cumulative_actual: Decimal | None = None
     metadata: dict[str, Any] | None = None
+
+    @field_serializer(
+        "planned_inflow", "planned_outflow", "actual_inflow", "actual_outflow",
+        "cumulative_planned", "cumulative_actual",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal | None) -> str | None:
+        return _serialise_money(v)
 
 
 class CashFlowResponse(BaseModel):
-    """Cash flow entry returned from the API."""
+    """Cash flow entry returned from the API.
+
+    v3 §10 — money fields are Decimal-as-string in JSON.
+    """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -180,26 +268,39 @@ class CashFlowResponse(BaseModel):
     project_id: UUID
     period: str
     category: str
-    planned_inflow: float
-    planned_outflow: float
-    actual_inflow: float
-    actual_outflow: float
-    cumulative_planned: float
-    cumulative_actual: float
+    planned_inflow: Decimal = Decimal("0")
+    planned_outflow: Decimal = Decimal("0")
+    actual_inflow: Decimal = Decimal("0")
+    actual_outflow: Decimal = Decimal("0")
+    cumulative_planned: Decimal = Decimal("0")
+    cumulative_actual: Decimal = Decimal("0")
     metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer(
+        "planned_inflow", "planned_outflow", "actual_inflow", "actual_outflow",
+        "cumulative_planned", "cumulative_actual",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Aggregated / composite response schemas ──────────────────────────────────
 
 
 class DashboardResponse(BaseModel):
-    """Aggregated 5D cost dashboard KPIs."""
+    """Aggregated 5D cost dashboard KPIs.
 
-    total_budget: float = 0.0
-    total_committed: float = 0.0
-    total_actual: float = 0.0
+    v3 §10 — money fields are Decimal-as-string in JSON. Ratios (SPI/CPI/
+    variance_pct) stay float. ``total_forecast`` and ``variance`` are
+    aggregate metrics not in the deferred list — kept float for now.
+    """
+
+    total_budget: Decimal = Decimal("0")
+    total_committed: Decimal = Decimal("0")
+    total_actual: Decimal = Decimal("0")
     total_forecast: float = 0.0
     variance: float = 0.0
     variance_pct: float = 0.0
@@ -207,6 +308,10 @@ class DashboardResponse(BaseModel):
     cpi: float = 0.0
     status: str = "on_budget"
     currency: str = ""
+
+    @field_serializer("total_budget", "total_committed", "total_actual", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class SCurvePeriod(BaseModel):
@@ -225,13 +330,22 @@ class SCurveData(BaseModel):
 
 
 class CashFlowPeriod(BaseModel):
-    """Single period data point for cash flow chart."""
+    """Single period data point for cash flow chart.
+
+    v3 §10 — ``cumulative_planned`` / ``cumulative_actual`` are money;
+    Decimal-as-string in JSON. ``inflow`` / ``outflow`` are deferred
+    (not in the audit list — kept float).
+    """
 
     period: str
     inflow: float = 0.0
     outflow: float = 0.0
-    cumulative_planned: float = 0.0
-    cumulative_actual: float = 0.0
+    cumulative_planned: Decimal = Decimal("0")
+    cumulative_actual: Decimal = Decimal("0")
+
+    @field_serializer("cumulative_planned", "cumulative_actual", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class CashFlowData(BaseModel):
@@ -278,7 +392,16 @@ class EVMResponse(BaseModel):
     eac: float = Field(0.0, description="Estimate At Completion — BAC / CPI")
     etc: float = Field(0.0, description="Estimate To Complete — EAC - AC")
     vac: float = Field(0.0, description="Variance At Completion — BAC - EAC")
-    tcpi: float = Field(0.0, description="To-Complete Performance Index — (BAC - EV) / (BAC - AC)")
+    tcpi: float | None = Field(
+        None,
+        description=(
+            "To-Complete Performance Index — (BAC - EV) / (BAC - AC). "
+            "Returns ``null`` when BAC <= AC: the denominator is zero or "
+            "negative (project is already at-or-over budget), making TCPI "
+            "mathematically undefined. Pre-audit this case was masked as "
+            "``0.0`` which dashboards mis-rendered as 'perfect efficiency'."
+        ),
+    )
     time_elapsed_pct: float = Field(0.0, description="Percentage of project duration elapsed (0.0 - 100.0)")
     schedule_progress_pct: float = Field(0.0, description="Weighted average schedule progress (0.0 - 100.0)")
     status: str = Field(
@@ -334,11 +457,16 @@ class VarianceResponse(BaseModel):
     positions of the project's primary BOQ, summed before any overrides).
     Current is the live BOQ total. Variance is expressed both in absolute
     currency and as a percentage of budget.
+
+    v3 §10 — ``budget`` / ``variance_abs`` are money; Decimal-as-string in
+    JSON. ``current`` and ``red_line`` are not in the deferred audit list
+    so they stay float (``current`` is a derived display value, ``red_line``
+    is a configurable percentage threshold).
     """
 
-    budget: float = 0.0
+    budget: Decimal = Decimal("0")
     current: float = 0.0
-    variance_abs: float = Field(0.0, description="current - budget")
+    variance_abs: Decimal = Field(default=Decimal("0"), description="current - budget")
     variance_pct: float = Field(
         0.0, description="(current - budget) / budget * 100 — 0.0 when budget is 0"
     )
@@ -346,3 +474,7 @@ class VarianceResponse(BaseModel):
         5.0, description="Absolute % threshold that flips the KPI to red"
     )
     currency: str = ""
+
+    @field_serializer("budget", "variance_abs", when_used="json")
+    def _ser_money(self, v: Decimal) -> str | None:
+        return _serialise_money(v)

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
@@ -19,6 +20,9 @@ import {
   GanttChart,
   Sparkles,
   PlayCircle,
+  Download,
+  AlertTriangle,
+  Diamond,
 } from 'lucide-react';
 import {
   Button,
@@ -26,11 +30,13 @@ import {
   Badge,
   EmptyState,
   Breadcrumb,
+  RecoveryCard,
   SkeletonTable,
   WideModal,
   ConfirmDialog,
   InfoHint,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
@@ -83,15 +89,18 @@ import {
   type RNCCategory,
   type Baseline,
   type BaselineDeltaEntry,
+  currentTasksForMaster,
 } from './api';
 
-type Tab =
-  | 'master'
-  | 'phases'
-  | 'look_ahead'
-  | 'weekly'
-  | 'constraints'
-  | 'baselines';
+const SCHEDULE_TAB_IDS = [
+  'master',
+  'phases',
+  'look_ahead',
+  'weekly',
+  'constraints',
+  'baselines',
+] as const;
+type Tab = (typeof SCHEDULE_TAB_IDS)[number];
 
 const PHASE_VARIANT: Record<PhaseStatus, 'neutral' | 'blue' | 'success' | 'warning'> = {
   in_planning: 'neutral',
@@ -159,6 +168,13 @@ function pctNumber(value: string | number | null | undefined): number {
 export function ScheduleAdvancedPage() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('master');
+  // Arrow-key navigation across the schedule advanced tab strip (WCAG 2.1.1).
+  const onTabKeyDown = useTabKeyboardNav<Tab>({
+    ids: SCHEDULE_TAB_IDS,
+    activeId: tab,
+    onChange: setTab,
+    orientation: 'horizontal',
+  });
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [projectId, setProjectId] = useState<string>('');
   const [masterId, setMasterId] = useState<string>('');
@@ -306,7 +322,7 @@ export function ScheduleAdvancedPage() {
         items={[
           {
             label: t('schedule_advanced.title', {
-              defaultValue: 'Last Planner / CPM‌⁠‍',
+              defaultValue: 'Last Planner / CPM',
             }),
           },
         ]}
@@ -318,12 +334,12 @@ export function ScheduleAdvancedPage() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-semibold text-content-primary">
-            {t('schedule_advanced.title', { defaultValue: 'Last Planner / CPM‌⁠‍' })}
+            {t('schedule_advanced.title', { defaultValue: 'Last Planner / CPM' })}
           </h1>
           <p className="mt-1 text-sm text-content-secondary">
             {t('schedule_advanced.subtitle', {
               defaultValue:
-                'Pull-planning, lookaheads, weekly commitments, constraints and baselines.‌⁠‍',
+                'Pull-planning, lookaheads, weekly commitments, constraints and baselines.',
             })}
           </p>
         </div>
@@ -351,16 +367,23 @@ export function ScheduleAdvancedPage() {
       <InfoHint
         text={t('schedule_advanced.what_is_lps', {
           defaultValue:
-            'The Last Planner System is pull-based production control that complements the 4D Schedule. Master schedule sets milestones, Phase Plans pull work backwards from them, Look-Aheads (6 weeks) make work ready by removing constraints, and Weekly Work Plans capture crew commitments. PPC (Percent Plan Complete) and constraint logs measure reliability. Use the 4D Schedule for the CPM critical path; use this for what the team actually commits to do next.‌⁠‍',
+            'The Last Planner System is pull-based production control that complements the 4D Schedule. Master schedule sets milestones, Phase Plans pull work backwards from them, Look-Aheads (6 weeks) make work ready by removing constraints, and Weekly Work Plans capture crew commitments. PPC (Percent Plan Complete) and constraint logs measure reliability. Use the 4D Schedule for the CPM critical path; use this for what the team actually commits to do next.',
         })}
       />
 
       {/* Tabs */}
       <div className="border-b border-border-light">
-        <nav className="flex gap-1 -mb-px overflow-x-auto">
+        <nav
+          className="flex gap-1 -mb-px overflow-x-auto"
+          role="tablist"
+          aria-label={t('schedule_advanced.tabs_aria', {
+            defaultValue: 'Schedule sections',
+          })}
+          onKeyDown={onTabKeyDown}
+        >
           {(
             [
-              { id: 'master', label: t('schedule_advanced.tab_master', { defaultValue: 'Master‌⁠‍' }), icon: Calendar },
+              { id: 'master', label: t('schedule_advanced.tab_master', { defaultValue: 'Master' }), icon: Calendar },
               { id: 'phases', label: t('schedule_advanced.tab_phases', { defaultValue: 'Phase Plans' }), icon: LayoutGrid },
               { id: 'look_ahead', label: t('schedule_advanced.tab_look_ahead', { defaultValue: 'Look-Ahead' }), icon: Clock },
               { id: 'weekly', label: t('schedule_advanced.tab_weekly', { defaultValue: 'Weekly Plan' }), icon: ClipboardCheck },
@@ -369,14 +392,20 @@ export function ScheduleAdvancedPage() {
             ] as { id: Tab; label: string; icon: React.ElementType }[]
           ).map((it) => {
             const Icon = it.icon;
+            const isActive = tab === it.id;
             return (
               <button
                 key={it.id}
                 type="button"
+                role="tab"
+                id={`sched-tab-${it.id}`}
+                aria-selected={isActive}
+                aria-controls={`sched-panel-${it.id}`}
+                tabIndex={isActive ? 0 : -1}
                 onClick={() => setTab(it.id)}
                 className={clsx(
                   'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap',
-                  tab === it.id
+                  isActive
                     ? 'border-oe-blue text-oe-blue'
                     : 'border-transparent text-content-secondary hover:text-content-primary',
                 )}
@@ -395,25 +424,15 @@ export function ScheduleAdvancedPage() {
           {projectsQ.isLoading ? (
             <SkeletonTable rows={6} columns={3} />
           ) : projectsQ.isError ? (
-            <EmptyState
-              icon={<AlertCircle size={22} strokeWidth={1.5} />}
-              title={t('common.error', { defaultValue: 'Error' })}
-              description={t('schedule_advanced.projects_load_error', {
-                defaultValue: 'Failed to load projects. Please try again.',
-              })}
-              action={{
-                label: t('common.retry', { defaultValue: 'Retry' }),
-                onClick: () => projectsQ.refetch(),
-              }}
-            />
+            <RecoveryCard error={projectsQ.error} onRetry={() => projectsQ.refetch()} />
           ) : (
-            <EmptyState
-              icon={<Calendar size={22} />}
-              title={t('schedule_advanced.no_project', { defaultValue: 'No project selected' })}
-              description={t('schedule_advanced.no_project_desc', {
+            <RequiresProject
+              emptyHint={t('schedule_advanced.no_project_desc', {
                 defaultValue: 'Create a project first to start pull-planning.',
               })}
-            />
+            >
+              {null}
+            </RequiresProject>
           )}
         </Card>
       ) : tab === 'master' ? (
@@ -493,6 +512,7 @@ export function ScheduleAdvancedPage() {
         />
       ) : (
         <BaselinesTab
+          masterId={masterId}
           baselines={baselinesQ.data ?? []}
           loading={baselinesQ.isLoading}
           isError={baselinesQ.isError}
@@ -616,7 +636,7 @@ function MasterTab({
       <InfoHint
         text={t('schedule_advanced.master_hint', {
           defaultValue:
-            'Select a master schedule to make it the working plan for the Phases, Look-Ahead, Weekly and Constraints tabs. Use the row actions to rename it, change its planned dates and status, or delete it.‌⁠‍',
+            'Select a master schedule to make it the working plan for the Phases, Look-Ahead, Weekly and Constraints tabs. Use the row actions to rename it, change its planned dates and status, or delete it.',
         })}
       />
 
@@ -636,7 +656,7 @@ function MasterTab({
           <table className="w-full text-sm">
             <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
               <tr>
-                <th className="px-4 py-2.5 text-left">{t('common.name', { defaultValue: 'Name' })}</th>
+                <th className="px-4 py-2.5 text-left">{t('common.name')}</th>
                 <th className="px-4 py-2.5 text-left">{t('schedule_advanced.planned_start', { defaultValue: 'Planned start' })}</th>
                 <th className="px-4 py-2.5 text-left">{t('schedule_advanced.planned_finish', { defaultValue: 'Planned finish' })}</th>
                 <th className="px-4 py-2.5 text-left">{t('common.status', { defaultValue: 'Status' })}</th>
@@ -761,27 +781,12 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 /* Shared failed-query surface — a failed fetch must NOT masquerade as an
- * empty success. Mirrors the isError + retry pattern used across sibling
- * feature pages (e.g. HSEAdvancedPage). */
-function ErrorCard({ onRetry }: { onRetry?: () => void }) {
-  const { t } = useTranslation();
+ * empty success. Routes through RecoveryCard so 401/403 get the correct
+ * sign-in / request-access CTA instead of a generic retry. */
+function ErrorCard({ onRetry, error }: { onRetry?: () => void; error?: unknown }) {
   return (
     <Card className="py-12">
-      <EmptyState
-        icon={<AlertCircle size={28} strokeWidth={1.5} />}
-        title={t('common.error', { defaultValue: 'Error' })}
-        description={t('schedule_advanced.load_error', {
-          defaultValue: 'Failed to load schedule data. Please try again.',
-        })}
-        action={
-          onRetry
-            ? {
-                label: t('common.retry', { defaultValue: 'Retry' }),
-                onClick: onRetry,
-              }
-            : undefined
-        }
-      />
+      <RecoveryCard error={error} onRetry={onRetry} />
     </Card>
   );
 }
@@ -817,6 +822,108 @@ function isPhaseDelayed(p: PhasePlan): boolean {
   return new Date(p.planned_finish).getTime() < Date.now();
 }
 
+/**
+ * A phase is treated as a milestone (diamond glyph) when start == finish.
+ * Zero-duration phases happen naturally for gates / inspections / TOCs.
+ */
+function isPhaseMilestone(p: PhasePlan): boolean {
+  if (!p.planned_start || !p.planned_finish) return false;
+  return p.planned_start === p.planned_finish;
+}
+
+/**
+ * Look-ahead horizon in weeks. ``null`` means show everything (default).
+ * The Gantt and card grid both honour this filter so the foreman can
+ * focus on near-term work instead of scrolling through years.
+ */
+type LookAheadHorizon = null | 1 | 2 | 4;
+
+function withinHorizon(p: PhasePlan, horizon: LookAheadHorizon): boolean {
+  if (horizon == null) return true;
+  if (!p.planned_start) return true; // undated rows always pass — don't hide them
+  const start = new Date(p.planned_start).getTime();
+  const cutoff = Date.now() + horizon * 7 * 86_400_000;
+  return start <= cutoff;
+}
+
+/**
+ * Crude critical-path heuristic for the LPS Phase Plans view. We don't
+ * have explicit predecessors here (those live in the proper CPM module
+ * on /schedule), so we mark a phase as "on the critical path" when:
+ *   - it is currently delayed (planned_finish < today, not completed), OR
+ *   - it sits on the longest chronological chain of phases (the longest
+ *     contiguous span — what would drive the project finish in a simple
+ *     FS-only network).
+ *
+ * This is intentionally additive: the real CPM lives in /schedule. This
+ * helper gives the foreman a visual cue without overstating accuracy.
+ */
+function computeCriticalPhaseIds(phases: PhasePlan[]): Set<string> {
+  const out = new Set<string>();
+  for (const p of phases) {
+    if (isPhaseDelayed(p)) out.add(p.id);
+  }
+  // Longest dated span = candidate critical chain.
+  const dated = phases.filter((p) => p.planned_start && p.planned_finish);
+  if (dated.length > 0) {
+    const sorted = [...dated].sort((a, b) => {
+      const da = phaseDurationDays(a) ?? 0;
+      const db = phaseDurationDays(b) ?? 0;
+      return db - da;
+    });
+    const longest = sorted[0];
+    if (longest) out.add(longest.id);
+  }
+  return out;
+}
+
+/**
+ * Variance vs baseline for one phase. Returns delta in days
+ * (positive = late, negative = early), or ``null`` when the phase
+ * isn't in the snapshot (e.g. created after capture).
+ */
+function phaseVarianceDays(
+  phase: PhasePlan,
+  deltas: BaselineDeltaEntry[] | null | undefined,
+): number | null {
+  if (!deltas || deltas.length === 0) return null;
+  const hit = deltas.find((d) => d.task_ref === phase.id);
+  if (!hit) return null;
+  if (typeof hit.schedule_variance_days !== 'number') return null;
+  return hit.schedule_variance_days;
+}
+
+function VarianceBadge({ days }: { days: number | null }) {
+  if (days == null) return null;
+  if (days === 0) {
+    return (
+      <span
+        className="inline-flex items-center rounded-md bg-surface-secondary px-1.5 py-px text-2xs font-medium text-content-tertiary tabular-nums"
+        data-testid="phase-variance-onplan"
+        title="On plan vs baseline"
+      >
+        ±0d
+      </span>
+    );
+  }
+  const positive = days > 0;
+  return (
+    <span
+      className={clsx(
+        'inline-flex items-center rounded-md px-1.5 py-px text-2xs font-medium tabular-nums',
+        positive
+          ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+          : 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+      )}
+      data-testid={positive ? 'phase-variance-late' : 'phase-variance-early'}
+      title={positive ? 'Slipped vs baseline' : 'Ahead of baseline'}
+    >
+      {positive ? '+' : ''}
+      {days}d
+    </span>
+  );
+}
+
 function PhasesTab({
   phases,
   loading,
@@ -840,11 +947,39 @@ function PhasesTab({
   const [editPhase, setEditPhase] = useState<PhasePlan | null>(null);
   const [deletePhase, setDeletePhase] = useState<PhasePlan | null>(null);
   const [templateOpen, setTemplateOpen] = useState(false);
+  const [horizon, setHorizon] = useState<LookAheadHorizon>(null);
+
+  // Pull the active baseline (if any) and compute deltas vs the current
+  // phases so we can render +5d / −2d variance badges in-line. Failure
+  // is silent — variance is a nice-to-have, not a blocker for the page.
+  const baselinesQ = useQuery({
+    queryKey: ['schedule-advanced', 'baselines', masterId],
+    queryFn: () => listBaselines(masterId),
+    enabled: !!masterId,
+  });
+  const activeBaseline = useMemo(
+    () => (baselinesQ.data ?? []).find((b) => b.status === 'active'),
+    [baselinesQ.data],
+  );
+  const baselineDeltaQ = useQuery({
+    queryKey: ['schedule-advanced', 'baseline-delta', activeBaseline?.id, masterId],
+    queryFn: async () => {
+      if (!activeBaseline || !masterId) return null;
+      const current = await currentTasksForMaster(masterId);
+      return baselineDelta(activeBaseline.id, current);
+    },
+    enabled: !!activeBaseline && !!masterId,
+  });
+  const deltas: BaselineDeltaEntry[] = baselineDeltaQ.data?.entries ?? [];
 
   const filtered = useMemo(() => {
-    if (!statusFilter) return phases;
-    return phases.filter((p) => p.pulled_status === statusFilter);
-  }, [phases, statusFilter]);
+    let arr = phases;
+    if (statusFilter) arr = arr.filter((p) => p.pulled_status === statusFilter);
+    if (horizon != null) arr = arr.filter((p) => withinHorizon(p, horizon));
+    return arr;
+  }, [phases, statusFilter, horizon]);
+
+  const criticalIds = useMemo(() => computeCriticalPhaseIds(phases), [phases]);
 
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: ['schedule-advanced', 'phases', masterId] });
@@ -1003,6 +1138,56 @@ function PhasesTab({
         </Button>
       </div>
 
+      {/* Look-ahead horizon chips — independent of status filter so the
+          foreman can instantly focus on near-term work. Lives below the
+          main toolbar to avoid crowding. */}
+      <div
+        className="flex flex-wrap items-center gap-1.5 text-xs"
+        role="group"
+        aria-label={t('schedule_advanced.look_ahead_aria', { defaultValue: 'Look-ahead horizon' })}
+        data-testid="phase-horizon-chips"
+      >
+        <span className="text-content-tertiary mr-1">
+          {t('schedule_advanced.look_ahead', { defaultValue: 'Look-ahead' })}:
+        </span>
+        <FilterChip
+          label={t('common.all', { defaultValue: 'All' })}
+          count={phases.length}
+          active={horizon == null}
+          onClick={() => setHorizon(null)}
+        />
+        <FilterChip
+          label={t('schedule_advanced.next_1w', { defaultValue: '1 week' })}
+          count={phases.filter((p) => withinHorizon(p, 1)).length}
+          active={horizon === 1}
+          onClick={() => setHorizon(1)}
+        />
+        <FilterChip
+          label={t('schedule_advanced.next_2w', { defaultValue: '2 weeks' })}
+          count={phases.filter((p) => withinHorizon(p, 2)).length}
+          active={horizon === 2}
+          onClick={() => setHorizon(2)}
+        />
+        <FilterChip
+          label={t('schedule_advanced.next_4w', { defaultValue: '4 weeks' })}
+          count={phases.filter((p) => withinHorizon(p, 4)).length}
+          active={horizon === 4}
+          onClick={() => setHorizon(4)}
+        />
+        {activeBaseline && (
+          <span
+            className="ml-auto text-content-tertiary"
+            data-testid="phase-baseline-ref"
+            title={`Baseline: ${activeBaseline.name}`}
+          >
+            {t('schedule_advanced.compared_against', {
+              name: activeBaseline.name,
+              defaultValue: 'Variance vs "{{name}}"',
+            })}
+          </span>
+        )}
+      </div>
+
       {filtered.length === 0 ? (
         <Card padding="md">
           <p className="text-center text-sm text-content-tertiary py-6">
@@ -1014,6 +1199,8 @@ function PhasesTab({
       ) : view === 'cards' ? (
         <PhasesCardGrid
           phases={filtered}
+          deltas={deltas}
+          criticalIds={criticalIds}
           onEdit={setEditPhase}
           onDelete={setDeletePhase}
           onPull={(id) => pullMut.mutate(id)}
@@ -1026,6 +1213,8 @@ function PhasesTab({
       ) : view === 'table' ? (
         <PhasesTableView
           phases={filtered}
+          deltas={deltas}
+          criticalIds={criticalIds}
           onEdit={setEditPhase}
           onDelete={setDeletePhase}
           onPull={(id) => pullMut.mutate(id)}
@@ -1033,7 +1222,12 @@ function PhasesTab({
           onComplete={(id) => completeMut.mutate(id)}
         />
       ) : (
-        <PhasesTimelineView phases={filtered} onEdit={setEditPhase} />
+        <PhasesTimelineView
+          phases={filtered}
+          deltas={deltas}
+          criticalIds={criticalIds}
+          onEdit={setEditPhase}
+        />
       )}
 
       {createOpen && (
@@ -1132,6 +1326,8 @@ function ViewToggle({
 
 function PhasesCardGrid({
   phases,
+  deltas,
+  criticalIds,
   onEdit,
   onDelete,
   onPull,
@@ -1142,6 +1338,8 @@ function PhasesCardGrid({
   completing,
 }: {
   phases: PhasePlan[];
+  deltas: BaselineDeltaEntry[];
+  criticalIds: Set<string>;
   onEdit: (p: PhasePlan) => void;
   onDelete: (p: PhasePlan) => void;
   onPull: (id: string) => void;
@@ -1156,6 +1354,9 @@ function PhasesCardGrid({
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
       {phases.map((p) => {
         const delayed = isPhaseDelayed(p);
+        const milestone = isPhaseMilestone(p);
+        const onCritical = criticalIds.has(p.id);
+        const variance = phaseVarianceDays(p, deltas);
         const colorClass =
           p.pulled_status === 'completed'
             ? 'border-semantic-success/30 bg-semantic-success-bg/40'
@@ -1166,14 +1367,54 @@ function PhasesCardGrid({
                 : 'border-border-light bg-surface-secondary/40';
         const pct = phasePercent(p);
         return (
-          <Card key={p.id} padding="md" className={clsx('border flex flex-col', colorClass)}>
-            <div className="flex items-start justify-between gap-2">
-              <h4 className="text-sm font-semibold truncate" title={p.name}>{p.name}</h4>
-              <Badge variant={delayed ? 'error' : PHASE_VARIANT[p.pulled_status]} dot>
-                {delayed
-                  ? t('schedule_advanced.phase_status.delayed', { defaultValue: 'Delayed' })
-                  : t(`schedule_advanced.phase_status.${p.pulled_status}`, { defaultValue: p.pulled_status })}
-              </Badge>
+          <Card
+            key={p.id}
+            padding="md"
+            className={clsx(
+              'border flex flex-col relative',
+              colorClass,
+              onCritical && 'ring-1 ring-rose-400/60',
+            )}
+            data-phase-id={p.id}
+            data-critical={onCritical ? 'true' : 'false'}
+          >
+            {onCritical && (
+              <span
+                className="absolute top-2 right-2 inline-flex items-center gap-0.5 rounded-md bg-rose-500/15 px-1.5 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300"
+                title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path — slipping this phase delays the project finish' })}
+                data-testid="phase-cp-badge"
+              >
+                <AlertTriangle size={9} />
+                CP
+              </span>
+            )}
+            <div className="flex items-start justify-between gap-2 pr-12">
+              <h4 className="text-sm font-semibold truncate flex items-center gap-1.5" title={p.name}>
+                {milestone && (
+                  <Diamond
+                    size={11}
+                    className="text-amber-500 shrink-0 rotate-45"
+                    aria-label={t('schedule_advanced.milestone', { defaultValue: 'Milestone' })}
+                    data-testid="phase-milestone-glyph"
+                  />
+                )}
+                {p.name}
+                {p.pulled_status === 'completed' && (
+                  <Check
+                    size={11}
+                    className="text-emerald-600 shrink-0"
+                    aria-label={t('schedule_advanced.phase_status.completed', { defaultValue: 'Completed' })}
+                  />
+                )}
+              </h4>
+              <div className="flex items-center gap-1 shrink-0">
+                <VarianceBadge days={variance} />
+                <Badge variant={delayed ? 'error' : PHASE_VARIANT[p.pulled_status]} dot>
+                  {delayed
+                    ? t('schedule_advanced.phase_status.delayed', { defaultValue: 'Delayed' })
+                    : t(`schedule_advanced.phase_status.${p.pulled_status}`, { defaultValue: p.pulled_status })}
+                </Badge>
+              </div>
             </div>
             <p className="mt-1 text-xs text-content-tertiary">
               {p.planned_start && p.planned_finish ? (
@@ -1227,6 +1468,8 @@ function PhasesCardGrid({
 
 function PhasesTableView({
   phases,
+  deltas,
+  criticalIds,
   onEdit,
   onDelete,
   onPull,
@@ -1234,6 +1477,8 @@ function PhasesTableView({
   onComplete,
 }: {
   phases: PhasePlan[];
+  deltas: BaselineDeltaEntry[];
+  criticalIds: Set<string>;
   onEdit: (p: PhasePlan) => void;
   onDelete: (p: PhasePlan) => void;
   onPull: (id: string) => void;
@@ -1248,10 +1493,11 @@ function PhasesTableView({
           <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
             <tr>
               <th className="px-4 py-2.5 text-left">#</th>
-              <th className="px-4 py-2.5 text-left">{t('common.name', { defaultValue: 'Name' })}</th>
+              <th className="px-4 py-2.5 text-left">{t('common.name')}</th>
               <th className="px-4 py-2.5 text-left">{t('schedule_advanced.planned_start', { defaultValue: 'Start' })}</th>
               <th className="px-4 py-2.5 text-left">{t('schedule_advanced.planned_finish', { defaultValue: 'Finish' })}</th>
               <th className="px-4 py-2.5 text-right">{t('schedule_advanced.duration_days', { defaultValue: 'Days' })}</th>
+              <th className="px-4 py-2.5 text-right">{t('schedule_advanced.variance', { defaultValue: 'Δ' })}</th>
               <th className="px-4 py-2.5 text-left">{t('common.status', { defaultValue: 'Status' })}</th>
               <th className="px-4 py-2.5 text-right">{t('schedule_advanced.progress', { defaultValue: 'Progress' })}</th>
               <th className="px-4 py-2.5 text-right">{t('common.actions', { defaultValue: 'Actions' })}</th>
@@ -1262,12 +1508,26 @@ function PhasesTableView({
               const delayed = isPhaseDelayed(p);
               const pct = phasePercent(p);
               const days = phaseDurationDays(p);
+              const variance = phaseVarianceDays(p, deltas);
+              const onCritical = criticalIds.has(p.id);
               return (
-                <tr key={p.id} className="border-t border-border-light hover:bg-surface-secondary">
+                <tr
+                  key={p.id}
+                  className={clsx(
+                    'border-t border-border-light hover:bg-surface-secondary',
+                    onCritical && 'bg-rose-500/5',
+                  )}
+                  data-phase-id={p.id}
+                  data-critical={onCritical ? 'true' : 'false'}
+                >
                   <td className="px-4 py-2 text-xs text-content-tertiary tabular-nums">{idx + 1}</td>
                   <td className="px-4 py-2 font-medium">
-                    <button type="button" className="text-left hover:text-oe-blue" onClick={() => onEdit(p)}>
+                    <button type="button" className="text-left hover:text-oe-blue flex items-center gap-1.5" onClick={() => onEdit(p)}>
+                      {isPhaseMilestone(p) && <Diamond size={10} className="text-amber-500 rotate-45 shrink-0" aria-hidden />}
                       {p.name}
+                      {onCritical && (
+                        <span className="rounded-md bg-rose-500/15 px-1 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300" title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path — slipping this phase delays the project finish' })} data-testid="phase-cp-badge">CP</span>
+                      )}
                     </button>
                   </td>
                   <td className="px-4 py-2 text-xs text-content-secondary">
@@ -1277,6 +1537,9 @@ function PhasesTableView({
                     {p.planned_finish ? <DateDisplay value={p.planned_finish} /> : '—'}
                   </td>
                   <td className="px-4 py-2 text-right font-mono text-xs">{days == null ? '—' : days}</td>
+                  <td className="px-4 py-2 text-right">
+                    {variance != null ? <VarianceBadge days={variance} /> : <span className="text-content-tertiary">—</span>}
+                  </td>
                   <td className="px-4 py-2">
                     <Badge variant={delayed ? 'error' : PHASE_VARIANT[p.pulled_status]} dot>
                       {delayed
@@ -1333,9 +1596,13 @@ function PhasesTableView({
 
 function PhasesTimelineView({
   phases,
+  deltas,
+  criticalIds,
   onEdit,
 }: {
   phases: PhasePlan[];
+  deltas: BaselineDeltaEntry[];
+  criticalIds: Set<string>;
   onEdit: (p: PhasePlan) => void;
 }) {
   const { t } = useTranslation();
@@ -1364,66 +1631,166 @@ function PhasesTimelineView({
   });
 
   return (
-    <Card padding="md">
-      <div className="flex items-center justify-between text-xs text-content-tertiary mb-3">
-        <span><DateDisplay value={new Date(minStart).toISOString().slice(0, 10)} /></span>
-        <span>{t('schedule_advanced.today', { defaultValue: 'Today' })}</span>
-        <span><DateDisplay value={new Date(maxEnd).toISOString().slice(0, 10)} /></span>
-      </div>
-      <div className="relative">
-        {todayPct != null && (
-          <div
-            className="absolute top-0 bottom-0 w-px bg-rose-500 pointer-events-none z-10"
-            style={{ left: `calc(160px + (100% - 160px) * ${todayPct / 100})` }}
-            aria-hidden
-          />
-        )}
-        <ul className="space-y-2">
-          {sorted.map((p) => {
-            const hasDates = p.planned_start && p.planned_finish;
-            const s = hasDates ? new Date(p.planned_start!).getTime() : minStart;
-            const f = hasDates ? new Date(p.planned_finish!).getTime() : minStart;
-            const left = ((s - minStart) / span) * 100;
-            const width = Math.max(2, ((f - s) / span) * 100);
-            const delayed = isPhaseDelayed(p);
-            const barColor =
-              p.pulled_status === 'completed'
-                ? 'bg-emerald-500'
+    <Card padding="md" data-testid="phases-gantt">
+      {/* Mobile (narrow) fallback — Gantt bars don't have enough room on
+          phones. Render the same data as a vertical status list with
+          coloured pips. The Tailwind `sm:hidden` flip happens at 640px
+          which matches the rest of the page's responsive cutoffs. */}
+      <ul className="block sm:hidden space-y-2" data-testid="phases-gantt-mobile">
+        {sorted.map((p) => {
+          const delayed = isPhaseDelayed(p);
+          const onCritical = criticalIds.has(p.id);
+          const variance = phaseVarianceDays(p, deltas);
+          const pipColor =
+            p.pulled_status === 'completed'
+              ? 'bg-emerald-500'
+              : delayed
+                ? 'bg-rose-500'
                 : p.pulled_status === 'active'
-                  ? delayed
-                    ? 'bg-rose-500'
-                    : 'bg-amber-500'
+                  ? 'bg-amber-500'
                   : p.pulled_status === 'pulled'
                     ? 'bg-blue-500'
                     : 'bg-slate-400';
-            return (
-              <li key={p.id} className="grid grid-cols-[160px_1fr] items-center gap-3">
-                <button
-                  type="button"
-                  className="truncate text-left text-sm font-medium text-content-primary hover:text-oe-blue"
-                  onClick={() => onEdit(p)}
-                  title={p.name}
+          return (
+            <li
+              key={p.id}
+              className="flex items-center gap-3 rounded-md border border-border-light bg-surface-primary px-3 py-2"
+              data-phase-id={p.id}
+            >
+              <span className={clsx('inline-block h-2.5 w-2.5 shrink-0 rounded-full', pipColor)} aria-hidden />
+              {isPhaseMilestone(p) && <Diamond size={12} className="text-amber-500 rotate-45 shrink-0" aria-label={t('schedule_advanced.milestone', { defaultValue: 'Milestone' })} />}
+              <button
+                type="button"
+                className="flex-1 truncate text-left text-sm font-medium hover:text-oe-blue"
+                onClick={() => onEdit(p)}
+              >
+                {p.name}
+              </button>
+              {onCritical && (
+                <span className="rounded-md bg-rose-500/15 px-1.5 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300" data-testid="phase-cp-badge">CP</span>
+              )}
+              <VarianceBadge days={variance} />
+            </li>
+          );
+        })}
+      </ul>
+
+      {/* Desktop / tablet — proper Gantt bars. */}
+      <div className="hidden sm:block">
+        <div className="flex items-center justify-between text-xs text-content-tertiary mb-3">
+          <span><DateDisplay value={new Date(minStart).toISOString().slice(0, 10)} /></span>
+          <span className="flex items-center gap-3">
+            {/* Legend — keeps colour semantics discoverable */}
+            <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-3 rounded-sm bg-blue-500" />{t('schedule_advanced.legend_planned', { defaultValue: 'Planned' })}</span>
+            <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-3 rounded-sm bg-amber-500" />{t('schedule_advanced.legend_active', { defaultValue: 'Active' })}</span>
+            <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-3 rounded-sm bg-emerald-500" />{t('schedule_advanced.legend_done', { defaultValue: 'Done' })}</span>
+            <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-3 rounded-sm bg-rose-500" />{t('schedule_advanced.legend_delayed', { defaultValue: 'Delayed' })}</span>
+            <span className="inline-flex items-center gap-1 ml-2"><span className="inline-block h-3 w-px bg-rose-500" />{t('schedule_advanced.today', { defaultValue: 'Today' })}</span>
+          </span>
+          <span><DateDisplay value={new Date(maxEnd).toISOString().slice(0, 10)} /></span>
+        </div>
+        <div className="relative">
+          {todayPct != null && (
+            <div
+              className="absolute top-0 bottom-0 w-px bg-rose-500 pointer-events-none z-10"
+              style={{ left: `calc(180px + (100% - 180px) * ${todayPct / 100})` }}
+              aria-hidden
+              data-testid="phases-gantt-today"
+            />
+          )}
+          <ul className="space-y-2">
+            {sorted.map((p) => {
+              const hasDates = p.planned_start && p.planned_finish;
+              const s = hasDates ? new Date(p.planned_start!).getTime() : minStart;
+              const f = hasDates ? new Date(p.planned_finish!).getTime() : minStart;
+              const left = ((s - minStart) / span) * 100;
+              const width = Math.max(0.5, ((f - s) / span) * 100);
+              const delayed = isPhaseDelayed(p);
+              const onCritical = criticalIds.has(p.id);
+              const variance = phaseVarianceDays(p, deltas);
+              const milestone = isPhaseMilestone(p);
+              const barColor =
+                p.pulled_status === 'completed'
+                  ? 'bg-emerald-500'
+                  : p.pulled_status === 'active'
+                    ? delayed
+                      ? 'bg-rose-500'
+                      : 'bg-amber-500'
+                    : p.pulled_status === 'pulled'
+                      ? 'bg-blue-500'
+                      : 'bg-slate-400';
+              return (
+                <li
+                  key={p.id}
+                  className="grid grid-cols-[180px_1fr] items-center gap-3"
+                  data-phase-id={p.id}
+                  data-critical={onCritical ? 'true' : 'false'}
                 >
-                  {p.name}
-                </button>
-                <div className="relative h-7 rounded-md bg-surface-secondary/40 border border-border-light">
-                  {hasDates && (
-                    <div
-                      className={clsx(
-                        'absolute top-1 bottom-1 rounded-sm flex items-center justify-center text-2xs font-medium text-white px-2 truncate',
-                        barColor,
-                      )}
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                      title={`${p.planned_start} → ${p.planned_finish}`}
-                    >
-                      <span className="truncate">{phasePercent(p)}%</span>
-                    </div>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                  <button
+                    type="button"
+                    className="truncate text-left text-sm font-medium text-content-primary hover:text-oe-blue flex items-center gap-1.5"
+                    onClick={() => onEdit(p)}
+                    title={p.name}
+                  >
+                    {onCritical && (
+                      <span className="rounded-sm bg-rose-500/15 px-1 py-px text-2xs font-semibold text-rose-700 dark:text-rose-300" title={t('schedule_advanced.cp_tooltip', { defaultValue: 'On the critical path — slipping this phase delays the project finish' })} data-testid="phase-cp-badge">CP</span>
+                    )}
+                    <span className="truncate">{p.name}</span>
+                    <VarianceBadge days={variance} />
+                  </button>
+                  <div className="relative h-7 rounded-md bg-surface-secondary/40 border border-border-light">
+                    {hasDates && (
+                      <>
+                        {/* Baseline ghost bar — drawn behind the live bar so
+                            the user can eyeball the shift. Only drawn when
+                            there's a baseline entry for this phase. */}
+                        {(() => {
+                          const hit = deltas.find((d) => d.task_ref === p.id);
+                          if (!hit?.planned_start_baseline || !hit?.planned_finish_baseline) return null;
+                          const bs = new Date(hit.planned_start_baseline).getTime();
+                          const bf = new Date(hit.planned_finish_baseline).getTime();
+                          const bl = ((bs - minStart) / span) * 100;
+                          const bw = Math.max(0.5, ((bf - bs) / span) * 100);
+                          return (
+                            <div
+                              className="absolute top-0 h-1 rounded-sm bg-content-tertiary/40"
+                              style={{ left: `${bl}%`, width: `${bw}%` }}
+                              aria-hidden
+                              data-testid="phase-gantt-baseline-bar"
+                              title={`Baseline: ${hit.planned_start_baseline} → ${hit.planned_finish_baseline}`}
+                            />
+                          );
+                        })()}
+                        {milestone ? (
+                          <div
+                            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10"
+                            style={{ left: `${left}%` }}
+                            title={p.planned_start ?? ''}
+                          >
+                            <Diamond size={14} className={clsx('rotate-45', delayed ? 'text-rose-500 fill-rose-500' : 'text-amber-500 fill-amber-400')} />
+                          </div>
+                        ) : (
+                          <div
+                            className={clsx(
+                              'absolute top-1 bottom-1 rounded-sm flex items-center justify-center text-2xs font-medium text-white px-2 truncate',
+                              barColor,
+                              onCritical && 'ring-1 ring-rose-300 ring-offset-1 ring-offset-surface-primary',
+                            )}
+                            style={{ left: `${left}%`, width: `${width}%` }}
+                            title={`${p.planned_start} → ${p.planned_finish}`}
+                            data-testid="phase-gantt-bar"
+                          >
+                            <span className="truncate">{phasePercent(p)}%</span>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       </div>
     </Card>
   );
@@ -2536,21 +2903,9 @@ function ConstraintsTab({
             <SkeletonTable rows={6} columns={5} />
           </div>
         ) : isError ? (
-          <EmptyState
-            icon={<AlertCircle size={22} strokeWidth={1.5} />}
-            title={t('common.error', { defaultValue: 'Error' })}
-            description={t('schedule_advanced.load_error', {
-              defaultValue: 'Failed to load schedule data. Please try again.',
-            })}
-            action={
-              onRetry
-                ? {
-                    label: t('common.retry', { defaultValue: 'Retry' }),
-                    onClick: onRetry,
-                  }
-                : undefined
-            }
-          />
+          <div className="p-4">
+            <RecoveryCard onRetry={onRetry} error={undefined} />
+          </div>
         ) : constraints.length === 0 ? (
           <EmptyState
             icon={<AlertCircle size={22} />}
@@ -2633,12 +2988,14 @@ function ConstraintsTab({
 /* ── Baselines tab ───────────────────────────────────────────────────── */
 
 function BaselinesTab({
+  masterId,
   baselines,
   loading,
   isError,
   onRetry,
   onCapture,
 }: {
+  masterId: string;
   baselines: Baseline[];
   loading: boolean;
   isError?: boolean;
@@ -2657,7 +3014,12 @@ function BaselinesTab({
     setCompareId(id);
     setComparing(true);
     try {
-      const res = await baselineDelta(id, []);
+      // Always send the live phase list as "current tasks" so the
+      // backend can actually compute variance. The legacy empty-array
+      // call returned an empty entries list because there was nothing
+      // to diff against.
+      const current = masterId ? await currentTasksForMaster(masterId) : [];
+      const res = await baselineDelta(id, current);
       setDeltaEntries(res.entries);
       setDelaying(res.delayed_tasks);
       setAccelerating(res.accelerated_tasks);
@@ -2667,6 +3029,47 @@ function BaselinesTab({
       setComparing(false);
     }
   };
+
+  /**
+   * Export the current delta as a CSV file so PMs can paste it into
+   * Excel / share with subcontractors. Pure browser side — no server
+   * round-trip, no extra dependency.
+   */
+  const exportCsv = () => {
+    const rows = [
+      ['task_ref', 'name', 'baseline_start', 'current_start', 'baseline_finish', 'current_finish', 'variance_days'],
+      ...deltaEntries.map((e) => [
+        e.task_ref,
+        e.name ?? '',
+        e.planned_start_baseline ?? '',
+        e.planned_start_current ?? '',
+        e.planned_finish_baseline ?? '',
+        e.planned_finish_current ?? '',
+        String(e.schedule_variance_days ?? 0),
+      ]),
+    ];
+    const csv = rows
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `baseline-variance-${compareId.slice(0, 8)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Top 5 most-delayed tasks — keeps the variance card actionable
+  // instead of just totals.
+  const topDelays = useMemo(() => {
+    return [...deltaEntries]
+      .filter((e) => (e.schedule_variance_days ?? 0) > 0)
+      .sort((a, b) => (b.schedule_variance_days ?? 0) - (a.schedule_variance_days ?? 0))
+      .slice(0, 5);
+  }, [deltaEntries]);
 
   if (loading) {
     return (
@@ -2766,10 +3169,23 @@ function BaselinesTab({
       </Card>
 
       {compareId && (
-        <Card padding="md">
-          <h3 className="text-sm font-semibold mb-3">
-            {t('schedule_advanced.variance_summary', { defaultValue: 'Variance summary' })}
-          </h3>
+        <Card padding="md" data-testid="baseline-variance-card">
+          <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+            <h3 className="text-sm font-semibold">
+              {t('schedule_advanced.variance_summary', { defaultValue: 'Variance summary' })}
+            </h3>
+            {deltaEntries.length > 0 && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Download size={12} />}
+                onClick={exportCsv}
+                data-testid="baseline-export-csv"
+              >
+                {t('schedule_advanced.export_csv', { defaultValue: 'Export CSV' })}
+              </Button>
+            )}
+          </div>
           <dl className="grid grid-cols-3 gap-3 text-center">
             <div>
               <dt className="text-xs uppercase tracking-wide text-content-tertiary">
@@ -2790,6 +3206,34 @@ function BaselinesTab({
               <dd className="text-xl font-semibold text-semantic-success">{accelerating}</dd>
             </div>
           </dl>
+          {deltaEntries.length === 0 && (
+            <p className="mt-3 text-center text-xs text-content-tertiary">
+              {t('schedule_advanced.no_variance_entries', {
+                defaultValue:
+                  'No variance data — the baseline snapshot was empty. Capture a new baseline now to start tracking variance.',
+              })}
+            </p>
+          )}
+          {topDelays.length > 0 && (
+            <div className="mt-4">
+              <div className="text-xs uppercase tracking-wide text-content-tertiary mb-2">
+                {t('schedule_advanced.top_delays', { defaultValue: 'Top delays' })}
+              </div>
+              <ul className="space-y-1 text-sm" data-testid="baseline-top-delays">
+                {topDelays.map((e) => (
+                  <li
+                    key={e.task_ref}
+                    className="flex items-center justify-between rounded-md bg-surface-secondary/60 px-3 py-1.5"
+                  >
+                    <span className="truncate" title={e.name ?? e.task_ref}>
+                      {e.name || `${e.task_ref.slice(0, 8)}…`}
+                    </span>
+                    <VarianceBadge days={e.schedule_variance_days ?? 0} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </Card>
       )}
     </div>

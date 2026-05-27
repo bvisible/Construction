@@ -1,16 +1,37 @@
 """‌⁠‍Assembly Pydantic schemas — request/response models.
 
 Defines create, update, and response schemas for assemblies and components.
-Numeric values (factor, quantity, unit_cost, total, total_rate, bid_factor)
-are exposed as floats in the API but stored as strings in the database for
-SQLite compatibility.
+Numeric values are stored as strings in the database for SQLite
+compatibility. v3 §10 money fields (``unit_cost``, ``unit_rate``,
+``grand_total``) are emitted as Decimal-as-string in JSON;
+``factor`` / ``quantity`` / ``total_rate`` / ``bid_factor`` stay as
+``float`` because they are dimensionless multipliers / quantities.
 """
 
+import math
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+
+# ── v3 §10 money serialisation helper ─────────────────────────────────────
+# Mirrors backend/app/modules/boq/schemas.py::_serialise_money — money
+# fields are stored / accepted as ``Decimal`` but emitted as plain decimal
+# *strings* in JSON so totals stay exact and locale-neutral.
+def _serialise_money(v: Decimal | None) -> str | None:
+    if v is None:
+        return None
+    if not isinstance(v, Decimal):
+        try:
+            v = Decimal(str(v))
+        except (InvalidOperation, ValueError):
+            return "0"
+    if not v.is_finite():
+        return "0"
+    return format(v, "f")
 
 # ── Component schemas ────────────────────────────────────────────────────────
 
@@ -21,6 +42,40 @@ from pydantic import BaseModel, ConfigDict, Field
 # pairwise/triple product finite in float and Decimal, so a component
 # total can never silently overflow to ``inf`` and serialise as ``null``.
 _NUM_MAX: float = 1e12
+
+
+def _sanitise_regional_factors(raw: Any) -> dict[str, Any]:
+    """Coerce a payload-supplied ``regional_factors`` dict to safe values.
+
+    The column is JSON so the Pydantic ``dict[str, Any]`` shape itself
+    cannot reject ``{"berlin": "Infinity"}`` / ``{"x": -5}`` / nested
+    dicts — but those values get multiplied straight into the BOQ
+    position's ``unit_rate`` at apply-to-boq time (NEW-ASM-105 /
+    ASM-007). Drop any non-finite, negative, or non-numeric entry at
+    the schema boundary rather than letting it persist and corrupt a
+    downstream rollup.
+
+    A ``None`` input is normalised to ``{}`` so the caller never has to
+    juggle a ``regional_factors is None`` branch.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, Any] = {}
+    for key, val in raw.items():
+        if not isinstance(key, str) or not key.strip():
+            continue
+        # Reject booleans (which are an int subclass) and nested
+        # containers — a factor must be a single number.
+        if isinstance(val, bool) or isinstance(val, (dict, list)):
+            continue
+        try:
+            num = float(val)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(num) or num < 0 or num > _NUM_MAX:
+            continue
+        cleaned[key.strip()] = num
+    return cleaned
 
 
 # Allowed resource_type values. Kept as a Literal-ish string so the DB
@@ -67,22 +122,32 @@ class ComponentCreate(BaseModel):
     factor: float = Field(default=1.0, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
     quantity: float = Field(default=1.0, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
     unit: str = Field(..., min_length=1, max_length=20)
-    unit_cost: float = Field(default=0.0, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
-    unit_rate: float | None = Field(
-        default=None, ge=0.0, le=_NUM_MAX, allow_inf_nan=False, exclude=True
-    )
+    # v3 §10 — money is Decimal-in / Decimal-as-string out.
+    unit_cost: Decimal = Field(default=Decimal("0"), ge=0, le=_NUM_MAX)
+    unit_rate: Decimal | None = Field(default=None, ge=0, le=_NUM_MAX, exclude=True)
     resource_type: str | None = Field(default=None, max_length=20)
     metadata: dict[str, Any] | None = None
+
+    @field_validator("unit_cost", "unit_rate", mode="after")
+    @classmethod
+    def _reject_non_finite_money(cls, v: Decimal | None) -> Decimal | None:
+        # Decimal can be NaN/Infinity; we explicitly reject so the
+        # downstream apply-to-boq arithmetic stays defensible.
+        if v is None:
+            return None
+        if not v.is_finite():
+            raise ValueError("money value must be finite (no NaN / Infinity)")
+        return v
 
     def get_description(self) -> str:
         """‌⁠‍Return description, falling back to name if description is empty."""
         return self.description or self.name or ""
 
-    def get_unit_cost(self) -> float:
+    def get_unit_cost(self) -> Decimal:
         """Return unit_cost, falling back to unit_rate if unit_cost is zero."""
         if self.unit_cost > 0:
             return self.unit_cost
-        return self.unit_rate if self.unit_rate is not None else 0.0
+        return self.unit_rate if self.unit_rate is not None else Decimal("0")
 
 
 class ComponentUpdate(BaseModel):
@@ -96,10 +161,19 @@ class ComponentUpdate(BaseModel):
     factor: float | None = Field(default=None, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
     quantity: float | None = Field(default=None, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
     unit: str | None = Field(default=None, min_length=1, max_length=20)
-    unit_cost: float | None = Field(default=None, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
+    unit_cost: Decimal | None = Field(default=None, ge=0, le=_NUM_MAX)
     resource_type: str | None = Field(default=None, max_length=20)
     sort_order: int | None = None
     metadata: dict[str, Any] | None = None
+
+    @field_validator("unit_cost", mode="after")
+    @classmethod
+    def _reject_non_finite_money(cls, v: Decimal | None) -> Decimal | None:
+        if v is None:
+            return None
+        if not v.is_finite():
+            raise ValueError("unit_cost must be finite (no NaN / Infinity)")
+        return v
 
 
 class ComponentResponse(BaseModel):
@@ -116,8 +190,11 @@ class ComponentResponse(BaseModel):
     factor: float
     quantity: float
     unit: str
-    unit_cost: float
-    total: float
+    unit_cost: Decimal = Decimal("0")
+    # Decimal (not float) so JSON serialises an exact string like "90.0"
+    # rather than 89.9999... — money/quantity totals must never be float
+    # in the response payload (R7 deep-improve).
+    total: Decimal = Decimal("0")
     sort_order: int
     # FastAPI defaults `response_model_by_alias=True`, so if we aliased
     # this to "metadata_" the wire payload would carry the trailing
@@ -127,6 +204,10 @@ class ComponentResponse(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("unit_cost", when_used="json")
+    def _ser_unit_cost(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 # ── Assembly schemas ─────────────────────────────────────────────────────────
@@ -156,6 +237,13 @@ class AssemblyCreate(BaseModel):
     project_id: UUID | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("regional_factors", mode="before")
+    @classmethod
+    def _clean_regional_factors(cls, v: Any) -> dict[str, Any]:
+        # NEW-ASM-107 — strip non-finite / negative / non-numeric
+        # entries so a poisoned factor can't reach apply-to-boq.
+        return _sanitise_regional_factors(v)
+
 
 class AssemblyUpdate(BaseModel):
     """Partial update for an assembly."""
@@ -180,6 +268,17 @@ class AssemblyUpdate(BaseModel):
     project_id: UUID | None = None
     is_active: bool | None = None
     metadata: dict[str, Any] | None = None
+
+    @field_validator("regional_factors", mode="before")
+    @classmethod
+    def _clean_regional_factors(cls, v: Any) -> Any:
+        # NEW-ASM-107 — UPDATE must not be a back door for a poisoned
+        # regional factor either. ``None`` is preserved so
+        # ``exclude_unset=True`` semantics still work (i.e. an absent
+        # field stays absent, not coerced to {}).
+        if v is None:
+            return None
+        return _sanitise_regional_factors(v)
 
 
 class AssemblyResponse(BaseModel):
@@ -370,7 +469,13 @@ class ApplyTemplateRequest(BaseModel):
 
 
 class AppliedComponent(BaseModel):
-    """A single component resolved against the project's cost catalogue."""
+    """A single component resolved against the project's cost catalogue.
+
+    v3 §10 — ``unit_rate`` is money; Decimal-as-string in JSON. ``total``
+    stays float here because the apply-template endpoint is a preview
+    (the persisted line totals are written via the BOQ service which is
+    already Decimal-correct).
+    """
 
     description: str
     cost_match_query: str
@@ -380,11 +485,15 @@ class AppliedComponent(BaseModel):
     factor: float = 0.0
     scaled_quantity: float = 0.0
     unit: str
-    unit_rate: float = 0.0
+    unit_rate: Decimal = Decimal("0")
     total: float = 0.0
     role: str = "material"
     match_confidence: float = 0.0
     match_channel: str = "lexical"
+
+    @field_serializer("unit_rate", when_used="json")
+    def _ser_unit_rate(self, v: Decimal) -> str | None:
+        return _serialise_money(v)
 
 
 class ApplyTemplateResponse(BaseModel):
@@ -406,6 +515,10 @@ class ApplyTemplateResponse(BaseModel):
     currency: str = ""
     components: list[AppliedComponent] = Field(default_factory=list)
     total_rate: float = 0.0
-    grand_total: float = 0.0
+    grand_total: Decimal = Decimal("0")
     unresolved_components: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+    @field_serializer("grand_total", when_used="json")
+    def _ser_grand_total(self, v: Decimal) -> str | None:
+        return _serialise_money(v)

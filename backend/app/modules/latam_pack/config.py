@@ -1,5 +1,6 @@
 """‌⁠‍Regional configuration for Latin America."""
 
+from decimal import Decimal
 from typing import Any
 
 PACK_CONFIG: dict[str, Any] = {
@@ -243,5 +244,21 @@ PACK_CONFIG: dict[str, Any] = {
         "volume": "m³",
         "weight": "kg",
         "temperature": "°C",
+    },
+    # ── VAT / IVA rates (Wave 25 — BR uses fragmented ISS/ICMS, omitted) ─────
+    "vat_rates": {
+        "MX": {
+            "standard": Decimal("0.16"),
+            "reduced": Decimal("0.08"),
+            "zero": Decimal("0.00"),
+        },
+        "AR": {
+            "standard": Decimal("0.21"),
+            "reduced": Decimal("0.105"),
+            "zero": Decimal("0.00"),
+        },
+        "CL": {"standard": Decimal("0.19"), "zero": Decimal("0.00")},
+        "CO": {"standard": Decimal("0.19"), "zero": Decimal("0.00")},
+        "PE": {"standard": Decimal("0.18"), "zero": Decimal("0.00")},
     },
 }

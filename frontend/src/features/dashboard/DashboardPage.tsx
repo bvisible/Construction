@@ -39,52 +39,26 @@ import {
   Activity,
   LayoutGrid,
 } from 'lucide-react';
-import { Card, CardHeader, CardContent, Button, Badge, Skeleton, ActivityFeed as CrossModuleActivityFeed, EmptyState } from '@/shared/ui';
+import { Card, CardHeader, CardContent, Button, Badge, Skeleton, ActivityFeed as CrossModuleActivityFeed, EmptyState, ModuleHelpButton } from '@/shared/ui';
+import { WhatsNewCard } from '@/shared/ui/WhatsNewCard';
 import BIMCoverageCard from './BIMCoverageCard';
 import { CompactProjectCard } from './components/CompactProjectCard';
 import { DashboardProjectsMap } from './components/DashboardProjectsMap';
 import { ShowAllProjectsCard } from './components/ShowAllProjectsCard';
+import { WeatherSiteWidget } from './components/NewWidgets';
+import { OperationsSnapshotCard } from './components/OperationsSnapshotCard';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { DashboardLayoutManager } from './DashboardLayoutManager';
 import { DASHBOARD_WIDGET_IDS } from './widgetRegistry';
-import { useDashboardLayoutStore, reconcileOrder } from '@/stores/useDashboardLayoutStore';
-
-/* ── Helpers ──────────────────────────────────────────────────────────── */
-
-/**
- * Run `task` for every item with at most `limit` requests in flight, then
- * flatten the results. Per-item rejections are swallowed (a project with no
- * BOQs/schedules 404s and must not abort the whole batch — same semantics as
- * the old per-iteration try/catch). Replaces the previous strictly-serial
- * `for (… of …) { await … }` fan-out so the dashboard issues N requests in
- * ~⌈N/limit⌉ waves instead of N back-to-back round-trips. Result order is
- * completion-order, which is fine: every consumer either aggregates or sorts
- * by timestamp.
- */
-async function fanOutPooled<T, R>(
-  items: readonly T[],
-  limit: number,
-  task: (item: T) => Promise<R[]>,
-): Promise<R[]> {
-  const out: R[] = [];
-  let cursor = 0;
-  const runWorker = async (): Promise<void> => {
-    while (cursor < items.length) {
-      const item = items[cursor++]!;
-      try {
-        out.push(...(await task(item)));
-      } catch {
-        /* skip — item has no rows for this resource */
-      }
-    }
-  };
-  const workers = Array.from(
-    { length: Math.min(limit, items.length) },
-    runWorker,
-  );
-  await Promise.all(workers);
-  return out;
-}
+import {
+  useDashboardLayoutStore,
+  reconcileOrder,
+  hydrateDashboardLayoutFromServer,
+} from '@/stores/useDashboardLayoutStore';
+import {
+  DashboardRollupProvider,
+  useDashboardRollupContext,
+} from './context/DashboardRollupContext';
 
 /* ── Types ────────────────────────────────────────────────────────────── */
 
@@ -242,7 +216,7 @@ function ImportDemoModal({
       navigate(`/projects/${result.project_id}`);
     },
     onError: (err: Error) => {
-      addToast({ type: 'error', title: t('demo.install_failed', { defaultValue: 'Failed to install demo‌⁠‍' }), message: err.message });
+      addToast({ type: 'error', title: t('demo.install_failed', { defaultValue: 'Failed to install demo' }), message: err.message });
     },
     onSettled: () => {
       setInstallingId(null);
@@ -338,8 +312,8 @@ function ImportDemoModal({
                     </p>
                     <div className="mt-1 flex items-center gap-3 text-2xs text-content-quaternary">
                       <span>{demo.type}</span>
-                      <span>{demo.sections} {t('demo.sections', { defaultValue: 'sections‌⁠‍' })}</span>
-                      <span>{demo.positions} {t('demo.positions', { defaultValue: 'positions‌⁠‍' })}</span>
+                      <span>{demo.sections} {t('demo.sections', { defaultValue: 'sections' })}</span>
+                      <span>{demo.positions} {t('demo.positions', { defaultValue: 'positions' })}</span>
                       <span>{demo.currency}</span>
                     </div>
                   </div>
@@ -521,7 +495,7 @@ function OnboardingSteps({
             <Zap size={14} className="text-oe-blue" strokeWidth={2} />
           </div>
           <h2 className="text-lg font-semibold text-content-primary">
-            {t('dashboard.getting_started', { defaultValue: 'Getting Started‌⁠‍' })}
+            {t('dashboard.getting_started', { defaultValue: 'Getting Started' })}
           </h2>
           <Badge variant="blue" size="sm">
             {completedCount}/{TOTAL_STEPS}
@@ -638,7 +612,7 @@ function OnboardingSteps({
                       iconPosition="right"
                     >
                       {step.done
-                        ? t('dashboard.completed', { defaultValue: 'Completed‌⁠‍' })
+                        ? t('dashboard.completed', { defaultValue: 'Completed' })
                         : t(step.buttonKey, { defaultValue: step.buttonDefault })}
                     </Button>
                   )}
@@ -691,7 +665,14 @@ function KpiRibbon({
 
   const totalValue = useMemo(() => {
     if (!boqs || boqs.length === 0) return 0;
-    return boqs.reduce((sum, b) => sum + (b.grand_total ?? 0), 0);
+    // Backend serialises money as a Decimal-string ("1234.56") per the
+    // project-wide contract. Coerce every leg before summing so a stray
+    // string doesn't trigger JS string concatenation ("01234.565678") +
+    // a downstream `.toFixed is not a function` crash in formatMoney.
+    return boqs.reduce((sum, b) => {
+      const n = Number(b.grand_total);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
   }, [boqs]);
 
   const activeEstimates = useMemo(() => {
@@ -725,7 +706,11 @@ function KpiRibbon({
   // 4217 code natively (BRL, INR, JPY, etc.). For values \u2265 1M we use the
   // built-in compact notation; below that, two decimals. Previously this
   // had an ad-hoc switch covering only EUR/GBP/USD/AED.
-  const formatMoney = (value: number) => {
+  const formatMoney = (raw: number | string | null | undefined) => {
+    // Harden against backend Decimal-strings sneaking past TypeScript: any
+    // string that can't be parsed degrades to 0 rather than crashing.
+    const value = typeof raw === 'number' ? raw : Number(raw ?? 0);
+    if (!Number.isFinite(value)) return `0 ${currency}`;
     try {
       const compact = value >= 1_000;
       return new Intl.NumberFormat(getIntlLocale(), {
@@ -799,6 +784,7 @@ function KpiRibbon({
     <div
       className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4 animate-card-in"
       style={{ animationDelay: '50ms' }}
+      data-testid="dashboard-tour-kpi-ribbon"
     >
       {cards.map((card, i) => {
         const clickable = 'onClick' in card && typeof card.onClick === 'function';
@@ -868,11 +854,12 @@ function PortfolioOverview({ projects: _projects }: { projects: ProjectSummary[]
   if (!analytics) return null;
 
   const hasWarnings = analytics.over_budget_count > 0;
-  const totalBudgetFormatted = analytics.total_planned >= 1_000_000
-    ? `${(analytics.total_planned / 1_000_000).toFixed(1)}M`
-    : analytics.total_planned >= 1_000
-      ? `${(analytics.total_planned / 1_000).toFixed(0)}K`
-      : analytics.total_planned.toLocaleString();
+  const totalPlannedNum = Number(analytics.total_planned ?? 0);
+  const totalBudgetFormatted = totalPlannedNum >= 1_000_000
+    ? `${(totalPlannedNum / 1_000_000).toFixed(1)}M`
+    : totalPlannedNum >= 1_000
+      ? `${(totalPlannedNum / 1_000).toFixed(0)}K`
+      : totalPlannedNum.toLocaleString();
 
   const overBudgetProjects = (analytics.projects || []).filter(
     (p) => p.status === 'over_budget',
@@ -1348,7 +1335,11 @@ function ProjectMetricCards({
   if (!cards || cards.length === 0) return null;
 
   return (
-    <div className="animate-card-in" style={{ animationDelay: '130ms' }}>
+    <div
+      className="animate-card-in"
+      style={{ animationDelay: '130ms' }}
+      data-testid="dashboard-tour-projects-list"
+    >
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Layers size={16} className="text-content-tertiary" strokeWidth={1.75} />
@@ -1706,11 +1697,32 @@ function QuickUploadCard() {
 /* ── Main Page ─────────────────────────────────────────────────────────── */
 
 export function DashboardPage() {
+  // Mount the rollup provider ONCE so every wave-2 widget — and the inner
+  // page's KPI ribbon / lastBoq / Analytics — reads from the same single
+  // ``GET /api/v1/dashboard/rollup/`` instead of fanning out per-project.
+  // The previous build fired 7×``/v1/boq/boqs/`` + 7×``/v1/schedule/
+  // schedules/`` at 7 projects (≈100 at 50). v4.6.2 N+1 nuke 2026-05-24:
+  // ≤ 2 dashboard requests on a render now.
+  return (
+    <DashboardRollupProvider>
+      <DashboardPageInner />
+    </DashboardRollupProvider>
+  );
+}
+
+function DashboardPageInner() {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
   const [showAllActivity, setShowAllActivity] = useState(false);
   const [customizing, setCustomizing] = useState(false);
+
+  // Single rollup-context read — every widget on this page shares this one
+  // fetch via the provider mounted above. Replaces the per-project fan-out
+  // for BOQs + schedules below.
+  const rollup = useDashboardRollupContext();
+  const boqSummary = rollup.byWidget('boq_summary');
+  const scheduleCritical = rollup.byWidget('schedule_critical');
 
   const widgetOrder = useDashboardLayoutStore((s) => s.order);
   const widgetHidden = useDashboardLayoutStore((s) => s.hidden);
@@ -1718,6 +1730,13 @@ export function DashboardPage() {
     () => reconcileOrder(widgetOrder, DASHBOARD_WIDGET_IDS),
     [widgetOrder],
   );
+
+  // Pull the server-side layout once at mount so a user who customised on
+  // another browser sees the same dashboard here. Idempotent: only the
+  // first call actually fires.
+  useEffect(() => {
+    void hydrateDashboardLayoutFromServer();
+  }, []);
 
   const { data: projects } = useQuery({
     queryKey: ['projects'],
@@ -1772,29 +1791,64 @@ export function DashboardPage() {
 
   const vectorCount = systemStatus?.vector_db?.vectors ?? 0;
 
-  // Fetch all BOQs across projects for KPI ribbon + analytics
-  const { data: allBoqs } = useQuery({
-    queryKey: ['dashboard-all-boqs', projects?.map((p) => p.id).join(',')],
-    queryFn: () =>
-      fanOutPooled(projects ?? [], 8, (project) =>
-        apiGet<BOQWithTotal[]>(`/v1/boq/boqs/?project_id=${project.id}`),
-      ),
-    enabled: Boolean(projects && projects.length > 0),
-    retry: false,
-  });
+  // ── allBoqs / allSchedules — derived from the rollup payload, NOT a
+  // per-project fan-out (v4.6.2 N+1 nuke 2026-05-24). The wave-2 widgets
+  // consume their slices directly via context; KPI ribbon + Analytics +
+  // OnboardingSteps still expect ``BOQWithTotal[]`` / ``ScheduleSummary[]``
+  // shapes, so we synthesize lite stubs from ``boq_summary.by_project`` +
+  // ``boq_summary.last_boq`` + ``schedule_critical.total_schedules`` that
+  // carry only the fields those consumers actually read. Anything beyond
+  // counts / aggregates was never used here — full position arrays + per-
+  // schedule rows live in the dedicated pages (``/boq`` / ``/schedule``).
+  const allBoqs = useMemo<BOQWithTotal[] | undefined>(() => {
+    if (!boqSummary) return undefined;
+    const stubs: BOQWithTotal[] = boqSummary.by_project.map((row) => ({
+      id: `summary-${row.project_id}`,
+      project_id: row.project_id,
+      name: row.project_name,
+      // KpiRibbon counts non-archived BOQs — without per-row status we mark
+      // the synthesized stub as ``active`` so it lands in the bucket. The
+      // accurate count for the tile comes from ``boqSummary.active_boqs``
+      // below; this stub only matters for legacy length-based checks.
+      status: 'active',
+      // Per-project total in project currency, as Number — KpiRibbon and
+      // AnalyticsSection sum these.
+      grand_total: Number(row.total_value) || 0,
+      // Synthetic position list — one entry per ``position_count`` would
+      // bloat memory, so we mark a single representative position carrying
+      // the rolled-up total. OnboardingSteps + SystemStatusSummary only
+      // check ``positions.length > 0`` + ``positions.some(p => p.total > 0)``.
+      positions:
+        row.position_count > 0
+          ? [{ total: row.position_count - row.positions_zero_price > 0 ? 1 : 0 }]
+          : [],
+    }));
+    // If the user has at least one real BOQ but no per-project rollup row
+    // covered it (defensive — should be impossible), insert a single fall-
+    // back so OnboardingSteps "Build your BOQ" step still ticks.
+    if (stubs.length === 0 && boqSummary.total_boqs > 0) {
+      stubs.push({
+        id: 'summary-fallback',
+        project_id: '',
+        name: '',
+        status: 'active',
+        grand_total: Number(boqSummary.total_value_eur) || 0,
+        positions: boqSummary.position_count > 0 ? [{ total: 1 }] : [],
+      });
+    }
+    return stubs;
+  }, [boqSummary]);
 
-  // Fetch schedules across projects for KPI ribbon
-  const { data: allSchedules } = useQuery({
-    queryKey: ['dashboard-all-schedules', projects?.map((p) => p.id).join(',')],
-    queryFn: () =>
-      fanOutPooled(projects ?? [], 8, (project) =>
-        apiGet<ScheduleSummary[]>(
-          `/v1/schedule/schedules/?project_id=${project.id}`,
-        ),
-      ),
-    enabled: Boolean(projects && projects.length > 0),
-    retry: false,
-  });
+  const allSchedules = useMemo<ScheduleSummary[] | undefined>(() => {
+    if (!scheduleCritical) return undefined;
+    const n = scheduleCritical.total_schedules ?? 0;
+    return Array.from({ length: n }, (_unused, i) => ({
+      id: `summary-sched-${i}`,
+      project_id: '',
+      name: '',
+      status: 'active',
+    }));
+  }, [scheduleCritical]);
 
   // Fetch contacts count for NextSteps suggestions
   const { data: contactsList } = useQuery({
@@ -1805,34 +1859,24 @@ export function DashboardPage() {
   });
   const contactsCount = contactsList?.length ?? 0;
 
-  // Determine the most recently updated BOQ for "Continue your work".
-  // Only consider BOQs with a valid `updated_at` — previously, missing
-  // timestamps coerced to Date(0) and would have ranked unstamped BOQs
-  // ahead of legitimate recent edits (fix from dashboard audit 2026-05-11).
+  // Most-recently updated BOQ for "Continue your work" — sourced from the
+  // rollup's pre-computed ``boq_summary.last_boq`` so we don't need to
+  // fan out a ``/v1/boq/boqs/?project_id=…`` per project just to sort by
+  // ``updated_at`` client-side.
   const lastBoq = useMemo(() => {
-    if (!allBoqs || allBoqs.length === 0) return null;
-    const withTimestamp = allBoqs
-      .map((b) => {
-        const raw = (b as unknown as { updated_at?: string }).updated_at;
-        const ts = raw ? new Date(raw).getTime() : NaN;
-        return Number.isFinite(ts) ? { boq: b, ts } : null;
-      })
-      .filter((x): x is { boq: BOQWithTotal; ts: number } => x !== null);
-    if (withTimestamp.length === 0) return null;
-    withTimestamp.sort((a, b) => b.ts - a.ts);
-    const picked = withTimestamp[0]!.boq;
-    const project = projects?.find((p) => p.id === picked.project_id);
+    const lb = boqSummary?.last_boq;
+    if (!lb) return null;
     return {
-      id: picked.id,
-      name: picked.name,
-      status: picked.status,
-      projectName: project?.name ?? '',
-      positionCount: (picked as unknown as { position_count?: number }).position_count ?? 0,
-      grandTotal: (picked as unknown as { grand_total?: number }).grand_total ?? 0,
-      currency: project?.currency ?? 'EUR',
-      updatedAt: (picked as unknown as { updated_at?: string }).updated_at,
+      id: lb.id,
+      name: lb.name,
+      status: lb.status ?? '',
+      projectName: lb.project_name,
+      positionCount: lb.position_count,
+      grandTotal: Number(lb.grand_total) || 0,
+      currency: lb.currency,
+      updatedAt: lb.updated_at,
     };
-  }, [allBoqs, projects]);
+  }, [boqSummary]);
 
   // ── Widget node map — keyed by registry id. The dashboard renders these
   //    in the user's saved order (`resolvedWidgets`), skipping hidden ones.
@@ -1993,10 +2037,24 @@ export function DashboardPage() {
         </div>
       </div>
     ),
+
+    // ── Wave 2 operations widgets (2026-05-23) — consolidated 2026-05-25
+    //    into a single OperationsSnapshotCard. The 9 individual widgets
+    //    still exist in NewWidgets.tsx (importable for projects that
+    //    want to embed them elsewhere) but no longer have IDs in the
+    //    registry, so the dashboard never renders them inline.
+    operations_snapshot: <OperationsSnapshotCard projects={projects} />,
+    weather_site: <WeatherSiteWidget projects={projects} />,
   };
 
   return (
+    <DashboardRollupProvider>
     <div className="space-y-5 animate-fade-in">
+      {/* "What's new in vX.Y.Z" release-notes card. Self-gates on a
+          localStorage `oe_whats_new_seen_<version>` flag so it only
+          appears once per release per browser. Sits above the hero so
+          the user sees release highlights before the dashboard hero. */}
+      <WhatsNewCard />
       {/* ─── 1. Hero · row A — greeting + primary actions ────────────────
           Compressed from the previous 6-row hero (audit 2026-05-11): the
           greeting and the 3 CTAs share a single line on desktop; row B
@@ -2019,7 +2077,11 @@ export function DashboardPage() {
             return t(key, { defaultValue: fallback });
           })()}
         </h1>
-        <div className="flex items-center gap-2 flex-wrap animate-stagger-in" style={{ animationDelay: '100ms' }}>
+        <div
+          className="flex items-center gap-2 flex-wrap animate-stagger-in"
+          style={{ animationDelay: '100ms' }}
+          data-testid="dashboard-tour-hero-actions"
+        >
           <Button
             variant="primary"
             size="md"
@@ -2073,11 +2135,14 @@ export function DashboardPage() {
             title={t('dashboard.layout.customize_hint', {
               defaultValue: 'Reorder, show or hide dashboard sections',
             })}
+            data-testid="dashboard-tour-customize-button"
           >
             {customizing
               ? t('dashboard.layout.done', { defaultValue: 'Done' })
               : t('dashboard.layout.customize', { defaultValue: 'Customize' })}
           </Button>
+          {/* Per-module Tour CTA — launches the Dashboard guided tour. */}
+          <ModuleHelpButton tourId="dashboard" />
         </div>
       </div>
 
@@ -2148,6 +2213,7 @@ export function DashboardPage() {
         return node ? <Fragment key={id}>{node}</Fragment> : null;
       })}
     </div>
+    </DashboardRollupProvider>
   );
 }
 
@@ -2238,46 +2304,38 @@ function ProjectsList({ projects }: { projects?: ProjectSummary[] }) {
 function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
   const { t } = useTranslation();
 
-  // Fetch all BOQs for each project
-  const { data: allBoqs } = useQuery({
-    // Reuse the parent's per-project BOQ fan-out by sharing the query key
-    // with the KPI ribbon's ``['dashboard-all-boqs', …]`` query above. React
-    // Query dedupes when keys match, so the analytics section gets the same
-    // ``allBoqs`` data without firing a second 1×N round of GETs.
-    queryKey: ['dashboard-all-boqs', projects.map((p) => p.id).join(',')],
-    queryFn: () =>
-      fanOutPooled(projects, 8, (project) =>
-        apiGet<BOQWithTotal[]>(`/v1/boq/boqs/?project_id=${project.id}`),
-      ),
-    enabled: projects.length > 0,
-    retry: false,
-  });
+  // Source aggregates from the dashboard rollup the parent provider already
+  // fetched — eliminates the per-project ``/v1/boq/boqs/?project_id=…`` fan
+  // -out this component used to do (v4.6.2 N+1 nuke 2026-05-24).
+  const { byWidget } = useDashboardRollupContext();
+  const boqSummary = byWidget('boq_summary');
 
   const stats = useMemo(() => {
-    if (!allBoqs) return null;
+    if (!boqSummary) return null;
 
-    const totalBoqs = allBoqs.length;
-    const totalValue = allBoqs.reduce((sum, b) => sum + (b.grand_total ?? 0), 0);
+    const totalBoqs = boqSummary.total_boqs;
+    const totalValue = Number(boqSummary.total_value_eur) || 0;
 
-    // Value per project
-    // Deduplicate projects by name (merge values for same-named projects)
+    // Per-project total values come directly from the rollup. Dedup by
+    // display name so two same-named projects merge (legacy behaviour the
+    // analytics chart relied on).
     const valueByName = new Map<string, number>();
-    for (const p of projects) {
-      const val = allBoqs
-        .filter((b) => b.project_id === p.id)
-        .reduce((sum, b) => sum + (b.grand_total ?? 0), 0);
-      valueByName.set(p.name, (valueByName.get(p.name) ?? 0) + val);
+    for (const row of boqSummary.by_project) {
+      const v = Number(row.total_value) || 0;
+      valueByName.set(row.project_name, (valueByName.get(row.project_name) ?? 0) + v);
     }
     const projectValues: { name: string; value: number }[] = Array.from(valueByName.entries())
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value);
 
-    // BOQ status distribution
+    // We no longer have per-BOQ status (we'd need a BOQ list call for
+    // that) — present a binary active vs inactive split derived from
+    // the active-count the rollup exposes. The donut chart consumer just
+    // wants ratio-shaped buckets, so this preserves the visual.
+    const inactive = Math.max(0, totalBoqs - (boqSummary.active_boqs ?? totalBoqs));
     const statusCounts: Record<string, number> = {};
-    for (const boq of allBoqs) {
-      const s = boq.status || 'draft';
-      statusCounts[s] = (statusCounts[s] || 0) + 1;
-    }
+    if (boqSummary.active_boqs > 0) statusCounts.active = boqSummary.active_boqs;
+    if (inactive > 0) statusCounts.archived = inactive;
 
     return {
       totalProjects: projects.length,
@@ -2286,7 +2344,7 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
       projectValues,
       statusCounts,
     };
-  }, [allBoqs, projects]);
+  }, [boqSummary, projects.length]);
 
   if (!stats) {
     return (
@@ -2465,7 +2523,7 @@ function SystemStatus() {
     {
       name: t('dashboard.vector_db', { defaultValue: 'Vector DB' }),
       status: vectorStatus,
-      detail: vectorVectors > 0 ? `${vectorVectors.toLocaleString()} vectors` : '',
+      detail: [status?.vector_db?.engine, vectorVectors > 0 ? `${vectorVectors.toLocaleString()} vectors` : ''].filter(Boolean).join(' · '),
       icon: <Globe size={13} />,
       delay: 520,
     },

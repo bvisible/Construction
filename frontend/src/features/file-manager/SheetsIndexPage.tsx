@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
 import clsx from 'clsx';
-import { FileText, Search, Check, AlertTriangle } from 'lucide-react';
+import { FileText, Search, Check } from 'lucide-react';
 import {
   Badge,
   Breadcrumb,
@@ -12,6 +12,7 @@ import {
   EmptyState,
   SkeletonTable,
 } from '@/shared/ui';
+import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { apiGet } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 
@@ -123,10 +124,10 @@ export function SheetsIndexPage() {
       {/* Breadcrumb */}
       <Breadcrumb
         items={[
-          { label: t('nav.dashboard', { defaultValue: 'Dashboard‌⁠‍' }), to: '/' },
+          { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
           { label: t('files.title', { defaultValue: 'Files' }), to: '/files' },
           ...(projectName ? [{ label: projectName }] : []),
-          { label: t('sheets.title', { defaultValue: 'Sheets‌⁠‍' }) },
+          { label: t('sheets.title', { defaultValue: 'Sheets' }) },
         ]}
         className="mb-4"
       />
@@ -135,33 +136,18 @@ export function SheetsIndexPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-content-primary">
-            {t('sheets.page_title', { defaultValue: 'Drawing Sheets‌⁠‍' })}
+            {t('sheets.page_title', { defaultValue: 'Drawing Sheets' })}
           </h1>
           <p className="mt-1 text-sm text-content-secondary">
             {t('sheets.subtitle', {
               defaultValue:
-                'Indexed drawing sheets across project documents — filter by discipline or search by number, title, revision.‌⁠‍',
+                'Indexed drawing sheets across project documents — filter by discipline or search by number, title, revision.',
             })}
           </p>
         </div>
       </div>
 
-      {/* No-project warning */}
-      {!projectId && (
-        <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800 px-4 py-3">
-          <AlertTriangle size={18} className="text-amber-600 shrink-0" />
-          <div>
-            <p className="text-sm font-medium text-amber-800 dark:text-amber-300">
-              {t('common.no_project_selected', { defaultValue: 'No project selected‌⁠‍' })}
-            </p>
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              {t('common.select_project_hint', {
-                defaultValue: 'Select a project from the header to view and manage items.',
-              })}
-            </p>
-          </div>
-        </div>
-      )}
+      {!projectId && <RequiresProject>{null}</RequiresProject>}
 
       {projectId && (
         <>

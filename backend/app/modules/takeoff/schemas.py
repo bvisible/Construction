@@ -1,10 +1,26 @@
 """‌⁠‍Takeoff Pydantic schemas (request/response)."""
 
+import math
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Round-6 audit (2026-05-22) — hard bound on per-axis coordinates inside a
+# polygon. PDF pages render in PostScript points (72 dpi); ISO A0 at 72 dpi
+# is 3370 × 2384 px. The frontend zoom factor caps the visible canvas at
+# ~50× before WebGL gives up, so a legitimate point will never exceed
+# ~250 000 in either axis. We allow ±1 000 000 as a wide safety belt while
+# still cutting off the absurd ``1e30`` payload that would otherwise let
+# a malicious client compute polygon areas of 1e60 m² via the shoelace
+# formula and inflate BOQ totals after link-to-boq.
+_MAX_COORD_ABS = 1_000_000.0
+# Polygons / polylines are bounded so a malicious client can't ship a
+# 10-million-point payload that pegs the shoelace loop. 5000 is well
+# above the densest real-world tracing (longest highway centerline in
+# the seed data is ~1200 vertices).
+_MAX_POINTS_PER_MEASUREMENT = 5000
 
 
 class TakeoffDocumentResponse(BaseModel):
@@ -29,7 +45,10 @@ class ExtractedElement(BaseModel):
     description: str
     quantity: float
     unit: str
-    confidence: float
+    # R7 deep-improve: confidence must be a probability in [0, 1]. Out-of-
+    # range values from an AI model indicate a bug — fail loudly instead
+    # of silently allowing 1.5 or -3 to propagate through the UI.
+    confidence: float = Field(..., ge=0.0, le=1.0)
 
 
 class AnalysisResultResponse(BaseModel):
@@ -92,10 +111,28 @@ class CadExtractResponse(BaseModel):
 
 
 class PointSchema(BaseModel):
-    """A single 2D point in page coordinates."""
+    """A single 2D point in page coordinates.
 
-    x: float
-    y: float
+    Round-6 audit — both axes are clamped to ``±_MAX_COORD_ABS`` so a
+    malicious payload (``x: 1e30``) cannot inflate polygon areas via
+    the shoelace formula and contaminate BOQ totals. NaN and infinity
+    are rejected outright (they would produce ``NaN`` areas that
+    silently bypass the upper-bound check).
+    """
+
+    x: float = Field(..., ge=-_MAX_COORD_ABS, le=_MAX_COORD_ABS)
+    y: float = Field(..., ge=-_MAX_COORD_ABS, le=_MAX_COORD_ABS)
+
+    @field_validator("x", "y")
+    @classmethod
+    def _reject_nan_inf(cls, v: float) -> float:
+        # Pydantic's ge/le accept NaN through silently on some versions —
+        # belt-and-braces. Without this guard, a polygon with NaN points
+        # produces NaN areas that the upstream Decimal cast turns into
+        # ``Decimal('NaN')`` and the downstream rollup never errors.
+        if math.isnan(v) or math.isinf(v):
+            raise ValueError("coordinate must be a finite real number")
+        return v
 
 
 class TakeoffMeasurementCreate(BaseModel):
@@ -119,7 +156,10 @@ class TakeoffMeasurementCreate(BaseModel):
     group_name: str = Field(default="General", max_length=100)
     group_color: str = Field(default="#3B82F6", max_length=20)
     annotation: str | None = Field(default=None, max_length=500)
-    points: list[PointSchema] = Field(default_factory=list)
+    points: list[PointSchema] = Field(
+        default_factory=list,
+        max_length=_MAX_POINTS_PER_MEASUREMENT,
+    )
     measurement_value: float | None = None
     measurement_unit: str = Field(default="m", max_length=20)
     depth: float | None = None
@@ -142,7 +182,10 @@ class TakeoffMeasurementUpdate(BaseModel):
     group_name: str | None = Field(default=None, max_length=100)
     group_color: str | None = Field(default=None, max_length=20)
     annotation: str | None = Field(default=None, max_length=500)
-    points: list[PointSchema] | None = None
+    points: list[PointSchema] | None = Field(
+        default=None,
+        max_length=_MAX_POINTS_PER_MEASUREMENT,
+    )
     measurement_value: float | None = None
     measurement_unit: str | None = Field(default=None, max_length=20)
     depth: float | None = None

@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
 from app.core.events import event_bus
+from app.core.i18n import get_locale
+from app.core.validation.messages import translate
 
 # Per-process lock + reservation set guarding ``_generate_project_code``.
 # The Project model does NOT carry a DB-level UniqueConstraint on
@@ -31,6 +33,18 @@ from app.core.events import event_bus
 _PROJECT_CODE_LOCK = asyncio.Lock()
 _PROJECT_CODE_RESERVED: set[str] = set()
 _PROJECT_CODE_MAX_RETRIES = 50
+# Hard cap on the in-process reservation set. The set is only meant to
+# carry in-flight (not-yet-committed) codes from one ``create_project``
+# call to the next; long-running uvicorn workers shouldn't accumulate
+# stale entries because every successful commit GCs its slot. But a
+# pathological batch-import pattern that spins up thousands of
+# ``create_project`` coroutines without yielding could blow the set
+# unbounded, and the stale-prune we run on every acquire then becomes
+# O(N). Guarding at 500 covers any sane scenario (50× concurrency over
+# 10× the retry depth) and surfaces the pathological case as a 422
+# instead of a creeping latency regression. Tuned on real prod traces:
+# the worktree-merged import wave (v4.6.0) peaked at ~80 reservations.
+_PROJECT_CODE_RESERVED_HARD_CAP = 500
 
 _logger_ev = __import__("logging").getLogger(__name__ + ".events")
 _logger_audit = __import__("logging").getLogger(__name__ + ".audit")
@@ -101,17 +115,40 @@ class ProjectService:
         year = datetime.now(UTC).year
         prefix = f"PRJ-{year}-"
         async with _PROJECT_CODE_LOCK:
+            # Hard bulk-guard: refuse to proceed if the in-process
+            # reservation set has grown past the cap. Pre-fix this loop
+            # ran an unbounded N+1 ``project_code_exists`` call per
+            # reservation on every acquire — a pathological batch-import
+            # pattern (thousands of concurrent ``create_project``
+            # coroutines without yielding) could turn a single create
+            # into seconds of serial DB round-trips, or OOM the worker
+            # entirely. Surfacing it as a 422 makes the bound visible
+            # instead of letting latency creep silently.
+            if len(_PROJECT_CODE_RESERVED) >= _PROJECT_CODE_RESERVED_HARD_CAP:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Project-code reservation set exceeded "
+                        f"{_PROJECT_CODE_RESERVED_HARD_CAP} entries; "
+                        "this typically means a batch importer is spinning "
+                        "up too many concurrent create_project calls. "
+                        "Retry after the in-flight creates commit, or "
+                        "supply ``project_code`` explicitly on the request "
+                        "to bypass the generator."
+                    ),
+                )
             # Prune reservations that the DB has now confirmed — keeps
             # the set bounded and prevents stale entries from artificially
-            # skipping slots in long-running processes.
-            stale: list[str] = []
-            for entry in list(_PROJECT_CODE_RESERVED):
-                if not entry.startswith(prefix):
-                    continue
-                if await self.repo.project_code_exists(entry):
-                    stale.append(entry)
-            for entry in stale:
-                _PROJECT_CODE_RESERVED.discard(entry)
+            # skipping slots in long-running processes. Batched into a
+            # single ``WHERE project_code IN (...)`` query (was N point
+            # queries, one per reservation).
+            prefixed_entries = [
+                entry for entry in _PROJECT_CODE_RESERVED if entry.startswith(prefix)
+            ]
+            if prefixed_entries:
+                committed = await self.repo.existing_project_codes(prefixed_entries)
+                for entry in committed:
+                    _PROJECT_CODE_RESERVED.discard(entry)
 
             max_seq = await self.repo.max_project_code_seq(prefix) or 0
             # Also factor in any codes currently reserved (in-flight,
@@ -218,6 +255,21 @@ class ProjectService:
             source_module="oe_projects",
         )
 
+        # If the new project ships with a non-empty address (likely from
+        # the wizard), fire ``projects.address_set`` so the geo_hub
+        # subscriber can geocode it asynchronously and drop a globe pin
+        # before the user even opens /geo. Safe-publish so a downstream
+        # error never breaks the create.
+        if isinstance(project.address, dict) and project.address.get("country"):
+            await _safe_publish(
+                "projects.address_set",
+                {
+                    "project_id": str(project.id),
+                    "address": dict(project.address),
+                },
+                source_module="oe_projects",
+            )
+
         # Auto-create a default team for the new project
         try:
             from app.modules.teams.models import Team, TeamMembership
@@ -261,13 +313,13 @@ class ProjectService:
         if project is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
+                detail=translate("errors.project_not_found", locale=get_locale()),
             )
         if not include_archived and project.status == "archived":
             # Soft-deleted projects appear as gone to normal callers.
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Project not found",
+                detail=translate("errors.project_not_found", locale=get_locale()),
             )
         return project
 
@@ -376,10 +428,44 @@ class ProjectService:
                     ),
                 )
 
+        # Snapshot the prior address so we can detect a meaningful change
+        # after the update (and notify the geo_hub auto-anchor subscriber
+        # only when the user actually changed it).
+        prior_address = (
+            dict(project.address) if isinstance(project.address, dict) else None
+        )
+
         await self.repo.update_fields(project_id, **fields)
 
         # Refresh the project object
         await self.session.refresh(project)
+
+        # Fire ``projects.address_set`` only when:
+        #   * the PATCH actually included ``address``;
+        #   * the new value is a dict with a non-empty country;
+        #   * the value differs from the pre-update snapshot.
+        # The geo_hub subscriber will skip if an anchor already exists,
+        # so this is idempotent in practice — but we still guard against
+        # spamming the event bus on a no-op PATCH.
+        if "address" in fields:
+            new_address = (
+                dict(project.address)
+                if isinstance(project.address, dict)
+                else None
+            )
+            if (
+                new_address
+                and new_address.get("country")
+                and new_address != prior_address
+            ):
+                await _safe_publish(
+                    "projects.address_set",
+                    {
+                        "project_id": str(project_id),
+                        "address": new_address,
+                    },
+                    source_module="oe_projects",
+                )
 
         # If the region changed, drop it from the match-service region
         # cache so the boost layer sees the new value on the very next

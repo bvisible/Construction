@@ -26,6 +26,7 @@ Security note (BUG-PDF01 / BUG-PDF02):
 import html
 import io
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 from reportlab.lib import colors
@@ -447,12 +448,13 @@ def _build_cover_page(
 
     # If there's a tax markup, compute VAT and gross total
     if vat_rate > 0:
-        vat_amount = net_total * vat_rate / 100.0
-        gross_total = net_total + vat_amount
+        net_total_d = Decimal(str(net_total))
+        vat_amount = net_total_d * Decimal(str(vat_rate)) / Decimal("100")
+        gross_total = net_total_d + vat_amount
     else:
         # No tax markup found — show net=gross with 0% VAT
         vat_rate = 0.0
-        vat_amount = 0.0
+        vat_amount = Decimal("0")
         gross_total = net_total
 
     summary_rows = [
@@ -703,12 +705,13 @@ def _build_boq_table(
             vat_rate = m.percentage
             break
 
+    net_total_d = Decimal(str(boq_data.net_total))
     if vat_rate > 0:
-        vat_amount = boq_data.net_total * vat_rate / 100.0
+        vat_amount = net_total_d * Decimal(str(vat_rate)) / Decimal("100")
     else:
-        vat_amount = 0.0
+        vat_amount = Decimal("0")
 
-    gross_total = boq_data.net_total + vat_amount
+    gross_total = net_total_d + vat_amount
 
     table_data.append(
         [
@@ -1108,8 +1111,13 @@ def generate_boq_pdf_simple(
             vat_rate = m.percentage
             break
 
-    vat_amount = boq_data.net_total * vat_rate / 100.0 if vat_rate > 0 else 0.0
-    gross_total = boq_data.net_total + vat_amount
+    net_total_d = Decimal(str(boq_data.net_total))
+    vat_amount = (
+        net_total_d * Decimal(str(vat_rate)) / Decimal("100")
+        if vat_rate > 0
+        else Decimal("0")
+    )
+    gross_total = net_total_d + vat_amount
 
     cost_rows.append(
         [
