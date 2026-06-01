@@ -505,13 +505,13 @@ runs.
 
    The seed script provisions:
 
-   - `demo@openestimator.io` / `demo123`  (TENANT_A, role=OWNER)
-   - `editor@openestimator.io` / `demo123`  (TENANT_A, role=EDITOR)
-   - `viewer@openestimator.io` / `demo123`  (TENANT_A, role=VIEWER)
-   - `tenantb@openestimator.io` / `demo123`  (TENANT_B, role=OWNER)  — IDOR check baseline
+   - `demo@openconstructionerp.com` / `demo123`  (TENANT_A, role=OWNER)
+   - `editor@openconstructionerp.com` / `demo123`  (TENANT_A, role=EDITOR)
+   - `viewer@openconstructionerp.com` / `demo123`  (TENANT_A, role=VIEWER)
+   - `tenantb@openconstructionerp.com` / `demo123`  (TENANT_B, role=OWNER)  — IDOR check baseline
    - 3 sample projects with BOQs, BIM, schedule, finance pre-populated
 
-   IMPORTANT: the email is `openestimator.io` (with the "r") — NOT
+   IMPORTANT: the email is `openconstructionerp.com` (with the "r") — NOT
    `openestimate.io` (which 401s and is a recurring test-author pitfall).
 
 ### 0.2 Backend bring-up
@@ -610,7 +610,7 @@ classified `blocker` and short-circuit the wave.
   1. Navigate to `http://localhost:5173/login`.
   2. Wait for the e-mail input to be visible (selector
      `input[type="email"][name="email"]`).
-  3. Type `demo@openestimator.io`.
+  3. Type `demo@openconstructionerp.com`.
   4. Type `demo123` into `input[type="password"]`.
   5. Click `button[type="submit"]` labelled `Sign in`.
 - **Expected**: redirect to `/dashboard` within 3 s; no `Unauthorized` toast;
@@ -648,7 +648,7 @@ classified `blocker` and short-circuit the wave.
 
 ### Test S-04 — Dashboard loads (after login)
 
-- Re-log as `demo@openestimator.io`.
+- Re-log as `demo@openconstructionerp.com`.
 - Verify dashboard widgets render: BOQ Summary, Critical Path, Top Risks, HSE
   Scorecard, Procurement Pipeline, Budget Variance, Change Orders, Clash
   Health, Validation Score, Weather Site (10 widgets total — v4.6.0).
@@ -901,7 +901,7 @@ def per_module_section(meta: dict) -> str:
         "pre": "Resource X created by TENANT_A; logged in as TENANT_B.",
         "steps": [
             f"As TENANT_A: POST a resource via `{routes[0]['path'] if routes else '<list-endpoint>'}`; capture {{id}}.",
-            f"Log out; log in as `tenantb@openestimator.io`.",
+            f"Log out; log in as `tenantb@openconstructionerp.com`.",
             f"GET / PATCH / DELETE the same {{id}}.",
         ],
         "expected": "All three return HTTP 404 (NOT 403, NOT 200).",
@@ -999,7 +999,7 @@ def _module_specific_edge_notes(module: str) -> list[str]:
         ],
         "users": [
             "Login timing-attack safe (test_auth_timing).",
-            "Demo email is `demo@openestimator.io` (with 'r').",
+            "Demo email is `demo@openconstructionerp.com` (with 'r').",
             "Magic-link + JWT round-trip.",
         ],
         "uploads": [
@@ -1021,7 +1021,7 @@ def _module_specific_edge_notes(module: str) -> list[str]:
 
 PERSONA_CONCRETE_STEPS: dict[str, list[str]] = {
     "persona-01-estimator-de": [
-        "Open `http://localhost:5173/login` and sign in as `demo@openestimator.io` / `demo123`.",
+        "Open `http://localhost:5173/login` and sign in as `demo@openconstructionerp.com` / `demo123`.",
         "Switch locale to DE via the header switcher; assert sidebar reads 'Projekte'.",
         "Click sidebar 'Projekte' → '+ Neues Projekt'; fill name 'Wohnpark Berlin Mitte', currency EUR, region DE; submit.",
         "Land on project detail; click 'BOQ' tab.",
@@ -1392,7 +1392,7 @@ selectors discovered at runtime.
 
 #### Template T001 — "GET list endpoint returns 200 + array"
 
-- **Pre**: logged in as `demo@openestimator.io` (OWNER, TENANT_A).
+- **Pre**: logged in as `demo@openconstructionerp.com` (OWNER, TENANT_A).
 - **Steps**:
   1. HTTP GET the module's first GET endpoint (discovered from `router.py`).
   2. Inspect the response.
@@ -1506,7 +1506,7 @@ selectors discovered at runtime.
 - **Pre**: resource X created by TENANT_A; logged in as TENANT_B.
 - **Steps**:
   1. As TENANT_A: POST a resource; capture `{id}`.
-  2. Log out; log in as `tenantb@openestimator.io`.
+  2. Log out; log in as `tenantb@openconstructionerp.com`.
   3. GET / PATCH / DELETE the same `{id}`.
 - **Expected**: all three return HTTP 404.
 - **Pass criteria**: all three responses `.status === 404`.

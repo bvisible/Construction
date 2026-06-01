@@ -18,6 +18,7 @@
 
 import { create } from 'zustand';
 import { useAuthStore } from '@/stores/useAuthStore';
+import { extractErrorMessageFromBody } from '@/shared/lib/api';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -157,7 +158,7 @@ export const useCatalogueInstallStore = create<CatalogueInstallState>(
           let detail = `HTTP ${res.status}`;
           try {
             const body = await res.json();
-            detail = body?.detail || detail;
+            detail = extractErrorMessageFromBody(body) ?? detail;
           } catch {
             // ignore
           }

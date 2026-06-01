@@ -142,6 +142,10 @@ export function LevelingMatrix({ packageId, currency }: Props) {
     },
   });
 
+  // The matrix is computed in the package currency (authoritative). Fall back
+  // to the project currency prop only when the backend did not report one.
+  const matrixCurrency = matrix?.currency || currency;
+
   const rowMedians = useMemo(() => {
     if (!matrix) return new Map<string, number>();
     const m = new Map<string, number>();
@@ -182,6 +186,11 @@ export function LevelingMatrix({ packageId, currency }: Props) {
           <h4 className="text-sm font-semibold text-content-primary flex items-center gap-2">
             <Scale size={16} className="text-oe-blue" />
             {t('tendering.leveling.title', 'Bid Leveling')}
+            {matrixCurrency && (
+              <Badge variant="neutral" size="sm">
+                {matrixCurrency}
+              </Badge>
+            )}
           </h4>
           <p className="mt-1 text-xs text-content-secondary">
             {t('tendering.leveling.subtitle', {
@@ -200,6 +209,26 @@ export function LevelingMatrix({ packageId, currency }: Props) {
           {t('tendering.leveling.run', 'Run Leveling')}
         </Button>
       </div>
+
+      {/* Off-currency exclusion notice — leveling normalises every bid onto
+          the same reference quantities and never blends currencies, so bids
+          quoted in a currency other than the package currency are dropped. */}
+      {matrix && matrix.excluded_off_currency > 0 && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-semantic-warning/30 bg-semantic-warning-bg/30 px-3 py-2 text-xs text-content-secondary">
+          <AlertTriangle
+            size={14}
+            className="mt-0.5 shrink-0 text-semantic-warning"
+          />
+          <span>
+            {t('tendering.leveling.excluded_currency', {
+              defaultValue:
+                '{{count}} bid(s) excluded: quoted in a different currency than the package ({{currency}}). Leveling never blends currencies; re-quote or FX-convert them first.',
+              count: matrix.excluded_off_currency,
+              currency: matrixCurrency || '-',
+            })}
+          </span>
+        </div>
+      )}
 
       {!matrix || matrix.rows.length === 0 ? (
         <EmptyState
@@ -235,7 +264,7 @@ export function LevelingMatrix({ packageId, currency }: Props) {
                     <span className="text-content-secondary">
                       {t('tendering.leveling.raw', 'Raw')}:{' '}
                       <span className="tabular-nums text-content-primary">
-                        {formatCurrency(bs.raw_amount, bs.currency || currency)}
+                        {formatCurrency(bs.raw_amount, bs.currency || matrixCurrency)}
                       </span>
                     </span>
                     <span className="text-content-secondary">
@@ -243,7 +272,7 @@ export function LevelingMatrix({ packageId, currency }: Props) {
                       <span className="tabular-nums font-semibold text-content-primary">
                         {formatCurrency(
                           bs.leveled_amount,
-                          bs.currency || currency,
+                          bs.currency || matrixCurrency,
                         )}
                       </span>
                     </span>
@@ -342,7 +371,7 @@ export function LevelingMatrix({ packageId, currency }: Props) {
                       matrix.rows.reduce(
                         (s, r) => s + r.reference_total, 0,
                       ),
-                      currency,
+                      matrixCurrency,
                     )}
                   </td>
                   {matrix.bid_summaries.map((bs) => (
@@ -352,7 +381,7 @@ export function LevelingMatrix({ packageId, currency }: Props) {
                     >
                       {formatCurrency(
                         bs.leveled_amount,
-                        bs.currency || currency,
+                        bs.currency || matrixCurrency,
                       )}
                     </td>
                   ))}

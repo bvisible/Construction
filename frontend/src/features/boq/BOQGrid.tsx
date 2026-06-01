@@ -315,6 +315,15 @@ export interface BOQGridProps {
    */
   fxRates?: { currency: string; rate: number; label?: string }[];
   /**
+   * Issue #157 — persist an FX rate the estimator types into the resource
+   * currency popover straight into the PROJECT ``fx_rates`` so the section
+   * subtotal, backend rollup and exports all convert the currency. ``code``
+   * is the foreign currency, ``rate`` is "1 unit of code = rate units of
+   * base". Wired by BOQEditorPage; omitted ⇒ the popover edit only updates
+   * the device-local global store (read-only viewers).
+   */
+  onUpsertProjectFxRate?: (code: string, rate: number) => void;
+  /**
    * ── Display-currency override (Issue #88 follow-up).
    * When set, all monetary aggregates rendered by the grid (per-position
    * total, section subtotals, footer rows) are formatted in `code` using
@@ -464,6 +473,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
   currencySymbol,
   currencyCode,
   fxRates,
+  onUpsertProjectFxRate,
   displayCurrency,
   onOpenFxRateSettings,
   locale,
@@ -956,6 +966,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       currencySymbol,
       currencyCode,
       fxRates: fxRates ?? [],
+      onUpsertProjectFxRate,
       // Issue #88 — display-currency view-only override. The
       // `totalFormatter` in columnDefs reads this and reformats every
       // aggregate (footer rows, section subtotals, per-position totals)
@@ -1014,7 +1025,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       positions,
       customColumns,
     }) as FullGridContext,
-    [currencySymbol, currencyCode, fxRates, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition, onAddSubSection,
+    [currencySymbol, currencyCode, fxRates, onUpsertProjectFxRate, displayCurrency, onOpenFxRateSettings, locale, fmt, t, collapsedSections, onToggleSection, onAddPosition, onAddSubSection,
      expandedPositions, toggleResources, onRemoveResource, onUpdateResource, onUpdateResourceFields,
      onSaveResourceToCatalog, onSaveVariantHeaderToCatalog, onOpenCostDbForPosition, onOpenCatalogForPosition, onRepickResourceVariant,
      openVariantPickerSignal, openVariantPickerFor, clearOpenVariantPicker, openPositionVariantPicker, onUpdateVariantHeader,
@@ -1409,17 +1420,67 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
       return sum;
     };
 
+    // Issue #157 (skolodi): a section's subtotal can be silently
+    // wrong when one of its descendants has a resource priced in a
+    // currency the project has no FX rate for — the local rebase
+    // ``resourceAwareTotalInBase`` returns the value unconverted, so
+    // changing EUR→USD-without-rate produces an identical sum and
+    // the user reports "didn't update". Bubble the missing codes up
+    // the tree so the section banner can render an amber "FX missing
+    // — section total may be incorrect" badge next to the subtotal.
+    const fxWarningsCache = new Map<string, string[]>();
+    const collectFxWarnings = (pos: Position): string[] => {
+      const cached = fxWarningsCache.get(pos.id);
+      if (cached !== undefined) return cached;
+      const base = (currencyCode || '').trim().toUpperCase();
+      const have = new Set((fxRates ?? []).map((r) => r.currency.toUpperCase()));
+      const codes = new Set<string>();
+      if (isSection(pos)) {
+        for (const child of childrenOf.get(pos.id) ?? []) {
+          for (const c of collectFxWarnings(child)) codes.add(c);
+        }
+      } else {
+        const meta = (pos.metadata ?? null) as Record<string, unknown> | null;
+        const resources = meta?.resources;
+        if (Array.isArray(resources)) {
+          for (const r of resources) {
+            if (!r || typeof r !== 'object') continue;
+            const code = String((r as { currency?: unknown }).currency ?? '')
+              .trim()
+              .toUpperCase();
+            if (!code || code === base) continue;
+            if (have.has(code)) continue;
+            codes.add(code);
+          }
+        }
+        // Also consider a position whose own metadata.currency is set
+        // to a foreign code without an FX rate — same silent no-op
+        // semantics in ``convertToBase``.
+        const posCode = String((meta?.currency as string | undefined) ?? '')
+          .trim()
+          .toUpperCase();
+        if (posCode && posCode !== base && !have.has(posCode)) {
+          codes.add(posCode);
+        }
+      }
+      const out = Array.from(codes).sort();
+      fxWarningsCache.set(pos.id, out);
+      return out;
+    };
+
     const rows: GridRow[] = [];
     const emit = (pos: Position, depth: number): void => {
       if (isSection(pos)) {
         const kids = sortSiblings(childrenOf.get(pos.id) ?? []);
         const subtotal = subtotalOf(pos);
+        const fxWarnings = collectFxWarnings(pos);
         rows.push({
           ...pos,
           _isSection: true,
           _depth: depth,
           _childCount: kids.length,
           _subtotal: subtotal,
+          _fxWarnings: fxWarnings,
           total: subtotal,
         } as GridRow);
         if (collapsedSections.has(pos.id)) return;

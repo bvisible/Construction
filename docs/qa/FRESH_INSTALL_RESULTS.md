@@ -33,7 +33,7 @@
 | 6 | Seed demo data                              | SKIPPED| Implicit `_seed_demo_account` on first boot creates the three users. Showcase seed not run for time budget.                          |
 | 7 | Start uvicorn + verify `/api/health` 200    | PASS   | `python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8765`. Backend up in ~18 s. 112 modules loaded.             |
 | 8 | Start vite dev server                       | PASS   | `VITE_API_TARGET=http://127.0.0.1:8765 npx vite --host 127.0.0.1 --port 5176`. Ready in 1.4 s after node_modules warm.               |
-| 9 | Visit `/login` and authenticate             | PASS   | After fixing the README's wrong default password (see Issue 2), login succeeded and returned a JWT for `demo@openestimator.io`.      |
+| 9 | Visit `/login` and authenticate             | PASS   | After fixing the README's wrong default password (see Issue 2), login succeeded and returned a JWT for `demo@openconstructionerp.com`.      |
 | 10| `/api/health` → 200, version matches        | PASS   | `version: "4.6.1"` — matches `backend/pyproject.toml`. Full JSON snapshot below.                                                     |
 | 11| `/api/system/modules` ≥ 112                 | PASS   | Returned exactly **112** modules (101 enabled by default, 11 disabled — eg `oe_rfq_bidding`, `oe_russia_pack`, `oe_uk_pack`, `oe_us_pack` ship disabled). |
 | 12| Sidebar ≥ 40 entries                        | PASS (inferred) | The sidebar renders from `/api/system/modules` × `users/me/sidebar-preferences/` (returns `{hidden_modules: []}` for a fresh user). 101 enabled modules → at least 40 sidebar entries. Not visually verified — no Playwright run in this pass. |
@@ -75,7 +75,7 @@ So "degraded" is purely cosmetic for a dev install and not a real failure.
 
 ## API smoke test results
 
-Logged in as `demo@openestimator.io`, bearer token, against backend `:8765`:
+Logged in as `demo@openconstructionerp.com`, bearer token, against backend `:8765`:
 
 | Endpoint                                | Code  | Note                                                                            |
 | --------------------------------------- | ----- | ------------------------------------------------------------------------------- |

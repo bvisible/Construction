@@ -22,7 +22,7 @@
  *   .tests-artifacts/r6/property_dev/buyer_edit/04_after_save.png
  *   .tests-artifacts/r6/property_dev/buyer_edit/05_table_refreshed.png
  *
- * Demo creds note: the openestimator.io domain has an 'r' in it
+ * Demo creds note: the openconstructionerp.com domain has an 'r' in it
  * (not "openestimate.io"); see ``feedback_demo_creds.md`` for context.
  */
 import { test, expect, type Page } from '@playwright/test';
@@ -34,7 +34,7 @@ const SCREENSHOT_DIR = '.tests-artifacts/r6/property_dev/buyer_edit';
 // brief referenced "demo-admin@…" / "demo-viewer@…" placeholders but the
 // platform only ships demo / estimator / manager seeds — use the real
 // ones, fall back to the viewer-less skip path documented inline.
-const DEMO_ADMIN = 'demo@openestimator.io';
+const DEMO_ADMIN = 'demo@openconstructionerp.com';
 // "estimator" maps to Role.EDITOR via permission_registry — close enough
 // to a real "viewer-less" scenario for the negative gating leg, since
 // editors can already update buyers. We therefore skip the viewer test

@@ -20,11 +20,11 @@ referential cleanup boundaries instead.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import (
     JSON,
     Boolean,
-    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -36,6 +36,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.db_types import AwareDateTime
 from app.database import GUID, Base
 
 
@@ -62,7 +63,7 @@ class DailyDiary(Base):
         nullable=False,
         index=True,
     )
-    diary_date: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    diary_date: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     site_supervisor_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("oe_users_user.id", ondelete="SET NULL"),
@@ -76,11 +77,9 @@ class DailyDiary(Base):
     )
     labour_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     equipment_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="open", index=True
-    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", index=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    closed_at: Mapped[str | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(AwareDateTime(), nullable=True)
     closed_by: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("oe_users_user.id", ondelete="SET NULL"),
@@ -121,10 +120,8 @@ class WeatherRecord(Base):
         nullable=False,
         index=True,
     )
-    captured_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
-    source: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="manual"
-    )  # open_meteo / manual / sensor
+    captured_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")  # open_meteo / manual / sensor
     temperature_c: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
     humidity_pct: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
     wind_speed_kmh: Mapped[float | None] = mapped_column(Numeric(6, 2), nullable=True)
@@ -171,7 +168,7 @@ class DiaryEntry(Base):
         index=True,
     )
     entry_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    entry_time: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
+    entry_time: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_module: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -224,9 +221,7 @@ class DiaryPhoto(Base):
         nullable=False,
         index=True,
     )
-    taken_at: Mapped[str] = mapped_column(
-        DateTime(timezone=True), nullable=False, index=True
-    )
+    taken_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False, index=True)
     photographer_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("oe_users_user.id", ondelete="SET NULL"),
@@ -284,7 +279,7 @@ class DiaryVideo(Base):
         nullable=False,
         index=True,
     )
-    recorded_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
     file_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     thumbnail_url: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -326,7 +321,7 @@ class DroneSurvey(Base):
         nullable=False,
         index=True,
     )
-    flown_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
+    flown_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
     pilot_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     drone_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
     area_m2: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
@@ -366,7 +361,7 @@ class RealityCaptureDataset(Base):
         nullable=False,
         index=True,
     )
-    captured_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
     capture_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default="laser_scan"
     )  # laser_scan / photogrammetry / mobile_scan
@@ -405,9 +400,7 @@ class DiaryArchiveSignature(Base):
     """
 
     __tablename__ = "oe_daily_diary_archive_signature"
-    __table_args__ = (
-        UniqueConstraint("diary_id", name="uq_oe_daily_diary_archive_signature_diary"),
-    )
+    __table_args__ = (UniqueConstraint("diary_id", name="uq_oe_daily_diary_archive_signature_diary"),)
 
     diary_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -416,7 +409,7 @@ class DiaryArchiveSignature(Base):
         index=True,
     )
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    signed_at: Mapped[str] = mapped_column(DateTime(timezone=True), nullable=False)
+    signed_at: Mapped[datetime] = mapped_column(AwareDateTime(), nullable=False)
     signed_by: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
         ForeignKey("oe_users_user.id", ondelete="SET NULL"),
@@ -431,7 +424,4 @@ class DiaryArchiveSignature(Base):
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     def __repr__(self) -> str:
-        return (
-            f"<DiaryArchiveSignature diary={self.diary_id} "
-            f"rev={self.revision} sha={self.content_sha256[:8]}>"
-        )
+        return f"<DiaryArchiveSignature diary={self.diary_id} rev={self.revision} sha={self.content_sha256[:8]}>"

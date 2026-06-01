@@ -761,7 +761,11 @@ function CostDbSearchForAssembly({
             <Button variant="primary" size="sm" onClick={onAdded}>
               {t('common.done', { defaultValue: 'Done' })}
             </Button>
-            <button onClick={handleClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors">
+            <button
+              onClick={handleClose}
+              aria-label={t('common.close', { defaultValue: 'Close' })}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+            >
               <X size={16} />
             </button>
           </div>
@@ -1398,6 +1402,7 @@ function ApplyToBOQModal({
             </div>
             <button
               onClick={onClose}
+              aria-label={t('common.close', { defaultValue: 'Close' })}
               className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-secondary transition-all"
             >
               <X size={16} />

@@ -170,10 +170,29 @@ export function AssembliesPage() {
     const all = allForBanner?.items ?? [];
     const totalCount = statsData?.total ?? all.length ?? 0;
     const totalComponents = all.reduce((sum, a) => sum + (a.component_count ?? 0), 0);
+    // Avg rate must NEVER blend currencies — averaging an EUR + USD + GBP
+    // mix yields a meaningless number. Group rated assemblies by their
+    // own ISO currency, then surface the dominant currency's average
+    // (with its code). When more than one currency is present we flag it
+    // so the single number isn't mistaken for a portfolio-wide rate.
     const ratedItems = all.filter((a) => a.total_rate > 0);
-    const avgRate = ratedItems.length
-      ? ratedItems.reduce((s, a) => s + a.total_rate, 0) / ratedItems.length
-      : 0;
+    const byCurrency = new Map<string, { sum: number; count: number }>();
+    for (const a of ratedItems) {
+      const code = (a.currency || 'EUR').toUpperCase();
+      const acc = byCurrency.get(code) ?? { sum: 0, count: 0 };
+      acc.sum += a.total_rate;
+      acc.count += 1;
+      byCurrency.set(code, acc);
+    }
+    let avgRate = 0;
+    let avgRateCurrency = '';
+    let avgRateMixed = false;
+    const dominant = [...byCurrency.entries()].sort((x, y) => y[1].count - x[1].count)[0];
+    if (dominant) {
+      avgRateCurrency = dominant[0];
+      avgRate = dominant[1].count ? dominant[1].sum / dominant[1].count : 0;
+      avgRateMixed = byCurrency.size > 1;
+    }
     const unusedCount = all.filter((a) => (a.usage_count ?? 0) === 0).length;
     const byCategory = statsData?.by_category ?? {};
     const topCategories = Object.entries(byCategory)
@@ -187,7 +206,20 @@ export function AssembliesPage() {
     const topTags = [...tagCounts.entries()]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 8);
-    return { totalCount, totalComponents, avgRate, unusedCount, topCategories, topTags };
+    // Most-used recipes — already computed server-side in /stats/. Surface
+    // it as a hover hint on the total tile so the fetched data isn't dead.
+    const mostUsed = (statsData?.most_used ?? []).filter((m) => (m.usage_count ?? 0) > 0);
+    return {
+      totalCount,
+      totalComponents,
+      avgRate,
+      avgRateCurrency,
+      avgRateMixed,
+      unusedCount,
+      topCategories,
+      topTags,
+      mostUsed,
+    };
   }, [statsData, allForBanner]);
 
   // Sort + unused filter (FE-side over the current page slice).
@@ -236,11 +268,11 @@ export function AssembliesPage() {
   // Bulk actions
   const handleBulkDelete = useCallback(async () => {
     const ids = Array.from(selected);
-    let ok = 0; let fail = 0;
-    for (const id of ids) {
-      try { await apiDelete(`/v1/assemblies/${id}`); ok += 1; }
-      catch { fail += 1; }
-    }
+    const results = await Promise.allSettled(
+      ids.map((id) => apiDelete(`/v1/assemblies/${id}`)),
+    );
+    const ok = results.filter((r) => r.status === 'fulfilled').length;
+    const fail = results.length - ok;
     setShowBulkConfirmDelete(false);
     clearSelection();
     queryClient.invalidateQueries({ queryKey: ['assemblies'] });
@@ -271,17 +303,17 @@ export function AssembliesPage() {
 
   const handleBulkTag = useCallback(async (tagsToAdd: string[]) => {
     const ids = Array.from(selected);
-    let ok = 0; let fail = 0;
-    for (const id of ids) {
-      try {
+    const results = await Promise.allSettled(
+      ids.map((id) => {
         const asm = (data?.items ?? []).find((a) => a.id === id)
           ?? (allForBanner?.items ?? []).find((a) => a.id === id);
         const existing = new Set(asm?.tags ?? []);
         for (const t2 of tagsToAdd) existing.add(t2);
-        await assembliesApi.updateTags(id, [...existing]);
-        ok += 1;
-      } catch { fail += 1; }
-    }
+        return assembliesApi.updateTags(id, [...existing]);
+      }),
+    );
+    const ok = results.filter((r) => r.status === 'fulfilled').length;
+    const fail = results.length - ok;
     setShowBulkTag(false);
     queryClient.invalidateQueries({ queryKey: ['assemblies'] });
     queryClient.invalidateQueries({ queryKey: ['assemblies-all-for-banner'] });
@@ -356,10 +388,21 @@ export function AssembliesPage() {
                     try {
                       const resp = await apiGet<AssemblySearchResponse>('/v1/assemblies/?limit=500');
                       const allItems = resp.items;
-                      // Build CSV with components flattened
-                      const rows: string[] = ['Assembly,Category,Unit,Total Rate,Component,Comp Unit,Factor,Rate'];
+                      // One row per assembly. The list endpoint returns no
+                      // component rows, so we export only the per-assembly
+                      // fields rather than printing empty Component/Factor
+                      // columns. Use the JSON export (or per-assembly
+                      // export) for the full component breakdown.
+                      const rows: string[] = ['Assembly,Code,Category,Unit,Total Rate,Currency'];
                       for (const a of allItems) {
-                        rows.push([csvEscape(a.name), a.category, a.unit || '', String(a.total_rate ?? ''), '', '', '', ''].join(','));
+                        rows.push([
+                          csvEscape(a.name),
+                          csvEscape(a.code),
+                          a.category,
+                          a.unit || '',
+                          String(a.total_rate ?? ''),
+                          a.currency || '',
+                        ].join(','));
                       }
                       downloadFile(rows.join('\n'), `assemblies_${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv');
                       addToast({ type: 'success', title: t('assemblies.exported_csv', { defaultValue: 'CSV exported' }) });
@@ -430,6 +473,13 @@ export function AssembliesPage() {
             icon={<Layers size={14} />}
             label={t('assemblies.stat_total', { defaultValue: 'Assemblies' })}
             value={String(banner.totalCount)}
+            title={
+              banner.mostUsed.length > 0
+                ? `${t('assemblies.stat_most_used', { defaultValue: 'Most used' })}: ${banner.mostUsed
+                    .map((m) => `${m.name} (${m.usage_count})`)
+                    .join(', ')}`
+                : undefined
+            }
           />
           <StatTile
             icon={<BarChart3 size={14} />}
@@ -438,8 +488,28 @@ export function AssembliesPage() {
           />
           <StatTile
             icon={<BarChart3 size={14} />}
-            label={t('assemblies.stat_avg_rate', { defaultValue: 'Avg. rate' })}
-            value={banner.avgRate > 0 ? fmt(banner.avgRate) : '—'}
+            label={
+              banner.avgRateMixed
+                ? t('assemblies.stat_avg_rate_dominant', {
+                    defaultValue: 'Avg. rate ({{currency}})',
+                    currency: banner.avgRateCurrency,
+                  })
+                : t('assemblies.stat_avg_rate', { defaultValue: 'Avg. rate' })
+            }
+            value={
+              banner.avgRate > 0
+                ? `${fmt(banner.avgRate)} ${banner.avgRateCurrency}`
+                : '—'
+            }
+            title={
+              banner.avgRateMixed
+                ? t('assemblies.stat_avg_rate_mixed_hint', {
+                    defaultValue:
+                      'Assemblies span multiple currencies; showing the average for the most common one ({{currency}}).',
+                    currency: banner.avgRateCurrency,
+                  })
+                : undefined
+            }
           />
           <StatTile
             icon={<Tag size={14} />}
@@ -943,6 +1013,7 @@ function StatTile({
   active,
   onClick,
   highlightTone = 'neutral',
+  title,
 }: {
   icon: React.ReactNode;
   label: string;
@@ -952,6 +1023,7 @@ function StatTile({
   active?: boolean;
   onClick?: () => void;
   highlightTone?: 'neutral' | 'amber';
+  title?: string;
 }) {
   const base =
     'flex flex-col gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors';
@@ -985,7 +1057,7 @@ function StatTile({
         className={`font-semibold text-content-primary tabular-nums truncate ${
           valueClassName ?? 'text-lg'
         }`}
-        title={value}
+        title={title ?? value}
       >
         {value}
       </span>
@@ -1167,7 +1239,11 @@ function BulkTagModal({
               {t('assemblies.bulk_tag_title', { defaultValue: `Add tag to ${count} assemblies`, count })}
             </h2>
           </div>
-          <button onClick={onClose} className="text-content-tertiary hover:text-content-primary">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="text-content-tertiary hover:text-content-primary"
+          >
             <X size={16} />
           </button>
         </div>
@@ -1362,7 +1438,11 @@ function AIGenerateModal({
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+          >
             <X size={16} />
           </button>
         </div>
@@ -1828,6 +1908,7 @@ function QuickPreview({
         </p>
         <button
           onClick={onClose}
+          aria-label={t('common.close', { defaultValue: 'Close' })}
           className="flex h-5 w-5 items-center justify-center rounded text-content-tertiary hover:text-content-primary transition-colors shrink-0"
         >
           <X size={12} />
@@ -1984,7 +2065,7 @@ function ImportAssemblyModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-light">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
               <Upload size={18} />
             </div>
             <div>
@@ -1996,7 +2077,11 @@ function ImportAssemblyModal({
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+          >
             <X size={16} />
           </button>
         </div>

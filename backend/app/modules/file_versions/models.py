@@ -28,7 +28,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import GUID, Base
 
-
 # Canonical set of file-kind labels the file manager exposes. The
 # field is open ``String(32)`` in the DB so a future kind doesn't
 # require a migration; this tuple is the validated whitelist surfaced
@@ -77,7 +76,9 @@ class FileVersion(Base):
     canonical_name: Mapped[str] = mapped_column(String(255), nullable=False)
     previous_version_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
+        ForeignKey("oe_file_version.id", ondelete="SET NULL"),
         nullable=True,
+        index=True,
         default=None,
     )
     is_current: Mapped[bool] = mapped_column(
@@ -86,11 +87,13 @@ class FileVersion(Base):
         default=True,
         server_default="1",
     )
-    superseded_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True, default=None
-    )
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
-        GUID(), nullable=True, default=None
+        GUID(),
+        ForeignKey("oe_file_version.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        default=None,
     )
     notes: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     uploaded_by_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -99,13 +102,9 @@ class FileVersion(Base):
         nullable=True,
         default=None,
     )
-    uploaded_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    checksum: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, default=None
-    )
+    checksum: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
 
     def __repr__(self) -> str:
         return (

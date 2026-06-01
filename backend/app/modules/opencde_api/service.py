@@ -52,10 +52,7 @@ class OpenCDEService:
         stmt = select(Project).order_by(Project.created_at.desc())
         result = await self.session.execute(stmt)
         projects = result.scalars().all()
-        return [
-            BCFProject(project_id=str(p.id), name=p.name)
-            for p in projects
-        ]
+        return [BCFProject(project_id=str(p.id), name=p.name) for p in projects]
 
     async def get_project(self, project_id: uuid.UUID) -> BCFProject:
         """Get a single project in BCF format."""
@@ -89,9 +86,7 @@ class OpenCDEService:
         comments = result.scalars().all()
         return [self._comment_to_topic(c) for c in comments]
 
-    async def get_topic(
-        self, project_id: uuid.UUID, topic_guid: uuid.UUID
-    ) -> BCFTopic:
+    async def get_topic(self, project_id: uuid.UUID, topic_guid: uuid.UUID) -> BCFTopic:
         """Get a single BCF topic."""
         comment = await self.session.get(Comment, topic_guid)
         if (
@@ -182,22 +177,20 @@ class OpenCDEService:
         comment.metadata_ = meta
 
         await self.session.flush()
+        # The UPDATE recomputes updated_at (onupdate=func.now()) and SQLAlchemy
+        # expires the attribute. Reload it inside the async greenlet so the sync
+        # serialize below does not trigger lazy IO (MissingGreenlet on asyncpg).
+        await self.session.refresh(comment)
         logger.info("BCF topic updated: %s", topic_guid)
         return self._comment_to_topic(comment)
 
     # ── Comments (mapped from comment replies) ───────────────────────────
 
-    async def list_comments(
-        self, project_id: uuid.UUID, topic_guid: uuid.UUID
-    ) -> list[BCFComment]:
+    async def list_comments(self, project_id: uuid.UUID, topic_guid: uuid.UUID) -> list[BCFComment]:
         """List BCF comments for a topic (replies to the topic comment)."""
         # Verify topic exists
         topic = await self.session.get(Comment, topic_guid)
-        if (
-            topic is None
-            or topic.entity_type != BCF_TOPIC_ENTITY_TYPE
-            or topic.entity_id != str(project_id)
-        ):
+        if topic is None or topic.entity_type != BCF_TOPIC_ENTITY_TYPE or topic.entity_id != str(project_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Topic not found",
@@ -225,11 +218,7 @@ class OpenCDEService:
         """Create a BCF comment (reply to topic)."""
         # Verify topic exists
         topic = await self.session.get(Comment, topic_guid)
-        if (
-            topic is None
-            or topic.entity_type != BCF_TOPIC_ENTITY_TYPE
-            or topic.entity_id != str(project_id)
-        ):
+        if topic is None or topic.entity_type != BCF_TOPIC_ENTITY_TYPE or topic.entity_id != str(project_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Topic not found",
@@ -256,17 +245,11 @@ class OpenCDEService:
 
     # ── Viewpoints ───────────────────────────────────────────────────────
 
-    async def list_viewpoints(
-        self, project_id: uuid.UUID, topic_guid: uuid.UUID
-    ) -> list[BCFViewpoint]:
+    async def list_viewpoints(self, project_id: uuid.UUID, topic_guid: uuid.UUID) -> list[BCFViewpoint]:
         """List BCF viewpoints for a topic."""
         # Verify topic exists
         topic = await self.session.get(Comment, topic_guid)
-        if (
-            topic is None
-            or topic.entity_type != BCF_TOPIC_ENTITY_TYPE
-            or topic.entity_id != str(project_id)
-        ):
+        if topic is None or topic.entity_type != BCF_TOPIC_ENTITY_TYPE or topic.entity_id != str(project_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Topic not found",
@@ -294,11 +277,7 @@ class OpenCDEService:
         """Create a BCF viewpoint linked to a topic."""
         # Verify topic exists
         topic = await self.session.get(Comment, topic_guid)
-        if (
-            topic is None
-            or topic.entity_type != BCF_TOPIC_ENTITY_TYPE
-            or topic.entity_id != str(project_id)
-        ):
+        if topic is None or topic.entity_type != BCF_TOPIC_ENTITY_TYPE or topic.entity_id != str(project_id):
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Topic not found",
@@ -358,9 +337,7 @@ class OpenCDEService:
         )
 
     @staticmethod
-    def _comment_to_bcf_comment(
-        comment: Comment, topic_guid: uuid.UUID
-    ) -> BCFComment:
+    def _comment_to_bcf_comment(comment: Comment, topic_guid: uuid.UUID) -> BCFComment:
         """Map a Comment reply to a BCFComment."""
         meta = comment.metadata_ or {}
         return BCFComment(

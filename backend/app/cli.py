@@ -47,6 +47,7 @@ def _stdout_supports_unicode() -> bool:
     enc = (getattr(sys.stdout, "encoding", "") or "").lower()
     return "utf" in enc
 
+
 DEFAULT_DATA_DIR = Path.home() / ".openestimate"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
@@ -121,12 +122,16 @@ def _bold(text: str) -> str:
 
 
 # ── Banner ────────────────────────────────────────────────────────────────
-_BANNER_ART = r"""‌⁠‍  ___                  ____                _                   _   _
- / _ \ _ __   ___ _ _ / ___|___  _ __  ___| |_ _ _ _   _  ___ | |_(_) ___  _ _
-| | | | '_ \ / _ \ '_| |   / _ \| '_ \/ __| __| '_| | | |/ __|| __| |/ _ \| '_ \
-| |_| | |_) |  __/ | | |__| (_) | | | \__ \ |_| |  | |_| | (__ | |_| | (_) | | | |
- \___/| .__/ \___|_|  \____\___/|_| |_|___/\__|_|   \__,_|\___(_)__|_|\___/|_| |_|
-      |_|                                                             ERP"""
+# "OpenConstructionERP" rendered in the figlet "small" font (82 cols × 5
+# rows). The previous "Standard" font wrapped the 19-character name onto
+# multiple visual rows on a typical 80-col terminal, which looked crooked;
+# the "small" font fits the full name on one row with the trailing "ERP"
+# inline. Generated once with pyfiglet and pasted in — no runtime dep.
+_BANNER_ART = r"""  ___                 ___             _               _   _          ___ ___ ___
+ / _ \ _ __  ___ _ _ / __|___ _ _  __| |_ _ _ _  _ __| |_(_)___ _ _ | __| _ \ _ \
+| (_) | '_ \/ -_) ' \ (__/ _ \ ' \(_-<  _| '_| || / _|  _| / _ \ ' \| _||   /  _/
+ \___/| .__/\___|_||_\___\___/_||_/__/\__|_|  \_,_\__|\__|_\___/_||_|___|_|_\_|
+      |_|"""
 
 
 def print_startup_banner(
@@ -157,7 +162,7 @@ def print_startup_banner(
         print(f"  {_dim('API only (frontend not bundled). Docs:')} {url}/api/docs")
     print()
     print(f"  {_bold('Demo login')} {_dim('(auto-created on first run)')}")
-    print(f"    {_dim('Email:')}    demo@openestimator.io")
+    print(f"    {_dim('Email:')}    demo@openconstructionerp.com")
     print(f"    {_dim('Password:')} DemoPass1234!")
     print()
     print(f"  {_dim('Data directory:')} {data_dir}")
@@ -178,6 +183,33 @@ def _setup_env(data_dir: Path, host: str, port: int) -> None:
     (data_dir / "uploads").mkdir(exist_ok=True)
 
     db_path = data_dir / "openestimate.db"
+
+    # Embedded PostgreSQL (no Docker) is the DEFAULT runtime as of v6.0.0: boot a
+    # real in-process PG16 and point DATABASE_URL/DATABASE_SYNC_URL at it BEFORE
+    # the SQLite setdefault below (which then no-ops because the keys are already
+    # set). Opt out with OE_USE_SQLITE=1 (legacy single-file SQLite) or by setting
+    # your own DATABASE_URL. Must run before any ``from app...`` import that builds
+    # the engine — _setup_env is that earliest point for every command.
+    from app.core import embedded_pg
+
+    if embedded_pg.is_requested():
+        if embedded_pg.boot(data_dir):
+            # Transparent one-time SQLite -> PostgreSQL migration: if the box has
+            # a legacy openestimate.db and the embedded cluster is still empty,
+            # move the data over before the server starts. No-op otherwise.
+            status = embedded_pg.auto_migrate_legacy_sqlite(data_dir)
+            if status.startswith("migrated"):
+                print(_green(_u("✓ ", "OK ")) + status)
+            print(_green(_u("✓ ", "OK ")) + "Database: embedded PostgreSQL 16 (no Docker)")
+        else:
+            # pixeltable-pgserver missing or initdb failed: degrade to SQLite so
+            # the app still comes up. Surface it so the operator can install the
+            # server extra or set DATABASE_URL.
+            print(
+                _yellow(_u("⚠ ", "! "))
+                + "Embedded PostgreSQL unavailable; falling back to SQLite. "
+                + "Install with 'pip install openconstructionerp[server]' or set OE_USE_SQLITE=1 to silence."
+            )
 
     os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
     os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{db_path}")
@@ -348,10 +380,7 @@ def check_core_tabular_deps() -> list[Check]:
     """
     from importlib.util import find_spec
 
-    hint = (
-        "Cost database import requires pandas + pyarrow. "
-        "Reinstall with: pip install --upgrade openconstructionerp"
-    )
+    hint = "Cost database import requires pandas + pyarrow. Reinstall with: pip install --upgrade openconstructionerp"
     out: list[Check] = []
     for mod in ("pandas", "pyarrow"):
         try:
@@ -455,9 +484,7 @@ def check_optional_extras() -> list[Check]:
     # Semantic embeddings (sentence-transformers + Qdrant client).
     # Renamed from `[ai]` in v1.3.14 — the old extra is still an alias.
     if _present("sentence_transformers"):
-        out.append(
-            Check("Semantic search [semantic]", "ok", "sentence-transformers installed")
-        )
+        out.append(Check("Semantic search [semantic]", "ok", "sentence-transformers installed"))
     else:
         out.append(
             Check(
@@ -529,8 +556,16 @@ def cmd_serve(args: argparse.Namespace) -> None:
     ]
     blocking = [c for c in fatal_checks if c.status == "error"]
     if blocking:
-        print(_red(_bold(_u("Cannot start OpenConstructionERP \u2014 pre-flight checks failed:",
-                              "Cannot start OpenConstructionERP - pre-flight checks failed:"))))
+        print(
+            _red(
+                _bold(
+                    _u(
+                        "Cannot start OpenConstructionERP \u2014 pre-flight checks failed:",
+                        "Cannot start OpenConstructionERP - pre-flight checks failed:",
+                    )
+                )
+            )
+        )
         print()
         for c in fatal_checks:
             c.print()
@@ -559,8 +594,14 @@ def cmd_serve(args: argparse.Namespace) -> None:
             data_dir=data_dir,
             serve_frontend=True,
         )
-        print(_dim(_u("  Starting server… first run may take up to 30 seconds.",
-                       "  Starting server... first run may take up to 30 seconds.")))
+        print(
+            _dim(
+                _u(
+                    "  Starting server… first run may take up to 30 seconds.",
+                    "  Starting server... first run may take up to 30 seconds.",
+                )
+            )
+        )
         print()
 
     if args.open:
@@ -595,9 +636,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print(_red(_bold("Server failed to start:")) + f" {exc}")
         arrow = _u("\u2192", "->")
         if "address already in use" in str(exc).lower() or "10048" in str(exc):
-            print(
-                _dim(f"  {arrow} Port {args.port} is already in use. Try: openestimate serve --port {args.port + 1}")
-            )
+            print(_dim(f"  {arrow} Port {args.port} is already in use. Try: openestimate serve --port {args.port + 1}"))
         else:
             print(_dim(f"  {arrow} See: {TROUBLESHOOTING_URL}"))
         sys.exit(1)
@@ -631,14 +670,13 @@ def cmd_init_db(args: argparse.Namespace) -> None:
         print(_amber(f"Reset: deleted previous DB at {db_path}"))
     elif db_path.exists():
         # Friendly warning, non-blocking — matches the spec.
-        print(
-            _yellow(f"Existing database at {db_path} — re-using.")
-            + _dim(" Use --reset to start fresh.")
-        )
+        print(_yellow(f"Existing database at {db_path} — re-using.") + _dim(" Use --reset to start fresh."))
 
-    print(_u("Initialising data directory at ", "Initialising data directory at ")
-          + f"{_bold(str(data_dir))}"
-          + _u("…", "..."))
+    print(
+        _u("Initialising data directory at ", "Initialising data directory at ")
+        + f"{_bold(str(data_dir))}"
+        + _u("…", "...")
+    )
     _setup_env(data_dir, DEFAULT_HOST, DEFAULT_PORT)
 
     # Trigger the same SQLite auto-migration that main.py does on startup,
@@ -649,15 +687,49 @@ def cmd_init_db(args: argparse.Namespace) -> None:
     # Mirrors the list in main.py's startup hook — keep the two lists in
     # sync when adding a new module.
     _module_names = [
-        "ai", "assemblies", "bim_hub", "boq", "catalog", "cde",
-        "changeorders", "collaboration", "contacts", "correspondence",
-        "costmodel", "costs", "documents", "enterprise_workflows",
-        "erp_chat", "fieldreports", "finance", "full_evm",
-        "i18n_foundation", "inspections", "integrations", "markups",
-        "meetings", "ncr", "notifications", "procurement", "projects",
-        "punchlist", "reporting", "requirements", "rfi", "rfq_bidding",
-        "risk", "safety", "schedule", "submittals", "takeoff", "tasks",
-        "teams", "tendering", "transmittals", "users", "validation",
+        "ai",
+        "assemblies",
+        "bim_hub",
+        "boq",
+        "catalog",
+        "cde",
+        "changeorders",
+        "collaboration",
+        "contacts",
+        "correspondence",
+        "costmodel",
+        "costs",
+        "documents",
+        "enterprise_workflows",
+        "erp_chat",
+        "fieldreports",
+        "finance",
+        "full_evm",
+        "i18n_foundation",
+        "inspections",
+        "integrations",
+        "markups",
+        "meetings",
+        "ncr",
+        "notifications",
+        "procurement",
+        "projects",
+        "punchlist",
+        "reporting",
+        "requirements",
+        "rfi",
+        "rfq_bidding",
+        "risk",
+        "safety",
+        "schedule",
+        "submittals",
+        "takeoff",
+        "tasks",
+        "teams",
+        "tendering",
+        "transmittals",
+        "users",
+        "validation",
     ]
 
     # Track import failures so we can report them loudly. Silently
@@ -717,11 +789,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
         for name, err in failed_imports:
             print(f"    - {_bold(name)}: {_dim(err)}")
         print()
-        print(
-            _red(
-                "Schema may be incomplete. Reinstall the package or check the error above."
-            )
-        )
+        print(_red("Schema may be incomplete. Reinstall the package or check the error above."))
         print(_dim(f"  {_u('\u2192', '->')} pip install --upgrade --force-reinstall openconstructionerp"))
         print(_dim(f"  {_u('\u2192', '->')} Then run 'openestimate doctor' to verify."))
         sys.exit(1)
@@ -759,7 +827,10 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print(_dim(f"Docs: {TROUBLESHOOTING_URL}"))
         sys.exit(1)
     elif warns:
-        print(_yellow(_bold(f"  {len(warns)} warning(s)")) + _dim(_u(" \u2014 non-fatal, server will run", " - non-fatal, server will run")))
+        print(
+            _yellow(_bold(f"  {len(warns)} warning(s)"))
+            + _dim(_u(" \u2014 non-fatal, server will run", " - non-fatal, server will run"))
+        )
         print()
         print(f"Run: {_amber('openestimate serve')}")
     else:
@@ -868,7 +939,7 @@ def print_welcome(*, next_command_hint: bool = True) -> None:
     print(f"    {_amber('openestimate doctor')}    {_dim('# health check if something looks wrong')}")
     print()
     print(f"  {_bold('After serve, open:')} {_amber('http://127.0.0.1:8080')}")
-    print(f"  {_dim('Demo login:')} demo@openestimator.io / DemoPass1234!")
+    print(f"  {_dim('Demo login:')} demo@openconstructionerp.com / DemoPass1234!")
     print()
     print(f"  {_bold('Get help or ask questions')}")
     print(f"    {_dim('Docs:')}      {DOCS_URL}")
@@ -901,10 +972,7 @@ def _prompt_open_browser(url: str, default_open: bool = True) -> bool:
         return default_open
 
     default_hint = "[O/n]" if default_open else "[o/N]"
-    prompt = (
-        f"  {_bold('Open')} {_amber(url)} "
-        f"{_dim('in your browser now?')} {_dim(default_hint)} "
-    )
+    prompt = f"  {_bold('Open')} {_amber(url)} {_dim('in your browser now?')} {_dim(default_hint)} "
     try:
         answer = input(prompt).strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -963,6 +1031,16 @@ def _add_common_server_args(p: argparse.ArgumentParser) -> None:
         default=str(DEFAULT_DATA_DIR),
         help=f"Data directory (default: {DEFAULT_DATA_DIR})",
     )
+    p.add_argument(
+        "--embedded-pg",
+        action="store_true",
+        help="Run an in-process PostgreSQL (no Docker); data in <data-dir>/pgdata (this is the default)",
+    )
+    p.add_argument(
+        "--sqlite",
+        action="store_true",
+        help="Use the legacy single-file SQLite database instead of embedded PostgreSQL",
+    )
 
 
 def main() -> None:
@@ -975,7 +1053,7 @@ def main() -> None:
             "    openestimate init-db\n"
             "    openestimate serve\n"
             "\n"
-            "Then open http://localhost:8080 — log in with demo@openestimator.io / DemoPass1234!"
+            "Then open http://localhost:8080 — log in with demo@openconstructionerp.com / DemoPass1234!"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1053,6 +1131,16 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Embedded PostgreSQL is the default (see embedded_pg.is_requested). The
+    # flags are explicit overrides mapped to the same env vars _setup_env reads
+    # before any app module (and therefore the engine) is imported:
+    #   --sqlite      → OE_USE_SQLITE=1     (escape hatch to legacy SQLite)
+    #   --embedded-pg → OE_USE_EMBEDDED_PG=1 (explicit; already the default)
+    if getattr(args, "sqlite", False):
+        os.environ["OE_USE_SQLITE"] = "1"
+    if getattr(args, "embedded_pg", False):
+        os.environ["OE_USE_EMBEDDED_PG"] = "1"
 
     if args.command == "serve":
         cmd_serve(args)

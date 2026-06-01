@@ -25,7 +25,9 @@ class PurchaseOrder(Base):
     __tablename__ = "oe_procurement_po"
     __table_args__ = (
         UniqueConstraint(
-            "project_id", "po_number", name="uq_procurement_po_project_number",
+            "project_id",
+            "po_number",
+            name="uq_procurement_po_project_number",
         ),
     )
 
@@ -37,9 +39,11 @@ class PurchaseOrder(Base):
     vendor_contact_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     po_number: Mapped[str] = mapped_column(String(50), nullable=False)
     po_type: Mapped[str] = mapped_column(String(50), nullable=False, default="standard")
-    issue_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    delivery_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    currency_code: Mapped[str] = mapped_column(String(10), nullable=False, default="EUR")
+    issue_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    delivery_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # Empty by default — service inherits the parent project's currency so
+    # no PO silently shows EUR when the project is non-EUR (task #217).
+    currency_code: Mapped[str] = mapped_column(String(10), nullable=False, default="")
     amount_subtotal: Mapped[str] = mapped_column(String(50), nullable=False, default="0")
     tax_amount: Mapped[str] = mapped_column(String(50), nullable=False, default="0")
     amount_total: Mapped[str] = mapped_column(String(50), nullable=False, default="0")
@@ -109,7 +113,7 @@ class GoodsReceipt(Base):
         nullable=False,
         index=True,
     )
-    receipt_date: Mapped[str] = mapped_column(String(20), nullable=False)
+    receipt_date: Mapped[str] = mapped_column(String(40), nullable=False)
     received_by_id: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
     delivery_note_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft", index=True)
@@ -173,19 +177,17 @@ class MaterialRequisition(Base):
     """
 
     __tablename__ = "oe_procurement_requisition"
-    __table_args__ = (
-        Index("ix_req_project_status", "project_id", "status"),
-    )
+    __table_args__ = (Index("ix_req_project_status", "project_id", "status"),)
 
     project_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
     requester_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     approver_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft", index=True)
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    required_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    required_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     lead_time_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Computed from required_date - lead_time_days; stored for query efficiency
-    estimated_delivery_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    estimated_delivery_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # FK to PO once approved → ordered
     po_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
@@ -232,12 +234,8 @@ class MaterialRequisitionItem(Base):
     quantity_received: Mapped[str] = mapped_column(String(50), nullable=False, default="0")
     quantity_consumed: Mapped[str] = mapped_column(String(50), nullable=False, default="0")
     # Money fields as Decimal-strings (R7 money sweep)
-    unit_cost: Mapped[Decimal] = mapped_column(
-        MoneyType(), nullable=False, default=Decimal("0")
-    )
-    extended_cost: Mapped[Decimal] = mapped_column(
-        MoneyType(), nullable=False, default=Decimal("0")
-    )
+    unit_cost: Mapped[Decimal] = mapped_column(MoneyType(), nullable=False, default=Decimal("0"))
+    extended_cost: Mapped[Decimal] = mapped_column(MoneyType(), nullable=False, default=Decimal("0"))
     currency_code: Mapped[str] = mapped_column(String(10), nullable=False, default="")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 

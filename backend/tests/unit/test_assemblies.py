@@ -14,8 +14,10 @@ Covers the QA-backlog items triaged in the ASM-* sweep:
 * ASM-005  ``AssemblyResponse.total_rate`` is documented as the
            unfactored base — apply-to-boq still applies the region.
 * ASM-006  applying an assembly into a different-currency project is
-           blocked (409) unless explicitly opted in, in which case the
-           position carries a loud ``currency_mismatch`` warning.
+           converted via the project's ``fx_rates`` when a rate exists;
+           otherwise it applies un-converted and the position carries a
+           loud, non-blocking ``currency_mismatch`` warning (Issue #128 —
+           the old hard 409 trapped the user, so there is no opt-in flag).
 * ASM-009  nested ``if()`` + lookup/param substitution evaluate
            correctly (the flat-regex splice bug is gone).
 * ASM-010  pathological formula input is rejected cheaply; a non-finite
@@ -249,9 +251,7 @@ async def test_component_update_round_trip_reads_back(session):
     from app.modules.assemblies.schemas import ComponentUpdate
     from app.modules.assemblies.service import _str_to_float
 
-    updated = await svc.update_component(
-        asm.id, comp.id, ComponentUpdate(quantity=5.0)
-    )
+    updated = await svc.update_component(asm.id, comp.id, ComponentUpdate(quantity=5.0))
     assert _str_to_float(updated.quantity) == pytest.approx(5.0)
     assert _str_to_float(updated.total) == pytest.approx(50.0)  # 1*5*10
     full = await svc.get_assembly_with_components(asm.id)
@@ -274,11 +274,7 @@ def test_component_repo_update_fields_has_no_global_expire():
     func = tree.body[0]
     # Drop the leading docstring expression before scanning the body.
     body = func.body
-    if (
-        body
-        and isinstance(body[0], ast.Expr)
-        and isinstance(body[0].value, ast.Constant)
-    ):
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
         body = body[1:]
     code_only = "\n".join(ast.dump(n) for n in body)
     assert "expire_all" not in code_only
@@ -311,9 +307,7 @@ async def test_apply_to_boq_currency_mismatch_no_rate_flags_not_blocks(session):
     await session.flush()
 
     # No exception — the apply succeeds.
-    pos = await svc.apply_to_boq(
-        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0)
-    )
+    pos = await svc.apply_to_boq(asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0))
     meta = getattr(pos, "metadata_", {}) or {}
     assert "currency_mismatch" in meta
     assert "currency_converted" not in meta
@@ -357,9 +351,7 @@ async def test_apply_to_boq_converts_when_fx_rate_present(session):
         ComponentCreate(unit="m", description="c", factor=1.0, quantity=1.0, unit_cost=100.0),
     )
 
-    pos = await svc.apply_to_boq(
-        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0)
-    )
+    pos = await svc.apply_to_boq(asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0))
     meta = getattr(pos, "metadata_", {}) or {}
     assert "currency_converted" in meta
     assert "currency_mismatch" not in meta
@@ -390,9 +382,7 @@ async def test_apply_to_boq_same_currency_ok(session):
     boq = BOQ(project_id=PROJECT_ID, name="B2")
     session.add(boq)
     await session.flush()
-    pos = await svc.apply_to_boq(
-        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=2.0)
-    )
+    pos = await svc.apply_to_boq(asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=2.0))
     meta = getattr(pos, "metadata_", {}) or {}
     assert "currency_mismatch" not in meta
 
@@ -417,9 +407,7 @@ def test_formula_if_with_func_branch():
 
 def test_formula_lookup_and_params():
     ev = FormulaEvaluator()
-    r = ev.evaluate(
-        'lookup("w", "HEB300") * ${n}', {"n": 2}, {"w": {"HEB300": 117.7}}
-    )
+    r = ev.evaluate('lookup("w", "HEB300") * ${n}', {"n": 2}, {"w": {"HEB300": 117.7}})
     assert r == pytest.approx(235.4)
 
 
@@ -485,9 +473,7 @@ async def test_apply_to_boq_drops_non_finite_regional_factor(session):
     from app.modules.assemblies.models import Assembly as AsmModel
 
     await session.execute(
-        sa_update(AsmModel)
-        .where(AsmModel.id == asm.id)
-        .values(regional_factors={"berlin": "Infinity", "muc": "1.10"})
+        sa_update(AsmModel).where(AsmModel.id == asm.id).values(regional_factors={"berlin": "Infinity", "muc": "1.10"})
     )
     await session.flush()
 
@@ -497,9 +483,7 @@ async def test_apply_to_boq_drops_non_finite_regional_factor(session):
     session.add(boq)
     await session.flush()
 
-    pos = await svc.apply_to_boq(
-        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0, region="berlin")
-    )
+    pos = await svc.apply_to_boq(asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0, region="berlin"))
     from app.modules.assemblies.service import _str_to_float
 
     # The non-finite Berlin factor was silently dropped → base rate 100.
@@ -534,9 +518,7 @@ async def test_apply_to_boq_valid_regional_factor_still_applies(session):
     boq = BOQ(project_id=PROJECT_ID, name="RFB2")
     session.add(boq)
     await session.flush()
-    pos = await svc.apply_to_boq(
-        asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0, region="muc")
-    )
+    pos = await svc.apply_to_boq(asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0, region="muc"))
     from app.modules.assemblies.service import _str_to_float
 
     # 100 × 1.10 = 110.
@@ -708,3 +690,104 @@ def test_assembly_update_preserves_unset_regional_factors():
     u = AssemblyUpdate()  # no fields set
     dumped = u.model_dump(exclude_unset=True)
     assert "regional_factors" not in dumped
+
+
+# ── ASM-leak — list + stats are owner-scoped (no cross-tenant leak) ──────
+
+
+@pytest.mark.asyncio
+async def test_search_assemblies_scoped_to_owner(session):
+    """A non-admin caller must only see their own assemblies — the list
+    endpoint passes ``owner_id`` so it cannot enumerate another tenant's
+    recipes (the per-item endpoints already 404 for non-owners)."""
+    from app.modules.users.models import User
+
+    other = User(
+        id=uuid.uuid4(),
+        email=f"leak-{uuid.uuid4().hex[:6]}@test.io",
+        hashed_password="x",
+        full_name="Other",
+    )
+    session.add(other)
+    await session.flush()
+
+    svc = AssemblyService(session)
+    await svc.create_assembly(AssemblyCreate(code="MINE-1", name="Mine", unit="m"), owner_id=str(OWNER_ID))
+    await svc.create_assembly(AssemblyCreate(code="THEIRS-1", name="Theirs", unit="m"), owner_id=str(other.id))
+
+    mine, mine_total = await svc.search_assemblies(owner_id=OWNER_ID)
+    assert mine_total == 1
+    assert [a.code for a in mine] == ["MINE-1"]
+
+    # Admin / unscoped sees everything.
+    everything, all_total = await svc.search_assemblies(owner_id=None)
+    assert all_total == 2
+    assert {a.code for a in everything} == {"MINE-1", "THEIRS-1"}
+
+
+@pytest.mark.asyncio
+async def test_get_stats_scoped_to_owner(session):
+    """The stats banner totals/breakdown are per-tenant so a VIEWER never
+    sees the platform-wide count."""
+    from app.modules.users.models import User
+
+    other = User(
+        id=uuid.uuid4(),
+        email=f"leak2-{uuid.uuid4().hex[:6]}@test.io",
+        hashed_password="x",
+        full_name="Other2",
+    )
+    session.add(other)
+    await session.flush()
+
+    svc = AssemblyService(session)
+    await svc.create_assembly(
+        AssemblyCreate(code="S-MINE", name="Mine", unit="m", category="concrete"),
+        owner_id=str(OWNER_ID),
+    )
+    await svc.create_assembly(
+        AssemblyCreate(code="S-THEIRS", name="Theirs", unit="m", category="steel"),
+        owner_id=str(other.id),
+    )
+
+    mine = await svc.get_stats(owner_id=OWNER_ID)
+    assert mine["total"] == 1
+    assert mine["by_category"] == {"concrete": 1}
+
+    everyone = await svc.get_stats(owner_id=None)
+    assert everyone["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_usage_counts_counts_applied_positions(session):
+    """get_usage_counts reflects how many BOQ positions reference an
+    assembly via their metadata, scoped to the caller's projects."""
+    from app.modules.boq.models import BOQ
+
+    svc = AssemblyService(session)
+    asm = await svc.create_assembly(
+        AssemblyCreate(code="USE-1", name="Use", unit="m", currency="EUR"),
+        owner_id=str(OWNER_ID),
+    )
+    await svc.add_component(
+        asm.id,
+        ComponentCreate(unit="m", description="c", factor=1.0, quantity=1.0, unit_cost=10.0),
+    )
+    boq = BOQ(project_id=PROJECT_ID, name="UseB")
+    session.add(boq)
+    await session.flush()
+
+    # No usage yet.
+    pre = await svc.get_usage_counts([asm.id], owner_id=OWNER_ID)
+    assert pre[str(asm.id)] == 0
+
+    # Apply twice (distinct ordinals so the BOQ accepts both) → usage 2.
+    await svc.apply_to_boq(asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=1.0, ordinal="01"))
+    await svc.apply_to_boq(asm.id, ApplyToBOQRequest(boq_id=boq.id, quantity=2.0, ordinal="02"))
+
+    post = await svc.get_usage_counts([asm.id], owner_id=OWNER_ID)
+    assert post[str(asm.id)] == 2
+
+    # A different tenant's scope sees none of these positions.
+    foreign = await svc.get_usage_counts([asm.id], owner_id=uuid.uuid4())
+    assert foreign[str(asm.id)] == 0

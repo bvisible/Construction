@@ -216,6 +216,40 @@ export function isNetworkErrorMessage(message: string | undefined | null): boole
   return NETWORK_ERROR_PATTERNS.some((re) => re.test(message));
 }
 
+// ---------------------------------------------------------------------------
+// Expected-state noise filter (handled empty states that arrive as js_error)
+// ---------------------------------------------------------------------------
+
+/**
+ * Message fingerprints for *expected* application states that surface as a
+ * thrown Error (and therefore reach us via window.onerror /
+ * unhandledrejection as a ``js_error``, bypassing the network whitelist
+ * which only matches tracked ``api_error`` events by path+status).
+ *
+ * Triggered by GitHub issue #168: on lightweight / showcase installs a
+ * model can legitimately have no 3D mesh artifact. The geometry endpoint
+ * returns 404 ``geometry_missing``; ``ElementManager`` throws a
+ * "Failed to fetch geometry (404): ..." Error which the viewer already
+ * handles by showing the empty / converting state. Because the throw is not
+ * caught as a tracked network event, it leaked into the bug-report buffer
+ * and users auto-filed false reports. A missing mesh is an expected empty
+ * state, not a defect.
+ */
+const EXPECTED_STATE_PATTERNS: readonly RegExp[] = [
+  // BIM geometry 404 — model has no 3D mesh artifact (lightweight install,
+  // metadata-only / showcase model, conversion not run). Matches both the
+  // "(404)" and bare ": 404" headline shapes emitted by ElementManager, and
+  // the backend ``geometry_missing`` marker if it surfaces in the message.
+  /Failed to fetch geometry(?:\s*\(404\)|:\s*404)\b/i,
+  /\bgeometry_missing\b/i,
+];
+
+/** Return true if the message represents an expected, handled empty state. */
+export function isExpectedStateMessage(message: string | undefined | null): boolean {
+  if (!message) return false;
+  return EXPECTED_STATE_PATTERNS.some((re) => re.test(message));
+}
+
 /** Return true if the status code is a transient infrastructure blip. */
 export function isTransientHttpStatus(status: number | undefined | null): boolean {
   if (status === undefined || status === null) return false;
@@ -455,6 +489,18 @@ export function logError(
   const isError = error instanceof Error;
   const message = isError ? error.message : String(error);
   const stack = isError ? error.stack : undefined;
+
+  // Drop errors explicitly flagged as expected by the throwing code (e.g.
+  // ElementManager sets ``err.expected = true`` on a geometry 404 when a
+  // model has no 3D mesh — an empty state the viewer handles, not a bug),
+  // or whose message matches a known expected-state marker. The throw
+  // arrives here as a js_error via window.onerror/unhandledrejection, so it
+  // bypasses the api_error path+status whitelist — match by flag/message.
+  const flaggedExpected =
+    isError && (error as Error & { expected?: boolean }).expected === true;
+  if (flaggedExpected || isExpectedStateMessage(message)) {
+    return;
+  }
 
   // Drop matches against the recording whitelist (handled noise that
   // would otherwise spam the bug-report buffer).

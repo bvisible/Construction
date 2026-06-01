@@ -11,5 +11,5 @@ guarded by three independent gates so it cannot be hit by accident:
 
 Even with all three gates open, the destructive scope is whitelisted: only
 projects/BOQs/etc. owned by the demo accounts (``demo@``, ``estimator@``,
-``manager@openestimator.io``) are removed before reseeding.
+``manager@openconstructionerp.com``) are removed before reseeding.
 """

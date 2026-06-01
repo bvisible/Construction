@@ -153,7 +153,10 @@ export async function fetchContainerRevisions(id: string): Promise<CDERevision[]
 export interface CreateRevisionPayload {
   file_name: string;
   change_summary?: string;
+  /** Real storage key of a freshly-uploaded file (upload mode). */
   storage_key?: string;
+  /** Existing Documents-hub row to link (link mode) — no duplicate is created. */
+  document_id?: string;
   mime_type?: string;
   file_size?: string;
 }
@@ -167,6 +170,17 @@ export async function createContainerRevision(
 
 export async function fetchSuitabilityCodes(): Promise<SuitabilityCodesResponse> {
   return apiGet<SuitabilityCodesResponse>('/v1/cde/suitability-codes/');
+}
+
+export interface CDEStats {
+  total: number;
+  by_state: Record<string, number>;
+  by_discipline: Record<string, number>;
+  latest_revisions: number;
+}
+
+export async function fetchCDEStats(projectId: string): Promise<CDEStats> {
+  return apiGet<CDEStats>(`/v1/cde/stats/?project_id=${encodeURIComponent(projectId)}`);
 }
 
 export async function fetchContainerHistory(

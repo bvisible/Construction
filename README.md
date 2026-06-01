@@ -2,15 +2,17 @@
 
 # OpenConstructionERP
 
-**Open-source ERP for construction estimation and project management**
+### The #1 open-source workspace for construction project management
 
-Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all in one platform.
+Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-source platform.
+
+**Like WordPress for construction companies** - pick modules from the marketplace, drop in your own, or replace ours with custom-built ones. Same plug-and-play model, but for BOQ, scheduling, cost control, BIM, and tendering.
 
 [▶ Watch the 12-min walkthrough](https://www.youtube.com/watch?v=X06cIaroAeI) · [Demo](https://openconstructionerp.com) · [Documentation](https://openconstructionerp.com/docs) · [Discussions](https://t.me/datadrivenconstruction) · [Report Bug](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Version](https://img.shields.io/github/v/release/datadrivenconstruction/OpenConstructionERP?label=version&color=green)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest)
-[![PyPI](https://img.shields.io/pypi/v/openconstructionerp?color=informational&label=pypi)](https://pypi.org/project/openconstructionerp/)
+[![Version](https://img.shields.io/github/v/release/datadrivenconstruction/OpenConstructionERP?label=version&color=green&v=5.2.7)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/openconstructionerp?color=informational&label=pypi&v=5.2.7)](https://pypi.org/project/openconstructionerp/)
 [![Downloads (pepy · per month)](https://static.pepy.tech/personalized-badge/openconstructionerp?period=month&units=international_system&left_color=grey&right_color=blue&left_text=downloads%20(pepy%20%C2%B7%20per%20month))](https://pepy.tech/project/openconstructionerp)
 [![Stars](https://img.shields.io/github/stars/datadrivenconstruction/OpenConstructionERP?style=flat&logo=github)](https://github.com/datadrivenconstruction/OpenConstructionERP/stargazers)
 <br/>
@@ -26,7 +28,16 @@ Professional BOQ, 4D/5D planning, AI-powered estimation, CAD/BIM takeoff — all
 
 <sub><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/device-camera-video-dark.svg"><img src="docs/readme-icons/device-camera-video-light.svg" width="14" align="center" alt=""></picture> <b>1-minute teaser above</b> · for the full 12-minute walkthrough → <a href="https://www.youtube.com/watch?v=X06cIaroAeI"><b>watch on YouTube</b></a> · onboarding → BoQ → BIM → DWG → PDF → AI → dashboard</sub>
 
-*100% open source · 55,000+ cost items · AI estimation · 27 languages · 111 modules · Self-hosted*
+<table>
+<tr>
+<td align="center" width="16.66%"><b>55K+</b><br/><sub>cost&nbsp;items</sub></td>
+<td align="center" width="16.66%"><b>24</b><br/><sub>languages</sub></td>
+<td align="center" width="16.66%"><b>48</b><br/><sub>regions</sub></td>
+<td align="center" width="16.66%"><b>6</b><br/><sub>CAD&nbsp;formats</sub></td>
+<td align="center" width="16.66%"><b>100+</b><br/><sub>modules</sub></td>
+<td align="center" width="16.66%"><b>12</b><br/><sub>sections</sub></td>
+</tr>
+</table>
 
 </div>
 
@@ -137,55 +148,51 @@ Star OpenConstructionERP on GitHub and be instantly notified of new releases.
 
 ---
 
-## <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/sparkle-fill-dark.svg"><img src="docs/readme-icons/sparkle-fill-light.svg" width="14" align="center" alt=""></picture> What's New in v4.6.0 — Floating chat + Accommodation + Geo overlay + 10 dashboard widgets
+## <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/sparkle-fill-dark.svg"><img src="docs/readme-icons/sparkle-fill-light.svg" width="14" align="center" alt=""></picture> What's New in v5.2.7 — Project-detail widget grid
 
-The **v4.6.0** wave adds a floating ERP-aware chat on every page, a new **Accommodation** module that unifies worker camps / rentals / hotels, **10 new dashboard widgets** with server-synced layout, **DWG/PDF raster overlay** in the Geo Hub globe, and **6 per-module guided tours**. **111 modules** ship in the box; the `/api/v1/*` surface remains the public contract.
+**v5.2.7** is a UI hotfix on top of v5.2.6. The 13 widgets on `/projects/:id` (RFI inbox, Change orders pulse, Daily diary, HSE incidents, Variations, Quality NCRs, Compliance, Schedule, Budget burn, Recent files, Photo strip, AI insights, Activity feed) were rendered as a **single tall column** since the original `ec5aec1e` widget customizer landed — never wrapped in a responsive grid, so users on desktop saw an awkward narrow stack on otherwise-wide screens. v5.2.7 wraps the block in `grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4` with selective `lg:col-span-2` for widgets whose content (Schedule timeline, Budget burn history bars, Photo strip carousel) requires horizontal room and `sm:col-span-2 lg:col-span-3` for the full-width Activity feed. No backend changes; install is `pip install --upgrade openconstructionerp` with no migration needed.
+
+---
+
+## <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/sparkle-fill-dark.svg"><img src="docs/readme-icons/sparkle-fill-light.svg" width="14" align="center" alt=""></picture> What's New in v5.2.6 — Login fix (BUG-D02) + WCAG-AA contrast + Reporting renderer + Dashboard rollup + 1197 JA keys
+
+**v5.2.6** is a quality-of-life wave on top of v5.2.5's install-crash fix. The headline change is **demo login works again from the manual form** — BUG-D01 had randomised the demo password per install for security, but everyone who typed the documented `DemoPass1234!` got 401. The new path short-circuits whitelisted demo emails through the password-free `demo_login` service when `SEED_DEMO=true` (default on community / self-host, off in production). The button + manual form + documented credential all work in one step now.
 
 <table>
 <tr>
 <td width="50%" valign="top">
 
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/comment-discussion-dark.svg"><img src="docs/readme-icons/comment-discussion-light.svg" width="14" align="center" alt=""></picture> Floating chat — every page, talks to your ERP DB**
-Bottom-right FAB on every screen opens a panel backed by 17 database tools (projects, BOQ, schedule, validation, risks, CWICR search, BIM elements, semantic search across all modules). Streamed responses with tool-call cards rendered inline.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/log-dark.svg"><img src="docs/readme-icons/log-light.svg" width="14" align="center" alt=""></picture> BUG-D02 — Demo login JustWorks**
+Manual login form accepts the documented `DemoPass1234!` for the three seeded demo emails (`demo@`, `estimator@`, `manager@`) without checking the bcrypt hash. Production installs (`SEED_DEMO=false`) fall back to the normal verify path — no security regression. Whitelist sync test now covers router + service + seeder. 76 unit + 6 integration tests green.
 
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/home-dark.svg"><img src="docs/readme-icons/home-light.svg" width="14" align="center" alt=""></picture> Accommodation module — worker camps + rentals + hotels**
-- One module for three lodging kinds (`worker_camp` / `rental` / `hotel`) with kind-filter tabs and per-card capacity.
-- **Rooms** with status (available · occupied · maintenance · blocked) and BIM element id linkage.
-- **Bookings** state machine: `reserved → checked_in → checked_out` (or `cancelled` from any non-final state), 409 on bookings into maintenance/blocked rooms.
-- **Charges** (base rent, extras, deposits, refunds) with Decimal precision and per-room currency inheritance.
-- **PropDev bootstrap** — one-click iterate a development block's plots → 1:1 rooms, idempotent.
-- **HR autobook** — suggest lowest-labelled available `worker_camp` room for an employee contact, human-confirmed.
-- BIM `bim_element_id` + Geo `lat/lon` integration; cards show a "Geo" deeplink when coords are set.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/checks-dark.svg"><img src="docs/readme-icons/checks-light.svg" width="14" align="center" alt=""></picture> #216 — WCAG-AA contrast tokens**
+Five semantic tokens (success / warning / error / info / blue-subtle) raised from sub-3:1 to 5.2–6.6:1 against their token backgrounds. Estimated **~700 of 863** axe-flagged contrast violations resolved at the design-system layer — no per-component patching. Apple Liquid button palette preserved; new `--oe-*-vivid` tokens keep saturated hues available for dots / status pips.
 
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/graph-dark.svg"><img src="docs/readme-icons/graph-light.svg" width="14" align="center" alt=""></picture> 10 new dashboard widgets + server-synced customizer**
-BOQ Summary · Critical Path · Top Risks · HSE Scorecard · Procurement Pipeline · Budget Variance · Change Orders · Clash Health · Validation Score · Weather Site. Layout persists server-side via `UserPreference` (no more device-local drift).
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/sparkle-dark.svg"><img src="docs/readme-icons/sparkle-light.svg" width="14" align="center" alt=""></picture> #252 — Reporting renderer (built from scratch)**
+`POST /reports/generate` previously stored a row but rendered nothing; the engine never existed. `ReportRenderer` (stdlib-only, no Jinja/WeasyPrint) now dispatches section types, escapes HTML, formats list-of-dicts as tables. New `GET /reports/{id}/content` returns rendered HTML. 7 new pytest cases + 38 existing reporting tests pass = 45/45.
 
 </td>
 <td width="50%" valign="top">
 
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> Geo Hub raster overlay (DWG/PDF on the globe)**
-- Upload a PDF or image, drag four corners onto the globe → raster appears as a draped overlay.
-- **Polygon crop** with vertex drag; degenerate-bbox guard + "Needs corners" CTA when pixel→geo math under-determines the placement.
-- Infinite-loop guard removed (component now stable under repeated re-mounts).
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/zap-dark.svg"><img src="docs/readme-icons/zap-light.svg" width="14" align="center" alt=""></picture> #253 — ProjectWidgets → /dashboard/rollup/**
+Project-detail page used to fan out 8 parallel widget requests on every paint. Now a single `/dashboard/rollup/?widgets=…` call feeds all 8 via a React context. Rollup endpoint grew from 10 → 18 known widget keys (additive — existing endpoints untouched). 5 widgets still standalone because their backend endpoints don't exist yet (graceful-null today). Mirrors VPS-502-mid-run mitigation memory note.
 
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/mortar-board-dark.svg"><img src="docs/readme-icons/mortar-board-light.svg" width="14" align="center" alt=""></picture> 6 per-module guided tours**
-BOQ · BIM · Geo · PropDev · Dashboard · Accommodation each ship a hand-written tour wired through `ModuleHelpButton tourId="…"`. 192 i18n strings translated EN/DE/RU at native quality.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/globe-dark.svg"><img src="docs/readme-icons/globe-light.svg" width="14" align="center" alt=""></picture> #245 — JA locale: 1197 keys translated**
+High-traffic surfaces covered: nav, sidebar admin grid, common buttons (Save / Cancel / Delete / …), validation messages, BOQ jargon (内訳明細書 / Position / Section / Resource / Assembly), project widgets, finance, procurement, match-elements. Acronyms (BOQ / IFC / BIM / GAEB / DIN) stay in Latin. ~529 long-tail keys (multi-sentence tooltips / onboarding paragraphs) deferred to a focused next pass.
 
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/bug-dark.svg"><img src="docs/readme-icons/bug-light.svg" width="14" align="center" alt=""></picture> Reliability fixes**
-- Dashboard widget endpoints: **12 4xx → 0** (URL paths were drifting from router prefixes).
-- Marketing-site SMTP: port 465 now correctly uses `SMTP_SSL` (port 587 stays STARTTLS).
-- Geo overlay: fix infinite re-render loop on initial open; degenerate bbox now shows actionable CTA instead of a blank globe.
-
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/lock-dark.svg"><img src="docs/readme-icons/lock-light.svg" width="14" align="center" alt=""></picture> Cumulative since v4.0.0**
-- v4.1–v4.3 Round 4 + Round 5 security: ~73 IDOR closures across 11 modules.
-- BIM Requirements (IDS/COBie), Coordination Hub, Smart Views, Clash AI Triage, BCF 3.0/OpenCDE.
-- PropDev complete Lead → SPA → Handover → Warranty clickflow + Geo Hub Cesium 3D Tiles.
-
-**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/broadcast-dark.svg"><img src="docs/readme-icons/broadcast-light.svg" width="14" align="center" alt=""></picture> Latest alembic head**: `v3121` (Accommodation + Geo raster overlay) · single-head invariant maintained across every wave.
+**<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/broadcast-dark.svg"><img src="docs/readme-icons/broadcast-light.svg" width="14" align="center" alt=""></picture> Latest alembic head**: `v3144` (unchanged from v5.2.5) — single-head invariant maintained.
 
 </td>
 </tr>
 </table>
+
+See the [latest release](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest) and the [CHANGELOG](CHANGELOG.md) for the per-release breakdown.
+
+---
+
+## <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/log-dark.svg"><img src="docs/readme-icons/log-light.svg" width="14" align="center" alt=""></picture> What's New in v5.2.5 — International BOQ + Universal audit trail + Install-crash fix
+
+The **v5.2.x** line graduates the platform to **116 modules** with three foundation epics from the Deep-Coordination initiative, plus **Epic I — International BOQ** for worldwide tender formats. **v5.2.5** specifically unblocks fresh `pip install` — the previous 4.5.0 wheel on PyPI crashed at startup because of a FastAPI 0.115.x regression on `@router.delete(status_code=204)` routes, and v5.2.5 pins `fastapi>=0.116`. Everyone stuck on 4.5.0 can now simply `pip install --upgrade openconstructionerp`.
 
 See the [latest release](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest) and the [CHANGELOG](CHANGELOG.md) for the per-release breakdown.
 
@@ -326,6 +333,82 @@ Each block below is a short GIF cut from the full walkthrough above — same ord
 <strong><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/search-dark.svg"><img src="docs/readme-icons/search-light.svg" width="14" align="center" alt=""></picture> Bonus · Instant Search</strong><br/>
 <em>Find any of 55K+ cost items across 11 regional databases by keyword, unit or classification</em><br/><br/>
 <img src="docs/gifs/05_Instant_Search.gif" alt="Instant Search" width="400" />
+</td>
+</tr>
+</table>
+
+---
+
+## A Look Inside
+
+A quick tour of the main workspaces. Every screen is the real application running the seven-country demo that ships with a fresh install.
+
+<table>
+<tr>
+<td align="center" width="50%">
+<strong>Portfolio Dashboard</strong><br/>
+<em>Every project on one live map, with multi-currency totals that are grouped by currency, never blended.</em><br/><br/>
+<img src="docs/screenshots/gallery/portfolio-dashboard.jpg" alt="Portfolio dashboard with world map and KPIs" width="420" />
+</td>
+<td align="center" width="50%">
+<strong>Projects</strong><br/>
+<em>Localized projects worldwide. Each card carries its site map, BIM / DWG / PDF badges and live value.</em><br/><br/>
+<img src="docs/screenshots/gallery/projects.jpg" alt="Projects overview with localized project cards" width="420" />
+</td>
+</tr>
+<tr>
+<td align="center">
+<strong>BOQ Editor</strong><br/>
+<em>Keyboard-first bill of quantities with sections, assemblies, a live quality score and grand total.</em><br/><br/>
+<img src="docs/screenshots/gallery/boq-editor.jpg" alt="Bill of Quantities editor" width="420" />
+</td>
+<td align="center">
+<strong>Cost Database</strong><br/>
+<em>55,000+ priced items across 11 regional databases, bilingual, searchable by code, unit or class.</em><br/><br/>
+<img src="docs/screenshots/gallery/cost-database.jpg" alt="Regional cost databases" width="420" />
+</td>
+</tr>
+<tr>
+<td align="center">
+<strong>3D BIM Viewer</strong><br/>
+<em>Federated models in the browser with a category and storey breakdown. Converted through DDC, no IfcOpenShell.</em><br/><br/>
+<img src="docs/screenshots/gallery/bim-3d-viewer.jpg" alt="3D BIM viewer with element summary" width="420" />
+</td>
+<td align="center">
+<strong>Clash Detection</strong><br/>
+<em>Geometric coordination across federated models, with a clash matrix and BCF export.</em><br/><br/>
+<img src="docs/screenshots/gallery/clash-detection.jpg" alt="Clash detection across federated models" width="420" />
+</td>
+</tr>
+<tr>
+<td align="center">
+<strong>PDF Takeoff</strong><br/>
+<em>Drop a drawing, let AI extract the quantities, then push them straight into the BOQ.</em><br/><br/>
+<img src="docs/screenshots/gallery/pdf-takeoff.jpg" alt="AI-assisted PDF takeoff" width="420" />
+</td>
+<td align="center">
+<strong>AI Estimate</strong><br/>
+<em>Turn text, a photo, a PDF or a spreadsheet into a scoped BOQ in seconds, with confidence scores.</em><br/><br/>
+<img src="docs/screenshots/gallery/ai-estimate.jpg" alt="AI quick estimate" width="420" />
+</td>
+</tr>
+<tr>
+<td align="center">
+<strong>Validation</strong><br/>
+<em>Built-in DIN 276, NRM and MasterFormat rules score every BOQ with a traffic-light report.</em><br/><br/>
+<img src="docs/screenshots/gallery/validation.jpg" alt="Validation report with traffic-light score" width="420" />
+</td>
+<td align="center">
+<strong>Cross-Project Analytics</strong><br/>
+<em>Portfolio KPIs grouped by currency: budget, actuals and variance, project by project.</em><br/><br/>
+<img src="docs/screenshots/gallery/analytics.jpg" alt="Cross-project analytics grouped by currency" width="420" />
+</td>
+</tr>
+<tr>
+<td align="center" colspan="2">
+<strong>Finance &amp; Earned Value</strong><br/>
+<em>Budgets, invoices, payments and earned value tracked against the estimate.</em><br/><br/>
+<img src="docs/screenshots/gallery/finance.jpg" alt="Finance and earned value management" width="420" />
 </td>
 </tr>
 </table>
@@ -690,7 +773,7 @@ Get productive in under 10 minutes:
 
 ```bash
 pip install --upgrade openconstructionerp
-openestimate
+openconstructionerp
 ```
 
 That's it. Installs backend + pre-built React frontend in one wheel (~7.4 MB), opens your browser at **http://localhost:8080**, creates a SQLite database, and seeds the three demo accounts on first boot. No Docker, no Node.js, no extra services. [PyPI package](https://pypi.org/project/openconstructionerp/).
@@ -703,7 +786,7 @@ That's it. Installs backend + pre-built React frontend in one wheel (~7.4 MB), o
 > ```
 > Full Linux guide with system deps and troubleshooting: [docs/INSTALL_LINUX.md](docs/INSTALL_LINUX.md).
 
-If something looks off, run `openestimate doctor` for a per-check OK/WARN/ERROR report.
+If something looks off, run `openconstructionerp doctor` for a per-check OK/WARN/ERROR report.
 
 ### Alternative 1: One-line installer (auto-detects Docker / uv / pip)
 
@@ -754,7 +837,7 @@ password is **generated per installation** (via `secrets.token_urlsafe`)
 and printed to the backend startup log so you see it immediately, e.g.:
 
 ```
-[seed] Demo user created: demo@openestimator.io / xK7p_Q2nR8sT4uV6wX9yZ
+[seed] Demo user created: demo@openconstructionerp.com / xK7p_Q2nR8sT4uV6wX9yZ
 [seed] Pre-set DEMO_USER_PASSWORD env to skip random generation
 ```
 
@@ -763,15 +846,15 @@ The same passwords are also persisted to
 them later. To pin known passwords (e.g. for a team demo or CI), set the
 env vars **before the first boot**:
 
-- `DEMO_USER_PASSWORD` — admin (`demo@openestimator.io`)
-- `DEMO_ESTIMATOR_PASSWORD` — estimator (`estimator@openestimator.io`)
-- `DEMO_MANAGER_PASSWORD` — manager (`manager@openestimator.io`)
+- `DEMO_USER_PASSWORD` — admin (`demo@openconstructionerp.com`)
+- `DEMO_ESTIMATOR_PASSWORD` — estimator (`estimator@openconstructionerp.com`)
+- `DEMO_MANAGER_PASSWORD` — manager (`manager@openconstructionerp.com`)
 
 | Account | Email | Password | Role |
 |---------|-------|----------|------|
-| Admin | `demo@openestimator.io` | _see startup log or `.demo_credentials.json`_ | Full access |
-| Estimator | `estimator@openestimator.io` | _see startup log or `.demo_credentials.json`_ | Estimator |
-| Manager | `manager@openestimator.io` | _see startup log or `.demo_credentials.json`_ | Manager |
+| Admin | `demo@openconstructionerp.com` | _see startup log or `.demo_credentials.json`_ | Full access |
+| Estimator | `estimator@openconstructionerp.com` | _see startup log or `.demo_credentials.json`_ | Estimator |
+| Manager | `manager@openconstructionerp.com` | _see startup log or `.demo_credentials.json`_ | Manager |
 
 > Demo accounts include 5 pre-loaded projects from Berlin, London, New York, Paris, and Dubai with complete BOQs, schedules, and cost models.
 >

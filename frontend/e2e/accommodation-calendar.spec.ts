@@ -31,7 +31,7 @@ const SCREENSHOT_DIR = path.resolve(
 const DEMO_USER = {
   // Note the "r" in openestima(r)tor — the canonical demo email per
   // memory. openestimate.io WITHOUT the r is the common 401 trap.
-  email: process.env.E2E_USER_EMAIL ?? 'demo@openestimator.io',
+  email: process.env.E2E_USER_EMAIL ?? 'demo@openconstructionerp.com',
 };
 
 async function login(page: Page): Promise<string> {

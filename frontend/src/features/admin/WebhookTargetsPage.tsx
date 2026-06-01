@@ -157,7 +157,8 @@ export function WebhookTargetsPage() {
             </p>
           </div>
         ) : (
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[640px]">
             <thead className="bg-surface-secondary/40 text-xs uppercase tracking-wide text-content-tertiary">
               <tr>
                 <th className="text-left px-4 py-2">{t('common.name', { defaultValue: 'Name' })}</th>
@@ -217,6 +218,7 @@ export function WebhookTargetsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </section>
     </div>
@@ -235,7 +237,7 @@ function StatusBadge({ target }: { target: WebhookTarget }) {
   }
   if (target.last_status == null) {
     return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs text-oe-blue">
+      <span className="inline-flex items-center gap-1 rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs text-oe-blue-text">
         Active · never fired
       </span>
     );

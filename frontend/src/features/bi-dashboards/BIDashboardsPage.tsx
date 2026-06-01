@@ -87,7 +87,11 @@ function toNumber(v: number | string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function formatValue(value: number, unit: string | null | undefined): string {
+function formatValue(
+  value: number,
+  unit: string | null | undefined,
+  currency?: string | null,
+): string {
   if (!Number.isFinite(value)) return '—';
   const abs = Math.abs(value);
   let formatted: string;
@@ -96,8 +100,80 @@ function formatValue(value: number, unit: string | null | undefined): string {
   else if (Number.isInteger(value)) formatted = String(value);
   else formatted = value.toFixed(2);
   if (unit === 'percent') return `${formatted}%`;
-  if (unit === 'currency') return formatted;
+  if (unit === 'currency') {
+    // Money rule: a currency amount must always carry its ISO code. When the
+    // backend resolved the project's base currency it ships it in
+    // ``breakdown.currency``; render e.g. "USD 1.2M". If the code is unknown
+    // (portfolio rollups with no single base currency) show the amount with
+    // a neutral marker rather than an unattributable bare number.
+    const code = (currency ?? '').trim().toUpperCase();
+    return code ? `${code} ${formatted}` : `${formatted}`;
+  }
   return formatted;
+}
+
+/** Pull the ISO currency code a money widget resolved, if any. */
+function widgetCurrency(breakdown: Record<string, unknown> | undefined): string | null {
+  const c = breakdown?.['currency'];
+  return typeof c === 'string' && c.trim() ? c.trim().toUpperCase() : null;
+}
+
+/**
+ * Portfolio money KPIs (CV/SV/EAC/ETC/VAC/COPQ/cash-in/out across projects)
+ * never blend mixed currencies: the headline value is the dominant
+ * currency's subtotal and the full per-currency split rides in
+ * ``breakdown.by_currency`` with a ``breakdown.multi_currency`` flag. This
+ * parses that map into a sorted ``[code, amount]`` list (empty when the KPI
+ * is single-currency).
+ */
+function widgetByCurrency(
+  breakdown: Record<string, unknown> | undefined,
+): Array<{ currency: string; amount: number }> {
+  const raw = breakdown?.['by_currency'];
+  if (!raw || typeof raw !== 'object') return [];
+  return Object.entries(raw as Record<string, unknown>)
+    .map(([currency, v]) => ({
+      currency,
+      amount: typeof v === 'number' ? v : Number(v),
+    }))
+    .filter((e) => Number.isFinite(e.amount))
+    .sort((a, b) => a.currency.localeCompare(b.currency));
+}
+
+function widgetMultiCurrency(breakdown: Record<string, unknown> | undefined): boolean {
+  return breakdown?.['multi_currency'] === true;
+}
+
+/**
+ * Renders the "+ N other · CODES" multi-currency hint plus the full
+ * per-currency subtotal list, so a portfolio money tile is honest about the
+ * fact that its headline figure is only the dominant currency's slice.
+ */
+function MultiCurrencyHint({
+  breakdown,
+  unit,
+}: {
+  breakdown: Record<string, unknown> | undefined;
+  unit: string | null | undefined;
+}) {
+  const { t } = useTranslation();
+  const groups = widgetByCurrency(breakdown);
+  if (!widgetMultiCurrency(breakdown) || groups.length < 2) return null;
+  return (
+    <div className="mt-1">
+      <span className="rounded bg-surface-tertiary px-1.5 py-0.5 text-2xs font-medium text-content-tertiary">
+        {t('bi.multi_currency', { defaultValue: 'multi-currency' })}
+      </span>
+      <div className="mt-1 flex flex-col gap-0.5 text-2xs text-content-tertiary">
+        {groups.map((g) => (
+          <div key={g.currency} className="flex justify-between gap-3 tabular-nums">
+            <span className="font-medium">{g.currency}</span>
+            <span>{formatValue(g.amount, unit, g.currency)}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 /* ─── Page ─── */
@@ -1032,6 +1108,7 @@ function WidgetCard({
   const { t } = useTranslation();
   const type = widget.widget.widget_type;
   const value = toNumber(widget.value);
+  const currency = widgetCurrency(widget.breakdown);
   const trend = (widget.breakdown?.['trend'] as unknown[]) || [];
   const trendValues = Array.isArray(trend)
     ? trend.map((p) => toNumber((p as { value?: number | string }).value ?? 0))
@@ -1062,11 +1139,12 @@ function WidgetCard({
         </p>
         <div className="mt-2 flex items-end justify-between">
           <p className="text-3xl font-semibold">
-            {formatValue(value, widget.unit ?? null)}
+            {formatValue(value, widget.unit ?? null, currency)}
           </p>
           {delta != null && <DeltaChip delta={delta} />}
         </div>
         <p className="mt-1 text-xs text-content-tertiary">{widget.unit ?? ''}</p>
+        <MultiCurrencyHint breakdown={widget.breakdown} unit={widget.unit} />
       </Card>
     );
   }
@@ -1107,8 +1185,9 @@ function WidgetCard({
         </p>
         <HalfGauge value={value} threshold={threshold || Math.max(1, value * 1.5)} />
         <p className="mt-1 text-center text-sm font-semibold">
-          {formatValue(value, widget.unit ?? null)}
+          {formatValue(value, widget.unit ?? null, currency)}
         </p>
+        <MultiCurrencyHint breakdown={widget.breakdown} unit={widget.unit} />
       </Card>
     );
   }
@@ -1167,7 +1246,8 @@ function WidgetCard({
       className={cardClickable ? 'cursor-pointer' : undefined}
     >
       <p className="text-xs uppercase tracking-wide text-content-tertiary">{type}</p>
-      <p className="mt-2 text-lg font-semibold">{formatValue(value, widget.unit ?? null)}</p>
+      <p className="mt-2 text-lg font-semibold">{formatValue(value, widget.unit ?? null, currency)}</p>
+      <MultiCurrencyHint breakdown={widget.breakdown} unit={widget.unit} />
     </Card>
   );
 }

@@ -11,6 +11,15 @@ import { useAuthStore } from '@/stores/useAuthStore';
 
 export type DwgScaleMode = 'preset' | 'calibrated' | 'per_annotation';
 
+/** Lifecycle states the backend reports for a drawing.
+ *  - `uploaded`: file persisted, conversion not yet started.
+ *  - `processing`: DXF parser or DDC DwgExporter is running. This is the
+ *    long step — a medium DWG can stay here for 3–8 minutes.
+ *  - `ready`: entities + thumbnail are available. The viewer can render.
+ *  - `empty`: file parsed cleanly but produced 0 entities.
+ *  - `error`: conversion failed. `error_message` carries the reason. */
+export type DwgDrawingStatus = 'uploaded' | 'processing' | 'ready' | 'empty' | 'error';
+
 export interface DwgDrawing {
   id: string;
   project_id: string;
@@ -26,6 +35,13 @@ export interface DwgDrawing {
   scale_mode?: DwgScaleMode;
   /** DXF $INSUNITS name: "mm", "cm", "m", "inches", "feet", "unitless", ... */
   units?: string | null;
+  /** Backend conversion lifecycle (see {@link DwgDrawingStatus}). Polled
+   *  by the DWG takeoff page while the user waits — uploading a .dwg
+   *  immediately returns a row with ``status="processing"`` while the
+   *  actual DDC conversion runs in the background for several minutes. */
+  status?: DwgDrawingStatus;
+  /** Human-readable reason when ``status === 'error'`` or ``'empty'``. */
+  error_message?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -191,6 +207,14 @@ export async function fetchDrawings(projectId: string): Promise<DwgDrawing[]> {
   return apiGet<DwgDrawing[]>(`/v1/dwg_takeoff/drawings/?project_id=${projectId}`);
 }
 
+/** Fetch a single drawing — used to poll conversion status while the
+ *  user watches the honest progress UI on /dwg-takeoff. The backend
+ *  flips `status` from `processing` → `ready` (or `error` / `empty`)
+ *  once the DDC pipeline finishes. */
+export async function fetchDrawing(drawingId: string): Promise<DwgDrawing> {
+  return apiGet<DwgDrawing>(`/v1/dwg_takeoff/drawings/${drawingId}`);
+}
+
 export async function uploadDrawing(
   projectId: string,
   file: File,
@@ -226,10 +250,48 @@ export async function deleteDrawing(id: string): Promise<void> {
   return apiDelete(`/v1/dwg_takeoff/drawings/${id}`);
 }
 
+/**
+ * Create (or reuse) a DWG/DXF drawing from an existing project Document.
+ *
+ * Powers the Documents / File Manager "Open in DWG Takeoff" action: a CAD
+ * file that lives only as a Document has no drawing to render, so opening it
+ * used to land on a blank page. The backend materialises the drawing on
+ * demand (status ``uploaded`` → ``processing`` → ``ready``) and is idempotent
+ * per document, so re-opening returns the same drawing. The caller then polls
+ * /drawings/{id} via the normal status-polling path while it converts.
+ */
+export async function importDrawingFromDocument(
+  documentId: string,
+  name?: string,
+): Promise<DwgDrawing> {
+  return apiPost<DwgDrawing>('/v1/dwg_takeoff/drawings/from-document/', {
+    document_id: documentId,
+    ...(name ? { name } : {}),
+  });
+}
+
 /* ── Entities & Layers ─────────────────────────────────────────────────── */
 
-export async function fetchEntities(drawingId: string): Promise<DxfEntity[]> {
-  return apiGet<DxfEntity[]>(`/v1/dwg_takeoff/drawings/${drawingId}/entities/`);
+/**
+ * Fetch parsed entities for a drawing.
+ *
+ * When `visibleLayers` is a non-empty list, only those layers are requested
+ * so the backend filters the (potentially large) entity set BEFORE
+ * serialising it — a medium DWG can carry 50k+ entities, and the canvas
+ * only ever renders the layers the user has toggled on. Omitting the
+ * parameter (or passing an empty list) returns every layer, which is the
+ * correct behaviour on first load when the full layer list is not yet known.
+ */
+export async function fetchEntities(
+  drawingId: string,
+  visibleLayers?: string[],
+): Promise<DxfEntity[]> {
+  let url = `/v1/dwg_takeoff/drawings/${drawingId}/entities/`;
+  if (visibleLayers && visibleLayers.length > 0) {
+    const layers = visibleLayers.map((l) => encodeURIComponent(l)).join(',');
+    url += `?layers=${layers}`;
+  }
+  return apiGet<DxfEntity[]>(url);
 }
 
 export async function fetchThumbnail(drawingId: string): Promise<string> {
@@ -331,7 +393,7 @@ export async function linkAnnotationToBoq(
 /* ── Pins ──────────────────────────────────────────────────────────────── */
 
 export async function fetchPins(drawingId: string): Promise<DwgPin[]> {
-  return apiGet<DwgPin[]>(`/v1/dwg_takeoff/drawings/${drawingId}/pins`);
+  return apiGet<DwgPin[]>(`/v1/dwg-takeoff/pins/?drawing_id=${encodeURIComponent(drawingId)}`);
 }
 
 /* ── Entity Groups (RFC 11) ───────────────────────────────────────────── */
@@ -374,6 +436,12 @@ export interface DwgOfflineReadiness {
   converter_available: boolean;
   version: string | null;
   message: string;
+  /** True only when the browser and the backend run on the same machine
+   *  (loopback request + non-production server). Drives whether the UI may
+   *  show the strong "your files never leave your computer" claim or the
+   *  honest "processed on your OpenConstructionERP server" copy. Optional so
+   *  older backends that don't yet send it are treated as NOT local-only. */
+  local_only?: boolean;
 }
 
 export async function fetchOfflineReadiness(): Promise<DwgOfflineReadiness> {
@@ -383,6 +451,7 @@ export async function fetchOfflineReadiness(): Promise<DwgOfflineReadiness> {
       converter_available: false,
       version: null,
       message: 'DWG takeoff module is disabled',
+      local_only: false,
     };
   }
   return apiGet<DwgOfflineReadiness>('/v1/dwg_takeoff/offline-readiness/');

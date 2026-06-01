@@ -13,7 +13,7 @@
 import { test, expect, Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
-const DEMO_EMAIL = process.env.OE_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.OE_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 const DEMO_PASSWORD = process.env.OE_DEMO_PASSWORD ?? 'DemoPass1234!';
 
 async function login(page: Page) {

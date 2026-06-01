@@ -18,6 +18,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import HTMLResponse
 
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.reporting.schemas import (
@@ -31,7 +32,7 @@ from app.modules.reporting.schemas import (
 )
 from app.modules.reporting.service import ReportingService
 
-router = APIRouter()
+router = APIRouter(tags=["reporting"])
 logger = logging.getLogger(__name__)
 
 
@@ -93,14 +94,22 @@ async def create_kpi_snapshot(
 @router.post("/kpi/recalculate-all/", status_code=200)
 async def recalculate_all_kpis(
     user_id: CurrentUserId,
-    _perm: None = Depends(RequirePermission("reporting.create")),
+    _perm: None = Depends(RequirePermission("reporting.distribute")),
     service: ReportingService = Depends(_get_service),
 ) -> dict:
-    """Recalculate KPI snapshots for all active projects (admin only).
+    """Recalculate KPI snapshots for ALL active projects (MANAGER+).
 
     Queries finance, safety, RFI, submittals, schedule, and risk modules
     to produce up-to-date KPI values.  Creates or updates one KPISnapshot
     per project for today's date.
+
+    Gated at ``reporting.distribute`` (MANAGER) rather than the per-row
+    ``reporting.create`` (EDITOR): this is a portfolio-wide,
+    cross-tenant recompute that ignores per-project membership and runs
+    O(projects x 6 module queries). The privileged blast radius warrants
+    the manager tier, mirroring how scheduling/distribution is gated
+    (W2 audit, /reporting). The frontend hides the trigger for roles
+    below manager so it is never a dead control.
     """
     return await service.auto_recalculate_kpis()
 
@@ -242,6 +251,7 @@ async def run_template_now(
     if template.project_id_scope is None:
         from fastapi import HTTPException
         from fastapi import status as http_status
+
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
             detail="Portfolio-wide run-now is not supported yet; set project_id_scope first",
@@ -295,6 +305,44 @@ async def list_reports(
         limit=limit,
     )
     return [GeneratedReportResponse.model_validate(r) for r in reports]
+
+
+@router.get(
+    "/reports/{report_id}/content",
+    response_class=HTMLResponse,
+    responses={
+        200: {"content": {"text/html": {}}},
+        404: {"description": "Report not found"},
+        410: {"description": "Report body not yet rendered or removed from storage"},
+    },
+)
+async def get_report_content(
+    report_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    service: ReportingService = Depends(_get_service),
+) -> HTMLResponse:
+    """Return the rendered HTML body of a generated report.
+
+    The matching metadata row must exist (404 otherwise) and have a
+    populated ``storage_key`` (410 Gone otherwise — the metadata exists
+    but the renderer never produced or persisted a body). IDOR-guarded
+    via ``verify_project_access`` on the report's parent project.
+
+    Before this endpoint landed (W23 P0 audit, task #252) the frontend
+    history panels listed report rows but had no way to open them
+    because no endpoint exposed the rendered body.
+    """
+    # Resolve the metadata row first (raises 404 if unknown) so we know
+    # which project to gate on, then verify access *before* fetching the
+    # rendered body from the storage backend.  Reversing the order would
+    # waste a storage I/O for every unauthorised request and, more
+    # importantly, would read sensitive report content into memory before
+    # the caller's access is confirmed.
+    report = await service.get_report(report_id)
+    await verify_project_access(report.project_id, user_id, session)
+    _, body_html = await service.get_report_content(report_id)
+    return HTMLResponse(content=body_html, status_code=200)
 
 
 @router.get("/reports/{report_id}", response_model=GeneratedReportResponse)

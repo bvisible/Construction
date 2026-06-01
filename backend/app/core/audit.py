@@ -8,7 +8,7 @@ Usage:
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import JSON, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -117,6 +117,12 @@ def _parse_iso(value: str | None) -> datetime | None:
 
     Accepts the trailing ``Z`` shorthand for UTC. Returns ``None`` for
     blank/unparseable inputs — callers should treat that as "no filter".
+
+    The result is always timezone-aware (offset-naive inputs are assumed UTC).
+    ``AuditEntry.created_at`` is ``DateTime(timezone=True)`` → ``TIMESTAMPTZ`` on
+    PostgreSQL, and asyncpg refuses to bind a naive ``datetime`` to a TIMESTAMPTZ
+    parameter. SQLite tolerates either, so normalising here keeps both dialects
+    working from the same call sites.
     """
     if not value:
         return None
@@ -126,9 +132,12 @@ def _parse_iso(value: str | None) -> datetime | None:
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
 
 
 async def get_audit_entries(
@@ -170,11 +179,7 @@ async def get_audit_entries(
         stmt = stmt.where(AuditEntry.created_at >= parsed_from)
     if parsed_to is not None:
         stmt = stmt.where(AuditEntry.created_at <= parsed_to)
-    order_col = (
-        AuditEntry.created_at.asc()
-        if sort == "asc"
-        else AuditEntry.created_at.desc()
-    )
+    order_col = AuditEntry.created_at.asc() if sort == "asc" else AuditEntry.created_at.desc()
     stmt = stmt.order_by(order_col).offset(offset).limit(limit)
     result = await session.execute(stmt)
     return list(result.scalars().all())

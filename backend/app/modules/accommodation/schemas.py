@@ -72,7 +72,13 @@ class AccommodationUpdate(BaseModel):
 class AccommodationResponse(BaseModel):
     """Read shape for an accommodation."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # ``populate_by_name`` lets the model accept the field *name*
+    # (``metadata``) in addition to its alias (``metadata_``). Response
+    # builders round-trip through ``model_dump(by_alias=False)`` +
+    # ``model_validate`` to decorate extra keys; without this the dumped
+    # ``metadata`` key would not match the ``metadata_`` alias on revalidate
+    # and the field would silently fall back to ``{}``.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     project_id: UUID
@@ -138,7 +144,9 @@ class RoomUpdate(BaseModel):
 class RoomResponse(BaseModel):
     """Read shape for a room."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # See ``AccommodationResponse`` — ``populate_by_name`` keeps the
+    # ``metadata_`` alias round-trip-safe through response builders.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     accommodation_id: UUID
@@ -199,11 +207,7 @@ class BookingUpdate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_dates(self) -> BookingUpdate:
-        if (
-            self.check_in is not None
-            and self.check_out is not None
-            and self.check_out <= self.check_in
-        ):
+        if self.check_in is not None and self.check_out is not None and self.check_out <= self.check_in:
             raise ValueError("check_out must be strictly after check_in")
         return self
 
@@ -216,7 +220,10 @@ class BookingResponse(BaseModel):
     ``None`` because the room id is already in scope at the call site.
     """
 
-    model_config = ConfigDict(from_attributes=True)
+    # See ``AccommodationResponse`` — ``populate_by_name`` keeps the
+    # ``metadata_`` alias round-trip-safe through ``_decorate_bookings`` and
+    # the booking-detail builder.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     room_id: UUID
@@ -267,11 +274,7 @@ class ChargeCreate(BaseModel):
 
     @model_validator(mode="after")
     def _validate_period(self) -> ChargeCreate:
-        if (
-            self.period_start is not None
-            and self.period_end is not None
-            and self.period_end < self.period_start
-        ):
+        if self.period_start is not None and self.period_end is not None and self.period_end < self.period_start:
             raise ValueError("period_end must not precede period_start")
         return self
 
@@ -279,7 +282,9 @@ class ChargeCreate(BaseModel):
 class ChargeResponse(BaseModel):
     """Read shape for a charge."""
 
-    model_config = ConfigDict(from_attributes=True)
+    # See ``AccommodationResponse`` — ``populate_by_name`` keeps the
+    # ``metadata_`` alias round-trip-safe through response builders.
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     booking_id: UUID

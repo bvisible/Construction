@@ -22,7 +22,7 @@ import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const DEMO_USER = {
-  email: process.env.E2E_USER_EMAIL ?? 'demo@openestimator.io',
+  email: process.env.E2E_USER_EMAIL ?? 'demo@openconstructionerp.com',
 };
 
 async function login(page: Page): Promise<string> {

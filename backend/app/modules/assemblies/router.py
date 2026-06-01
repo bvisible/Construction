@@ -49,11 +49,28 @@ from app.modules.assemblies.service import AssemblyService, _str_to_float
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(tags=["assemblies"])
 
 
 def _get_service(session: SessionDep) -> AssemblyService:
     return AssemblyService(session)
+
+
+def _scope_owner_id(user_id: str, payload: dict | None) -> uuid.UUID | None:
+    """Resolve the owner scope for collection/stats endpoints.
+
+    Admins (role claim == ``admin``) get ``None`` — an unscoped,
+    platform-wide view. Everyone else is pinned to their own ``owner_id``
+    so list + stats never leak another tenant's assemblies (the per-item
+    endpoints already 404 for non-owners; this closes the matching gap in
+    the collection / aggregate endpoints).
+    """
+    if payload and payload.get("role") == "admin":
+        return None
+    try:
+        return uuid.UUID(str(user_id))
+    except (TypeError, ValueError):
+        return None
 
 
 async def _verify_assembly_owner(
@@ -115,14 +132,17 @@ async def _verify_target_boq_owner(
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(boq.project_id)
     if project is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale())
+        )
     if str(project.owner_id) != str(user_id):
         # 404 here too — don't let callers probe for valid BOQ ids.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="BOQ not found")
 
 
 def _assembly_to_response(
-    assembly: object, usage_count: int = 0,
+    assembly: object,
+    usage_count: int = 0,
 ) -> AssemblyResponse:
     """Convert an Assembly ORM model to an AssemblyResponse schema."""
     components = getattr(assembly, "components", None) or []
@@ -199,6 +219,8 @@ async def create_assembly(
     dependencies=[Depends(RequirePermission("assemblies.read"))],
 )
 async def search_assemblies(
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     q: str | None = Query(default=None, description="Text search on code, name, description"),
     category: str | None = Query(default=None, description="Filter by category"),
     unit: str | None = Query(default=None, description="Filter by unit"),
@@ -209,7 +231,12 @@ async def search_assemblies(
     limit: int = Query(default=50, ge=1, le=500),
     service: AssemblyService = Depends(_get_service),
 ) -> AssemblySearchResponse:
-    """Search assemblies with optional filters and pagination."""
+    """Search assemblies with optional filters and pagination.
+
+    Scoped to the caller's own assemblies (per-tenant isolation) so the
+    collection cannot leak other tenants' recipes — admins see all.
+    """
+    scope_owner = _scope_owner_id(user_id, payload)
     assemblies, total = await service.search_assemblies(
         q=q,
         category=category,
@@ -219,6 +246,7 @@ async def search_assemblies(
         is_template=is_template,
         offset=offset,
         limit=limit,
+        owner_id=scope_owner,
     )
 
     # Compute usage counts for each assembly from BOQ metadata
@@ -226,15 +254,13 @@ async def search_assemblies(
     try:
         usage_map = await service.get_usage_counts(
             [a.id for a in assemblies],
+            owner_id=scope_owner,
         )
     except Exception:
         logger.debug("Could not compute assembly usage counts")
 
     return AssemblySearchResponse(
-        items=[
-            _assembly_to_response(a, usage_count=usage_map.get(str(a.id), 0))
-            for a in assemblies
-        ],
+        items=[_assembly_to_response(a, usage_count=usage_map.get(str(a.id), 0)) for a in assemblies],
         total=total,
         limit=limit,
         offset=offset,
@@ -443,10 +469,16 @@ async def ai_generate_assembly(
     dependencies=[Depends(RequirePermission("assemblies.read"))],
 )
 async def get_stats(
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     service: AssemblyService = Depends(_get_service),
 ) -> dict:
-    """Return aggregated assembly statistics: totals, category breakdown, most-used."""
-    return await service.get_stats()
+    """Return aggregated assembly statistics: totals, category breakdown, most-used.
+
+    Scoped to the caller's own assemblies so the stats banner does not
+    expose the platform-wide count to a non-admin tenant.
+    """
+    return await service.get_stats(owner_id=_scope_owner_id(user_id, payload))
 
 
 @router.get(
@@ -774,9 +806,7 @@ async def list_templates(
     category: str | None = Query(default=None, description="Filter by category"),
     tag: str | None = Query(default=None, description="Filter by tag"),
     din276: str | None = Query(default=None, description="Filter by DIN 276 KG code"),
-    masterformat: str | None = Query(
-        default=None, description="Filter by MasterFormat division"
-    ),
+    masterformat: str | None = Query(default=None, description="Filter by MasterFormat division"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=500),
 ) -> AssemblyTemplateSearchResponse:
@@ -905,7 +935,54 @@ async def apply_template(
     components_out: list[AppliedComponent] = []
     unresolved: list[str] = []
     grand_total = 0.0
-    currency = getattr(project, "currency", "") or ""
+    # Target currency for the rolled-up ``grand_total``. The project currency is
+    # authoritative; when the project has none we lock the target to the first
+    # matched component's currency (below). Money rule: NEVER blend currencies —
+    # each component is converted into the target via the project's ``fx_rates``
+    # before it is summed; a foreign component with no configured FX rate is
+    # kept in its own currency and flagged (non-blocking), mirroring
+    # ``apply_to_boq``'s ``currency_mismatch`` behaviour rather than silently
+    # adding mismatched numbers (the previous behaviour).
+    from app.modules.boq.service import _project_fx_map
+
+    currency = (getattr(project, "currency", "") or "").strip().upper()
+    fx_map = _project_fx_map(project)
+    fx_warnings: set[str] = set()
+
+    def _convert_component(amount: float, src_currency: str) -> float:
+        """Convert ``amount`` from ``src_currency`` into the locked target.
+
+        Foreign→target is multiplication by ``fx_rates[src]`` (units of target
+        per 1 unit of source — the same convention the BOQ rollup uses). When no
+        rate is configured the amount is returned unchanged and a warning is
+        recorded so the un-converted value is visible, never silently blended.
+        """
+        nonlocal currency
+        src = (src_currency or "").strip().upper()
+        if not src:
+            # Match carried no currency — treat as already in the target.
+            return amount
+        if not currency:
+            # Project had no currency: lock the target to this first currency.
+            currency = src
+            return amount
+        if src == currency:
+            return amount
+        raw_rate = fx_map.get(src)
+        if raw_rate:
+            try:
+                rate = float(raw_rate)
+            except (TypeError, ValueError):
+                rate = 0.0
+            if rate > 0.0 and rate == rate and rate not in (float("inf"), float("-inf")):
+                return amount * rate
+        # No usable FX rate — keep the native value and flag the mismatch.
+        fx_warnings.add(
+            f"Component priced in {src} could not be converted to {currency} "
+            f"(no FX rate configured); its value was kept in {src}. "
+            f"Add an FX rate in Project Settings to convert it."
+        )
+        return amount
 
     for raw in template.components or []:
         query = str(raw.get("cost_match_query", "")).strip()
@@ -972,13 +1049,16 @@ async def apply_template(
                 except (TypeError, ValueError):
                     matched_id = None
             m_currency = getattr(top, "currency", "") or ""
-            if not currency and m_currency:
-                currency = m_currency
         else:
+            m_currency = ""
             unresolved.append(query or description)
 
+        # Native total (in the matched item's currency) — what the component row
+        # displays. The rolled-up ``grand_total`` instead accumulates each
+        # component CONVERTED into the target currency so currencies are never
+        # blended (``_convert_component`` also locks the target on first match).
         total = _component_total(factor, float(data.quantity), unit_rate)
-        grand_total += total
+        grand_total += _convert_component(total, m_currency)
 
         components_out.append(
             AppliedComponent(
@@ -1000,10 +1080,11 @@ async def apply_template(
 
     warnings: list[str] = []
     if unresolved:
-        warnings.append(
-            f"{len(unresolved)} component(s) could not be matched against the "
-            "project's cost catalogue."
-        )
+        warnings.append(f"{len(unresolved)} component(s) could not be matched against the project's cost catalogue.")
+    # Surface any currency mismatches the conversion could not resolve, so the
+    # un-converted (kept-native) components are visible rather than silently
+    # blended into the target-currency grand total.
+    warnings.extend(sorted(fx_warnings))
 
     # ``total_rate`` is the per-unit rate (assembly subtotal at quantity=1);
     # ``grand_total`` is the rolled-up total for the requested quantity.

@@ -5,20 +5,35 @@ the top-level response (``RollupResponse``) keys are dynamic — only the
 widgets the caller asked for are populated. Unrequested widgets are
 absent (not ``None``) so the frontend can use ``in`` to detect coverage.
 
-All money fields ship as **strings**, never floats, per CLAUDE.md §10:
+All money fields ship as **strings**, never floats, per the architecture guide §10:
 JS ``Number`` loses precision on currency values > 2^53, and ``orjson``
 defaults can stringify-without-rounding nondeterministically.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _Widget(BaseModel):
     """Common base — allow extra so we can extend payloads without re-shipping schemas."""
 
     model_config = ConfigDict(extra="allow")
+
+
+class CurrencySubtotal(BaseModel):
+    """Per-currency money subtotal in a cross-project rollup.
+
+    Used wherever a headline scalar would otherwise blend ISO currencies
+    (which is financially meaningless without an FX table). Consumers
+    should render these per-currency chips instead of the legacy blended
+    scalar whenever ``multi_currency`` is true.
+    """
+
+    currency: str
+    total_value: str  # Decimal-as-string
 
 
 class BOQByProject(BaseModel):
@@ -54,11 +69,30 @@ class BOQSummaryPayload(_Widget):
     total_boqs: int
     active_boqs: int = Field(
         default=0,
+        description=("BOQs whose status is NOT in archived/closed/cancelled/rejected."),
+    )
+    # NOTE: ``total_value_eur`` is a legacy field name. It is NOT an
+    # FX-converted EUR equivalent — there is no cross-project rate table.
+    # It is a RAW arithmetic sum of every project's BOQ total across
+    # whatever currencies they use. When ``multi_currency`` is true it
+    # mixes ISO currencies and must NOT be shown as a single headline
+    # figure — use ``by_currency`` instead. The name is retained only for
+    # backward compatibility with existing consumers.
+    total_value_eur: str = Field(
         description=(
-            "BOQs whose status is NOT in archived/closed/cancelled/rejected."
+            "Legacy raw cross-currency sum (NOT FX-converted). When "
+            "multi_currency is true this blends ISO currencies and must "
+            "not be rendered as a single headline — use by_currency."
         ),
     )
-    total_value_eur: str = Field(description="Sum across all projects, **EUR equivalent** as Decimal string.")
+    by_currency: list[CurrencySubtotal] = Field(
+        default_factory=list,
+        description="FX-correct per-currency subtotals of BOQ value.",
+    )
+    multi_currency: bool = Field(
+        default=False,
+        description="True when projects span more than one ISO currency.",
+    )
     position_count: int
     positions_missing_quantity: int
     positions_zero_price: int
@@ -189,10 +223,29 @@ class ChangeOrderItem(BaseModel):
     currency: str
 
 
+class ChangeOrderCurrencySubtotal(BaseModel):
+    """Per-currency open change-order impact subtotal."""
+
+    currency: str
+    total_impact: str  # Decimal-as-string
+
+
 class ChangeOrdersPayload(_Widget):
     open_count: int
+    # Legacy flat scalar kept for backward compatibility. When
+    # ``multi_currency`` is true it blends ISO currencies (there is no
+    # cross-project FX table) and must not be rendered as a single
+    # headline figure — use ``by_currency`` instead.
     total_impact: str  # Decimal-as-string
     currency: str
+    by_currency: list[ChangeOrderCurrencySubtotal] = Field(
+        default_factory=list,
+        description="FX-correct per-currency subtotals of open change-order impact.",
+    )
+    multi_currency: bool = Field(
+        default=False,
+        description="True when open change orders span more than one ISO currency.",
+    )
     top_pending: list[ChangeOrderItem]
 
 
@@ -203,6 +256,120 @@ class WeatherSitePayload(_Widget):
     temperature_c: float | None
     conditions: str | None
     source: str | None
+
+
+# ── Project-detail widget payloads (W23 P0) ──────────────────────────────────
+#
+# These widgets live on /projects/:id. The rollup endpoint accepts them as
+# additional widget keys + a ``project_ids=<id>`` filter, so the frontend
+# can replace ~8 parallel per-widget useQuery calls with a single rollup.
+# Money fields ship as Decimal strings, same as the wave-2 widgets above.
+
+
+class ProjectRFIItem(BaseModel):
+    id: str
+    number: str | None
+    subject: str
+    status: str
+    created_at: str | None = None
+    due_date: str | None = None
+
+
+class ProjectRFIInboxPayload(_Widget):
+    items: list[ProjectRFIItem]
+
+
+class ProjectChangeOrdersPulsePayload(_Widget):
+    open_count: int
+    pending_count: int
+    approved_count: int
+    total_value: str
+    approved_value: str
+    currency: str
+
+
+class ProjectDiaryItem(BaseModel):
+    """Single diary header — shape matches the widget's ``DiaryItem``.
+
+    ``weather_summary`` is a JSONB dict server-side; the widget already
+    has a ``formatWeatherSummary`` helper that handles both shapes, so
+    we pass the dict through untouched.
+    """
+
+    id: str
+    diary_date: str | None
+    status: str | None
+    weather_summary: dict | str | None = None
+    manpower_total: int | None = None
+    narrative: str | None = None
+
+
+class ProjectDailyDiaryPayload(_Widget):
+    items: list[ProjectDiaryItem]
+
+
+class ProjectHSEItem(BaseModel):
+    id: str
+    status: str | None
+    severity: str | None
+
+
+class ProjectHSEIncidentsPayload(_Widget):
+    total: int
+    high: int
+    medium: int
+    low: int
+    items: list[ProjectHSEItem]
+
+
+class ProjectVariationItem(BaseModel):
+    id: str
+    status: str | None
+    estimated_value: str  # Decimal-as-string
+    disputed: bool
+
+
+class ProjectVariationsPayload(_Widget):
+    open: int
+    disputed_value: str  # Decimal-as-string
+    currency: str
+    items: list[ProjectVariationItem]
+
+
+class ProjectNCRItem(BaseModel):
+    id: str
+    status: str | None
+    severity: str | None
+
+
+class ProjectQualityNCRPayload(_Widget):
+    open: int
+    major: int
+    minor: int
+    items: list[ProjectNCRItem]
+
+
+class ProjectComplianceItem(BaseModel):
+    id: str
+    status: str | None
+    expires_at: str | None
+    doc_type: str | None
+
+
+class ProjectComplianceSummaryPayload(_Widget):
+    active: int
+    expiring: int
+    expired: int
+    items: list[ProjectComplianceItem]
+
+
+class ProjectBudgetBurnPayload(_Widget):
+    planned_total: str  # Decimal-as-string
+    actual_total: str  # Decimal-as-string
+    currency: str
+    # Per-period series omitted in v1 (kept on the schema so the widget's
+    # sparkline glue keeps working when a future endpoint fills it in).
+    series: list[dict] = Field(default_factory=list)
 
 
 class RollupResponse(BaseModel):
@@ -230,6 +397,16 @@ class RollupResponse(BaseModel):
     change_orders: ChangeOrdersPayload | None = None
     weather_site: WeatherSitePayload | None = None
 
+    # Project-detail widgets (W23 P0).
+    project_rfi_inbox: ProjectRFIInboxPayload | None = None
+    project_change_orders_pulse: ProjectChangeOrdersPulsePayload | None = None
+    project_daily_diary: ProjectDailyDiaryPayload | None = None
+    project_hse_incidents: ProjectHSEIncidentsPayload | None = None
+    project_variations: ProjectVariationsPayload | None = None
+    project_quality_ncr: ProjectQualityNCRPayload | None = None
+    project_compliance_summary: ProjectComplianceSummaryPayload | None = None
+    project_budget_burn: ProjectBudgetBurnPayload | None = None
+
     # Cache metadata — populated by the router so the frontend can
     # display a "last refreshed Xs ago" stamp without round-tripping
     # headers through React Query's transport layer.
@@ -238,25 +415,158 @@ class RollupResponse(BaseModel):
     project_count: int = 0
 
 
+# ── Widget-config request schemas (used by POST /rollup with body) ─────────
+#
+# The legacy ``GET /rollup/?widgets=…`` query-string flow takes a flat list
+# of widget ids with no per-widget overrides. The richer config-aware path
+# accepts a list of ``WidgetConfigItem``s instead so the caller can ask for,
+# e.g., ``{"widget_id": "boq_summary", "config": {"max_by_project": 25}}``.
+#
+# The 422-path is enforced here in Pydantic (rather than in the router) so
+# the OpenAPI schema documents which keys + value bounds are accepted per
+# widget. The error messages match the patterns ``tests/unit/test_dashboard_
+# rollup.py::TestWidgetConfigValidation`` checks.
+
+# Map widget_id → ``{config_key: (type, min, max)}``. ``type`` is the
+# Python type the value must coerce to; ``min`` / ``max`` are inclusive
+# bounds (``None`` to skip the bound).
+_WIDGET_CONFIG_SPEC: dict[str, dict[str, tuple[type, Any, Any]]] = {
+    "boq_summary": {
+        "show_last_boq": (bool, None, None),
+        "max_by_project": (int, 1, 500),
+    },
+    "validation_score": {
+        "target_score": (float, 0.0, 1.0),
+    },
+    "clash_health": {},
+    "schedule_critical": {
+        "lookahead_days": (int, 1, 365),
+    },
+    "risk_top": {
+        "limit": (int, 1, 100),
+    },
+    "hse_scorecard": {},
+    "procurement_pipeline": {},
+    "budget_variance": {},
+    "change_orders": {
+        "limit": (int, 1, 100),
+    },
+    "weather_site": {},
+}
+
+_KNOWN_CONFIG_WIDGETS: frozenset[str] = frozenset(_WIDGET_CONFIG_SPEC)
+
+
+class WidgetConfigItem(BaseModel):
+    """One ``(widget_id, config)`` pair from a config-aware rollup request.
+
+    Validates two layers:
+      * ``widget_id`` is one of the known configurable widgets (10 of them).
+      * Every key in ``config`` is allowed for that widget, with the right
+        type and within the documented bounds. Unknown keys reject — we
+        don't silently drop them because that has historically caused
+        silent regressions when a config key was renamed.
+    """
+
+    widget_id: str
+    config: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("widget_id")
+    @classmethod
+    def _validate_widget_id(cls, v: str) -> str:
+        if v not in _KNOWN_CONFIG_WIDGETS:
+            allowed = ", ".join(sorted(_KNOWN_CONFIG_WIDGETS))
+            raise ValueError(f"Unknown widget_id {v!r}. Allowed: {allowed}")
+        return v
+
+    @field_validator("config")
+    @classmethod
+    def _validate_config(cls, v: dict[str, Any], info: Any) -> dict[str, Any]:
+        widget_id = info.data.get("widget_id")
+        if widget_id is None or widget_id not in _WIDGET_CONFIG_SPEC:
+            # widget_id either failed its own validation or is unknown;
+            # leave the config alone and let the widget_id error surface.
+            return v
+        spec = _WIDGET_CONFIG_SPEC[widget_id]
+        if not v:
+            # Empty config is always valid — no per-widget defaults to apply.
+            return v
+        for key, value in v.items():
+            if key not in spec:
+                allowed = ", ".join(sorted(spec)) or "(none)"
+                raise ValueError(f"Unknown config key {key!r} for widget_id={widget_id!r}. Allowed: {allowed}")
+            expected_type, lo, hi = spec[key]
+            # bool is a subclass of int in Python, so check it first.
+            if expected_type is bool:
+                if not isinstance(value, bool):
+                    raise ValueError(f"Config value for {widget_id!r}.{key!r} must be bool")
+                continue
+            if expected_type is int:
+                if isinstance(value, bool) or not isinstance(value, int):
+                    raise ValueError(f"Config value for {widget_id!r}.{key!r} must be int")
+                if lo is not None and hi is not None and not (lo <= value <= hi):
+                    raise ValueError(f"Config value for {widget_id!r}.{key!r} must be between {lo} and {hi}")
+                continue
+            if expected_type is float:
+                if isinstance(value, bool) or not isinstance(value, int | float):
+                    raise ValueError(f"Config value for {widget_id!r}.{key!r} must be float")
+                fval = float(value)
+                if lo is not None and hi is not None and not (lo <= fval <= hi):
+                    raise ValueError(f"Config value for {widget_id!r}.{key!r} must be between {lo} and {hi}")
+                continue
+        return v
+
+
+class RollupRequest(BaseModel):
+    """Config-aware rollup request body (POST flavour).
+
+    Accepts a list of ``WidgetConfigItem``s instead of a CSV string of
+    widget ids. The GET endpoint stays the canonical "fast path"; this
+    request body is reserved for callers that need per-widget overrides
+    (e.g. the dashboard customisation panel).
+    """
+
+    widget_configs: list[WidgetConfigItem] = Field(default_factory=list)
+    project_ids: list[str] | None = None
+
+
 __all__ = [
     "BOQByProject",
     "BOQSummaryPayload",
     "BudgetByProject",
     "BudgetVariancePayload",
+    "ChangeOrderCurrencySubtotal",
     "ChangeOrderItem",
     "ChangeOrdersPayload",
     "ClashByProject",
     "ClashHealthPayload",
     "CriticalTaskItem",
+    "CurrencySubtotal",
     "HSEByProject",
     "HSEScorecardPayload",
     "LastBOQRef",
     "ProcurementPipelinePayload",
+    "ProjectBudgetBurnPayload",
+    "ProjectChangeOrdersPulsePayload",
+    "ProjectComplianceItem",
+    "ProjectComplianceSummaryPayload",
+    "ProjectDailyDiaryPayload",
+    "ProjectDiaryItem",
+    "ProjectHSEIncidentsPayload",
+    "ProjectHSEItem",
+    "ProjectNCRItem",
+    "ProjectQualityNCRPayload",
+    "ProjectRFIInboxPayload",
+    "ProjectRFIItem",
+    "ProjectVariationItem",
+    "ProjectVariationsPayload",
     "RiskItem",
     "RiskTopPayload",
+    "RollupRequest",
     "RollupResponse",
     "ScheduleCriticalPayload",
     "ValidationByProject",
     "ValidationScorePayload",
     "WeatherSitePayload",
+    "WidgetConfigItem",
 ]

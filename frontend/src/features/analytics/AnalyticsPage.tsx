@@ -16,6 +16,8 @@ import {
   BarChart3,
   Search,
   Database,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { Breadcrumb, Button, Card, Badge, Skeleton, EmptyState } from '@/shared/ui';
 
@@ -47,9 +49,16 @@ interface ProjectAnalytics {
   budget: number;
   actual: number;
   variance: number;
-  variance_pct: number;
+  variance_pct: number | null;
   boq_count: number;
   status: 'on_budget' | 'over_budget';
+}
+
+interface CurrencyTotal {
+  currency: string;
+  total_planned: number;
+  total_actual: number;
+  total_variance: number;
 }
 
 interface AnalyticsOverview {
@@ -58,6 +67,8 @@ interface AnalyticsOverview {
   total_planned: number;
   total_actual: number;
   total_variance: number;
+  multi_currency: boolean;
+  totals_by_currency: CurrencyTotal[];
   over_budget_count: number;
   projects: ProjectAnalytics[];
 }
@@ -76,7 +87,7 @@ export function AnalyticsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [search, setSearch] = useState('');
 
-  const { data, isLoading } = useQuery<AnalyticsOverview>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<AnalyticsOverview>({
     queryKey: ['analytics', 'overview'],
     queryFn: () => apiGet<AnalyticsOverview>('/v1/projects/analytics/overview/'),
   });
@@ -117,7 +128,16 @@ export function AnalyticsPage() {
 
   const handleExportCSV = useCallback(() => {
     if (!sortedProjects.length) return;
-    const headers = ['Project', 'Region', 'Currency', 'Budget', 'Actual', 'Variance', 'Variance %', 'Status'];
+    const headers = [
+      t('analytics.col_project', { defaultValue: 'Project' }),
+      t('analytics.col_region', { defaultValue: 'Region' }),
+      t('analytics.col_currency', { defaultValue: 'Currency' }),
+      t('analytics.col_budget', { defaultValue: 'Budget' }),
+      t('analytics.col_actual', { defaultValue: 'Actual' }),
+      t('analytics.col_variance', { defaultValue: 'Variance' }),
+      t('analytics.col_variance_pct', { defaultValue: 'Var. %' }),
+      t('analytics.col_status', { defaultValue: 'Status' }),
+    ];
     const rows = sortedProjects.map(p => [
       `"${p.name.replace(/"/g, '""')}"`,
       p.region,
@@ -125,7 +145,7 @@ export function AnalyticsPage() {
       p.budget.toFixed(0),
       p.actual.toFixed(0),
       p.variance.toFixed(0),
-      `${p.variance_pct.toFixed(1)}%`,
+      p.variance_pct == null ? '' : `${p.variance_pct.toFixed(1)}%`,
       p.status,
     ].join(','));
     const csv = [headers.join(','), ...rows].join('\n');
@@ -136,7 +156,7 @@ export function AnalyticsPage() {
     a.download = 'analytics_export.csv';
     a.click();
     URL.revokeObjectURL(url);
-  }, [sortedProjects]);
+  }, [sortedProjects, t]);
 
   // Find the max budget for bar chart scaling
   const maxBudget = useMemo(() => {
@@ -144,10 +164,19 @@ export function AnalyticsPage() {
     return Math.max(...sortedProjects.map((p) => Math.max(p.budget, p.actual)), 1);
   }, [sortedProjects]);
 
+  const currencyTotals = data?.totals_by_currency ?? [];
+  // Treat as multi-currency only when the backend flags it AND we actually
+  // have per-currency breakdowns to render; otherwise fall back to the single
+  // headline figure labelled with that one currency's ISO code.
+  const isMultiCurrency = Boolean(data?.multi_currency) && currencyTotals.length > 1;
+  // The single ISO code to label the flat scalar headline figures with, so a
+  // GBP/USD/AED portfolio is never mislabelled as EUR.
+  const singleCurrency = currencyTotals.length === 1 ? currencyTotals[0]?.currency : undefined;
+
   const totalVariancePct =
     data && data.total_planned > 0
-      ? ((data.total_variance / data.total_planned) * 100).toFixed(1)
-      : '0.0';
+      ? `${((data.total_variance / data.total_planned) * 100).toFixed(1)}%`
+      : '—';
 
   if (isLoading) {
     return (
@@ -172,6 +201,39 @@ export function AnalyticsPage() {
             ))}
           </div>
         </Card>
+      </div>
+    );
+  }
+
+  /* ── Fetch failed — distinguish a server error from an empty portfolio ── */
+  if (isError) {
+    return (
+      <div className="space-y-6">
+        <Breadcrumb
+          items={[
+            { label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' },
+            { label: t('analytics.title', { defaultValue: 'Analytics' }) },
+          ]}
+          className="mb-4"
+        />
+        <EmptyState
+          icon={<AlertCircle size={28} />}
+          title={t('analytics.error_title', { defaultValue: 'Could not load analytics' })}
+          description={t('analytics.error_description', {
+            defaultValue:
+              'Something went wrong while fetching analytics data. Check your connection and try again.',
+          })}
+          action={
+            <Button
+              variant="primary"
+              icon={<RefreshCw size={14} className={isFetching ? 'animate-spin' : undefined} />}
+              onClick={() => refetch()}
+              disabled={isFetching}
+            >
+              {t('analytics.retry', { defaultValue: 'Retry' })}
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -269,11 +331,34 @@ export function AnalyticsPage() {
           iconBg="bg-semantic-success-bg"
           iconColor="text-semantic-success"
           label={t('analytics.total_budget', { defaultValue: 'Total Budget' })}
-          value={compactCurrency(data?.total_planned ?? 0)}
-          sub={t('analytics.actual_spend', {
-            defaultValue: '{{amount}} actual',
-            amount: compactCurrency(data?.total_actual ?? 0),
-          })}
+          {...(isMultiCurrency
+            ? {
+                valueNode: (
+                  <div className="space-y-0.5">
+                    {currencyTotals.map((v) => (
+                      <div key={v.currency} className="flex items-baseline justify-between gap-2">
+                        <span className="text-base font-bold text-content-primary tabular-nums truncate">
+                          {compactCurrency(v.total_planned, v.currency)}
+                        </span>
+                        <span className="text-2xs text-content-tertiary tabular-nums shrink-0">
+                          {compactCurrency(v.total_actual, v.currency)}{' '}
+                          {t('analytics.actual_short', { defaultValue: 'Actual' })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ),
+                sub: t('analytics.multi_currency_note', {
+                  defaultValue: 'Multiple currencies, shown per currency',
+                }),
+              }
+            : {
+                value: compactCurrency(data?.total_planned ?? 0, singleCurrency),
+                sub: t('analytics.actual_spend', {
+                  defaultValue: '{{amount}} actual',
+                  amount: compactCurrency(data?.total_actual ?? 0, singleCurrency),
+                }),
+              })}
         />
         <KPICard
           icon={<TrendingDown size={20} />}
@@ -286,15 +371,44 @@ export function AnalyticsPage() {
             (data?.total_variance ?? 0) >= 0 ? 'text-semantic-success' : 'text-semantic-error'
           }
           label={t('analytics.overall_variance', { defaultValue: 'Overall Variance' })}
-          value={compactCurrency(data?.total_variance ?? 0)}
-          badge={
-            <Badge
-              variant={(data?.total_variance ?? 0) >= 0 ? 'success' : 'error'}
-              size="sm"
-            >
-              {totalVariancePct}%
-            </Badge>
-          }
+          {...(isMultiCurrency
+            ? {
+                valueNode: (
+                  <div className="space-y-0.5">
+                    {currencyTotals.map((v) => (
+                      <div key={v.currency} className="flex items-baseline justify-between gap-2">
+                        <span
+                          className={`text-base font-bold tabular-nums truncate ${
+                            v.total_variance >= 0 ? 'text-semantic-success' : 'text-semantic-error'
+                          }`}
+                        >
+                          {v.total_variance >= 0 ? '+' : ''}
+                          {compactCurrency(v.total_variance, v.currency)}
+                        </span>
+                        <span className="text-2xs text-content-tertiary tabular-nums shrink-0">
+                          {v.total_planned > 0
+                            ? `${fmtNumber((v.total_variance / v.total_planned) * 100, 1)}%`
+                            : '—'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                ),
+                sub: t('analytics.multi_currency_note', {
+                  defaultValue: 'Multiple currencies, shown per currency',
+                }),
+              }
+            : {
+                value: compactCurrency(data?.total_variance ?? 0, singleCurrency),
+                badge: (
+                  <Badge
+                    variant={(data?.total_variance ?? 0) >= 0 ? 'success' : 'error'}
+                    size="sm"
+                  >
+                    {totalVariancePct}
+                  </Badge>
+                ),
+              })}
         />
         <KPICard
           icon={<AlertTriangle size={20} />}
@@ -459,11 +573,21 @@ export function AnalyticsPage() {
                     </td>
                     <td
                       className={`px-4 py-3 text-right tabular-nums whitespace-nowrap ${
-                        p.variance_pct >= 0 ? 'text-semantic-success' : 'text-semantic-error'
+                        p.variance_pct == null
+                          ? 'text-content-tertiary'
+                          : p.variance_pct >= 0
+                            ? 'text-semantic-success'
+                            : 'text-semantic-error'
                       }`}
                     >
-                      {p.variance_pct >= 0 ? '+' : ''}
-                      {fmtNumber(p.variance_pct, 1)}%
+                      {p.variance_pct == null ? (
+                        '—'
+                      ) : (
+                        <>
+                          {p.variance_pct >= 0 ? '+' : ''}
+                          {fmtNumber(p.variance_pct, 1)}%
+                        </>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Badge
@@ -562,6 +686,7 @@ function KPICard({
   iconColor,
   label,
   value,
+  valueNode,
   sub,
   badge,
 }: {
@@ -569,7 +694,8 @@ function KPICard({
   iconBg: string;
   iconColor: string;
   label: string;
-  value: string;
+  value?: string;
+  valueNode?: React.ReactNode;
   sub?: string;
   badge?: React.ReactNode;
 }) {
@@ -583,10 +709,14 @@ function KPICard({
         </div>
         <div className="min-w-0 flex-1">
           <p className="text-xs font-medium text-content-tertiary">{label}</p>
-          <div className="mt-1 flex items-center gap-2">
-            <span className="text-xl font-bold text-content-primary truncate">{value}</span>
-            {badge}
-          </div>
+          {valueNode ? (
+            <div className="mt-1">{valueNode}</div>
+          ) : (
+            <div className="mt-1 flex items-center gap-2">
+              <span className="text-xl font-bold text-content-primary truncate">{value}</span>
+              {badge}
+            </div>
+          )}
           {sub && <p className="mt-0.5 text-xs text-content-secondary">{sub}</p>}
         </div>
       </div>

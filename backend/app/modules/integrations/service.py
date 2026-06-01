@@ -74,6 +74,9 @@ class WebhookService:
                 col = "metadata_" if field == "metadata" else field
                 setattr(webhook, col, data[field])
         await self.session.flush()
+        # Reload server-computed columns (updated_at onupdate=func.now()) inside
+        # the async greenlet so model_validate after return doesn't lazy-load them.
+        await self.session.refresh(webhook)
         return webhook
 
     async def delete_webhook(self, webhook: WebhookEndpoint) -> None:

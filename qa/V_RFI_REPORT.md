@@ -4,7 +4,7 @@ Branch: `feat/rfi-deep-improve`
 Base: `0e679296`
 Backend: 8027 (sqlite, `_rfi_qa.db`)
 Frontend: vite 5197 (`VITE_API_TARGET=http://127.0.0.1:8027`)
-Demo user: `demo@openestimator.io`
+Demo user: `demo@openconstructionerp.com`
 
 ---
 

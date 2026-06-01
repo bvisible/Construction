@@ -280,7 +280,7 @@ export function AISmartPanel({
         <button
           onClick={onClose}
           className="p-1.5 rounded-md hover:bg-red-100 dark:hover:bg-red-900/30 text-text-muted hover:text-red-600 dark:hover:text-red-400 transition-colors"
-          aria-label="Close"
+          aria-label={t('common.close', { defaultValue: 'Close' })}
         >
           <X size={18} />
         </button>

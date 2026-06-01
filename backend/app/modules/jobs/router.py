@@ -56,11 +56,17 @@ def _get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 @router.get("/{job_id}", response_model=JobRunRead)
-async def get_job(job_id: uuid.UUID) -> JobRunRead:
+async def get_job(job_id: uuid.UUID, _user_id: CurrentUserId) -> JobRunRead:
     """‌⁠‍Return the current state of a JobRun by id.
 
     Returns:
         404 when the id is unknown.
+
+    Authentication is required: the JobRun result/error blobs may carry
+    business data (cost-estimation outputs, AI-classification results,
+    exported files) that must not leak to anonymous callers. The table
+    is per-tenant (``tenant_id`` column) but RLS isn't enabled yet — at
+    minimum, anonymous reads are blocked here.
     """
     factory = _get_session_factory()
     async with factory() as session:
@@ -79,14 +85,12 @@ async def get_job(job_id: uuid.UUID) -> JobRunRead:
 @router.get("", response_model=JobRunListResponse)
 @router.get("/", response_model=JobRunListResponse)
 async def list_jobs(
+    _user_id: CurrentUserId,
     kind: str | None = Query(default=None, description="Filter by JobRun.kind"),
     job_status: str | None = Query(
         default=None,
         alias="status",
-        description=(
-            "Filter by JobRun.status (pending, started, success, failed, "
-            "cancelled, retry)."
-        ),
+        description=("Filter by JobRun.status (pending, started, success, failed, cancelled, retry)."),
     ),
     limit: int = Query(default=_DEFAULT_LIMIT, ge=1, le=10_000),
     offset: int = Query(default=0, ge=0),

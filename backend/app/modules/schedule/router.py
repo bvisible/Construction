@@ -34,6 +34,7 @@ from fastapi.responses import StreamingResponse
 
 logger = logging.getLogger(__name__)
 
+from app.core.http_headers import content_disposition_attachment
 from app.core.i18n import get_locale
 from app.core.validation.messages import translate
 from app.dependencies import CurrentUserId, CurrentUserPayload, RequirePermission, SessionDep, verify_project_access
@@ -45,6 +46,7 @@ from app.modules.schedule.schemas import (
     BaselineCreate,
     BaselineResponse,
     BaselineUpdate,
+    ClearActivitiesResponse,
     CPMCalculateRequest,
     CriticalPathResponse,
     GanttData,
@@ -63,13 +65,20 @@ from app.modules.schedule.schemas import (
     ScheduleResponse,
     ScheduleStatsResponse,
     ScheduleUpdate,
+    WorkCalendarResponse,
     WorkOrderCreate,
     WorkOrderResponse,
     WorkOrderUpdate,
 )
-from app.modules.schedule.service import ScheduleService, _str_to_float, compute_duration
+from app.modules.schedule.service import (
+    ScheduleService,
+    _effective_activity_status,
+    _str_to_float,
+    compute_duration,
+    get_work_calendar,
+)
 
-router = APIRouter()
+router = APIRouter(tags=["schedule"])
 
 
 def _get_service(session: SessionDep) -> ScheduleService:
@@ -356,6 +365,30 @@ async def list_activities(
     return [_activity_to_response(a) for a in activities]
 
 
+@router.delete(
+    "/schedules/{schedule_id}/activities/",
+    response_model=ClearActivitiesResponse,
+    summary="Clear all activities (reset schedule)",
+    dependencies=[Depends(RequirePermission("schedule.delete"))],
+)
+async def clear_activities(
+    schedule_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: ScheduleService = Depends(_get_service),
+) -> ClearActivitiesResponse:
+    """Delete every activity (and its work orders) of a schedule in one call.
+
+    Backs the schedule "Reset" action so the client no longer fires an N+1
+    serial DELETE per activity. Verifies the caller owns the parent project
+    (admins bypass).
+    """
+    await _verify_schedule_owner(service, session, schedule_id, _user_id, payload)
+    deleted = await service.clear_activities(schedule_id)
+    return ClearActivitiesResponse(schedule_id=schedule_id, deleted=deleted)
+
+
 @router.get(
     "/schedules/{schedule_id}/gantt/",
     response_model=GanttData,
@@ -574,9 +607,7 @@ async def update_activity_bim_links(
     be handled client-side by reading the current value first.
     """
     activity = await service.get_activity(activity_id)
-    await _verify_schedule_owner(
-        service, session, activity.schedule_id, _user_id, payload
-    )
+    await _verify_schedule_owner(service, session, activity.schedule_id, _user_id, payload)
     updated = await service.update_bim_links(activity_id, body.bim_element_ids)
     return _activity_to_response(updated)
 
@@ -592,18 +623,14 @@ async def list_activities_by_bim_element(
     payload: CurrentUserPayload,
     session: SessionDep,
     element_id: str = Query(..., description="BIM element UUID to look up"),
-    project_id: uuid.UUID = Query(
-        ..., description="Project scope for the search"
-    ),
+    project_id: uuid.UUID = Query(..., description="Project scope for the search"),
     service: ScheduleService = Depends(_get_service),
 ) -> list[ActivityResponse]:
     """Reverse query: return every activity in ``project_id`` whose
     ``bim_element_ids`` array contains ``element_id``.
     """
     await _verify_schedule_project_owner(session, project_id, _user_id, payload)
-    activities = await service.get_activities_for_bim_element(
-        element_id, project_id
-    )
+    activities = await service.get_activities_for_bim_element(element_id, project_id)
     return [_activity_to_response(act) for act in activities]
 
 
@@ -725,9 +752,7 @@ async def create_relationship(
     # Build adjacency from existing relationships, then check if adding the
     # new edge (predecessor -> successor) would create a cycle by testing
     # reachability from successor back to predecessor.
-    stmt = select(ScheduleRelationship).where(
-        ScheduleRelationship.schedule_id == schedule_id
-    )
+    stmt = select(ScheduleRelationship).where(ScheduleRelationship.schedule_id == schedule_id)
     result = await session.execute(stmt)
     existing_rels = list(result.scalars().all())
 
@@ -748,8 +773,7 @@ async def create_relationship(
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Adding this dependency would create a circular reference. "
-                    "Check the dependency chain for cycles."
+                    "Adding this dependency would create a circular reference. Check the dependency chain for cycles."
                 ),
             )
         if current in visited:
@@ -850,17 +874,13 @@ async def delete_relationship(
     if rel is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
 
-    sched = (
-        await session.execute(select(Schedule).where(Schedule.id == rel.schedule_id))
-    ).scalar_one_or_none()
+    sched = (await session.execute(select(Schedule).where(Schedule.id == rel.schedule_id))).scalar_one_or_none()
     if sched is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Relationship not found")
 
     await verify_project_access(sched.project_id, user_id, session)
 
-    stmt = delete(ScheduleRelationship).where(
-        ScheduleRelationship.id == relationship_id
-    )
+    stmt = delete(ScheduleRelationship).where(ScheduleRelationship.id == relationship_id)
     await session.execute(stmt)
 
 
@@ -908,27 +928,29 @@ async def calculate_cpm_full(
     # Build activity dicts for CPM engine
     act_dicts = []
     for act in activities:
-        act_dicts.append({
-            "id": str(act.id),
-            "duration": act.duration_days or 0,
-            "name": act.name,
-        })
+        act_dicts.append(
+            {
+                "id": str(act.id),
+                "duration": act.duration_days or 0,
+                "name": act.name,
+            }
+        )
 
     # Collect relationships from both ScheduleRelationship table and inline deps
     rel_dicts: list[dict] = []
 
     # 1. Explicit ScheduleRelationship records
-    rel_stmt = select(ScheduleRelationship).where(
-        ScheduleRelationship.schedule_id == schedule_id
-    )
+    rel_stmt = select(ScheduleRelationship).where(ScheduleRelationship.schedule_id == schedule_id)
     rel_result = await session.execute(rel_stmt)
     for r in rel_result.scalars().all():
-        rel_dicts.append({
-            "predecessor_id": str(r.predecessor_id),
-            "successor_id": str(r.successor_id),
-            "type": r.relationship_type,
-            "lag": r.lag_days,
-        })
+        rel_dicts.append(
+            {
+                "predecessor_id": str(r.predecessor_id),
+                "successor_id": str(r.successor_id),
+                "type": r.relationship_type,
+                "lag": r.lag_days,
+            }
+        )
 
     # 2. Inline JSON dependencies from each activity
     for act in activities:
@@ -936,19 +958,23 @@ async def calculate_cpm_full(
         for dep in deps:
             if isinstance(dep, dict):
                 pred_id = dep.get("activity_id", "")
-                rel_dicts.append({
-                    "predecessor_id": str(pred_id),
-                    "successor_id": str(act.id),
-                    "type": dep.get("type", "FS"),
-                    "lag": dep.get("lag_days", 0),
-                })
+                rel_dicts.append(
+                    {
+                        "predecessor_id": str(pred_id),
+                        "successor_id": str(act.id),
+                        "type": dep.get("type", "FS"),
+                        "lag": dep.get("lag_days", 0),
+                    }
+                )
             elif isinstance(dep, str):
-                rel_dicts.append({
-                    "predecessor_id": dep,
-                    "successor_id": str(act.id),
-                    "type": "FS",
-                    "lag": 0,
-                })
+                rel_dicts.append(
+                    {
+                        "predecessor_id": dep,
+                        "successor_id": str(act.id),
+                        "type": "FS",
+                        "lag": 0,
+                    }
+                )
 
     # Deduplicate relationships by (pred, succ)
     seen: set[tuple[str, str]] = set()
@@ -1142,11 +1168,7 @@ async def update_baseline(
 
     updates = data.model_dump(exclude_unset=True)
     if updates:
-        stmt = (
-            update(ScheduleBaseline)
-            .where(ScheduleBaseline.id == baseline_id)
-            .values(**updates)
-        )
+        stmt = update(ScheduleBaseline).where(ScheduleBaseline.id == baseline_id).values(**updates)
         await session.execute(stmt)
         await session.flush()
         session.expire_all()
@@ -1289,11 +1311,7 @@ async def update_progress_update(
     if "metadata" in updates:
         updates["metadata_"] = updates.pop("metadata")
     if updates:
-        stmt = (
-            update(ProgressUpdateModel)
-            .where(ProgressUpdateModel.id == update_id)
-            .values(**updates)
-        )
+        stmt = update(ProgressUpdateModel).where(ProgressUpdateModel.id == update_id).values(**updates)
         await session.execute(stmt)
         await session.flush()
         session.expire_all()
@@ -1423,10 +1441,7 @@ async def import_xer(
             or ""
         )
         end_date = (
-            task_row.get("target_end_date")
-            or task_row.get("act_end_date")
-            or task_row.get("early_end_date")
-            or ""
+            task_row.get("target_end_date") or task_row.get("act_end_date") or task_row.get("early_end_date") or ""
         )
 
         # Normalize dates: XER may use "YYYY-MM-DD HH:MM" or "YYYY-MM-DD"
@@ -1516,10 +1531,7 @@ async def import_xer(
         succ_uuid = xer_id_to_uuid.get(succ_task_id)
 
         if pred_uuid is None or succ_uuid is None:
-            warnings.append(
-                f"Relationship {pred_task_id}->{succ_task_id}: "
-                "predecessor or successor not found, skipped"
-            )
+            warnings.append(f"Relationship {pred_task_id}->{succ_task_id}: predecessor or successor not found, skipped")
             continue
 
         if pred_uuid == succ_uuid:
@@ -1638,7 +1650,8 @@ async def import_msp_xml(
         # raises EntitiesForbidden/DTDForbidden/ExternalReferenceForbidden,
         # which are NOT ET.ParseError — reject cleanly instead of 500.
         raise HTTPException(
-            status_code=400, detail="XML rejected for security reasons",
+            status_code=400,
+            detail="XML rejected for security reasons",
         ) from e
     except ET.ParseError as e:
         raise HTTPException(status_code=400, detail=f"Invalid XML: {e}") from e
@@ -1802,9 +1815,7 @@ async def import_msp_xml(
             pred_uid = findtext(link_el, "PredecessorUID", "")
             pred_uuid = msp_uid_to_uuid.get(pred_uid)
             if pred_uuid is None:
-                warnings.append(
-                    f"Link: predecessor UID={pred_uid} not found for task UID={uid}"
-                )
+                warnings.append(f"Link: predecessor UID={pred_uid} not found for task UID={uid}")
                 continue
 
             if pred_uuid == succ_uuid:
@@ -1870,9 +1881,7 @@ async def export_schedule_csv(
     activities, _ = await service.list_activities_for_schedule(schedule_id, limit=5000)
 
     # Fetch relationships for predecessor lookup
-    rel_stmt = select(ScheduleRelationship).where(
-        ScheduleRelationship.schedule_id == schedule_id
-    )
+    rel_stmt = select(ScheduleRelationship).where(ScheduleRelationship.schedule_id == schedule_id)
     rel_result = await session.execute(rel_stmt)
     relationships = list(rel_result.scalars().all())
 
@@ -1907,18 +1916,20 @@ async def export_schedule_csv(
     # Generate CSV
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "Activity Code",
-        "Name",
-        "WBS",
-        "Start",
-        "End",
-        "Duration (days)",
-        "Progress (%)",
-        "Total Float",
-        "Critical",
-        "Predecessors",
-    ])
+    writer.writerow(
+        [
+            "Activity Code",
+            "Name",
+            "WBS",
+            "Start",
+            "End",
+            "Duration (days)",
+            "Progress (%)",
+            "Total Float",
+            "Critical",
+            "Predecessors",
+        ]
+    )
 
     for act in activities:
         act_id = str(act.id)
@@ -1926,18 +1937,20 @@ async def export_schedule_csv(
         # Deduplicate predecessors
         preds = list(dict.fromkeys(preds))
 
-        writer.writerow([
-            act.activity_code or "",
-            act.name,
-            act.wbs_code,
-            act.start_date,
-            act.end_date,
-            act.duration_days,
-            _str_to_float(act.progress_pct),
-            act.total_float if act.total_float is not None else "",
-            "Yes" if act.is_critical else "No",
-            "; ".join(preds),
-        ])
+        writer.writerow(
+            [
+                act.activity_code or "",
+                act.name,
+                act.wbs_code,
+                act.start_date,
+                act.end_date,
+                act.duration_days,
+                _str_to_float(act.progress_pct),
+                act.total_float if act.total_float is not None else "",
+                "Yes" if act.is_critical else "No",
+                "; ".join(preds),
+            ]
+        )
 
     csv_content = output.getvalue()
     output.close()
@@ -1948,7 +1961,7 @@ async def export_schedule_csv(
     return StreamingResponse(
         io.BytesIO(csv_content.encode("utf-8-sig")),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 
@@ -1970,8 +1983,11 @@ async def schedule_stats(
     Computes total activities, critical count, delayed, on_track, progress_pct, etc.
     """
     await verify_project_access(project_id, _user_id, session)
+    from datetime import UTC, datetime
+
     from sqlalchemy import select
 
+    from app.modules.projects.repository import ProjectRepository
     from app.modules.schedule.models import Activity, Schedule
 
     # Get all schedules for the project
@@ -1990,6 +2006,12 @@ async def schedule_stats(
     total = len(activities)
     if total == 0:
         return ScheduleStatsResponse()
+
+    # Resolve the project region + today so "delayed" is derived the same way
+    # as the Gantt summary (overdue + unfinished), keeping the rollup honest.
+    project = await ProjectRepository(session).get_by_id(project_id)
+    project_region = project.region if project else None
+    today = datetime.now(UTC).date()
 
     critical_count = 0
     delayed = 0
@@ -2013,14 +2035,22 @@ async def schedule_stats(
         if getattr(act, "is_critical", False):
             critical_count += 1
 
-        if act.status == "delayed":
+        effective_status = _effective_activity_status(
+            stored_status=act.status,
+            progress_pct=progress,
+            end_date=act.end_date,
+            today=today,
+            region=project_region,
+        )
+
+        if effective_status == "delayed":
             delayed += 1
-        elif act.status == "completed":
+        elif effective_status == "completed":
             completed += 1
-        elif act.status == "not_started":
+        elif effective_status == "not_started":
             not_started += 1
             on_track += 1
-        elif act.status == "in_progress":
+        elif effective_status == "in_progress":
             in_progress += 1
             on_track += 1
 
@@ -2042,14 +2072,45 @@ async def schedule_stats(
 
 
 @router.get(
+    "/work-calendar/",
+    response_model=WorkCalendarResponse,
+    dependencies=[Depends(RequirePermission("schedule.read"))],
+)
+async def schedule_work_calendar(
+    project_id: uuid.UUID = Query(..., description="Project to resolve the work calendar for"),
+    session: SessionDep = None,  # type: ignore[assignment]
+    _user_id: CurrentUserId = None,  # type: ignore[assignment]
+) -> WorkCalendarResponse:
+    """Return the resolved regional work calendar for a project.
+
+    The schedule duration/CPM math resolves the calendar via prefix + full-label
+    region maps. Exposing the resolved values here lets the UI render the true
+    hours-per-day / days-per-week badge instead of re-deriving it from a smaller
+    client-side map that diverges for region values like "Middle East",
+    "United States", "DE_BERLIN" or "NORDIC".
+    """
+    await verify_project_access(project_id, _user_id, session)
+
+    from app.modules.projects.repository import ProjectRepository
+
+    project = await ProjectRepository(session).get_by_id(project_id)
+    region = project.region if project else None
+    cal = get_work_calendar(region)
+    return WorkCalendarResponse(
+        region=region,
+        hours_per_day=cal["hours_per_day"],
+        work_days_per_week=len(cal["work_days"]),
+        label=cal["label"],
+    )
+
+
+@router.get(
     "/critical-path/",
     response_model=list[ActivityResponse],
     dependencies=[Depends(RequirePermission("schedule.read"))],
 )
 async def critical_path_activities(
-    project_id: uuid.UUID | None = Query(
-        default=None, description="Project to retrieve critical path for"
-    ),
+    project_id: uuid.UUID | None = Query(default=None, description="Project to retrieve critical path for"),
     schedule_id: uuid.UUID | None = Query(
         default=None,
         description="Schedule to retrieve critical path for (takes precedence over project_id)",

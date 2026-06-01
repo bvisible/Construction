@@ -24,6 +24,7 @@ import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useAuthStore } from '@/stores/useAuthStore';
 import {
   fetchCDEContainers,
   createCDEContainer,
@@ -31,6 +32,7 @@ import {
   fetchContainerRevisions,
   createContainerRevision,
   fetchSuitabilityCodes,
+  fetchCDEStats,
   type CDEContainer,
   type CDEState,
   type CDEDiscipline,
@@ -77,6 +79,38 @@ const STATE_CONFIG: Record<
 };
 
 const STATE_ORDER: CDEState[] = ['wip', 'shared', 'published', 'archived'];
+
+/**
+ * Mirror of the backend ISO 19650 gate roles (see
+ * backend/app/modules/cde/service.py + core/cde_states.py). Promoting a
+ * container crosses a gate that requires a minimum role:
+ *   Gate A (wip → shared)        : manager / admin
+ *   Gate B (shared → published)  : manager / admin
+ *   Gate C (published → archived): admin only
+ * Editors and viewers can never promote, so we hide the action for them
+ * rather than letting the click 400.
+ */
+function normalizeRole(role: string | null | undefined): string {
+  const r = (role ?? 'viewer').trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    estimator: 'editor',
+    quantity_surveyor: 'editor',
+    qs: 'editor',
+    user: 'editor',
+    superuser: 'admin',
+    owner: 'admin',
+    readonly: 'viewer',
+    guest: 'viewer',
+  };
+  return aliases[r] ?? r;
+}
+
+function canRoleCrossGate(role: string | null | undefined, fromState: CDEState): boolean {
+  const r = normalizeRole(role);
+  if (fromState === 'published') return r === 'admin'; // Gate C — archive
+  if (fromState === 'wip' || fromState === 'shared') return r === 'admin' || r === 'manager';
+  return false; // archived has no onward gate
+}
 
 const DISCIPLINE_LABELS: Record<CDEDiscipline, string> = {
   architecture: 'Architecture',
@@ -574,10 +608,14 @@ function LinkDocumentModal({
       for (const doc of selected) {
         await createContainerRevision(container.id, {
           file_name: doc.name || doc.file_name || 'document',
-          change_summary: `Linked from Documents`,
+          change_summary: t('cde.linked_from_documents', {
+            defaultValue: 'Linked from Documents',
+          }),
           mime_type: doc.mime_type || undefined,
           file_size: doc.file_size ? String(doc.file_size) : undefined,
-          storage_key: doc.id,
+          // Link mode: reference the existing Document so its real file is
+          // reused — never duplicate the row with a broken file path.
+          document_id: doc.id,
         });
       }
       addToast({
@@ -629,7 +667,11 @@ function LinkDocumentModal({
               {container.container_code} — {container.title}
             </p>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-surface-secondary">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="p-1 rounded hover:bg-surface-secondary"
+          >
             <X size={16} />
           </button>
         </div>
@@ -713,7 +755,7 @@ function LinkDocumentModal({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{doc.name || doc.file_name}</p>
                     <p className="text-2xs text-content-quaternary">
-                      {doc.category || 'Document'}
+                      {doc.category || t('cde.category_document', { defaultValue: 'Document' })}
                       {doc.file_size ? ` · ${formatSize(doc.file_size)}` : ''}
                     </p>
                   </div>
@@ -754,11 +796,13 @@ function LinkDocumentModal({
 
 const ContainerRow = React.memo(function ContainerRow({
   container,
+  userRole,
   onPromote,
   onLinkDocument,
   onShowHistory,
 }: {
   container: CDEContainer;
+  userRole: string | null;
   onPromote: (c: CDEContainer) => void;
   onLinkDocument: (c: CDEContainer) => void;
   onShowHistory: (c: CDEContainer) => void;
@@ -779,8 +823,11 @@ const ContainerRow = React.memo(function ContainerRow({
     enabled: expanded,
   });
 
-  // Can promote if not archived
-  const canPromote = containerState !== 'archived';
+  // Can promote only when there is a next state AND the current user's role
+  // can actually pass the next gate (mirrors the backend gate roles). Showing
+  // the button to editors/viewers who always get a 400 is a dead control.
+  const hasNextGate = containerState !== 'archived';
+  const canPromote = hasNextGate && canRoleCrossGate(userRole, containerState);
   const nextState = STATE_ORDER[STATE_ORDER.indexOf(containerState) + 1] as
     | CDEState
     | undefined;
@@ -990,6 +1037,9 @@ export function CDEPage() {
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
+  // Authoritative role drives which container actions are offered (the
+  // backend gates promotions by role — see canRoleCrossGate).
+  const userRole = useAuthStore((s) => s.userRole);
 
   // State
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -1025,6 +1075,15 @@ export function CDEPage() {
     enabled: !!projectId,
   });
 
+  // Aggregate stats — drives the summary cards. Keyed by project so the
+  // ['cde-stats'] invalidation fired after create/promote actually refreshes
+  // a live query (it previously invalidated a cache that did not exist).
+  const { data: stats } = useQuery({
+    queryKey: ['cde-stats', projectId],
+    queryFn: () => fetchCDEStats(projectId),
+    enabled: !!projectId,
+  });
+
   // Client-side search
   const filtered = useMemo(() => {
     if (!searchQuery.trim()) return containers;
@@ -1050,6 +1109,7 @@ export function CDEPage() {
   const invalidateAll = useCallback(() => {
     qc.invalidateQueries({ queryKey: ['cde-containers'] });
     qc.invalidateQueries({ queryKey: ['cde-revisions'] });
+    qc.invalidateQueries({ queryKey: ['cde-stats'] });
   }, [qc]);
 
   // Mutations
@@ -1140,12 +1200,26 @@ export function CDEPage() {
         title: t('cde.promoted', { defaultValue: 'Container promoted' }),
       });
     },
-    onError: (e: Error) =>
+    onError: (e: Error) => {
+      // Don't forward the backend's raw English "Insufficient role: ..." —
+      // surface a translated, user-facing message instead. Other backend
+      // errors (e.g. already-in-state) are passed through as a fallback.
+      const raw = e.message?.trim() ?? '';
+      const isRoleGate = /insufficient role/i.test(raw);
       addToast({
         type: 'error',
-        title: t('common.error', { defaultValue: 'Error' }),
-        message: e.message,
-      }),
+        title: t('cde.promote_failed', { defaultValue: 'Could not promote container' }),
+        message: isRoleGate
+          ? t('cde.promote_insufficient_role', {
+              defaultValue:
+                'Your role cannot promote this container to the next state. A project manager or admin is required.',
+            })
+          : raw ||
+            t('cde.promote_failed_generic', {
+              defaultValue: 'The state transition could not be completed.',
+            }),
+      });
+    },
   });
 
   const handleCreateSubmit = useCallback(
@@ -1344,6 +1418,44 @@ export function CDEPage() {
         </div>
       </div>
 
+      {/* Summary cards — fed by the /cde/stats aggregate endpoint */}
+      {projectId && stats && stats.total > 0 && (
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <Card padding="sm" className="flex flex-col">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('cde.stat_total', { defaultValue: 'Total containers' })}
+            </span>
+            <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
+              {stats.total}
+            </span>
+          </Card>
+          <Card padding="sm" className="flex flex-col">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('cde.state_published', { defaultValue: 'Published' })}
+            </span>
+            <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
+              {stats.by_state?.published ?? 0}
+            </span>
+          </Card>
+          <Card padding="sm" className="flex flex-col">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('cde.state_wip', { defaultValue: 'WIP' })}
+            </span>
+            <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
+              {stats.by_state?.wip ?? 0}
+            </span>
+          </Card>
+          <Card padding="sm" className="flex flex-col">
+            <span className="text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+              {t('cde.stat_with_revisions', { defaultValue: 'With revisions' })}
+            </span>
+            <span className="mt-1 text-2xl font-bold tabular-nums text-content-primary">
+              {stats.latest_revisions}
+            </span>
+          </Card>
+        </div>
+      )}
+
       {/* State filter tabs */}
       <div className="mb-6 flex items-center gap-1 overflow-x-auto pb-1" title={t('cde.iso19650_states_tooltip', { defaultValue: 'ISO 19650 document states: WIP = Work in Progress (being authored), Shared = shared with team for review, Published = formally approved and issued, Archived = superseded or no longer current' })}>
         {[
@@ -1360,7 +1472,7 @@ export function CDEPage() {
             className={clsx(
               'flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors whitespace-nowrap',
               stateFilter === tab.key
-                ? 'bg-oe-blue-subtle text-oe-blue'
+                ? 'bg-oe-blue-subtle text-oe-blue-text'
                 : 'text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
             )}
           >
@@ -1470,6 +1582,7 @@ export function CDEPage() {
                 <ContainerRow
                   key={c.id}
                   container={c}
+                  userRole={userRole}
                   onPromote={handlePromote}
                   onLinkDocument={handleLinkDocument}
                   onShowHistory={handleShowHistory}

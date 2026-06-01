@@ -4,7 +4,13 @@
  * All endpoints are prefixed with /v1/meetings/.
  */
 
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import {
+  apiGet,
+  apiPost,
+  apiPatch,
+  apiDelete,
+  extractErrorMessageFromBody,
+} from '@/shared/lib/api';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 /* -- Types ----------------------------------------------------------------- */
@@ -206,7 +212,7 @@ export async function uploadMeetingDocument(
     let detail = 'Upload failed';
     try {
       const body = await res.json();
-      if (body?.detail) detail = body.detail;
+      detail = extractErrorMessageFromBody(body) ?? detail;
     } catch {
       // ignore parse error
     }
@@ -308,7 +314,7 @@ async function _importSummaryRequest(
     let detail = 'Import failed';
     try {
       const body = await response.json();
-      detail = body.detail || detail;
+      detail = extractErrorMessageFromBody(body) ?? detail;
     } catch {
       // ignore parse error
     }

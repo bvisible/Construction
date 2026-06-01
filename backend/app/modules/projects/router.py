@@ -16,8 +16,10 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import CurrentUserId, CurrentUserPayload, SessionDep, SettingsDep
+from app.modules.projects import profile_service
 from app.modules.projects.bundle_export import (
     export_bundle as fm_export_bundle,
 )
@@ -61,7 +63,6 @@ from app.modules.projects.member_schemas import (
     AddProjectMemberRequest,
     ProjectMemberResponse,
 )
-from app.modules.projects import profile_service
 from app.modules.projects.module_presence import probe_project_modules
 from app.modules.projects.schemas import (
     FocusModePatch,
@@ -72,9 +73,9 @@ from app.modules.projects.schemas import (
     MilestoneUpdate,
     PresetRead,
     ProfileSpec,
+    ProjectCreate,
     ProjectModulePresence,
     ProjectModuleRead,
-    ProjectCreate,
     ProjectProfileResult,
     ProjectResponse,
     ProjectUpdate,
@@ -89,7 +90,7 @@ from app.modules.projects.service import (
     update_match_settings,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["projects"])
 logger = logging.getLogger(__name__)
 
 
@@ -107,6 +108,7 @@ async def _verify_project_owner(
 
     Admins (role=admin in JWT payload) bypass the ownership check.
     Returns the project object on success, raises 403 if not owner.
+    Used for write operations (update, delete, add/remove member, etc.).
     """
     project = await service.get_project(project_id)
     # Admin bypass
@@ -118,6 +120,50 @@ async def _verify_project_owner(
             detail="You do not have access to this project",
         )
     return project
+
+
+async def _verify_project_access(
+    service: ProjectService,
+    project_id: uuid.UUID,
+    user_id: str,
+    session: AsyncSession,
+    payload: dict | None = None,
+) -> object:
+    """‌⁠‍Load a project and verify the current user has read access.
+
+    Grants access to: admins, the project owner, and any team member
+    added via add_project_member (i.e. a TeamMembership row exists).
+    Used for read operations (get, dashboard, list members, etc.).
+
+    Raises 404 (not 403) on denial to keep "missing" and "denied"
+    indistinguishable — same IDOR policy as verify_project_access.
+    """
+    from app.modules.teams.access import is_project_member
+
+    project = await service.get_project(project_id)
+
+    # Admin bypass
+    if payload and payload.get("role") == "admin":
+        return project
+
+    # Owner has full access
+    if str(project.owner_id) == user_id:
+        return project
+
+    # Team-member check — any membership row for this project grants read access.
+    # Wrap UUID conversion so a malformed user_id yields 404, not 500.
+    try:
+        uid = uuid.UUID(str(user_id))
+    except (ValueError, TypeError):
+        uid = None
+
+    if uid is not None and await is_project_member(session, project_id, uid):
+        return project
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Project not found",
+    )
 
 
 # ── Create ────────────────────────────────────────────────────────────────
@@ -196,10 +242,11 @@ async def get_project(
     project_id: uuid.UUID,
     user_id: CurrentUserId,
     payload: CurrentUserPayload,
+    session: SessionDep,
     service: ProjectService = Depends(_get_service),
 ) -> ProjectResponse:
-    """Get project by ID. Verifies ownership."""
-    project = await _verify_project_owner(service, project_id, user_id, payload)
+    """Get project by ID. Accessible by owner, admin, or project team member."""
+    project = await _verify_project_access(service, project_id, user_id, session, payload)
     return ProjectResponse.model_validate(project)
 
 
@@ -275,8 +322,7 @@ async def delete_project(
     "/{project_id}/restore/",
     response_model=ProjectResponse,
     summary="Restore archived project",
-    description="Restore an archived project back to active status. "
-    "Only the project owner or admin can restore.",
+    description="Restore an archived project back to active status. Only the project owner or admin can restore.",
 )
 async def restore_project(
     project_id: uuid.UUID,
@@ -332,7 +378,8 @@ async def duplicate_project(
     await _verify_project_owner(service, project_id, user_id, payload)
     try:
         new_project = await service.duplicate_project(
-            project_id, uuid.UUID(user_id),
+            project_id,
+            uuid.UUID(user_id),
         )
         return ProjectResponse.model_validate(new_project)
     except HTTPException:
@@ -372,8 +419,8 @@ async def list_project_members_endpoint(
     session: SessionDep,
     service: ProjectService = Depends(_get_service),
 ) -> list[ProjectMemberResponse]:
-    """List members of a project. Owner / admin only — 403 otherwise."""
-    await _verify_project_owner(service, project_id, user_id, payload)
+    """List members of a project. Accessible by owner, admin, or any team member."""
+    await _verify_project_access(service, project_id, user_id, session, payload)
     from app.modules.projects.member_service import list_project_members
 
     return await list_project_members(session, project_id)
@@ -449,8 +496,7 @@ async def remove_project_member_endpoint(
 @router.get(
     "/{project_id}/folder-permissions/",
     summary="List folder permissions",
-    description="List all non-revoked folder permissions for the project. "
-    "Owner / admin only.",
+    description="List all non-revoked folder permissions for the project. Owner / admin only.",
 )
 async def list_folder_permissions(
     project_id: uuid.UUID,
@@ -482,9 +528,7 @@ async def list_folder_permissions(
     user_ids = {r.user_id for r in rows}
     user_map: dict[uuid.UUID, User] = {}
     if user_ids:
-        users = (
-            await session.execute(_select(User).where(User.id.in_(user_ids)))
-        ).scalars().all()
+        users = (await session.execute(_select(User).where(User.id.in_(user_ids)))).scalars().all()
         user_map = {u.id: u for u in users}
 
     out: list[dict] = []
@@ -504,9 +548,7 @@ async def list_folder_permissions(
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
                 "user_email": (u.email if u is not None else None),
-                "user_full_name": (
-                    u.full_name if u is not None and u.full_name else None
-                ),
+                "user_full_name": (u.full_name if u is not None and u.full_name else None),
             }
         )
     return out
@@ -528,6 +570,8 @@ async def grant_folder_permission_endpoint(
     body: dict = Body(...),  # type: ignore[assignment]
 ) -> dict:
     """Mint a new grant. 409 on duplicate (scope, user). 400 on bad role."""
+    from pydantic import ValidationError
+
     from app.modules.documents.folder_permissions_service import (
         grant_permission,
         is_project_member,
@@ -536,7 +580,22 @@ async def grant_folder_permission_endpoint(
 
     await _verify_project_owner(service, project_id, user_id, payload)
 
-    data = FolderPermissionCreate(**body)
+    # body is an untyped dict (FolderPermissionCreate is imported lazily to
+    # avoid a circular import), so validate it explicitly — otherwise a
+    # malformed/incomplete body raises pydantic.ValidationError that escapes
+    # as an opaque HTTP 500 instead of a clean 422.
+    try:
+        data = FolderPermissionCreate(**body)
+    except ValidationError as exc:
+        # Reduce to JSON-safe fields — pydantic's raw errors() can carry a
+        # non-serialisable ``ctx`` (exception objects) that would itself 500.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[
+                {"loc": list(e.get("loc", [])), "msg": e.get("msg"), "type": e.get("type")}
+                for e in exc.errors()
+            ],
+        ) from exc
 
     # Refuse to grant to a non-member — leaks "this user doesn't exist
     # on this project" but is more useful than a downstream FK error.
@@ -619,11 +678,12 @@ async def project_dashboard(
     """
     from datetime import date, datetime, timedelta
 
-    from sqlalchemy import Float, func, literal_column, select, union_all
-    from sqlalchemy.sql.expression import cast
+    from sqlalchemy import func, literal_column, select, union_all
 
-    # Verify ownership / admin access
-    project = await _verify_project_owner(service, project_id, user_id, payload)
+    from app.core.sql_numeric import numeric_value
+
+    # Verify read access — owner, admin, or team member
+    project = await _verify_project_access(service, project_id, user_id, session, payload)
 
     # ── Helper: safe query wrapper ──────────────────────────────
     async def _safe(coro, default=None):  # noqa: ANN001, ANN202
@@ -682,7 +742,7 @@ async def project_dashboard(
             ).scalar_one()
 
             total_result = (
-                await session.execute(select(func.sum(cast(Position.total, Float))).where(Position.boq_id.in_(boq_ids)))
+                await session.execute(select(func.sum(numeric_value(Position.total))).where(Position.boq_id.in_(boq_ids)))
             ).scalar_one()
             boq_total_value = round(total_result or 0.0, 2)
 
@@ -697,8 +757,8 @@ async def project_dashboard(
         from app.modules.costmodel.models import BudgetLine
 
         budget_stmt = select(
-            func.sum(cast(BudgetLine.planned_amount, Float)).label("planned"),
-            func.sum(cast(BudgetLine.actual_amount, Float)).label("actual"),
+            func.sum(numeric_value(BudgetLine.planned_amount)).label("planned"),
+            func.sum(numeric_value(BudgetLine.actual_amount)).label("actual"),
         ).where(BudgetLine.project_id == project_id)
         budget_row = (await session.execute(budget_stmt)).one_or_none()
         planned_total = float(budget_row.planned or 0) if budget_row else 0.0
@@ -726,7 +786,7 @@ async def project_dashboard(
             committed_total = float(
                 (
                     await session.execute(
-                        select(func.sum(cast(PurchaseOrder.amount_total, Float))).where(
+                        select(func.sum(numeric_value(PurchaseOrder.amount_total))).where(
                             PurchaseOrder.project_id == project_id,
                             PurchaseOrder.status.notin_(["draft", "cancelled"]),
                         )
@@ -1142,7 +1202,7 @@ async def project_dashboard(
 
         total_committed_result = (
             await session.execute(
-                select(func.sum(cast(PurchaseOrder.amount_total, Float))).where(
+                select(func.sum(numeric_value(PurchaseOrder.amount_total))).where(
                     PurchaseOrder.project_id == project_id,
                     PurchaseOrder.status.notin_(["draft", "cancelled"]),
                 )
@@ -1283,7 +1343,9 @@ async def project_dashboard(
         week_ago = date.today() - timedelta(days=7)
         field_reports_this_week = (
             await session.execute(
-                select(func.count(FieldReport.id)).where(FieldReport.project_id == project_id, FieldReport.report_date >= week_ago)
+                select(func.count(FieldReport.id)).where(
+                    FieldReport.project_id == project_id, FieldReport.report_date >= week_ago
+                )
             )
         ).scalar_one()
     except Exception:
@@ -1334,10 +1396,14 @@ async def project_dashboard(
     try:
         from app.modules.changeorders.models import ChangeOrder
 
-        co_total = (await session.execute(select(func.count(ChangeOrder.id)).where(ChangeOrder.project_id == project_id))).scalar_one()
+        co_total = (
+            await session.execute(select(func.count(ChangeOrder.id)).where(ChangeOrder.project_id == project_id))
+        ).scalar_one()
         co_approved = (
             await session.execute(
-                select(func.count(ChangeOrder.id)).where(ChangeOrder.project_id == project_id, ChangeOrder.status == "approved")
+                select(func.count(ChangeOrder.id)).where(
+                    ChangeOrder.project_id == project_id, ChangeOrder.status == "approved"
+                )
             )
         ).scalar_one()
     except Exception:
@@ -1373,6 +1439,132 @@ async def project_dashboard(
     }
 
 
+# ── Recent activity feed (project-scoped, lightweight) ─────────────────
+
+
+@router.get(
+    "/{project_id}/activity",
+    summary="Recent activity for a project",
+    description="Project-scoped cross-module event stream (RFIs, tasks, change "
+    "orders, documents, punch items, field reports), newest first. Each module "
+    "degrades gracefully if its table is absent.",
+)
+async def project_activity(
+    project_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    service: ProjectService = Depends(_get_service),
+    limit: int = Query(default=8, ge=1, le=50),
+) -> list[dict]:
+    """Recent cross-module activity for a single project.
+
+    Mirrors the ``recent_activity`` block of the project dashboard but as a
+    standalone, cheap endpoint that the project overview widgets can poll
+    without pulling the full dashboard payload. Returns ``[{type, title,
+    date}]`` newest first. Verifies project read access; every module query
+    is wrapped so a missing table never fails the request.
+    """
+    from sqlalchemy import func, literal_column, union_all
+
+    # Verify read access — owner, admin, or team member
+    await _verify_project_access(service, project_id, user_id, session, payload)
+
+    activity_queries = []
+    try:
+        from app.modules.rfi.models import RFI as _RFI
+
+        activity_queries.append(
+            select(
+                literal_column("'rfi_created'").label("type"),
+                _RFI.subject.label("title"),
+                _RFI.created_at,
+            ).where(_RFI.project_id == project_id)
+        )
+    except Exception:
+        logger.debug("Activity: RFI query build failed", exc_info=True)
+    try:
+        from app.modules.tasks.models import Task as _Task
+
+        activity_queries.append(
+            select(
+                literal_column("'task_created'").label("type"),
+                _Task.title.label("title"),
+                _Task.created_at,
+            ).where(_Task.project_id == project_id)
+        )
+    except Exception:
+        logger.debug("Activity: Task query build failed", exc_info=True)
+    try:
+        from app.modules.changeorders.models import ChangeOrder
+
+        activity_queries.append(
+            select(
+                literal_column("'change_order'").label("type"),
+                ChangeOrder.title.label("title"),
+                ChangeOrder.created_at,
+            ).where(ChangeOrder.project_id == project_id)
+        )
+    except Exception:
+        logger.debug("Activity: ChangeOrder query build failed", exc_info=True)
+    try:
+        from app.modules.documents.models import Document as _Doc
+
+        activity_queries.append(
+            select(
+                literal_column("'document_uploaded'").label("type"),
+                _Doc.name.label("title"),
+                _Doc.created_at,
+            ).where(_Doc.project_id == project_id)
+        )
+    except Exception:
+        logger.debug("Activity: Document query build failed", exc_info=True)
+    try:
+        from app.modules.punchlist.models import PunchItem as _Punch
+
+        activity_queries.append(
+            select(
+                literal_column("'punch_item'").label("type"),
+                _Punch.title.label("title"),
+                _Punch.created_at,
+            ).where(_Punch.project_id == project_id)
+        )
+    except Exception:
+        logger.debug("Activity: PunchItem query build failed", exc_info=True)
+    try:
+        from app.modules.fieldreports.models import FieldReport
+
+        activity_queries.append(
+            select(
+                literal_column("'field_report'").label("type"),
+                func.coalesce(FieldReport.work_performed, FieldReport.report_type).label("title"),
+                FieldReport.created_at,
+            ).where(FieldReport.project_id == project_id)
+        )
+    except Exception:
+        logger.debug("Activity: FieldReport query build failed", exc_info=True)
+
+    events: list[dict] = []
+    if activity_queries:
+        try:
+            combined = union_all(*activity_queries).subquery()
+            rows = (
+                await session.execute(select(combined).order_by(combined.c.created_at.desc()).limit(limit))
+            ).all()
+            for row in rows:
+                events.append(
+                    {
+                        "type": row[0],
+                        "title": row[1],
+                        "date": row[2].isoformat() if isinstance(row[2], datetime) else str(row[2]),
+                    }
+                )
+        except Exception:
+            logger.debug("Activity: union query failed", exc_info=True)
+
+    return events
+
+
 # ── Dashboard Summary Cards (lightweight, single endpoint) ──────────────
 
 
@@ -1394,21 +1586,31 @@ async def dashboard_cards(
     multiple modules. Each module section is wrapped in try/except for
     graceful degradation if a module table does not exist yet.
     """
-    from sqlalchemy import Float, func, select
-    from sqlalchemy.sql.expression import cast
+    from types import SimpleNamespace
+
+    from sqlalchemy import func, select
 
     from app.modules.projects.models import Project
 
-    # Fetch all projects (admin sees all, regular user sees own)
+    # Fetch all projects (admin sees all, regular user sees owned + member projects)
     is_admin = payload.get("role") == "admin"
     if is_admin:
         proj_result = await session.execute(
             select(Project).where(Project.status != "archived").order_by(Project.updated_at.desc())
         )
     else:
+        from app.modules.teams.access import member_project_ids_subquery
+
+        try:
+            uid = uuid.UUID(user_id)
+        except (ValueError, TypeError):
+            return []
         proj_result = await session.execute(
             select(Project)
-            .where(Project.owner_id == uuid.UUID(user_id), Project.status != "archived")
+            .where(
+                (Project.owner_id == uid) | (Project.id.in_(member_project_ids_subquery(uid))),
+                Project.status != "archived",
+            )
             .order_by(Project.updated_at.desc())
         )
     all_projects = proj_result.scalars().all()
@@ -1419,11 +1621,32 @@ async def dashboard_cards(
     project_ids = [p.id for p in all_projects]
 
     # ── BOQ total value per project ─────────────────────────────────────
+    #
+    # Money rule (a): WITHIN a single project, foreign-currency positions are
+    # converted to the project's base currency via ``Project.fx_rates``.
+    # Each project carries exactly one base currency (``Project.currency``),
+    # so the per-project ``boq_total_value`` is a single well-defined number
+    # in that currency — the frontend groups ACROSS projects by currency
+    # (rule b) and never blends different currencies into one scalar.
     boq_values: dict[str, float] = {}
     boq_counts: dict[str, int] = {}
     position_counts: dict[str, int] = {}
     try:
         from app.modules.boq.models import BOQ, Position
+        from app.modules.boq.service import (
+            _position_currency,
+            _position_total_in_base,
+            _project_fx_map,
+        )
+
+        # Pre-compute each project's FX map + base currency so per-position
+        # conversion is a dict lookup rather than a per-row recompute.
+        fx_by_project: dict[str, dict[str, str]] = {
+            str(p.id): _project_fx_map(p) for p in all_projects
+        }
+        base_by_project: dict[str, str] = {
+            str(p.id): (p.currency or "") for p in all_projects
+        }
 
         # BOQ count per project
         boq_count_rows = (
@@ -1437,11 +1660,7 @@ async def dashboard_cards(
             boq_counts[str(pid)] = cnt
 
         # Get all BOQ IDs grouped by project
-        boq_rows = (
-            await session.execute(
-                select(BOQ.id, BOQ.project_id).where(BOQ.project_id.in_(project_ids))
-            )
-        ).all()
+        boq_rows = (await session.execute(select(BOQ.id, BOQ.project_id).where(BOQ.project_id.in_(project_ids)))).all()
         boq_id_to_project: dict[str, str] = {}
         for bid, pid in boq_rows:
             boq_id_to_project[str(bid)] = str(pid)
@@ -1449,23 +1668,28 @@ async def dashboard_cards(
         if boq_id_to_project:
             all_boq_ids = [uuid.UUID(bid) for bid in boq_id_to_project]
 
-            # Sum of position totals per BOQ
+            # Stream positions with their currency metadata so each total can
+            # be converted into its project's base currency before summing.
             pos_rows = (
                 await session.execute(
-                    select(
-                        Position.boq_id,
-                        func.sum(cast(Position.total, Float)).label("total_value"),
-                        func.count(Position.id).label("pos_count"),
+                    select(Position.boq_id, Position.total, Position.metadata_).where(
+                        Position.boq_id.in_(all_boq_ids)
                     )
-                    .where(Position.boq_id.in_(all_boq_ids))
-                    .group_by(Position.boq_id)
                 )
             ).all()
-            for boq_id, total_val, pos_cnt in pos_rows:
+            for boq_id, total, metadata in pos_rows:
                 pid = boq_id_to_project.get(str(boq_id), "")
-                if pid:
-                    boq_values[pid] = boq_values.get(pid, 0.0) + (total_val or 0.0)
-                    position_counts[pid] = position_counts.get(pid, 0) + (pos_cnt or 0)
+                if not pid:
+                    continue
+                position_counts[pid] = position_counts.get(pid, 0) + 1
+                code = _position_currency(SimpleNamespace(metadata_=metadata))
+                converted = _position_total_in_base(
+                    total,
+                    code,
+                    fx_by_project.get(pid),
+                    base_by_project.get(pid, ""),
+                )
+                boq_values[pid] = boq_values.get(pid, 0.0) + float(converted)
     except Exception:
         logger.debug("Dashboard cards: BOQ query failed", exc_info=True)
 
@@ -1535,11 +1759,7 @@ async def dashboard_cards(
         from app.modules.schedule.models import Activity, Schedule
 
         sched_rows = (
-            await session.execute(
-                select(Schedule.id, Schedule.project_id).where(
-                    Schedule.project_id.in_(project_ids)
-                )
-            )
+            await session.execute(select(Schedule.id, Schedule.project_id).where(Schedule.project_id.in_(project_ids)))
         ).all()
         sched_to_project: dict[str, str] = {}
         sched_ids = []
@@ -1624,19 +1844,27 @@ async def analytics_overview(
 
     Scoped to the current user's owned projects; admins see every project.
     """
-    from sqlalchemy import Float, func, select
-    from sqlalchemy.sql.expression import cast
+    from sqlalchemy import func, select
 
+    from app.core.sql_numeric import numeric_value
     from app.modules.boq.models import BOQ
     from app.modules.costmodel.models import BudgetLine
     from app.modules.projects.models import Project
 
     is_admin = bool(payload and payload.get("role") == "admin")
 
-    # Per-project summary — owner-scoped for non-admins
+    # Per-project summary — owner + team-member projects for non-admins
     proj_stmt = select(Project).order_by(Project.name)
     if not is_admin:
-        proj_stmt = proj_stmt.where(Project.owner_id == _user_id)
+        from app.modules.teams.access import member_project_ids_subquery
+
+        try:
+            _uid = uuid.UUID(_user_id)
+        except (ValueError, TypeError):
+            return {}
+        proj_stmt = proj_stmt.where(
+            (Project.owner_id == _uid) | (Project.id.in_(member_project_ids_subquery(_uid)))
+        )
     proj_result = await session.execute(proj_stmt)
     all_projects = list(proj_result.scalars().all())
 
@@ -1648,8 +1876,8 @@ async def analytics_overview(
         budget_stmt = (
             select(
                 BudgetLine.project_id,
-                func.sum(cast(BudgetLine.planned_amount, Float)).label("planned"),
-                func.sum(cast(BudgetLine.actual_amount, Float)).label("actual"),
+                func.sum(numeric_value(BudgetLine.planned_amount)).label("planned"),
+                func.sum(numeric_value(BudgetLine.actual_amount)).label("actual"),
             )
             .where(BudgetLine.project_id.in_(project_ids))
             .group_by(BudgetLine.project_id)
@@ -1694,9 +1922,7 @@ async def analytics_overview(
     # Single grouped query for BOQ counts (fixes N+1)
     if project_ids:
         boq_stmt = (
-            select(BOQ.project_id, func.count(BOQ.id))
-            .where(BOQ.project_id.in_(project_ids))
-            .group_by(BOQ.project_id)
+            select(BOQ.project_id, func.count(BOQ.id)).where(BOQ.project_id.in_(project_ids)).group_by(BOQ.project_id)
         )
         boq_count_rows = (await session.execute(boq_stmt)).all()
         boq_counts_map: dict[str, int] = {str(row[0]): int(row[1]) for row in boq_count_rows}
@@ -1713,8 +1939,14 @@ async def analytics_overview(
 
         # Find budget for this project
         planned, actual = budget_map.get(pid, (0.0, 0.0))
-        variance = planned - actual if planned > 0 else 0
-        variance_pct = round((variance / planned * 100), 1) if planned > 0 else 0
+        # Variance is always planned - actual. When planned == 0 but actual > 0
+        # the project has incurred cost with no recorded budget; that is an
+        # overspend (negative variance), not a neutral "on budget" zero.
+        variance = planned - actual
+        # Percentage is undefined when there is no budget to measure against;
+        # return None so the frontend can render an explicit placeholder
+        # instead of a misleading 0.0%.
+        variance_pct = round((variance / planned * 100), 1) if planned > 0 else None
 
         # BOQ count from pre-fetched map (single grouped query above)
         boq_count = boq_counts_map.get(pid, 0)
@@ -1730,7 +1962,7 @@ async def analytics_overview(
                 "variance": round(variance, 2),
                 "variance_pct": variance_pct,
                 "boq_count": boq_count,
-                "status": "on_budget" if variance >= 0 else "over_budget",
+                "status": "over_budget" if actual > planned else "on_budget",
             }
         )
 
@@ -1761,8 +1993,7 @@ async def analytics_overview(
     response_model=WBSResponse,
     status_code=201,
     summary="Create WBS node",
-    description="Create a Work Breakdown Structure node for a project. "
-    "Supports hierarchical nesting via parent_id.",
+    description="Create a Work Breakdown Structure node for a project. Supports hierarchical nesting via parent_id.",
 )
 async def create_wbs_node(
     project_id: uuid.UUID,
@@ -2015,11 +2246,16 @@ async def update_milestone(
     from app.modules.projects.models import ProjectMilestone
     from app.modules.projects.schemas import _MILESTONE_TRANSITIONS
 
+    # Confirm the milestone belongs to this project on EVERY update path
+    # (not just status changes). Owning the project only proves access to
+    # ``project_id``; without this check a non-status update could fetch and
+    # return a foreign project's milestone in the response below.
+    current = await session.get(ProjectMilestone, milestone_id)
+    if current is None or current.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+
     # Validate status transition if status is being changed
     if data.status is not None:
-        current = await session.get(ProjectMilestone, milestone_id)
-        if current is None or current.project_id != project_id:
-            raise HTTPException(status_code=404, detail="Milestone not found")
         current_status = current.status
         if data.status != current_status:
             allowed = _MILESTONE_TRANSITIONS.get(current_status, set())
@@ -2124,7 +2360,10 @@ async def patch_match_settings(
     """PATCH the project's match settings (audit-logged)."""
     await _verify_project_owner(service, project_id, user_id, payload)
     row = await update_match_settings(
-        session, project_id, data, user_id=user_id,
+        session,
+        project_id,
+        data,
+        user_id=user_id,
     )
     return MatchProjectSettingsRead.model_validate(row)
 
@@ -2171,9 +2410,13 @@ async def file_manager_tree(
     endpoint so the sidebar counts match what the user actually sees
     in the right pane after a search.
     """
-    await _verify_project_owner(service, project_id, user_id, payload)
+    # IDOR/RBAC: team-readable docs — allow project team members (owner/admin/member), not owner-only
+    await _verify_project_access(service, project_id, user_id, session, payload)
     return await fm_file_tree(
-        session, str(project_id), query=q, extension=extension,
+        session,
+        str(project_id),
+        query=q,
+        extension=extension,
     )
 
 
@@ -2201,7 +2444,8 @@ async def file_manager_list(
     Each row carries the *real* on-disk path so the UI can ground users
     on where their data actually lives.
     """
-    await _verify_project_owner(service, project_id, user_id, payload)
+    # IDOR/RBAC: team-readable docs — allow project team members (owner/admin/member), not owner-only
+    await _verify_project_access(service, project_id, user_id, session, payload)
     return await fm_list_files(
         session,
         str(project_id),
@@ -2224,6 +2468,7 @@ async def file_manager_locations(
     user_id: CurrentUserId,
     payload: CurrentUserPayload,
     settings: SettingsDep,
+    session: SessionDep,
     service: ProjectService = Depends(_get_service),
 ) -> StorageLocations:
     """Return the absolute filesystem paths used by the project.
@@ -2232,9 +2477,12 @@ async def file_manager_locations(
     open the containing folder (Tauri-only), or just understand where
     their attachments live.
     """
-    project = await _verify_project_owner(service, project_id, user_id, payload)
+    # IDOR/RBAC: team-readable docs — allow project team members (owner/admin/member), not owner-only
+    project = await _verify_project_access(service, project_id, user_id, session, payload)
     return fm_resolve_locations(
-        str(project_id), getattr(project, "name", ""), settings=settings,
+        str(project_id),
+        getattr(project, "name", ""),
+        settings=settings,
     )
 
 
@@ -2350,7 +2598,8 @@ async def post_import_validate(
         return fm_validate_bundle(raw)
     except BundleError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         ) from exc
 
 
@@ -2361,11 +2610,13 @@ async def post_import_validate(
 )
 async def post_import_bundle(
     user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     session: SessionDep,
     file: UploadFile = File(..., description=".ocep bundle"),
     mode: ImportMode = Form(default="new_project"),
     target_project_id: str | None = Form(default=None),
     new_project_name: str | None = Form(default=None),
+    service: ProjectService = Depends(_get_service),
 ) -> ImportResult:
     """Unpack the bundle and write rows + attachments.
 
@@ -2379,6 +2630,25 @@ async def post_import_bundle(
       bundled table, then insert the bundle verbatim. Destructive — the
       UI must confirm.
     """
+    # merge_into_existing / replace_existing write into (and replace_existing
+    # WIPES) an existing project, so the caller must own it (or be admin).
+    # Without this any authenticated user could pass another user's project
+    # UUID and destroy or overwrite their data (IDOR).
+    if mode in ("merge_into_existing", "replace_existing"):
+        if not target_project_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="target_project_id is required for this import mode",
+            )
+        try:
+            target_uuid = uuid.UUID(target_project_id)
+        except (ValueError, AttributeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="target_project_id is not a valid UUID",
+            ) from exc
+        await _verify_project_owner(service, target_uuid, user_id, payload)
+
     raw = await file.read()
     try:
         result = await fm_import_bundle(
@@ -2390,7 +2660,8 @@ async def post_import_bundle(
         )
     except BundleError as exc:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
         ) from exc
 
     # ``new_project`` mode created a project row; make the importing user
@@ -2409,7 +2680,8 @@ async def post_import_bundle(
                 await session.commit()
         except Exception:  # noqa: BLE001
             logger.exception(
-                "Could not assign owner_id to imported project %s", result.project_id,
+                "Could not assign owner_id to imported project %s",
+                result.project_id,
             )
 
     return result
@@ -2467,14 +2739,13 @@ async def post_email_link(
     for mod, cls_name, kind in file_kinds:
         try:
             import importlib
+
             cls = getattr(importlib.import_module(mod), cls_name, None)
         except ImportError:
             continue
         if cls is None:
             continue
-        row = (
-            await session.execute(select(cls).where(cls.id == file_id))
-        ).scalar_one_or_none()
+        row = (await session.execute(select(cls).where(cls.id == file_id))).scalar_one_or_none()
         if row is not None:
             found_row = row
             found_kind = kind
@@ -2483,7 +2754,8 @@ async def post_email_link(
 
     if found_row is None or not target_project_id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="File not found",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
         )
 
     # Project ownership gate.
@@ -2507,6 +2779,7 @@ async def post_email_link(
         "uid": user_id,
     }
     import json as _json
+
     payload_bytes = _json.dumps(payload_obj, separators=(",", ":")).encode("utf-8")
     payload_b64 = base64.urlsafe_b64encode(payload_bytes).rstrip(b"=").decode("ascii")
     sig = hmac.new(
@@ -2517,22 +2790,14 @@ async def post_email_link(
     sig_b64 = base64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
     token = f"{payload_b64}.{sig_b64}"
 
-    name = (
-        getattr(found_row, "name", None)
-        or getattr(found_row, "filename", None)
-        or str(file_id)
-    )
+    name = getattr(found_row, "name", None) or getattr(found_row, "filename", None) or str(file_id)
     size_bytes = int(
-        getattr(found_row, "file_size", None)
-        or getattr(found_row, "size_bytes", None)
-        or 0,
+        getattr(found_row, "file_size", None) or getattr(found_row, "size_bytes", None) or 0,
     )
     if not size_bytes:
         try:
             size_bytes = os.path.getsize(
-                getattr(found_row, "file_path", None)
-                or getattr(found_row, "canonical_file_path", None)
-                or "",
+                getattr(found_row, "file_path", None) or getattr(found_row, "canonical_file_path", None) or "",
             )
         except OSError:
             size_bytes = 0
@@ -2588,6 +2853,7 @@ async def get_share_file(
             payload_b64 + "=" * (-len(payload_b64) % 4),
         )
         import json as _json
+
         payload_obj = _json.loads(payload_bytes)
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=400, detail="Malformed share token") from exc
@@ -2602,6 +2868,7 @@ async def get_share_file(
 
     # Resolve the file again — we never trust the token to carry the path.
     import importlib
+
     kind_to_class = {
         "document": ("app.modules.documents.models", "Document", "file_path", "name"),
         "photo": ("app.modules.documents.models", "ProjectPhoto", "file_path", "filename"),
@@ -2619,9 +2886,7 @@ async def get_share_file(
     if cls is None:
         raise HTTPException(status_code=503, detail="File class not loaded")
 
-    row = (
-        await session.execute(select(cls).where(cls.id == fid))
-    ).scalar_one_or_none()
+    row = (await session.execute(select(cls).where(cls.id == fid))).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="File no longer exists")
 
@@ -2713,7 +2978,8 @@ async def get_project_profile(
         # already created the profile will short-circuit at the existence
         # check.
         result = await profile_service.ensure_default_profile(
-            service.session, project_id,
+            service.session,
+            project_id,
         )
     return result
 
@@ -2734,7 +3000,10 @@ async def apply_project_profile(
 ) -> ProjectProfileResult:
     await _verify_project_owner(service, project_id, user_id, payload)
     return await profile_service.apply_profile(
-        service.session, project_id, spec, _user_uuid(user_id),
+        service.session,
+        project_id,
+        spec,
+        _user_uuid(user_id),
     )
 
 
@@ -2756,7 +3025,8 @@ async def recompute_project_profile(
         return await profile_service.recompute(service.session, project_id)
     except LookupError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc),
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
         ) from exc
 
 
@@ -2776,7 +3046,9 @@ async def set_project_focus_mode(
 ) -> ProjectProfileResult:
     await _verify_project_owner(service, project_id, user_id, payload)
     return await profile_service.set_focus_mode(
-        service.session, project_id, body.focus_mode_enabled,
+        service.session,
+        project_id,
+        body.focus_mode_enabled,
     )
 
 
@@ -2798,7 +3070,8 @@ async def list_project_modules(
     result = await profile_service.get_profile(service.session, project_id)
     if result is None:
         result = await profile_service.ensure_default_profile(
-            service.session, project_id,
+            service.session,
+            project_id,
         )
     return result.modules
 

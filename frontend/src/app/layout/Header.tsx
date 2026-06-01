@@ -9,7 +9,8 @@ import { useAuthStore } from '@/stores/useAuthStore';
 import { useUploadQueueStore } from '@/stores/useUploadQueueStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useThemeStore } from '@/stores/useThemeStore';
-import { CountryFlag } from '@/shared/ui';
+import { CountryFlag, PartnerLogoBadge } from '@/shared/ui';
+import { usePartnerPack } from '@/shared/hooks/usePartnerPack';
 import { NotificationBell } from '@/shared/ui/NotificationBell';
 import { apiGet } from '@/shared/lib/api';
 import {
@@ -24,45 +25,140 @@ import { useI18nReady } from '@/shared/lib/useI18nReady';
 import { SupportUsButton } from './SupportUsButton';
 import { SubscribeButton } from './SubscribeButton';
 
-/** Map English page titles (passed from App.tsx routes) to i18n keys. */
+/**
+ * Map the English page titles passed from App.tsx routes to i18n keys.
+ *
+ * The keys mirror the labelKey the Sidebar uses for the same destination, so
+ * the on-screen page heading, the browser tab title and the sidebar entry all
+ * resolve through the same locale bundle and can never disagree. When a title
+ * has no entry here the heading falls back to the English `defaultValue`
+ * (current behaviour), so adding a route without a mapping degrades gracefully
+ * rather than showing a raw key.
+ */
 const TITLE_I18N_MAP: Record<string, string> = {
+  // Overview
   'Dashboard': 'nav.dashboard',
-  'AI Quick Estimate': 'nav.ai_estimate',
-  'AI Cost Advisor': 'nav.ai_advisor',
-  'CAD/BIM Takeoff': 'nav.cad_takeoff',
-  'Match Elements': 'match_elements.title',
   'Projects': 'nav.projects',
   'New Project': 'projects.new_project',
   'Project': 'nav.projects',
+  'Project Settings': 'nav.settings',
+  'Project Files': 'nav.project_files',
+  'Project Intelligence': 'nav.estimation_dashboard',
+  // Estimation
+  'Match Elements': 'match_elements.title',
+  'AI Quick Estimate': 'nav.ai_estimate',
   'New BOQ': 'boq.new_estimate',
   'Bill of Quantities': 'nav.boq',
   'BOQ Editor': 'boq.editor',
   'BOQ Templates': 'nav.templates',
+  // Catalogues
   'Cost Database': 'nav.costs',
   'Import Cost Database': 'costs.import_title',
   'Resource Catalog': 'nav.resource_catalog',
   'Assemblies': 'nav.assemblies',
   'New Assembly': 'assemblies.new',
   'Assembly Editor': 'assemblies.editor',
-  'Validation': 'nav.validation',
+  // Takeoff & CAD/BIM
   'Quantity Takeoff': 'nav.takeoff_overview',
   'PDF Takeoff': 'nav.takeoff',
-  '4D Schedule': 'nav.schedule',
-  '5D Cost Model': 'nav.5d_cost_model',
-  'Reports': 'nav.reports',
-  'Sustainability': 'nav.sustainability',
+  'DWG Takeoff': 'nav.dwg_takeoff',
+  'CAD/BIM Takeoff': 'nav.cad_takeoff',
+  'Data Explorer': 'nav.cad_bim_explorer',
+  'BIM Viewer': 'nav.bim_viewer',
+  'BIM Federations': 'nav.bim_federations',
+  'BIM Rules': 'nav.bim_rules',
+  'Clash Detection': 'nav.clash_detection',
+  'Model Coordination': 'nav.coordination_hub',
+  'EIR Matrix': 'nav.eir_matrix',
+  'Geo Hub': 'sidebar.geo_hub',
+  // AI
+  'AI Agents': 'nav.ai_agents',
+  'AI Cost Advisor': 'nav.ai_advisor',
+  'AI Chat': 'nav.erp_chat',
+  // Commercial
+  'CRM': 'nav.crm',
+  'Contracts': 'nav.contracts',
+  'Subcontractors': 'nav.subcontractors',
+  'Bid Management': 'nav.bid_management',
   'Tendering': 'nav.tendering',
+  'Variations': 'nav.variations',
+  'Supplier Catalogs': 'nav.supplier_catalogs',
   'Change Orders': 'nav.change_orders',
-  'Documents': 'nav.documents',
-  'Project Photos': 'nav.photos',
-  'Project Files': 'nav.project_files',
+  // Property development
+  'Property Development': 'nav.property_dev',
+  'Property Development Dashboards': 'nav.property_dev_dashboards',
+  'House Type Catalogue': 'nav.property_dev_house_types',
+  'Document Templates': 'nav.property_dev_doc_templates',
+  'Bulk Operations': 'nav.property_dev_bulk_operations',
+  'Pricing Engine': 'nav.property_dev_pricing_engine',
+  'Inventory Map': 'nav.property_dev_inventory_map',
+  'Compliance Rule Builder': 'nav.compliance_rule_builder',
+  'Accommodation': 'nav.accommodation',
+  'Accommodation Calendar': 'nav.accommodation',
+  // Planning
+  '4D Schedule': 'nav.schedule',
+  'Advanced Schedule': 'nav.schedule_advanced',
+  'Tasks': 'tasks.title',
+  '5D Cost Model': 'nav.5d_cost_model',
   'Risk Register': 'nav.risk_register',
+  // Operations
+  'Daily Diary': 'nav.daily_diary',
+  'Field Reports': 'nav.field_reports',
+  'Equipment & Fleet': 'nav.equipment',
+  'Resources & Crew': 'nav.resources',
+  'Service & Maintenance': 'nav.service',
+  'Subcontractor Portal': 'nav.portal',
+  'Asset Register': 'nav.assets',
+  // Quality & safety
+  'Validation': 'nav.validation',
+  'Inspections': 'inspections.title',
+  'NCR': 'ncr.title',
+  'Punch List': 'nav.punchlist',
+  'Quality Management': 'nav.qms',
+  'Safety': 'safety.title',
+  'HSE Management': 'nav.hse_advanced',
+  'Carbon & ESG': 'nav.carbon',
+  // Communication & documentation
+  'Contacts': 'contacts.title',
+  'Meetings': 'meetings.title',
+  'RFI': 'rfi.title',
+  'Submittals': 'submittals.title',
+  'Transmittals': 'transmittals.title',
+  'Correspondence': 'correspondence.title',
+  'CDE': 'cde.title',
+  'Project Photos': 'nav.photos',
+  'Markups': 'nav.markups',
+  'Documents': 'nav.documents',
+  // Finance
+  'Finance': 'finance.title',
+  'Procurement': 'procurement.title',
+  // Analytics
+  'Reports': 'nav.reports',
+  'BI Dashboards': 'nav.bi_dashboards',
+  'Dashboards': 'nav.snapshots',
+  'Reporting Dashboards': 'nav.reporting_dashboards',
   'Analytics': 'nav.analytics',
-  'About': 'nav.about',
-  'Not Found': 'error.not_found',
+  'Architecture Map': 'nav.architecture_map',
+  'Sustainability': 'nav.sustainability',
+  // Admin
+  'User Management': 'sidebar.admin_grid.users',
+  'Audit Log': 'sidebar.admin_grid.audit',
+  'Governance': 'sidebar.admin_grid.governance',
   'Modules': 'nav.modules',
   'Settings': 'nav.settings',
+  'About': 'nav.about',
+  'Not Found': 'error.not_found',
 };
+
+/**
+ * Resolve the i18n key for a page title (or `null` when there is no mapping).
+ * Shared with AppLayout so the browser-tab `document.title` translates the
+ * same way the on-screen heading does.
+ */
+export function resolvePageTitleKey(title: string | undefined): string | null {
+  if (!title) return null;
+  return TITLE_I18N_MAP[title] ?? null;
+}
 
 interface HeaderProps {
   title?: string;
@@ -79,6 +175,12 @@ export function Header({ title, onMenuClick }: HeaderProps) {
   // returned version number is unused — its role is to invalidate the
   // memoization React applies to this render.
   useI18nReady();
+  // A partner pack drives the centered co-brand chip only. The secondary
+  // header actions (search, Support, Subscribe) keep their full labelled
+  // form whether or not a pack is active, so the top bar looks the same for
+  // every operator. The chip sits in a flex-1 column that yields space, so it
+  // never has to push the action buttons into icon-only mode to fit.
+  const packActive = usePartnerPack().data?.active === true;
   const translatedTitle = title
     ? t(TITLE_I18N_MAP[title] ?? title, { defaultValue: title })
     : undefined;
@@ -101,7 +203,7 @@ export function Header({ title, onMenuClick }: HeaderProps) {
       <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-border to-transparent" />
 
       {/* ── Zone 1 (Workspace): mobile menu + project breadcrumb + title ── */}
-      <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center gap-3 min-w-0 shrink">
         {onMenuClick && (
           <button
             onClick={onMenuClick}
@@ -132,6 +234,24 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         )}
       </div>
 
+      {/* ── Partner co-brand chip (center column) ───────────────────────
+          Sits in a flexible column between the workspace zone (left) and the
+          action cluster (right), centered within the clear space. The
+          header's true midpoint is occupied by the search box and action
+          buttons, so a chip pinned to the exact center lands on top of the
+          search field (the "slides under search" bug). Centering it in the
+          open gap keeps it fully visible and collision-free at every width,
+          which is what an absolute overlay cannot guarantee on a busy header.
+          Shown lg+; min-w-0 lets the column yield space instead of pushing
+          the zones, and the chip's own name truncation keeps it from
+          overflowing. Below lg the co-brand still shows in the dashboard
+          banner. */}
+      {packActive && (
+        <div className="hidden lg:flex flex-1 min-w-0 items-center justify-center px-2">
+          <PartnerLogoBadge variant="nav" />
+        </div>
+      )}
+
       {/* Right side — three zones separated by hairline dividers.
           Zone 2: Search · Zone 3: Notifications + Help · Zone 4: Account
           (Upload + Language + User). Each zone has internal `gap-1`,
@@ -143,12 +263,13 @@ export function Header({ title, onMenuClick }: HeaderProps) {
           centred across the header but that created awkward visual
           tension with the project switcher on the left; planted next
           to Support/Help, the two CTAs read as a coherent cluster. */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 shrink-0">
         {/* ── Zone 2 (Search) ──────────────────────────────────────── */}
         <button
           onClick={openCommandPalette}
           className={clsx(
-            'hidden sm:flex h-8 items-center gap-2 rounded-lg px-3',
+            'hidden sm:flex',
+            'h-8 items-center gap-2 rounded-lg px-3',
             // Solid-ish white background so the field doesn't dissolve into
             // the translucent header background; falls back to a dark tint
             // in dark mode so the chip stays readable on the dark blurred
@@ -171,7 +292,10 @@ export function Header({ title, onMenuClick }: HeaderProps) {
         <button
           onClick={openCommandPalette}
           aria-label={t('common.search', { defaultValue: 'Search' })}
-          className="flex sm:hidden h-8 w-8 items-center justify-center rounded-lg text-content-secondary hover:bg-surface-secondary transition-colors"
+          className={clsx(
+            'flex sm:hidden',
+            'h-8 w-8 items-center justify-center rounded-lg text-content-secondary hover:bg-surface-secondary transition-colors',
+          )}
         >
           <Search size={16} />
         </button>
@@ -643,10 +767,13 @@ function HelpMenu() {
           role="menu"
           className="absolute right-0 top-full mt-1.5 w-60 rounded-xl border border-border-light bg-surface-elevated shadow-lg animate-scale-in py-1 z-40"
         >
-          {/* External resources */}
+          {/* External resources. Documentation points at the repository's
+              docs/ folder on GitHub (the marketing-site docs.html 404s), a
+              real browsable destination on the same repo the GitHub item
+              below links to. */}
           <a
             role="menuitem"
-            href="https://openconstructionerp.com/docs.html"
+            href="https://github.com/datadrivenconstruction/OpenConstructionERP/tree/main/docs"
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => setOpen(false)}
@@ -774,7 +901,7 @@ function LanguageSwitcher({
               className={clsx(
                 'flex w-full items-center gap-2.5 px-3 py-1.5 text-sm transition-colors',
                 lang.code === currentLang.code
-                  ? 'bg-oe-blue-subtle text-oe-blue font-medium'
+                  ? 'bg-oe-blue-subtle text-oe-blue-text font-medium'
                   : 'text-content-primary hover:bg-surface-secondary',
               )}
             >
@@ -796,6 +923,114 @@ const GITHUB_REPO = 'datadrivenconstruction/OpenConstructionERP';
 const MAX_BODY_BYTES = 7800;
 
 /**
+ * Route prefix → human component name, longest-prefix-wins.
+ *
+ * The bug report previously derived the "component" from a raw pathname,
+ * which named the wrong screen (e.g. a deep-linked `/bim/<uuid>` reported as
+ * the root). This table maps the current route to the screen the user is
+ * actually on so a filed report points the maintainer at the right surface
+ * (#168). Order does not matter — ``deriveComponentFromRoute`` picks the
+ * longest matching prefix, so `/bim/federations` beats `/bim`.
+ */
+const ROUTE_COMPONENT_MAP: ReadonlyArray<readonly [string, string]> = [
+  ['/bim/federations', 'BIM Federations'],
+  ['/bim/rules', 'BIM Rules'],
+  ['/bim', 'BIM Viewer'],
+  ['/clash', 'Clash Detection'],
+  ['/coordination', 'Model Coordination'],
+  ['/assets', 'Asset Register'],
+  ['/data-explorer', 'Data Explorer'],
+  ['/match-elements', 'Match Elements'],
+  ['/boq', 'BOQ'],
+  ['/templates', 'BOQ Templates'],
+  ['/costs', 'Cost Database'],
+  ['/catalog', 'Resource Catalog'],
+  ['/assemblies', 'Assemblies'],
+  ['/validation', 'Validation'],
+  ['/compliance', 'Compliance'],
+  ['/quantities', 'Quantity Takeoff'],
+  ['/takeoff', 'PDF Takeoff'],
+  ['/dwg-takeoff', 'DWG Takeoff'],
+  ['/schedule', 'Schedule'],
+  ['/5d', '5D Cost Model'],
+  ['/analytics', 'Analytics'],
+  ['/dashboards', 'Dashboards'],
+  ['/reporting', 'Reporting'],
+  ['/reports', 'Reports'],
+  ['/tendering', 'Tendering'],
+  ['/changeorders', 'Change Orders'],
+  ['/photos', 'Project Photos'],
+  ['/files', 'Files'],
+  ['/risks', 'Risk Register'],
+  ['/markups', 'Markups'],
+  ['/punchlist', 'Punch List'],
+  ['/field-reports', 'Field Reports'],
+  ['/finance', 'Finance'],
+  ['/procurement', 'Procurement'],
+  ['/safety', 'Safety'],
+  ['/contacts', 'Contacts'],
+  ['/tasks', 'Tasks'],
+  ['/rfi', 'RFI'],
+  ['/submittals', 'Submittals'],
+  ['/correspondence', 'Correspondence'],
+  ['/cde', 'CDE'],
+  ['/transmittals', 'Transmittals'],
+  ['/meetings', 'Meetings'],
+  ['/inspections', 'Inspections'],
+  ['/ncr', 'NCR'],
+  ['/users', 'User Management'],
+  ['/admin', 'Admin'],
+  ['/approval-routes', 'Approval Routes'],
+  ['/modules', 'Modules'],
+  ['/setup', 'Setup'],
+  ['/settings', 'Settings'],
+  ['/integrations', 'Integrations'],
+  ['/about', 'About'],
+  ['/project-intelligence', 'Project Intelligence'],
+  ['/service', 'Service & Maintenance'],
+  ['/equipment', 'Equipment & Fleet'],
+  ['/daily-diary', 'Daily Diary'],
+  ['/portal', 'Subcontractor Portal'],
+  ['/resources', 'Resources & Crew'],
+  ['/contracts', 'Contracts'],
+  ['/ai-estimate', 'AI Quick Estimate'],
+  ['/ai-agents', 'AI Agents'],
+  ['/advisor', 'AI Cost Advisor'],
+  ['/chat', 'AI Chat'],
+  ['/projects', 'Projects'],
+];
+
+/**
+ * Resolve the human-readable component/screen name for a pathname.
+ *
+ * Picks the longest matching prefix from ``ROUTE_COMPONENT_MAP`` so nested
+ * routes resolve to the most specific screen. A pathname inside a project
+ * (``/projects/<id>/finance``) is matched by stripping the project prefix
+ * first, then falling back to the project route. ``/`` (root) and anything
+ * unknown resolve to a sensible generic ("Dashboard").
+ */
+export function deriveComponentFromRoute(pathname: string): string {
+  if (!pathname || pathname === '/') return 'Dashboard';
+  // Nested project routes carry the feature after /projects/<id>/. Match the
+  // feature segment first so /projects/<id>/finance reports as "Finance"
+  // rather than "Projects".
+  const projectNested = pathname.match(/^\/projects\/[^/]+\/(.+)$/);
+  const candidate = projectNested ? `/${projectNested[1]}` : pathname;
+  let best: string | null = null;
+  let bestLen = -1;
+  for (const [prefix, name] of ROUTE_COMPONENT_MAP) {
+    if (
+      (candidate === prefix || candidate.startsWith(prefix + '/')) &&
+      prefix.length > bestLen
+    ) {
+      best = name;
+      bestLen = prefix.length;
+    }
+  }
+  return best ?? 'Dashboard';
+}
+
+/**
  * Build the GitHub "new issue" URL pre-filled with environment + last error.
  *
  * Returns `{ url, body }` so callers can fall back to clipboard when the
@@ -803,7 +1038,9 @@ const MAX_BODY_BYTES = 7800;
  * contains user JWT, email, or other PII — `getLastError()` returns
  * already-anonymized strings via `errorLogger.anonymize()`.
  */
-function buildBugReportUrl(t: (key: string, opts?: { defaultValue?: string }) => string): {
+function buildBugReportUrl(
+  t: (key: string, opts?: { defaultValue?: string; [k: string]: unknown }) => string,
+): {
   url: string;
   body: string;
   title: string;
@@ -814,12 +1051,15 @@ function buildBugReportUrl(t: (key: string, opts?: { defaultValue?: string }) =>
     ? `\`\`\`\n${last.message}\n${stackLines}\n\`\`\``
     : t('app.report_bug_no_error', { defaultValue: '_No error captured during this session._' });
 
+  const component = deriveComponentFromRoute(window.location.pathname);
+
   const body = [
     '### Description',
     '<!-- describe what you were doing -->',
     '',
     '### Environment',
     `- App version: ${APP_VERSION}`,
+    `- Component: ${component}`,
     `- Page: ${window.location.pathname}${window.location.search}`,
     `- User agent: ${navigator.userAgent}`,
     `- Build: ${APP_BUILD_FINGERPRINT}`,
@@ -840,7 +1080,12 @@ function buildBugReportUrl(t: (key: string, opts?: { defaultValue?: string }) =>
     encoded = encodeURIComponent(safeBody);
   }
 
-  const title = t('app.report_bug_title_default', { defaultValue: 'Bug report from in-app menu' });
+  // Name the screen in the title so triage knows the affected surface at a
+  // glance (#168). i18n interpolation keeps the component verbatim.
+  const title = t('app.report_bug_title_component', {
+    defaultValue: '[{{component}}] Bug report from in-app menu',
+    component,
+  });
   const encodedTitle = encodeURIComponent(title);
   const url = GITHUB_REPO
     ? `https://github.com/${GITHUB_REPO}/issues/new?title=${encodedTitle}&body=${encoded}`
@@ -1105,8 +1350,10 @@ function ProjectSwitcher() {
             }
           }}
           className={clsx(
+            // WCAG AA fix 2026-05-27: text-oe-blue-text (#0071e3) on bg-oe-blue-subtle
+            // failed 4.35:1; text-oe-blue-text passes at 8.05:1.
             'flex items-center gap-2 pl-1.5 pr-2 h-9 text-[13px] min-w-0',
-            activeProjectId ? 'text-oe-blue' : 'text-oe-blue/85 hover:text-oe-blue',
+            activeProjectId ? 'text-oe-blue-text' : 'text-oe-blue-text/85 hover:text-oe-blue-text',
           )}
           title={activeProjectId
             ? t('projects.open_current', { defaultValue: 'Open this project' })
@@ -1137,10 +1384,13 @@ function ProjectSwitcher() {
           type="button"
           onClick={() => setOpen(!open)}
           className={clsx(
+            // WCAG AA: text-oe-blue-text at /70 alpha on bg-oe-blue-subtle drops
+            // below 4.5:1. Use oe-blue-dark for the icon color so axe scans
+            // pass even though ChevronDown is presentational.
             'flex items-center px-2 border-l transition-colors',
             activeProjectId
-              ? 'border-oe-blue/20 text-oe-blue/70 hover:bg-oe-blue/10 hover:text-oe-blue'
-              : 'border-oe-blue/25 border-dashed text-oe-blue/60 hover:bg-oe-blue/10 hover:text-oe-blue',
+              ? 'border-oe-blue/20 text-oe-blue-text/70 hover:bg-oe-blue/10 hover:text-oe-blue-text'
+              : 'border-oe-blue/25 border-dashed text-oe-blue-text/60 hover:bg-oe-blue/10 hover:text-oe-blue-text',
           )}
           title={t('schedule.switch_project', { defaultValue: 'Switch Project' })}
           aria-label={t('schedule.switch_project', { defaultValue: 'Switch Project' })}
@@ -1211,7 +1461,7 @@ function ProjectSwitcher() {
                 className={clsx(
                   'flex w-full items-center gap-2.5 px-4 py-2 text-sm transition-colors',
                   p.id === activeProjectId
-                    ? 'bg-oe-blue-subtle text-oe-blue font-medium'
+                    ? 'bg-oe-blue-subtle text-oe-blue-text font-medium'
                     : 'text-content-primary hover:bg-surface-secondary',
                 )}
               >
@@ -1305,7 +1555,7 @@ function UploadQueueIndicator() {
         aria-expanded={open}
         className={clsx(
           'relative flex h-8 w-8 items-center justify-center rounded-lg transition-colors',
-          totalActive > 0 ? 'text-oe-blue bg-oe-blue-subtle' : 'text-content-tertiary hover:bg-surface-secondary',
+          totalActive > 0 ? 'text-oe-blue-text bg-oe-blue-subtle' : 'text-content-tertiary hover:bg-surface-secondary',
         )}
         title={t('queue.title', { defaultValue: 'Upload Queue' })}
       >

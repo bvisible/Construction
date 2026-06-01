@@ -27,10 +27,7 @@ import { BOQListPage } from '@/features/boq/BOQListPage';
 import { CreateBOQPage } from '@/features/boq/CreateBOQPage';
 import { TemplatesPage } from '@/features/boq/TemplatesPage';
 import { syncCustomUnitsFromServer } from '@/features/boq/boqHelpers';
-import { CostsPage } from '@/features/costs';
-import { ValidationPage } from '@/features/validation';
 import { NlRuleBuilderPanel } from '@/features/compliance';
-import { QuantitiesPage } from '@/features/quantities';
 import { useModuleRouteElements } from '@/modules/ModuleRoutes';
 // //// NEOFFICE PATCH — Swiss Pack feature import
 import { SwissPackPage } from '@/features/swiss-pack';
@@ -41,8 +38,6 @@ import { SwissPackPage } from '@/features/swiss-pack';
 // import { SettingsPage } from '@/features/settings';
 // //// END NEOFFICE PATCH
 import { DatabaseSetupPage } from '@/features/setup';
-import { IntegrationsPage } from '@/features/integrations';
-import { AboutPage } from '@/features/about/AboutPage';
 import { Logo, ShortcutsDialog, CommandPalette, ToastContainer, ErrorBoundary, NotFoundPage, ProductTour, OfflineBanner, PWAInstallPrompt } from '@/shared/ui';
 import { AdminOnly } from '@/shared/auth/AdminOnly';
 import GlobalSearchModal from '@/features/search/GlobalSearchModal';
@@ -151,6 +146,9 @@ const TasksPage = lazy(() =>
 const RFIPage = lazy(() =>
   import('@/features/rfi/RFIPage').then((m) => ({ default: m.RFIPage }))
 );
+const RFIDetailPage = lazy(() =>
+  import('@/features/rfi/RFIDetailPage').then((m) => ({ default: m.RFIDetailPage }))
+);
 const SubmittalsPage = lazy(() =>
   import('@/features/submittals/SubmittalsPage').then((m) => ({ default: m.SubmittalsPage }))
 );
@@ -197,17 +195,20 @@ const UserManagementPage = lazy(() =>
 const AuditLogPage = lazy(() =>
   import('@/features/admin/AuditLogPage').then((m) => ({ default: m.AuditLogPage }))
 );
-// Admin: read-only permissions matrix — roles × modules × permissions
-// (gated server-side by `audit.view`).
-const PermissionsMatrixPage = lazy(() =>
-  import('@/features/admin/PermissionsMatrixPage').then((m) => ({
-    default: m.PermissionsMatrixPage,
-  })),
-);
+// (PermissionsMatrixPage now mounts inside GovernancePage — see below.)
 // Admin: Epic B / B11 — outbound notification webhook targets.
 const WebhookTargetsPage = lazy(() =>
   import('@/features/admin/WebhookTargetsPage').then((m) => ({
     default: m.WebhookTargetsPage,
+  })),
+);
+// (ApprovalRoutesPage now mounts inside GovernancePage — see below.)
+// Governance — one module merging Permissions + Approval Routes +
+// Validation Rules behind /governance with /modules-style top tabs.
+// The three old standalone routes redirect here, preserving the tab.
+const GovernancePage = lazy(() =>
+  import('@/features/governance').then((m) => ({
+    default: m.GovernancePage,
   })),
 );
 const ArchitectureMapPage = lazy(() =>
@@ -312,11 +313,7 @@ const PropertyDevHouseTypeSettingsPage = lazy(() =>
     default: m.HouseTypeSettingsPage,
   }))
 );
-const ValidationRulesSettingsPage = lazy(() =>
-  import('@/features/property-dev').then((m) => ({
-    default: m.ValidationRulesSettingsPage,
-  })),
-);
+// (ValidationRulesSettingsPage now mounts inside GovernancePage — see below.)
 const PropertyDevDocumentTemplatesSettingsPage = lazy(() =>
   import('@/features/property-dev').then((m) => ({
     default: m.DocumentTemplatesSettingsPage,
@@ -440,6 +437,25 @@ const LoginPageNext = lazy(() =>
 );
 const QuickEstimatePage = lazy(() =>
   import('@/features/ai/QuickEstimatePage').then((m) => ({ default: m.QuickEstimatePage }))
+);
+
+// Rarely-visited or heavy secondary pages — moved out of the initial
+// `index` bundle (was eager via barrel imports, ~1.4 MB chunk; these
+// surfaces are not part of the post-login landing flow).
+const CostsPage = lazy(() =>
+  import('@/features/costs').then((m) => ({ default: m.CostsPage }))
+);
+const ValidationPage = lazy(() =>
+  import('@/features/validation').then((m) => ({ default: m.ValidationPage }))
+);
+const QuantitiesPage = lazy(() =>
+  import('@/features/quantities').then((m) => ({ default: m.QuantitiesPage }))
+);
+const IntegrationsPage = lazy(() =>
+  import('@/features/integrations').then((m) => ({ default: m.IntegrationsPage }))
+);
+const AboutPage = lazy(() =>
+  import('@/features/about/AboutPage').then((m) => ({ default: m.AboutPage }))
 );
 
 // CPMView is keyed by the schedule it analyses, so the route reads :id and
@@ -575,6 +591,13 @@ function GlobalShortcuts() {
 // Run once at module load — synchronous, before any render
 useAuthStore.getState().loadFromStorage();
 useThemeStore.getState().init();
+
+// Refresh the authoritative role from the server so a user whose role was
+// changed by an admin sees the correct UI immediately on the next page load,
+// without waiting for their token to expire (RBAC stale-role fix).
+// Fire-and-forget — a network failure here is non-fatal; the JWT-decoded role
+// remains available as a fallback.
+useAuthStore.getState().syncRoleFromServer();
 
 // Initialize the anonymized error logger (global handlers for unhandled errors)
 initErrorLogger();
@@ -858,6 +881,7 @@ export default function App() {
         <Route path="/tasks" element={<P title="Tasks"><TasksPage /></P>} />
         <Route path="/projects/:projectId/rfi" element={<P title="RFI"><RFIPage /></P>} />
         <Route path="/rfi" element={<P title="RFI"><RFIPage /></P>} />
+        <Route path="/rfi/:rfiId" element={<P title="RFI"><RFIDetailPage /></P>} />
         <Route path="/projects/:projectId/submittals" element={<P title="Submittals"><SubmittalsPage /></P>} />
         <Route path="/submittals" element={<P title="Submittals"><SubmittalsPage /></P>} />
         <Route path="/projects/:projectId/correspondence" element={<P title="Correspondence"><CorrespondencePage /></P>} />
@@ -875,11 +899,19 @@ export default function App() {
 
         <Route path="/users" element={<P title="User Management"><UserManagementPage /></P>} />
         <Route path="/admin/audit-log" element={<P title="Audit Log"><AuditLogPage /></P>} />
-        <Route path="/admin/permissions" element={<P title="Permissions Matrix"><PermissionsMatrixPage /></P>} />
+        {/* Governance — merged home for Permissions, Approval Routes and
+            Validation Rules (three /modules-style top tabs). The active
+            tab is driven by ?tab=permissions|approvals|validation. */}
+        <Route path="/governance" element={<P title="Governance"><GovernancePage /></P>} />
+        {/* The three standalone pages now live as Governance tabs (mounted
+            inside GovernancePage). Redirect old links — and any internal
+            navigations — to the matching tab so nothing breaks. */}
+        <Route path="/admin/permissions" element={<Navigate to="/governance?tab=permissions" replace />} />
         <Route path="/admin/webhook-targets" element={<P title="Webhook Targets"><WebhookTargetsPage /></P>} />
-        <Route path="/admin/validation-rules" element={<P title="Validation Rules"><ValidationRulesSettingsPage /></P>} />
-        {/* Legacy redirect — moved 2026-05-23 from PropDev settings to platform-wide admin. */}
-        <Route path="/property-dev/settings/validation-rules" element={<Navigate to="/admin/validation-rules" replace />} />
+        <Route path="/admin/validation-rules" element={<Navigate to="/governance?tab=validation" replace />} />
+        <Route path="/approval-routes" element={<Navigate to="/governance?tab=approvals" replace />} />
+        {/* Legacy redirect — moved 2026-05-23 from PropDev settings; now to Governance. */}
+        <Route path="/property-dev/settings/validation-rules" element={<Navigate to="/governance?tab=validation" replace />} />
         <Route path="/modules" element={<P title="Modules"><ModulesPage /></P>} />
         <Route path="/modules/developer-guide" element={<P title="Module Developer Guide"><ModuleDeveloperGuide /></P>} />
         {/* //// NEOFFICE PATCH — Swiss Pack route */}

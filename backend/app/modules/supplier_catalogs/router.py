@@ -54,7 +54,7 @@ from app.modules.supplier_catalogs.schemas import (
 )
 from app.modules.supplier_catalogs.service import SupplierCatalogsService
 
-router = APIRouter()
+router = APIRouter(tags=["supplier_catalogs"])
 
 
 def _svc(session: SessionDep) -> SupplierCatalogsService:
@@ -514,7 +514,9 @@ async def ingest_peppol_invoice(
     """
     raw = await file.read()
     return await service.ingest_peppol_invoice(
-        raw, user_id=user_id, auto_match=auto_match,
+        raw,
+        user_id=user_id,
+        auto_match=auto_match,
     )
 
 

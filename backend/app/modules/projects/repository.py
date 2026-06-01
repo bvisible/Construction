@@ -36,13 +36,19 @@ class ProjectRepository:
     ) -> tuple[list[Project], int]:
         """List projects for a user with pagination. Returns (projects, total_count).
 
-        Admins see all projects; regular users see only their own.
+        Admins see all projects; regular users see projects they own OR
+        where they are a team member (added via add_project_member).
         Archived (soft-deleted) projects are excluded by default; pass an
         explicit `status` to override.
         """
+        from app.modules.teams.access import member_project_ids_subquery
+
         base = select(Project)
         if not is_admin:
-            base = base.where(Project.owner_id == owner_id)
+            base = base.where(
+                (Project.owner_id == owner_id)
+                | (Project.id.in_(member_project_ids_subquery(owner_id)))
+            )
         if status is not None:
             base = base.where(Project.status == status)
         elif exclude_archived:
@@ -102,9 +108,7 @@ class ProjectRepository:
         sequence number before either inserts. Cheap — single indexed
         scalar query.
         """
-        stmt = select(func.count()).select_from(
-            select(Project.id).where(Project.project_code == code).subquery()
-        )
+        stmt = select(func.count()).select_from(select(Project.id).where(Project.project_code == code).subquery())
         count = (await self.session.execute(stmt)).scalar_one()
         return bool(count)
 
@@ -135,7 +139,7 @@ class ProjectRepository:
         BATCH = 1000
         found: set[str] = set()
         for start in range(0, len(codes), BATCH):
-            chunk = codes[start:start + BATCH]
+            chunk = codes[start : start + BATCH]
             stmt = select(Project.project_code).where(
                 Project.project_code.in_(chunk),
             )

@@ -29,6 +29,7 @@ def _serialise_money(v: Decimal | None) -> str | None:
         return "0"
     return format(v, "f")
 
+
 # ── AI Settings schemas ──────────────────────────────────────────────────────
 
 
@@ -201,6 +202,10 @@ class EstimateJobResponse(BaseModel):
     input_filename: str | None = None
     status: str
     items: list[EstimateItem] = Field(default_factory=list)
+    # Resolved currency the items were priced in (ISO code or empty when the
+    # currency is unknown). The frontend must show this ISO code rather than a
+    # hard-coded EUR symbol, and never blend it with foreign-currency rates.
+    currency: str = ""
     error_message: str | None = None
     model_used: str | None = None
     tokens_used: int = 0

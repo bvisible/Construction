@@ -1,0 +1,48 @@
+{
+  "results": [
+    {
+      "slug": "boq-fx-popover",
+      "status": "PASS",
+      "note": "grid=34; aria_currency=7 ; opened on i=0 txt=\"NZD\" ; auto_focus=true; popover_after_pick=0; final_popover=0; fx_inputs=1",
+      "file": "boq-fx-popover.png"
+    },
+    {
+      "slug": "integrations-no-orphans",
+      "status": "FAIL",
+      "note": "orphan_rows=28; no Test buttons visible (nTest=0)",
+      "file": "integrations-no-orphans.png"
+    },
+    {
+      "slug": "bim-default-full-geom",
+      "status": "PASS",
+      "note": "canvas=2, isolated_text=0",
+      "file": "bim-default-full-geom.png"
+    },
+    {
+      "slug": "bim-property-search",
+      "status": "PARTIAL",
+      "note": "typed \"Wall\" into input[placeholder*=\"search\" i]:visible; screenshot captured",
+      "file": "bim-property-search.png"
+    },
+    {
+      "slug": "bim-begehung-top",
+      "status": "PARTIAL",
+      "note": "begehung_count=1; top_half=1, bottom_half=0; positions=[{\"y\":175,\"x\":1372}]; ruler/section_btns=0",
+      "file": "bim-begehung-top.png"
+    },
+    {
+      "slug": "doc-templates-locale-chips",
+      "status": "PASS",
+      "note": "chips=27; sample=\"EN English (English)\"; modal_after_click=1; textareas=1",
+      "file": "doc-templates-locale-chips.png"
+    },
+    {
+      "slug": "doc-templates-locale-add",
+      "status": "PASS",
+      "note": "clicked=true, modal=1",
+      "file": "doc-templates-locale-add.png"
+    }
+  ],
+  "consoleErrorCount": 0,
+  "consoleErrorsSample": []
+}

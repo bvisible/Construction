@@ -1,21 +1,37 @@
 /** React Query hooks for the file manager. */
 
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  keepPreviousData,
+} from '@tanstack/react-query';
 import { apiGet } from '@/shared/lib/api';
 import { useAuthStore } from '@/stores/useAuthStore';
 import {
+  fetchFavorites,
   fetchFileList,
   fetchFileTree,
   fetchStorageLocations,
   listFolderPermissions,
+  starFile,
+  unstarFile,
 } from './api';
-import type { FileFilters, FolderPermissionRow } from './types';
+import {
+  favoriteKey,
+  type FileFavorite,
+  type FileFilters,
+  type FileKind,
+  type FolderPermissionRow,
+} from './types';
 
 const KEY_TREE = 'file-manager-tree';
 const KEY_LIST = 'file-manager-list';
 const KEY_LOC = 'file-manager-locations';
 const KEY_FOLDER_PERMS = 'folder-permission-counts';
 const KEY_IS_PROJECT_OWNER = 'is-project-owner';
+const KEY_FAVORITES = 'file-manager-favorites';
 
 export function useFileTree(
   projectId: string | null | undefined,
@@ -57,7 +73,103 @@ export const fileManagerKeys = {
   locations: KEY_LOC,
   folderPermissionCounts: KEY_FOLDER_PERMS,
   isProjectOwner: KEY_IS_PROJECT_OWNER,
+  favorites: KEY_FAVORITES,
 };
+
+/* ── Per-user favourites / pins ────────────────────────────────────── */
+
+export interface UseFavoritesResult {
+  /** Raw favourite rows (pinned-first, as the backend returns them). */
+  rows: FileFavorite[];
+  /** Fast membership lookup keyed by ``favoriteKey(kind, id)``. */
+  keys: Set<string>;
+  /** Subset that is pinned (elevated favourites). */
+  pinnedKeys: Set<string>;
+  isLoading: boolean;
+}
+
+/**
+ * The current user's favourites for a project. Returns a memoised
+ * ``Set`` of ``kind:id`` keys so a grid of N tiles does an O(1) lookup
+ * per tile instead of scanning the row list.
+ */
+export function useFavorites(
+  projectId: string | null | undefined,
+): UseFavoritesResult {
+  const { data = [], isLoading } = useQuery({
+    queryKey: [KEY_FAVORITES, projectId],
+    queryFn: () => fetchFavorites(projectId as string),
+    enabled: Boolean(projectId),
+    staleTime: 30_000,
+  });
+
+  return useMemo(() => {
+    const keys = new Set<string>();
+    const pinnedKeys = new Set<string>();
+    for (const row of data) {
+      const k = favoriteKey(row.file_kind, row.file_id);
+      keys.add(k);
+      if (row.pinned) pinnedKeys.add(k);
+    }
+    return { rows: data, keys, pinnedKeys, isLoading };
+  }, [data, isLoading]);
+}
+
+/**
+ * Toggle a file's favourite state with an optimistic cache write so the
+ * star fills/empties instantly. Rolls back and rethrows on error so the
+ * caller can surface a toast.
+ */
+export function useToggleFavorite(projectId: string | null | undefined) {
+  const qc = useQueryClient();
+  const queryKey = [KEY_FAVORITES, projectId];
+
+  return useMutation({
+    mutationFn: async (vars: {
+      kind: FileKind;
+      fileId: string;
+      /** Current state — when already a favourite we un-star, else star. */
+      isFavorite: boolean;
+    }) => {
+      if (!projectId) throw new Error('No active project');
+      if (vars.isFavorite) {
+        await unstarFile(projectId, vars.kind, vars.fileId);
+        return null;
+      }
+      return starFile(projectId, vars.kind, vars.fileId);
+    },
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey });
+      const previous = qc.getQueryData<FileFavorite[]>(queryKey);
+      qc.setQueryData<FileFavorite[]>(queryKey, (old = []) => {
+        const k = favoriteKey(vars.kind, vars.fileId);
+        if (vars.isFavorite) {
+          return old.filter((r) => favoriteKey(r.file_kind, r.file_id) !== k);
+        }
+        // Optimistic insert — the real row (with id/timestamps) replaces
+        // this on settle via invalidation.
+        const optimistic: FileFavorite = {
+          id: `optimistic-${k}`,
+          user_id: '',
+          project_id: projectId ?? '',
+          file_kind: vars.kind,
+          file_id: vars.fileId,
+          pinned: false,
+          created_at: '',
+          updated_at: '',
+        };
+        return [...old, optimistic];
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(queryKey, context.previous);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey });
+    },
+  });
+}
 
 /* ── Per-folder permissions helpers ────────────────────────────────── */
 

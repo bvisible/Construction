@@ -50,7 +50,7 @@ from app.modules.fieldreports.schemas import (
 )
 from app.modules.fieldreports.service import FieldReportService, FieldReportTemplateService
 
-router = APIRouter()
+router = APIRouter(tags=["fieldreports"])
 logger = logging.getLogger(__name__)
 
 
@@ -329,9 +329,7 @@ async def download_field_reports_template(
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": 'attachment; filename="field_reports_import_template.xlsx"'
-        },
+        headers={"Content-Disposition": 'attachment; filename="field_reports_import_template.xlsx"'},
     )
 
 
@@ -581,11 +579,13 @@ async def import_field_reports_file(
             try:
                 report_date_val = date.fromisoformat(report_date_raw)
             except ValueError:
-                errors.append({
-                    "row": row_idx,
-                    "error": f"Invalid date format: {report_date_raw}. Use YYYY-MM-DD.",
-                    "data": {k: str(v)[:100] for k, v in row.items()},
-                })
+                errors.append(
+                    {
+                        "row": row_idx,
+                        "error": f"Invalid date format: {report_date_raw}. Use YYYY-MM-DD.",
+                        "data": {k: str(v)[:100] for k, v in row.items()},
+                    }
+                )
                 continue
 
             # Weather
@@ -630,11 +630,13 @@ async def import_field_reports_file(
             imported_count += 1
 
         except Exception as exc:
-            errors.append({
-                "row": row_idx,
-                "error": str(exc),
-                "data": {k: str(v)[:100] for k, v in row.items()},
-            })
+            errors.append(
+                {
+                    "row": row_idx,
+                    "error": str(exc),
+                    "data": {k: str(v)[:100] for k, v in row.items()},
+                }
+            )
             logger.warning("Field report import error at row %d: %s", row_idx, exc)
 
     logger.info(
@@ -690,23 +692,31 @@ async def export_field_reports(
     for row_idx, report in enumerate(reports, 2):
         workforce = report.workforce or []  # type: ignore[attr-defined]
         equipment = report.equipment_on_site or []  # type: ignore[attr-defined]
-        workforce_count = sum(
-            (e.get("count", 0) if isinstance(e, dict) else 0) for e in workforce
+        workforce_count = sum((e.get("count", 0) if isinstance(e, dict) else 0) for e in workforce)
+        ws.cell(
+            row=row_idx,
+            column=1,
+            value=str(report.report_date),  # type: ignore[attr-defined]
         )
         ws.cell(
-            row=row_idx, column=1, value=str(report.report_date)  # type: ignore[attr-defined]
+            row=row_idx,
+            column=2,
+            value=report.weather_condition,  # type: ignore[attr-defined]
         )
         ws.cell(
-            row=row_idx, column=2, value=report.weather_condition  # type: ignore[attr-defined]
+            row=row_idx,
+            column=3,
+            value=report.temperature_c,  # type: ignore[attr-defined]
         )
         ws.cell(
-            row=row_idx, column=3, value=report.temperature_c  # type: ignore[attr-defined]
+            row=row_idx,
+            column=4,
+            value=report.wind_speed,  # type: ignore[attr-defined]
         )
         ws.cell(
-            row=row_idx, column=4, value=report.wind_speed  # type: ignore[attr-defined]
-        )
-        ws.cell(
-            row=row_idx, column=5, value=report.work_performed  # type: ignore[attr-defined]
+            row=row_idx,
+            column=5,
+            value=report.work_performed,  # type: ignore[attr-defined]
         )
         ws.cell(row=row_idx, column=6, value=workforce_count)
         ws.cell(row=row_idx, column=7, value=len(equipment))
@@ -851,10 +861,20 @@ async def submit_report(
 async def approve_report(
     report_id: uuid.UUID,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("fieldreports.approve")),
     service: FieldReportService = Depends(_get_service),
 ) -> FieldReportResponse:
-    """Approve a submitted report."""
+    """Approve a submitted report.
+
+    IDOR guard: load the report first and verify the caller owns the parent
+    project before mutating the status.  Previously ``session`` was not
+    injected so ``verify_project_access`` could never be called — any
+    authenticated user with the ``fieldreports.approve`` permission could
+    approve reports belonging to other tenants.
+    """
+    existing = await service.get_report(report_id)
+    await verify_project_access(existing.project_id, user_id, session)
     report = await service.approve_report(report_id, user_id)
     return _report_to_response(report)
 
@@ -945,7 +965,7 @@ async def export_pdf(
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f"attachment; filename=field_report_{report_id}.pdf"},
+        headers={"Content-Disposition": f'attachment; filename="field_report_{report_id}.pdf"'},
     )
 
 
@@ -1049,7 +1069,9 @@ async def update_template(
     try:
         tpl_uuid = uuid.UUID(template_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail=translate("errors.template_not_found", locale=get_locale())) from None
+        raise HTTPException(
+            status_code=404, detail=translate("errors.template_not_found", locale=get_locale())
+        ) from None
 
     # IDOR guard: load first, verify the template's project, then mutate.
     existing = await service.repo.get_by_id(tpl_uuid)
@@ -1080,7 +1102,9 @@ async def delete_template(
     try:
         tpl_uuid = uuid.UUID(template_id)
     except ValueError:
-        raise HTTPException(status_code=404, detail=translate("errors.template_not_found", locale=get_locale())) from None
+        raise HTTPException(
+            status_code=404, detail=translate("errors.template_not_found", locale=get_locale())
+        ) from None
 
     existing = await service.repo.get_by_id(tpl_uuid)
     if existing is None or str(existing.project_id) != str(project_id):

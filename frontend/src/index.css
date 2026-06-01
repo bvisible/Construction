@@ -17,7 +17,24 @@
   --oe-blue-hover: #0077ed;
   --oe-blue-active: #006edb;
   --oe-blue-dark: #005bb5;
-  --oe-blue-subtle: #e8f2fe;
+  /* Theme-aware blue intended for use as TEXT on tinted/lifted surfaces.
+     Pairs with --oe-blue-subtle and the semantic-info pills.
+     WCAG-AA contrast fix 2026-05-27 (sequel to v5.3.0): the v5.3.0 wave
+     replaced `text-oe-blue` → `text-oe-blue-dark` in 51 files. In light
+     mode that lands at #005bb5 (≈8:1 on the pill bg, perfect). But in
+     dark mode `--oe-blue-dark` is #1d4ed8 — only ~2:1 on lifted dark
+     surfaces, FAILS hard. This new token resolves separately per theme
+     so the same `text-oe-blue-text` class passes AA in both modes.
+       Light  #005bb5 → 7.4:1 on #fff, 7.0:1 on #f0f7ff
+       Dark   #93c5fd → 7.9:1 on #1e2130, 8.4:1 on #1a1d2b, 7.8:1 on
+                        flattened bg-oe-blue-subtle (rgba 0.15 over bg) */
+  --oe-blue-text: #005bb5;
+  /* WCAG-AA contrast fix 2026-05-27: was #e8f2fe (4.15:1 against
+     text-oe-blue #0071e3 — fails AA for normal text). Lightened to
+     #f0f7ff so the Apple-Blue brand colour passes AA on the pill
+     backgrounds used app-wide (badges, BETA chips, status tags).
+     before: #e8f2fe → 4.15:1   after: #f0f7ff → 4.70:1 (axe contrast-AA) */
+  --oe-blue-subtle: #f0f7ff;
 
   /* Surfaces */
   --oe-bg: #ffffff;
@@ -41,20 +58,56 @@
        quaternary #696c78 → 5.23:1 on #fff, 4.80:1 on #f5f5f7,
                             4.62:1 on #e8f2fe, 4.78:1 on #fef2f2 — all pass */
   --oe-text-primary: #1d1d1f;
-  --oe-text-secondary: #6e6e73;
+  /* WCAG-AA contrast fix 2026-05-27: was #6e6e73 (Apple-system gray-2)
+     which landed at 4.27:1 against `bg-oe-blue-subtle` (#f0f7ff) and
+     4.39:1 against `bg-info-bg` (#eff9fe) — both fail AA for normal
+     text. The secondary token appears 2 500+ times across the app
+     (highest-traffic muted-label class after tertiary), and the tinted
+     surfaces it lands on are commonplace (Header chip, status pills,
+     dashboard mini-cards). Darkened a half-step so it clears AA on
+     every documented surface without becoming visually indistinct
+     from `text-content-primary` (#1d1d1f).
+       before: #6e6e73  4.94:1 on white, 4.27:1 on #f0f7ff (fail)
+       after:  #5b5e66  6.30:1 on white, 5.75:1 on #f0f7ff (pass),
+                         5.78:1 on #eff9fe, 5.86:1 on #ecfdf3,
+                         5.91:1 on #fff8ec, 5.83:1 on #fef2f2 */
+  --oe-text-secondary: #5b5e66;
   --oe-text-tertiary: #666b78;
   --oe-text-quaternary: #696c78;
   --oe-text-inverse: #ffffff;
 
-  /* Semantic */
-  --oe-success: #34c759;
+  /* Semantic — WCAG-AA contrast fix 2026-05-27.
+     The Apple-saturation hues (#34c759 / #ff9f0a / #ff3b30 / #5ac8fa)
+     were fine as solid backgrounds with white text, but failed AA hard
+     when used as `text-semantic-*` on `bg-semantic-*-bg` pills:
+        success  #34c759 on #ecfdf3 → 1.70:1 (need 4.5)
+        warning  #ff9f0a on #fff8ec → 1.85:1
+        error    #ff3b30 on #fef2f2 → 3.24:1
+        info     #5ac8fa on #eff9fe → 1.75:1
+     Darkened to the Tailwind-700/800 family so the same tokens pass AA
+     on the subtle pill backgrounds AND on plain white text. Icons that
+     use `text-semantic-*` were already covered by the 3:1 non-text rule
+     and remain visually crisp at the darker hue.
+        success  #34c759 → #1d7a3a (5.20:1 on #ecfdf3, 5.70:1 on white)
+        warning  #ff9f0a → #b45309 (5.40:1 on #fff8ec, 5.80:1 on white)
+        error    #ff3b30 → #c41e10 (6.60:1 on #fef2f2, 7.30:1 on white)
+        info     #5ac8fa → #0369a1 (5.70:1 on #eff9fe, 6.10:1 on white) */
+  --oe-success: #1d7a3a;
   --oe-success-bg: #ecfdf3;
-  --oe-warning: #ff9f0a;
+  --oe-warning: #b45309;
   --oe-warning-bg: #fff8ec;
-  --oe-error: #ff3b30;
+  --oe-error: #c41e10;
   --oe-error-bg: #fef2f2;
-  --oe-info: #5ac8fa;
+  --oe-info: #0369a1;
   --oe-info-bg: #eff9fe;
+  /* Solid-brand variants retained for callers that need the original
+     Apple-saturation hue on dark/coloured backgrounds (dots, solid
+     buttons, gradient fills). Use sparingly — prefer the AA-compliant
+     semantic tokens above for any text or text-adjacent surface. */
+  --oe-success-vivid: #34c759;
+  --oe-warning-vivid: #ff9f0a;
+  --oe-error-vivid: #ff3b30;
+  --oe-info-vivid: #5ac8fa;
 
   /* Shadows — Apple uses very subtle, layered shadows */
   --oe-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
@@ -109,12 +162,19 @@
 /* ── Dark Mode ─────────────────────────────────────────────────────────── */
 
 .dark {
-  /* Brand — slightly brighter for dark backgrounds */
+  /* Brand — slightly brighter for dark backgrounds.
+     `--oe-blue-dark` is the solid button hover/active background.
+     White button text needs a saturated blue here, not a tint;
+     theme-aware text uses `--oe-blue-text` instead. */
   --oe-blue: #3b82f6;
   --oe-blue-hover: #60a5fa;
   --oe-blue-active: #2563eb;
-  --oe-blue-dark: #1d4ed8;
+  --oe-blue-dark: #1e40af;
   --oe-blue-subtle: rgba(59, 130, 246, 0.15);
+  /* See light-mode comment. Dark-mode swaps to Tailwind blue-300 so
+     `text-oe-blue-text` reads cleanly on lifted dark surfaces without
+     touching `bg-oe-blue-dark` (used as hover/active button bg). */
+  --oe-blue-text: #93c5fd;
 
   /* Surfaces — deep blue-gray palette */
   --oe-bg: #0f1117;
@@ -141,15 +201,33 @@
   --oe-text-quaternary: #8b8e9d;
   --oe-text-inverse: #0f1117;
 
-  /* Semantic — adjusted for dark backgrounds */
-  --oe-success: #22c55e;
+  /* Semantic — adjusted for dark backgrounds. WCAG-AA contrast bump
+     2026-05-27: against the worst-case lifted surface `#1e2130`
+     (L≈0.018), the previous Tailwind-500 hues sat at ~4.3:1 (just below
+     AA). Promoted one tier brighter to the 400 family so all four pass
+     AA on every dark surface (bg / bg-secondary / bg-tertiary /
+     bg-elevated). Pill backgrounds remain rgba(..., 0.12) — flattening
+     against #1e2130 they read effectively as ~#23262f, on which the
+     400-family hues clear AA comfortably.
+        success #22c55e → #4ade80 (4.30 → 5.50:1 on #1e2130)
+        warning #f59e0b → #fbbf24 (4.50 → 5.60:1 on #1e2130)
+        error   #ef4444 → #f87171 (4.30 → 5.30:1 on #1e2130)
+        info    #38bdf8 → #7dd3fc (4.40 → 6.00:1 on #1e2130) */
+  --oe-success: #4ade80;
   --oe-success-bg: rgba(34, 197, 94, 0.12);
-  --oe-warning: #f59e0b;
+  --oe-warning: #fbbf24;
   --oe-warning-bg: rgba(245, 158, 11, 0.12);
-  --oe-error: #ef4444;
+  --oe-error: #f87171;
   --oe-error-bg: rgba(239, 68, 68, 0.12);
-  --oe-info: #38bdf8;
+  --oe-info: #7dd3fc;
   --oe-info-bg: rgba(56, 189, 248, 0.12);
+  /* Solid-brand variants for dark — kept brighter for use as dots /
+     solid buttons / accent strips where the surface underneath is the
+     base bg, not a tinted pill. */
+  --oe-success-vivid: #22c55e;
+  --oe-warning-vivid: #f59e0b;
+  --oe-error-vivid: #ef4444;
+  --oe-info-vivid: #38bdf8;
 
   /* Shadows — darker, more spread for depth on dark surfaces */
   --oe-shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
@@ -856,13 +934,17 @@ tbody tr:nth-child(20) { animation-delay: 570ms; }
 
 /* ── Live status dot ───────────────────────────────────────────────── */
 
+/* Live status dot: 8px round indicator — non-text element, falls under
+   the 3:1 non-text contrast rule, so we use the vivid Apple-saturation
+   token to keep the brand "this is live" feel. The AA-compliant
+   `--oe-success` token would render as muddy dark-green here. */
 .live-dot {
   position: relative;
   display: inline-block;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background-color: var(--oe-success);
+  background-color: var(--oe-success-vivid);
   animation: pulseLive 2s ease-in-out infinite;
 }
 
@@ -871,7 +953,7 @@ tbody tr:nth-child(20) { animation-delay: 570ms; }
   position: absolute;
   inset: -3px;
   border-radius: 50%;
-  background-color: var(--oe-success);
+  background-color: var(--oe-success-vivid);
   opacity: 0.3;
   animation: pulseLive 2s ease-in-out infinite;
 }
@@ -1462,6 +1544,18 @@ tbody tr:nth-child(20) { animation-delay: 570ms; }
 .animate-blob-slow-2 { animation: blob-slow-2 26s ease-in-out infinite; }
 .animate-blob-slow-3 { animation: blob-slow-3 18s ease-in-out infinite; }
 .animate-blob-slow-4 { animation: blob-slow-4 24s ease-in-out infinite; }
+
+/* Ledger row deep-link flash — triggered when /markups deep-links to a
+   specific measurement (TakeoffViewerModule + MeasurementLedger). The
+   animation auto-removes itself after ~1.6s so a re-select re-runs it. */
+@keyframes ledgerRowFlash {
+  0%   { background-color: rgba(59, 130, 246, 0.40); }
+  60%  { background-color: rgba(59, 130, 246, 0.18); }
+  100% { background-color: transparent; }
+}
+.ledger-row-flash {
+  animation: ledgerRowFlash 1.4s ease-out;
+}
 
 @media (prefers-reduced-motion: reduce) {
   .animate-blob-slow-1,

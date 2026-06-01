@@ -16,15 +16,46 @@ import {
   FileText,
   ClipboardList,
   Activity,
+  Eye,
+  X,
 } from 'lucide-react';
-import { Breadcrumb, Card, CardContent, Skeleton } from '@/shared/ui';
+import { Breadcrumb, Button, Card, CardContent, EmptyState, Skeleton } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
-import { apiGet, apiPost } from '@/shared/lib/api';
+import { useAuthStore } from '@/stores/useAuthStore';
+import { apiGet, apiPost, API_BASE, getAuthToken, ApiError } from '@/shared/lib/api';
 import { projectsApi, type Project } from '@/features/projects/api';
+
+// Roles allowed to trigger the portfolio-wide KPI recompute. The backend
+// gates /kpi/recalculate-all/ behind reporting.distribute (MANAGER), so
+// editors/viewers would only ever get a 403 — hiding the trigger keeps it
+// from being a dead control (W2 audit, /reporting).
+const RECALC_ROLES = new Set(['manager', 'admin', 'superuser', 'owner']);
 
 /* ── Types ─────────────────────────────────────────────────────────────────── */
 
-type DashboardTab = 'executive' | 'pm' | 'estimator' | 'site' | 'finance';
+type DashboardTab = 'executive' | 'pm' | 'estimator' | 'site' | 'finance' | 'reports';
+
+interface ReportTemplate {
+  id: string;
+  name: string;
+  report_type: string;
+  description: string | null;
+  is_system: boolean;
+  is_scheduled: boolean;
+  schedule_cron: string | null;
+  created_at: string;
+}
+
+interface GeneratedReport {
+  id: string;
+  project_id: string;
+  template_id: string | null;
+  report_type: string;
+  title: string;
+  format: string;
+  generated_at: string;
+  created_at: string;
+}
 
 interface KPISnapshot {
   id: string;
@@ -41,18 +72,32 @@ interface KPISnapshot {
   risk_score_avg: string | null;
 }
 
+// Wire contract for GET /api/v1/finance/dashboard/. The previous shape
+// (total_budget / budget_warning / overdue_payable / overdue_receivable /
+// invoices_due_this_week / invoices_due_this_month) did NOT exist on the
+// finance endpoint, so every card bound to those keys rendered N/A /
+// undefined% and the budget traffic-light was permanently green. The real
+// response is FinanceDashboardResponse in backend/app/modules/finance/
+// schemas.py: total_budget_revised / total_budget_original / total_committed /
+// total_overdue / budget_warning_level. Money fields are Decimal-serialized
+// and arrive as STRINGS on the wire (the @field_serializer emits plain
+// decimal strings), so they are typed `number | string` and MUST be wrapped
+// in Number() before any arithmetic / .toFixed() (platform money rule).
+// `currency` carries the ISO code these amounts are denominated in — never
+// hardcode EUR.
 interface FinanceDashboard {
-  total_payable: number;
-  total_receivable: number;
-  overdue_payable: number;
-  overdue_receivable: number;
-  total_budget: number;
-  total_actual: number;
-  budget_consumed_pct: number;
-  budget_warning: string;
-  cash_flow_net: number;
-  invoices_due_this_week: number;
-  invoices_due_this_month: number;
+  total_payable: number | string;
+  total_receivable: number | string;
+  total_budget_original: number | string;
+  total_budget_revised: number | string;
+  total_committed: number | string;
+  total_actual: number | string;
+  total_overdue: number | string;
+  // Percentage ratio — backend keeps this a float (not in the deferred
+  // money list), but it is null-safe to treat the wire value defensively.
+  budget_consumed_pct: number | string | null;
+  budget_warning_level: string; // "normal" | "caution" | "critical"
+  cash_flow_net: number | string;
   currency: string;
 }
 
@@ -123,6 +168,18 @@ function fmtNum(v: number | null | undefined, decimals = 0): string {
   });
 }
 
+// Money-bug guard: finance amounts arrive as Decimal-serialized STRINGS
+// (e.g. "517103508.65"). Passing a string to fmtNum (which calls
+// .toLocaleString) or doing `value > 0` would format/compare a string —
+// yielding "NaN" or a lexicographic comparison. Coerce through Number()
+// first; non-numeric/empty values become null so the card shows N/A rather
+// than a misleading 0. Returns number | null, which fmtNum already accepts.
+function toMoneyNum(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 /* ── KPI Card component ────────────────────────────────────────────────────── */
 
 function KPICard({
@@ -154,13 +211,37 @@ function KPICard({
 /* ── Project status badge ──────────────────────────────────────────────────── */
 
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation();
+  // Colors carry dark-mode variants so the badge is legible in both
+  // themes (the rest of the page is dark-aware). Labels route through
+  // t() so non-English locales don't see raw English enum tokens; the
+  // unknown-status fallback humanises snake_case rather than printing it
+  // verbatim.
   const map: Record<string, { color: string; label: string }> = {
-    active: { color: 'bg-emerald-100 text-emerald-700', label: 'Active' },
-    on_hold: { color: 'bg-amber-100 text-amber-700', label: 'On Hold' },
-    completed: { color: 'bg-blue-100 text-blue-700', label: 'Completed' },
-    archived: { color: 'bg-gray-100 text-gray-500', label: 'Archived' },
+    active: {
+      color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+      label: t('reporting.status_active', { defaultValue: 'Active' }),
+    },
+    on_hold: {
+      color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+      label: t('reporting.status_on_hold', { defaultValue: 'On Hold' }),
+    },
+    completed: {
+      color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+      label: t('reporting.status_completed', { defaultValue: 'Completed' }),
+    },
+    archived: {
+      color: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+      label: t('reporting.status_archived', { defaultValue: 'Archived' }),
+    },
   };
-  const s = map[status] ?? { color: 'bg-gray-100 text-gray-500', label: status };
+  const fallbackLabel = status
+    ? status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+    : t('reporting.status_unknown', { defaultValue: 'Unknown' });
+  const s = map[status] ?? {
+    color: 'bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400',
+    label: fallbackLabel,
+  };
   return <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${s.color}`}>{s.label}</span>;
 }
 
@@ -172,6 +253,7 @@ const TABS: { key: DashboardTab; labelKey: string; defaultLabel: string; icon: R
   { key: 'estimator', labelKey: 'reporting.tab_estimator', defaultLabel: 'Estimator', icon: Calculator },
   { key: 'site', labelKey: 'reporting.tab_site', defaultLabel: 'Site Engineer', icon: HardHat },
   { key: 'finance', labelKey: 'reporting.tab_finance', defaultLabel: 'Finance', icon: Wallet },
+  { key: 'reports', labelKey: 'reporting.tab_reports', defaultLabel: 'Reports', icon: FileText },
 ];
 
 /* ── Main component ────────────────────────────────────────────────────────── */
@@ -179,6 +261,8 @@ const TABS: { key: DashboardTab; labelKey: string; defaultLabel: string; icon: R
 export function ReportingPage() {
   const { t } = useTranslation();
   const { activeProjectId, activeProjectName } = useProjectContextStore();
+  const userRole = useAuthStore((s) => s.userRole);
+  const canRecalculate = RECALC_ROLES.has((userRole ?? '').toLowerCase());
 
   const [tab, setTab] = useState<DashboardTab>('executive');
   const [loading, setLoading] = useState(true);
@@ -300,11 +384,19 @@ export function ReportingPage() {
 
   // Active / total counts
   const activeProjects = projects.filter((p) => p.status === 'active');
-  const totalPortfolioValue = projects.reduce((sum, p) => {
+  // Portfolio value MUST NOT blend currencies: a EUR project and a USD
+  // project cannot be added as if 1 EUR = 1 USD. We group each project's
+  // budget by its own ISO currency and let the UI render per-currency
+  // subtotals (each carrying its code), per the platform money rule.
+  const portfolioValueByCurrency = projects.reduce<Record<string, number>>((acc, p) => {
     const meta = p.metadata as Record<string, unknown> | undefined;
     const budget = meta?.budget_estimate ?? (p as unknown as Record<string, unknown>).budget_estimate;
-    return sum + (budget ? Number(budget) || 0 : 0);
-  }, 0);
+    const amount = budget ? Number(budget) || 0 : 0;
+    if (amount <= 0) return acc;
+    const code = (p.currency || '').trim().toUpperCase() || 'N/A';
+    acc[code] = (acc[code] ?? 0) + amount;
+    return acc;
+  }, {});
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
   const selectedKpi = selectedProjectId ? kpiMap[selectedProjectId] : undefined;
@@ -336,14 +428,16 @@ export function ReportingPage() {
             })}
           </p>
         </div>
-        <button
-          onClick={handleRecalculate}
-          disabled={recalculating}
-          className="inline-flex items-center gap-2 rounded-lg bg-oe-blue px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-oe-blue-hover disabled:opacity-50"
-        >
-          {recalculating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
-          {t('reporting.recalculate', { defaultValue: 'Recalculate KPIs' })}
-        </button>
+        {canRecalculate && (
+          <button
+            onClick={handleRecalculate}
+            disabled={recalculating}
+            className="inline-flex items-center gap-2 rounded-lg bg-oe-blue px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-oe-blue-hover disabled:opacity-50"
+          >
+            {recalculating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+            {t('reporting.recalculate', { defaultValue: 'Recalculate KPIs' })}
+          </button>
+        )}
       </div>
 
       {recalcError && (
@@ -444,7 +538,7 @@ export function ReportingPage() {
         <ExecutiveDashboard
           projects={projects}
           activeProjects={activeProjects}
-          totalValue={totalPortfolioValue}
+          valueByCurrency={portfolioValueByCurrency}
           kpiMap={kpiMap}
         />
       )}
@@ -477,6 +571,9 @@ export function ReportingPage() {
           procurementStats={procurementStats}
         />
       )}
+      {!loading && !loadError && tab === 'reports' && (
+        <ReportsTab project={selectedProject} />
+      )}
     </div>
   );
 }
@@ -486,15 +583,27 @@ export function ReportingPage() {
 function ExecutiveDashboard({
   projects,
   activeProjects,
-  totalValue,
+  valueByCurrency,
   kpiMap,
 }: {
   projects: Project[];
   activeProjects: Project[];
-  totalValue: number;
+  valueByCurrency: Record<string, number>;
   kpiMap: Record<string, KPISnapshot>;
 }) {
   const { t } = useTranslation();
+
+  // Sort currencies by descending subtotal so the largest leads. Each
+  // entry keeps its own ISO code — we never collapse them into one
+  // figure because there is no FX context here to convert with.
+  const currencyEntries = Object.entries(valueByCurrency).sort((a, b) => b[1] - a[1]);
+  const [topEntry] = currencyEntries;
+  const portfolioValueLabel =
+    currencyEntries.length === 0 || topEntry === undefined
+      ? 'N/A'
+      : currencyEntries.length === 1
+        ? `${fmtNum(topEntry[1])} ${topEntry[0]}`
+        : currencyEntries.map(([code, amount]) => `${fmtNum(amount)} ${code}`).join(' · ');
 
   return (
     <div className="space-y-6">
@@ -514,7 +623,7 @@ function ExecutiveDashboard({
         />
         <KPICard
           label={t('reporting.portfolio_value', { defaultValue: 'Portfolio Value' })}
-          value={totalValue > 0 ? fmtNum(totalValue) : 'N/A'}
+          value={portfolioValueLabel}
           color="gray"
           icon={BarChart3}
         />
@@ -626,7 +735,7 @@ function PMDashboard({
 }) {
   const { t } = useTranslation();
   if (!project) {
-    return <EmptyState message={t('reporting.select_project_prompt', { defaultValue: 'Select a project to view PM dashboard' })} />;
+    return <PromptCard message={t('reporting.select_project_prompt', { defaultValue: 'Select a project to view PM dashboard' })} />;
   }
 
   const budgetPct = kpi?.budget_consumed_pct ? parseFloat(kpi.budget_consumed_pct) : null;
@@ -769,7 +878,7 @@ function EstimatorDashboard({
   }, [projectId]);
 
   if (!project) {
-    return <EmptyState message={t('reporting.select_project_prompt_estimator', { defaultValue: 'Select a project to view Estimator dashboard' })} />;
+    return <PromptCard message={t('reporting.select_project_prompt_estimator', { defaultValue: 'Select a project to view Estimator dashboard' })} />;
   }
 
   return (
@@ -856,7 +965,7 @@ function SiteDashboard({
   const { t } = useTranslation();
 
   if (!project) {
-    return <EmptyState message={t('reporting.select_project_prompt_site', { defaultValue: 'Select a project to view Site Engineer dashboard' })} />;
+    return <PromptCard message={t('reporting.select_project_prompt_site', { defaultValue: 'Select a project to view Site Engineer dashboard' })} />;
   }
 
   return (
@@ -946,8 +1055,46 @@ function FinanceDashboardView({
   const { t } = useTranslation();
 
   if (!project) {
-    return <EmptyState message={t('reporting.select_project_prompt_finance', { defaultValue: 'Select a project to view Finance dashboard' })} />;
+    return <PromptCard message={t('reporting.select_project_prompt_finance', { defaultValue: 'Select a project to view Finance dashboard' })} />;
   }
+
+  // The procurement stats endpoint does not expose its own currency, so
+  // committed money is shown against the project's finance currency
+  // (purchase orders inherit the project currency). Money must always
+  // carry its ISO code — a bare number is ambiguous. Derived from the
+  // finance payload's own currency first, then the project, never EUR.
+  const procurementCurrency = financeDash?.currency || project.currency || '';
+
+  // Coerce the Decimal-string money fields once so arithmetic and
+  // formatting below operate on real numbers (money-bug fix). null means
+  // the figure was absent — render N/A instead of a misleading 0.
+  const currency = financeDash?.currency ?? '';
+  const totalPayable = toMoneyNum(financeDash?.total_payable);
+  const totalReceivable = toMoneyNum(financeDash?.total_receivable);
+  // Was overdue_payable (a key the endpoint never returns) — real wire field
+  // is total_overdue.
+  const totalOverdue = toMoneyNum(financeDash?.total_overdue);
+  const cashFlowNet = toMoneyNum(financeDash?.cash_flow_net);
+  // Real wire field is total_budget_revised; the old `total_budget` key never
+  // existed so this card always read N/A.
+  const totalBudgetRevised = toMoneyNum(financeDash?.total_budget_revised);
+  const totalCommitted = toMoneyNum(financeDash?.total_committed);
+  const totalActual = toMoneyNum(financeDash?.total_actual);
+  // budget_consumed_pct is a percentage (may be string/float/null on the wire).
+  const budgetConsumedPct = toMoneyNum(financeDash?.budget_consumed_pct);
+  // Primary budget signal is the numeric consumed-% (unambiguous); the
+  // backend's budget_warning_level string ("normal"|"caution"|"critical") is
+  // a secondary escalator. The old code compared the nonexistent
+  // `budget_warning` key, so the light was permanently green even at 100%.
+  const warningLevel = (financeDash?.budget_warning_level ?? '').toLowerCase();
+  const budgetColor: TrafficLight =
+    warningLevel === 'critical' || (budgetConsumedPct !== null && budgetConsumedPct >= 100)
+      ? 'red'
+      : warningLevel === 'caution' || (budgetConsumedPct !== null && budgetConsumedPct >= 90)
+        ? 'yellow'
+        : budgetConsumedPct === null
+          ? 'gray'
+          : 'green';
 
   return (
     <div className="space-y-6">
@@ -957,60 +1104,55 @@ function FinanceDashboardView({
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <KPICard
               label={t('reporting.payable', { defaultValue: 'Total Payable' })}
-              value={`${fmtNum(financeDash.total_payable, 2)} ${financeDash.currency}`}
+              value={`${fmtNum(totalPayable, 2)} ${currency}`.trim()}
               color="gray"
               icon={Wallet}
             />
             <KPICard
               label={t('reporting.receivable', { defaultValue: 'Total Receivable' })}
-              value={`${fmtNum(financeDash.total_receivable, 2)} ${financeDash.currency}`}
+              value={`${fmtNum(totalReceivable, 2)} ${currency}`.trim()}
               color="gray"
               icon={TrendingUp}
             />
             <KPICard
-              label={t('reporting.overdue_payable', { defaultValue: 'Overdue Payable' })}
-              value={`${fmtNum(financeDash.overdue_payable, 2)} ${financeDash.currency}`}
-              color={financeDash.overdue_payable > 0 ? 'red' : 'green'}
+              label={t('reporting.overdue_total', { defaultValue: 'Total Overdue' })}
+              value={`${fmtNum(totalOverdue, 2)} ${currency}`.trim()}
+              color={totalOverdue !== null && totalOverdue > 0 ? 'red' : 'green'}
               icon={AlertTriangle}
             />
             <KPICard
               label={t('reporting.cash_flow_net', { defaultValue: 'Net Cash Flow' })}
-              value={`${fmtNum(financeDash.cash_flow_net, 2)} ${financeDash.currency}`}
-              color={financeDash.cash_flow_net >= 0 ? 'green' : 'red'}
-              icon={financeDash.cash_flow_net >= 0 ? TrendingUp : TrendingDown}
+              value={`${fmtNum(cashFlowNet, 2)} ${currency}`.trim()}
+              color={cashFlowNet === null ? 'gray' : cashFlowNet >= 0 ? 'green' : 'red'}
+              icon={cashFlowNet !== null && cashFlowNet < 0 ? TrendingDown : TrendingUp}
             />
           </div>
 
-          {/* Invoices and budget */}
+          {/* Budget and committed — replaces the invoices_due_* cards, which
+              had no source on the finance dashboard endpoint. */}
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <KPICard
-              label={t('reporting.invoices_week', { defaultValue: 'Invoices Due (Week)' })}
-              value={String(financeDash.invoices_due_this_week)}
-              color={financeDash.invoices_due_this_week > 0 ? 'yellow' : 'green'}
-              icon={Clock}
-            />
-            <KPICard
-              label={t('reporting.invoices_month', { defaultValue: 'Invoices Due (Month)' })}
-              value={String(financeDash.invoices_due_this_month)}
-              color="gray"
-              icon={Clock}
-            />
-            <KPICard
               label={t('reporting.budget_total', { defaultValue: 'Total Budget' })}
-              value={`${fmtNum(financeDash.total_budget, 2)} ${financeDash.currency}`}
+              value={`${fmtNum(totalBudgetRevised, 2)} ${currency}`.trim()}
+              color="gray"
+              icon={Wallet}
+            />
+            <KPICard
+              label={t('reporting.committed', { defaultValue: 'Committed' })}
+              value={`${fmtNum(totalCommitted, 2)} ${currency}`.trim()}
+              color="gray"
+              icon={ClipboardList}
+            />
+            <KPICard
+              label={t('reporting.actual_spend', { defaultValue: 'Actual Spend' })}
+              value={`${fmtNum(totalActual, 2)} ${currency}`.trim()}
               color="gray"
               icon={Wallet}
             />
             <KPICard
               label={t('reporting.budget_consumed', { defaultValue: 'Budget Consumed' })}
-              value={`${financeDash.budget_consumed_pct?.toFixed(1) ?? 'N/A'}%`}
-              color={
-                financeDash.budget_warning === 'critical'
-                  ? 'red'
-                  : financeDash.budget_warning === 'caution'
-                    ? 'yellow'
-                    : 'green'
-              }
+              value={budgetConsumedPct !== null ? `${budgetConsumedPct.toFixed(1)}%` : 'N/A'}
+              color={budgetColor}
               icon={BarChart3}
             />
           </div>
@@ -1036,7 +1178,7 @@ function FinanceDashboardView({
               <StatBlock label={t('reporting.total_pos', { defaultValue: 'Total POs' })} value={procurementStats.total_pos} />
               <StatBlock
                 label={t('reporting.committed', { defaultValue: 'Committed' })}
-                value={fmtNum(procurementStats.total_committed, 2)}
+                value={`${fmtNum(procurementStats.total_committed, 2)}${procurementCurrency ? ` ${procurementCurrency}` : ''}`}
               />
               <StatBlock
                 label={t('reporting.pending_delivery', { defaultValue: 'Pending Delivery' })}
@@ -1058,6 +1200,19 @@ function FinanceDashboardView({
 
 /* ── Shared sub-components ─────────────────────────────────────────────────── */
 
+type StatColor = 'emerald' | 'amber' | 'red' | 'blue';
+
+// Static lookup — Tailwind only ships classes it finds as literal
+// strings in source. Interpolating `text-${color}-600` would let the
+// production purge drop every colored stat (they appear nowhere literal),
+// so the red/amber/green signalling silently disappeared in builds.
+const STAT_COLOR_CLASSES: Record<StatColor, string> = {
+  emerald: 'text-emerald-600 dark:text-emerald-400',
+  amber: 'text-amber-600 dark:text-amber-400',
+  red: 'text-red-600 dark:text-red-400',
+  blue: 'text-blue-600 dark:text-blue-400',
+};
+
 function StatBlock({
   label,
   value,
@@ -1065,9 +1220,9 @@ function StatBlock({
 }: {
   label: string;
   value: string | number;
-  color?: string;
+  color?: StatColor;
 }) {
-  const textColor = color ? `text-${color}-600 dark:text-${color}-400` : 'text-content-primary';
+  const textColor = color ? STAT_COLOR_CLASSES[color] : 'text-content-primary';
   return (
     <div>
       <p className="text-xs font-medium text-content-secondary">{label}</p>
@@ -1076,7 +1231,7 @@ function StatBlock({
   );
 }
 
-function EmptyState({ message }: { message: string }) {
+function PromptCard({ message }: { message: string }) {
   return (
     <Card>
       <CardContent>
@@ -1086,5 +1241,495 @@ function EmptyState({ message }: { message: string }) {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/* ── Reports tab — templates + generated reports list ─────────────────────── */
+
+function ReportsTab({ project }: { project?: Project }) {
+  const { t } = useTranslation();
+  const [templates, setTemplates] = useState<ReportTemplate[]>([]);
+  const [reports, setReports] = useState<GeneratedReport[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(true);
+  const [loadingReports, setLoadingReports] = useState(true);
+  const [templatesError, setTemplatesError] = useState(false);
+  const [reportsError, setReportsError] = useState(false);
+  const [creating, setCreating] = useState<string | null>(null);
+  // W23 P0 (#252): viewer state — opens the rendered HTML from the
+  // /reports/{id}/content endpoint in a modal so users can finally
+  // read the generated body instead of staring at a row that does nothing.
+  const [viewing, setViewing] = useState<GeneratedReport | null>(null);
+
+  const projectId = project?.id;
+
+  const fetchTemplates = useCallback(async () => {
+    setLoadingTemplates(true);
+    setTemplatesError(false);
+    try {
+      const data = await apiGet<ReportTemplate[]>('/v1/reporting/templates/');
+      setTemplates(data);
+    } catch {
+      setTemplates([]);
+      setTemplatesError(true);
+    } finally {
+      setLoadingTemplates(false);
+    }
+  }, []);
+
+  const fetchReports = useCallback(async () => {
+    if (!projectId) {
+      setReports([]);
+      setLoadingReports(false);
+      return;
+    }
+    setLoadingReports(true);
+    setReportsError(false);
+    try {
+      const data = await apiGet<GeneratedReport[]>(`/v1/reporting/reports/?project_id=${projectId}`);
+      setReports(data);
+    } catch {
+      setReports([]);
+      setReportsError(true);
+    } finally {
+      setLoadingReports(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    fetchTemplates();
+  }, [fetchTemplates]);
+
+  useEffect(() => {
+    fetchReports();
+  }, [fetchReports]);
+
+  const handleGenerate = async (template: ReportTemplate) => {
+    if (!projectId) return;
+    setCreating(template.id);
+    try {
+      await apiPost('/v1/reporting/generate/', {
+        project_id: projectId,
+        template_id: template.id,
+        report_type: template.report_type,
+        title: `${template.name} — ${new Date().toLocaleDateString()}`,
+        format: 'pdf',
+      });
+      await fetchReports();
+    } catch {
+      setReportsError(true);
+    } finally {
+      setCreating(null);
+    }
+  };
+
+  if (!project) {
+    return <PromptCard message={t('reporting.select_project_prompt_reports', { defaultValue: 'Select a project to view reports' })} />;
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Templates */}
+      <Card>
+        <CardContent>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-content-primary">
+              {t('reporting.templates_title', { defaultValue: 'Report templates' })}
+            </h3>
+          </div>
+
+          {loadingTemplates ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full rounded-lg" />
+              <Skeleton className="h-12 w-full rounded-lg" />
+              <Skeleton className="h-12 w-full rounded-lg" />
+            </div>
+          ) : templatesError ? (
+            <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">
+              <AlertTriangle size={16} className="shrink-0" />
+              <span>{t('reporting.templates_load_failed', { defaultValue: 'Could not load report templates.' })}</span>
+              <button onClick={fetchTemplates} className="ml-2 underline">
+                {t('common.retry', { defaultValue: 'Retry' })}
+              </button>
+            </div>
+          ) : templates.length === 0 ? (
+            <EmptyState
+              icon={<FileText size={24} />}
+              title={t('reporting.no_templates_title', { defaultValue: 'No report templates yet' })}
+              description={t('reporting.no_templates_desc', { defaultValue: 'System templates will appear here as the platform seeds them, or your admin can add custom templates.' })}
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border-light bg-surface-secondary text-left text-xs font-medium text-content-secondary">
+                    <th className="px-4 py-3">{t('reporting.template_name', { defaultValue: 'Name' })}</th>
+                    <th className="px-4 py-3">{t('reporting.template_type', { defaultValue: 'Type' })}</th>
+                    <th className="px-4 py-3">{t('reporting.template_scope', { defaultValue: 'Scope' })}</th>
+                    <th className="px-4 py-3">{t('reporting.template_schedule', { defaultValue: 'Schedule' })}</th>
+                    <th className="px-4 py-3 text-right">{t('reporting.actions', { defaultValue: 'Actions' })}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {templates.map((tpl) => (
+                    <tr key={tpl.id} className="border-b border-border-light last:border-0 hover:bg-surface-secondary/50">
+                      <td className="px-4 py-3 font-medium text-content-primary">{tpl.name}</td>
+                      <td className="px-4 py-3 text-content-secondary">{tpl.report_type}</td>
+                      <td className="px-4 py-3 text-content-secondary">
+                        {tpl.is_system
+                          ? t('reporting.scope_system', { defaultValue: 'System' })
+                          : t('reporting.scope_custom', { defaultValue: 'Custom' })}
+                      </td>
+                      <td className="px-4 py-3 text-content-secondary">
+                        {tpl.is_scheduled && tpl.schedule_cron
+                          ? tpl.schedule_cron
+                          : t('reporting.schedule_none', { defaultValue: '—' })}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleGenerate(tpl)}
+                          disabled={creating === tpl.id}
+                        >
+                          {creating === tpl.id ? (
+                            <Loader2 size={14} className="animate-spin" />
+                          ) : (
+                            t('reporting.generate_now', { defaultValue: 'Generate' })
+                          )}
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Generated reports */}
+      <Card>
+        <CardContent>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-content-primary">
+              {t('reporting.generated_reports_title', { defaultValue: 'Generated reports' })}
+            </h3>
+          </div>
+
+          {loadingReports ? (
+            <div className="space-y-2">
+              <Skeleton className="h-12 w-full rounded-lg" />
+              <Skeleton className="h-12 w-full rounded-lg" />
+            </div>
+          ) : reportsError ? (
+            <div role="alert" className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-400">
+              <AlertTriangle size={16} className="shrink-0" />
+              <span>{t('reporting.reports_load_failed', { defaultValue: 'Could not load generated reports.' })}</span>
+              <button onClick={fetchReports} className="ml-2 underline">
+                {t('common.retry', { defaultValue: 'Retry' })}
+              </button>
+            </div>
+          ) : reports.length === 0 ? (
+            <EmptyState
+              icon={<FileText size={24} />}
+              title={t('reporting.no_reports_title', { defaultValue: 'No reports yet' })}
+              description={t('reporting.no_reports_desc', { defaultValue: 'Generate your first report from a template above to get started.' })}
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border-light bg-surface-secondary text-left text-xs font-medium text-content-secondary">
+                    <th className="px-4 py-3">{t('reporting.report_title', { defaultValue: 'Title' })}</th>
+                    <th className="px-4 py-3">{t('reporting.report_type', { defaultValue: 'Type' })}</th>
+                    <th className="px-4 py-3">{t('reporting.report_format', { defaultValue: 'Format' })}</th>
+                    <th className="px-4 py-3">{t('reporting.report_generated_at', { defaultValue: 'Generated' })}</th>
+                    <th className="px-4 py-3 text-right">{t('reporting.actions', { defaultValue: 'Actions' })}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reports.map((r) => {
+                    const generated = r.generated_at || r.created_at;
+                    const ts = generated ? new Date(generated).toLocaleString() : '—';
+                    return (
+                      <tr key={r.id} className="border-b border-border-light last:border-0 hover:bg-surface-secondary/50">
+                        <td className="px-4 py-3 font-medium text-content-primary">{r.title}</td>
+                        <td className="px-4 py-3 text-content-secondary">{r.report_type}</td>
+                        <td className="px-4 py-3 text-content-secondary uppercase">{r.format}</td>
+                        <td className="px-4 py-3 text-content-secondary">{ts}</td>
+                        <td className="px-4 py-3 text-right">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => setViewing(r)}
+                            aria-label={t('reporting.view_report_aria', {
+                              defaultValue: 'View report: {{title}}',
+                              title: r.title,
+                            })}
+                          >
+                            <Eye size={14} className="mr-1" />
+                            {t('reporting.view', { defaultValue: 'View' })}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {viewing && (
+        <ReportViewerModal report={viewing} onClose={() => setViewing(null)} />
+      )}
+    </div>
+  );
+}
+
+/* ── Report viewer modal — renders the HTML body inside a sandboxed iframe ─ */
+
+/**
+ * Modal viewer for a generated report.
+ *
+ * Fetches the rendered HTML from ``/v1/reporting/reports/{id}/content`` (the
+ * endpoint added in the W23 P0 backend fix for #252) and pipes the body into
+ * a sandboxed ``<iframe srcDoc>``. Sandboxing is mandatory — the renderer
+ * already HTML-escapes user-supplied values but defence-in-depth keeps a
+ * future renderer regression from turning into a stored-XSS hole.
+ *
+ * Loading / 410-not-yet-rendered / 404 / generic-error states all surface
+ * distinct messages so the user knows whether to wait, regenerate, or
+ * complain to support.
+ */
+function ReportViewerModal({
+  report,
+  onClose,
+}: {
+  report: GeneratedReport;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const [html, setHtml] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [errorKind, setErrorKind] = useState<'not_rendered' | 'not_found' | 'network' | null>(null);
+
+  // Fetch the rendered HTML body. We bypass apiGet because it always parses
+  // JSON — this endpoint returns text/html.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    (async () => {
+      setLoading(true);
+      setErrorKind(null);
+      try {
+        const token = getAuthToken();
+        const res = await fetch(
+          `${API_BASE}/v1/reporting/reports/${report.id}/content`,
+          {
+            method: 'GET',
+            headers: {
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              Accept: 'text/html',
+              'X-DDC-Client': 'OE/1.0',
+            },
+            signal: controller.signal,
+          },
+        );
+        if (cancelled) return;
+        if (res.status === 410) {
+          setErrorKind('not_rendered');
+          setLoading(false);
+          return;
+        }
+        if (res.status === 404) {
+          setErrorKind('not_found');
+          setLoading(false);
+          return;
+        }
+        if (!res.ok) {
+          setErrorKind('network');
+          setLoading(false);
+          return;
+        }
+        const body = await res.text();
+        if (!cancelled) {
+          setHtml(body);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ApiError) {
+          setErrorKind('network');
+        } else if (err instanceof DOMException && err.name === 'AbortError') {
+          // Component unmounted — silently ignore.
+          return;
+        } else {
+          setErrorKind('network');
+        }
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [report.id]);
+
+  // Escape key closes the modal — matches the rest of the app's modals.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="report-viewer-title"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-8"
+    >
+      <button
+        type="button"
+        aria-label={t('common.close', { defaultValue: 'Close' })}
+        onClick={onClose}
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-fade-in"
+      />
+      <div className="relative flex h-full max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border-light bg-surface-primary shadow-2xl animate-scale-in">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 border-b border-border-light px-5 py-3">
+          <div className="min-w-0">
+            <h2
+              id="report-viewer-title"
+              className="truncate text-base font-semibold text-content-primary"
+            >
+              {report.title}
+            </h2>
+            <p className="truncate text-xs text-content-secondary">
+              {report.report_type} · {report.format?.toUpperCase()}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                // Open the same URL in a fresh tab so users can use the
+                // browser's native Print / Save-As-PDF flow.
+                const token = getAuthToken();
+                // We can't easily send Authorization on a window.open(),
+                // but the auth cookie (when present) covers the case.
+                // For Bearer-only auth we copy the URL to clipboard as
+                // a graceful fallback.
+                const url = `${API_BASE}/v1/reporting/reports/${report.id}/content`;
+                if (token) {
+                  // Trigger a fetch + blob URL so we can carry the Authorization.
+                  fetch(url, {
+                    headers: { Authorization: `Bearer ${token}` },
+                  })
+                    .then((r) => (r.ok ? r.blob() : Promise.reject(r)))
+                    .then((blob) => {
+                      const objUrl = URL.createObjectURL(blob);
+                      window.open(objUrl, '_blank', 'noopener,noreferrer');
+                      // Revoke after a delay so the new tab has time to load.
+                      setTimeout(() => URL.revokeObjectURL(objUrl), 30_000);
+                    })
+                    .catch(() => {
+                      window.open(url, '_blank', 'noopener,noreferrer');
+                    });
+                } else {
+                  window.open(url, '_blank', 'noopener,noreferrer');
+                }
+              }}
+              disabled={loading || !!errorKind}
+              aria-label={t('reporting.open_in_new_tab', { defaultValue: 'Open in new tab' })}
+            >
+              {t('reporting.open_in_new_tab', { defaultValue: 'Open in new tab' })}
+            </Button>
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t('common.close', { defaultValue: 'Close' })}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary transition-colors hover:bg-surface-secondary hover:text-content-primary"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-hidden bg-surface-secondary">
+          {loading && (
+            <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-content-secondary">
+              <Loader2 size={28} className="animate-spin" />
+              <p className="text-sm">
+                {t('reporting.loading_report', { defaultValue: 'Loading report…' })}
+              </p>
+            </div>
+          )}
+
+          {!loading && errorKind === 'not_rendered' && (
+            <div
+              role="alert"
+              className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center"
+            >
+              <Clock size={36} className="text-amber-500" />
+              <p className="max-w-md text-sm text-content-secondary">
+                {t('reporting.report_not_rendered', {
+                  defaultValue:
+                    'This report has been queued but no body has been rendered yet. Re-generate it from the templates list above.',
+                })}
+              </p>
+            </div>
+          )}
+
+          {!loading && errorKind === 'not_found' && (
+            <div
+              role="alert"
+              className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center"
+            >
+              <AlertTriangle size={36} className="text-red-500" />
+              <p className="max-w-md text-sm text-content-secondary">
+                {t('reporting.report_not_found', {
+                  defaultValue:
+                    'This report was not found. It may have been deleted by another user.',
+                })}
+              </p>
+            </div>
+          )}
+
+          {!loading && errorKind === 'network' && (
+            <div
+              role="alert"
+              className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center"
+            >
+              <AlertTriangle size={36} className="text-red-500" />
+              <p className="max-w-md text-sm text-content-secondary">
+                {t('reporting.report_load_failed', {
+                  defaultValue:
+                    'Could not load the report body. Check your connection and try again.',
+                })}
+              </p>
+            </div>
+          )}
+
+          {!loading && !errorKind && html != null && (
+            <iframe
+              // Sandbox: forbid scripts, top-navigation, popups, form submission.
+              // The renderer already escapes user input but defence-in-depth
+              // matters — a future regression should NOT turn into XSS.
+              sandbox=""
+              srcDoc={html}
+              title={report.title}
+              className="h-full w-full border-0 bg-white"
+            />
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

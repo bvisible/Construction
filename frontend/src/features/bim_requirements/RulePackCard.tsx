@@ -29,17 +29,20 @@ const CATEGORY_COLOR: Record<SeedPackCategory, string> = {
 };
 
 function categoryLabelKey(category: SeedPackCategory): string {
+  // Reuse the same underscored keys the filter pills use
+  // (RulePackLibrary.tsx) so the chip and the pill stay in sync and
+  // resolve against the existing en.ts entries (rulePacks.category_*).
   switch (category) {
     case 'Accessibility':
-      return 'rulePacks.category.accessibility';
+      return 'rulePacks.category_accessibility';
     case 'Cost Classification':
-      return 'rulePacks.category.cost';
+      return 'rulePacks.category_cost';
     case 'Fire Safety':
-      return 'rulePacks.category.fire';
+      return 'rulePacks.category_fire';
     case 'MEP':
-      return 'rulePacks.category.mep';
+      return 'rulePacks.category_mep';
     case 'Naming':
-      return 'rulePacks.category.naming';
+      return 'rulePacks.category_naming';
   }
 }
 

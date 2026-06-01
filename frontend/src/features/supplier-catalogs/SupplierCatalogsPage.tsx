@@ -671,13 +671,26 @@ function PriceComparisonModal({
     queryFn: () => comparePrices(item.id),
   });
   const rows = q.data ?? [];
+  // Money bug fix: each vendor price list carries its own ISO currency, so a
+  // raw Number(unit_price) comparison across rows would crown e.g. 100 JPY
+  // "cheaper" than 5 EUR. We may only pick a single cheapest when every
+  // compared row shares one currency. When currencies differ we never crown a
+  // cross-currency winner — the UI shows a "mixed currencies" note instead.
+  const distinctCurrencies = useMemo(
+    () => new Set(rows.map((r) => r.currency)),
+    [rows],
+  );
+  const singleCurrency = distinctCurrencies.size <= 1;
   const cheapest = useMemo(() => {
     if (rows.length === 0) return null;
+    // Only a same-currency comparison is meaningful; otherwise no winner.
+    if (!singleCurrency) return null;
     return rows.reduce<PriceComparisonRow | null>((best, r) => {
       if (!best) return r;
+      // Decimal-serialized strings: wrap in Number() before comparing.
       return Number(r.unit_price) < Number(best.unit_price) ? r : best;
     }, null);
-  }, [rows]);
+  }, [rows, singleCurrency]);
 
   return (
     <WideModal
@@ -709,8 +722,23 @@ function PriceComparisonModal({
             })}
           />
         ) : (
-          <div className="mt-1 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-            {rows.map((r) => {
+          <>
+            {/* Money bug fix: when vendors quote in different ISO currencies we
+                cannot rank them by raw number, so we suppress the "Cheapest"
+                crown and tell the buyer the prices are not directly comparable. */}
+            {!singleCurrency && rows.length > 1 && (
+              <div className="mt-1 mb-3 flex items-start gap-2 rounded-lg border border-semantic-warning/40 bg-semantic-warning/10 px-3 py-2 text-xs text-content-secondary">
+                <AlertOctagon size={14} className="mt-0.5 shrink-0 text-semantic-warning" />
+                <span>
+                  {t('supplier_catalogs.mixed_currencies', {
+                    defaultValue:
+                      'Vendors quote in different currencies — prices are not directly comparable, so no cheapest is highlighted.',
+                  })}
+                </span>
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+              {rows.map((r) => {
               const vendor = vendors.find((v) => v.id === r.vendor_id);
               const isCheapest = cheapest && cheapest.vendor_id === r.vendor_id && rows.length > 1;
               return (
@@ -764,8 +792,9 @@ function PriceComparisonModal({
                   </div>
                 </div>
               );
-            })}
-          </div>
+              })}
+            </div>
+          </>
         )}
       </div>
     </WideModal>

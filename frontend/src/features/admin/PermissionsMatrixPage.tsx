@@ -29,14 +29,19 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import {
   Check,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Download,
   Loader2,
   Lock,
+  MinusSquare,
   RotateCcw,
   Search,
   ShieldCheck,
+  Square,
   X as XIcon,
 } from 'lucide-react';
 import { EmptyState } from '@/shared/ui';
@@ -50,6 +55,7 @@ import {
   fetchPermissionsMatrix,
   updatePermissionMinRole,
   type MatrixCellState,
+  type MatrixPermission,
   type MatrixRole,
   type PermissionsMatrix,
 } from './api';
@@ -57,6 +63,43 @@ import {
 /** Lowercase-and-trim normaliser so the search filter is forgiving. */
 function normalise(s: string): string {
   return s.trim().toLowerCase();
+}
+
+/** Title-Case a permission module slug for human-readable group headers.
+ *  `bim_hub` → `Bim Hub`, `costs` → `Costs`, `system.settings` → keeps
+ *  only the first segment (the registry groups by first dotted segment,
+ *  but a slug may itself contain underscores / hyphens). */
+function titleCaseSlug(slug: string): string {
+  return slug
+    .split(/[._\-\s]+/)
+    .filter(Boolean)
+    .map((w) => (w.length <= 2 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
+/**
+ * Resolve a friendly, localized label for a module group.
+ *
+ * We reuse the existing `nav.{slug}` i18n strings when a *real*
+ * translation exists (so the header reads "Bill of Quantities" instead
+ * of "Boq"), and otherwise fall back to a Title-Cased slug. The key-echo
+ * guard (`label !== key`) means an untranslated/unknown slug never leaks
+ * the raw `nav.*` key onto the screen — it Title-Cases instead.
+ */
+function humanizeModule(slug: string, t: ReturnType<typeof useTranslation>['t']): string {
+  const key = `nav.${slug}`;
+  const label = t(key, { defaultValue: '' });
+  if (label && label !== key) return label;
+  return titleCaseSlug(slug);
+}
+
+/** Split a `module.action` permission key into its action tail (the part
+ *  after the FIRST dot). `projects.create` → `create`,
+ *  `system.settings.write` → `settings.write`. Falls back to the whole
+ *  key when there is no dot. */
+function permissionAction(key: string): string {
+  const idx = key.indexOf('.');
+  return idx === -1 ? key : key.slice(idx + 1);
 }
 
 /** Permissions that the admin must never demote — clicking these cells
@@ -154,6 +197,11 @@ function MatrixCell({
 
 interface ModuleRowsProps {
   module: PermissionsMatrix['modules'][number];
+  /** The module's COMPLETE permission list (before the denied-only role
+   *  filter narrows the displayed rows). Used so the "X / Y granted"
+   *  count and the tri-state checkbox describe the whole module for the
+   *  selected role, not just the currently-listed rows. */
+  fullPermissions: MatrixPermission[];
   roles: MatrixRole[];
   hierarchy: Record<string, number>;
   hoveredRole: MatrixRole | null;
@@ -161,13 +209,28 @@ interface ModuleRowsProps {
   collapsed: boolean;
   onToggle: () => void;
   editable: boolean;
+  /** The role the per-group "grant all / none" checkbox acts on. Null
+   *  when the role filter is "All roles" — the checkbox then renders
+   *  disabled (you must pick a role to bulk-grant a whole module). */
+  selectedRole: MatrixRole | null;
   pendingKey: string | null;
+  /** True while a bulk grant/revoke for THIS module is in flight. */
+  bulkPending: boolean;
   onCellToggle: (role: MatrixRole, permissionKey: string, currentMinRole: MatrixRole) => void;
+  /** Bulk grant (grant=true) or revoke (grant=false) every permission in
+   *  this module for `selectedRole`. */
+  onBulkToggle: (moduleName: string, grant: boolean) => void;
   t: ReturnType<typeof useTranslation>['t'];
 }
 
+/** Tri-state of a module group for one role: are ALL / SOME / NONE of the
+ *  module's permissions allowed for that role. Drives the header
+ *  checkbox (checked / indeterminate / unchecked). */
+type GroupCheckState = 'all' | 'some' | 'none';
+
 function ModuleRows({
   module,
+  fullPermissions,
   roles,
   hierarchy,
   hoveredRole,
@@ -175,19 +238,71 @@ function ModuleRows({
   collapsed,
   onToggle,
   editable,
+  selectedRole,
   pendingKey,
+  bulkPending,
   onCellToggle,
+  onBulkToggle,
   t,
 }: ModuleRowsProps) {
-  const filteredPerms = useMemo(() => {
+  // Reusable matcher: a permission matches the search when the query hits
+  // the action tail, the full dotted key, the raw slug OR the humanized
+  // label (so "Bill of Quantities" finds boq.* rows).
+  const matchPerm = useMemo(() => {
     const q = normalise(query);
-    if (!q) return module.permissions;
-    return module.permissions.filter(
-      (p) => normalise(p.key).includes(q) || normalise(module.name).includes(q),
-    );
-  }, [module, query]);
+    const label = normalise(humanizeModule(module.name, t));
+    const slug = normalise(module.name);
+    return (p: MatrixPermission) =>
+      !q ||
+      normalise(p.key).includes(q) ||
+      normalise(permissionAction(p.key)).includes(q) ||
+      slug.includes(q) ||
+      label.includes(q);
+  }, [module.name, query, t]);
 
-  if (filteredPerms.length === 0) return null;
+  // Displayed rows: the (role-filtered) module permissions that match the
+  // search query.
+  const filteredPerms = useMemo(
+    () => module.permissions.filter(matchPerm),
+    [module.permissions, matchPerm],
+  );
+
+  // Count base: the COMPLETE module (search-filtered) — so "X / Y granted"
+  // describes the whole module for the selected role even when the
+  // denied-only role filter hides the granted rows below.
+  const countPerms = useMemo(
+    () => fullPermissions.filter(matchPerm),
+    [fullPermissions, matchPerm],
+  );
+
+  // How many of the module's permissions are allowed for the selected
+  // role — powers the "X / Y granted" count and the tri-state checkbox.
+  const grantedCount = useMemo(() => {
+    if (!selectedRole) return 0;
+    return countPerms.filter(
+      (p) => cellState(selectedRole, p.min_role, hierarchy) === 'allowed',
+    ).length;
+  }, [countPerms, selectedRole, hierarchy]);
+
+  const groupState: GroupCheckState = !selectedRole
+    ? 'none'
+    : grantedCount === 0
+      ? 'none'
+      : grantedCount === countPerms.length
+        ? 'all'
+        : 'some';
+
+  // Hide the whole group when neither the displayed rows nor (for the
+  // count) the full module match the search.
+  if (countPerms.length === 0) return null;
+
+  const friendlyName = humanizeModule(module.name, t);
+  const headerId = `module-group-${module.name}`;
+  // The per-group checkbox is only actionable in edit mode with a chosen
+  // role; otherwise it is shown disabled so the affordance is discoverable.
+  const checkboxActionable = editable && !!selectedRole && !bulkPending;
+  const CheckIcon =
+    groupState === 'all' ? CheckSquare : groupState === 'some' ? MinusSquare : Square;
 
   return (
     <>
@@ -198,26 +313,91 @@ function ModuleRows({
           colSpan={roles.length + 1}
           className="px-3 py-2 text-left text-sm font-semibold text-text-primary"
         >
-          <button
-            type="button"
-            onClick={onToggle}
-            className="flex items-center gap-2 hover:text-accent-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary rounded"
-            data-testid={`module-toggle-${module.name}`}
-            aria-expanded={!collapsed}
-          >
-            {collapsed ? (
-              <ChevronRight size={16} aria-hidden />
-            ) : (
-              <ChevronDown size={16} aria-hidden />
-            )}
-            <span className="font-mono">{module.name}</span>
-            <span className="text-xs text-text-tertiary font-normal">
-              {t('admin.permissions.module_count', {
-                count: filteredPerms.length,
-                defaultValue: '{{count}} permission_other',
+          <div className="flex items-center gap-2">
+            {/* Per-group tri-state "grant all / none" for the selected role */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!checkboxActionable) return;
+                // Toggle semantics: if everything is granted, revoke all;
+                // otherwise grant all (covers the "some" partial case too).
+                onBulkToggle(module.name, groupState !== 'all');
+              }}
+              disabled={!checkboxActionable}
+              aria-checked={groupState === 'all' ? 'true' : groupState === 'some' ? 'mixed' : 'false'}
+              role="checkbox"
+              aria-label={t('admin.permissions.bulk_aria', {
+                defaultValue: 'Grant or revoke all {{module}} permissions',
+                module: friendlyName,
               })}
-            </span>
-          </button>
+              data-testid={`module-selectall-${module.name}`}
+              title={
+                !editable
+                  ? t('admin.permissions.bulk_needs_edit', {
+                      defaultValue: 'Enable edit mode to grant a whole module at once',
+                    })
+                  : !selectedRole
+                    ? t('admin.permissions.bulk_needs_role', {
+                        defaultValue: 'Pick a role above to grant / revoke this whole module',
+                      })
+                    : groupState === 'all'
+                      ? t('admin.permissions.bulk_revoke_all', {
+                          defaultValue: 'Revoke all "{{module}}" permissions from {{role}}',
+                          module: friendlyName,
+                          role: selectedRole,
+                        })
+                      : t('admin.permissions.bulk_grant_all', {
+                          defaultValue: 'Grant all "{{module}}" permissions to {{role}}',
+                          module: friendlyName,
+                          role: selectedRole,
+                        })
+              }
+              className={clsx(
+                'flex items-center justify-center rounded p-0.5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary',
+                checkboxActionable
+                  ? 'text-accent-primary hover:bg-accent-primary/10 cursor-pointer'
+                  : 'text-text-quaternary cursor-not-allowed opacity-60',
+              )}
+            >
+              {bulkPending ? (
+                <Loader2 size={16} className="animate-spin" aria-hidden />
+              ) : (
+                <CheckIcon size={16} aria-hidden />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={onToggle}
+              id={headerId}
+              className="flex flex-1 items-center gap-2 hover:text-accent-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-primary rounded text-left"
+              data-testid={`module-toggle-${module.name}`}
+              aria-expanded={!collapsed}
+            >
+              {collapsed ? (
+                <ChevronRight size={16} aria-hidden />
+              ) : (
+                <ChevronDown size={16} aria-hidden />
+              )}
+              <span className="font-semibold">{friendlyName}</span>
+              <span className="font-mono text-[11px] font-normal text-text-tertiary">
+                {module.name}
+              </span>
+              <span className="ml-auto text-xs text-text-tertiary font-normal tabular-nums">
+                {selectedRole
+                  ? t('admin.permissions.group_granted_count', {
+                      defaultValue: '{{granted}} / {{total}} granted',
+                      granted: grantedCount,
+                      total: countPerms.length,
+                    })
+                  : t('admin.permissions.module_count', {
+                      count: filteredPerms.length,
+                      defaultValue: '{{count}} permission_other',
+                    })}
+              </span>
+            </button>
+          </div>
         </th>
       </tr>
 
@@ -231,19 +411,41 @@ function ModuleRows({
             <th
               scope="row"
               className={clsx(
-                'sticky left-0 z-10 bg-surface-elevated px-3 py-2 text-left text-sm font-mono text-text-secondary',
+                'sticky left-0 z-10 bg-surface-elevated px-3 py-2 pl-9 text-left text-sm text-text-secondary',
                 'border-r border-border-light',
               )}
             >
-              <span className="block truncate max-w-[280px]" title={perm.key}>
+              {/* Action is the primary, readable label; the full dotted
+                  key is muted, monospaced secondary text. */}
+              <span className="block truncate max-w-[280px] font-medium text-text-primary" title={permissionAction(perm.key)}>
+                {permissionAction(perm.key)}
+              </span>
+              <span className="block truncate max-w-[280px] font-mono text-[10px] text-text-tertiary" title={perm.key}>
                 {perm.key}
+                <span className="ml-1.5 uppercase tracking-wider">
+                  · {t('admin.permissions.min_role_label', { defaultValue: 'min' })}: {perm.min_role}
+                </span>
               </span>
-              <span className="block text-[10px] uppercase tracking-wider text-text-tertiary">
-                {t('admin.permissions.min_role_label', {
-                  defaultValue: 'min',
-                })}
-                : {perm.min_role}
-              </span>
+              {/* Plain-language description — resolved from a per-permission
+                  i18n key, with a deterministic humanized fallback so every
+                  row is described (no stubs / no undescribed rows). */}
+              {(() => {
+                const desc = t(`perm_desc.${perm.key}`, {
+                  defaultValue: t('perm_desc.fallback', {
+                    action: permissionAction(perm.key),
+                    module: friendlyName,
+                    defaultValue: 'Allows {{action}} in {{module}}',
+                  }),
+                });
+                return (
+                  <span
+                    className="mt-0.5 block max-w-[280px] text-[11px] leading-snug text-text-tertiary line-clamp-2 font-normal normal-case"
+                    title={desc}
+                  >
+                    {desc}
+                  </span>
+                );
+              })()}
             </th>
             {roles.map((role) => {
               const state = cellState(role, perm.min_role, hierarchy);
@@ -289,6 +491,28 @@ function ModuleRows({
             })}
           </tr>
         ))}
+
+      {/* When the denied-only role filter hides every row in an expanded
+          module (i.e. the role already has everything here), show a short
+          note instead of an empty, confusing gap. */}
+      {!collapsed && filteredPerms.length === 0 && countPerms.length > 0 && (
+        <tr className="border-b border-border-light last:border-0">
+          <td
+            colSpan={roles.length + 1}
+            className="px-3 py-2 pl-9 text-left text-xs italic text-text-tertiary"
+          >
+            {selectedRole
+              ? t('admin.permissions.group_all_granted', {
+                  defaultValue: '{{role}} already has all {{count}} permissions in this module.',
+                  role: selectedRole,
+                  count: countPerms.length,
+                })
+              : t('admin.permissions.group_no_matches', {
+                  defaultValue: 'No permissions match the current filter.',
+                })}
+          </td>
+        </tr>
+      )}
     </>
   );
 }
@@ -302,15 +526,31 @@ export function PermissionsMatrixPage() {
 
   const [query, setQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<MatrixRole | 'all'>('all');
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Groups are COLLAPSED by default — we track the set of *expanded*
+  // module names so a fresh page shows a compact, scannable list of
+  // module headers instead of ~500 permission rows at once. A search
+  // query force-expands any group with matches (see `isExpanded`).
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [hoveredRole, setHoveredRole] = useState<MatrixRole | null>(null);
   const [pendingKey, setPendingKey] = useState<string | null>(null);
+  // Module name whose bulk grant/revoke is currently in flight (null = none).
+  const [bulkModule, setBulkModule] = useState<string | null>(null);
   // Pending confirmation for a destructive change (cell toggle or
   // preset apply). Null when no modal is open.
   const [confirmState, setConfirmState] = useState<
     | { kind: 'toggle'; permissionKey: string; newMinRole: MatrixRole; currentMinRole: MatrixRole }
     | { kind: 'preset'; preset: string }
     | { kind: 'lockout'; permissionKey: string }
+    | {
+        kind: 'bulk';
+        moduleName: string;
+        role: MatrixRole;
+        grant: boolean;
+        /** Permission keys that will actually change min_role. */
+        keys: string[];
+        /** Target min_role to write to every key above. */
+        target: MatrixRole;
+      }
     | null
   >(null);
   // Per-role "edit mode": when the caller can edit the matrix, this
@@ -450,6 +690,88 @@ export function PermissionsMatrixPage() {
     },
   });
 
+  // Bulk grant / revoke a whole module for one role. The backend has no
+  // batch endpoint, so we fan out one ``updatePermissionMinRole`` PATCH
+  // per changed key with ``Promise.allSettled`` (partial failures are
+  // tolerated and reported). We optimistically rewrite the cached matrix
+  // up-front and reconcile on settle via an invalidate.
+  const bulkMutation = useMutation({
+    meta: { suppressGlobalErrorToast: true },
+    mutationFn: async ({ keys, target }: { moduleName: string; keys: string[]; target: MatrixRole }) => {
+      const results = await Promise.allSettled(
+        keys.map((key) => updatePermissionMinRole(key, target)),
+      );
+      const failed = results.filter((r) => r.status === 'rejected').length;
+      return { total: keys.length, failed };
+    },
+    onMutate: async ({ moduleName, keys, target }) => {
+      setBulkModule(moduleName);
+      await queryClient.cancelQueries({ queryKey: ['admin', 'permissions-matrix'] });
+      const prev = queryClient.getQueryData<PermissionsMatrix>(['admin', 'permissions-matrix']);
+      if (prev) {
+        const keySet = new Set(keys);
+        queryClient.setQueryData<PermissionsMatrix>(['admin', 'permissions-matrix'], {
+          ...prev,
+          modules: prev.modules.map((m) => ({
+            ...m,
+            permissions: m.permissions.map((p) =>
+              keySet.has(p.key) ? { ...p, min_role: target } : p,
+            ),
+          })),
+        });
+      }
+      return { prev };
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['admin', 'permissions-matrix'], ctx.prev);
+      const message =
+        err instanceof Error
+          ? err.message
+          : t('admin.permissions.bulk_error', { defaultValue: 'Could not update the module' });
+      addToast(
+        {
+          type: 'error',
+          title: t('admin.permissions.bulk_error_title', { defaultValue: 'Bulk update failed' }),
+          message,
+        },
+        { duration: 6000 },
+      );
+    },
+    onSuccess: (result) => {
+      if (result.failed > 0) {
+        addToast(
+          {
+            type: 'warning',
+            title: t('admin.permissions.bulk_partial_title', { defaultValue: 'Partially updated' }),
+            message: t('admin.permissions.bulk_partial_message', {
+              defaultValue: '{{ok}} of {{total}} permissions updated — {{failed}} failed.',
+              ok: result.total - result.failed,
+              total: result.total,
+              failed: result.failed,
+            }),
+          },
+          { duration: 6000 },
+        );
+      } else {
+        addToast(
+          {
+            type: 'success',
+            title: t('admin.permissions.bulk_success_title', { defaultValue: 'Module updated' }),
+            message: t('admin.permissions.bulk_success_message', {
+              defaultValue: '{{count}} permission(s) updated.',
+              count: result.total,
+            }),
+          },
+          { duration: 4000 },
+        );
+      }
+    },
+    onSettled: () => {
+      setBulkModule(null);
+      queryClient.invalidateQueries({ queryKey: ['admin', 'permissions-matrix'] });
+    },
+  });
+
   // ── Handlers ──────────────────────────────────────────────────────
 
   const handleCellToggle = (
@@ -490,6 +812,60 @@ export function PermissionsMatrixPage() {
     });
   };
 
+  // Bulk grant/revoke the whole module for the role currently chosen in
+  // the role filter. Grant → set min_role to that role; revoke → raise
+  // min_role one level above that role (or to admin when it is already
+  // the highest non-admin role). Admin-lockout permissions are never
+  // touched. We pre-compute the exact set of keys that change so the
+  // confirm dialog can show an accurate count and the no-op case is
+  // skipped silently.
+  const handleBulkToggle = (moduleName: string, grant: boolean) => {
+    if (!data || roleFilter === 'all') return;
+    const role = roleFilter as MatrixRole;
+    const module = data.modules.find((m) => m.name === moduleName);
+    if (!module) return;
+
+    // Roles are ordered lowest→highest; "next up" is used for revoke.
+    const roleIdx = data.roles.indexOf(role);
+    const nextUp = data.roles[roleIdx + 1] ?? 'admin';
+    const target: MatrixRole = grant ? role : nextUp;
+
+    const keys = module.permissions
+      .filter((p) => {
+        // Never touch permissions that must stay admin-only.
+        if (isAdminLockout(p.key, target)) return false;
+        const allowed = cellState(role, p.min_role, data.role_hierarchy) === 'allowed';
+        // Grant: only flip the ones the role can't already do.
+        // Revoke: only flip the ones the role currently can do.
+        return grant ? !allowed : allowed;
+      })
+      .map((p) => p.key);
+
+    if (keys.length === 0) {
+      addToast(
+        {
+          type: 'info',
+          title: t('admin.permissions.noop_title', { defaultValue: 'No change' }),
+          message: grant
+            ? t('admin.permissions.bulk_noop_grant', {
+                defaultValue: '{{role}} already has every "{{module}}" permission.',
+                role,
+                module: humanizeModule(moduleName, t),
+              })
+            : t('admin.permissions.bulk_noop_revoke', {
+                defaultValue: '{{role}} has no "{{module}}" permissions to revoke.',
+                role,
+                module: humanizeModule(moduleName, t),
+              }),
+        },
+        { duration: 3000 },
+      );
+      return;
+    }
+
+    setConfirmState({ kind: 'bulk', moduleName, role, grant, keys, target });
+  };
+
   const handleConfirm = () => {
     if (!confirmState) return;
     if (confirmState.kind === 'toggle') {
@@ -499,6 +875,12 @@ export function PermissionsMatrixPage() {
       });
     } else if (confirmState.kind === 'preset') {
       presetMutation.mutate(confirmState.preset);
+    } else if (confirmState.kind === 'bulk') {
+      bulkMutation.mutate({
+        moduleName: confirmState.moduleName,
+        keys: confirmState.keys,
+        target: confirmState.target,
+      });
     }
     // 'lockout' modal has no confirm path — the user can only close.
     setConfirmState(null);
@@ -563,6 +945,93 @@ export function PermissionsMatrixPage() {
   // caller is not admin (per the brief, never break the page).
   const canEdit = isAdmin && editMode;
 
+  // The role the per-group tri-state checkbox + granted counts act on.
+  // Reuses the existing role dropdown: "All roles" → null (counts show
+  // plain permission totals; the bulk checkbox is shown disabled).
+  const selectedRole: MatrixRole | null = roleFilter === 'all' ? null : (roleFilter as MatrixRole);
+
+  // Does a permission match the active search query? (Same matcher the
+  // group headers use, hoisted so the page-level stats agree with the
+  // per-group counts.) Memoized so typing in search stays smooth across
+  // ~512 rows.
+  const permMatchesQuery = useMemo(() => {
+    const q = normalise(query);
+    return (moduleName: string, key: string) => {
+      if (!q) return true;
+      const label = normalise(humanizeModule(moduleName, t));
+      return (
+        normalise(key).includes(q) ||
+        normalise(permissionAction(key)).includes(q) ||
+        normalise(moduleName).includes(q) ||
+        label.includes(q)
+      );
+    };
+  }, [query, t]);
+
+  // Module names that currently have at least one search match — used to
+  // drive Expand-all / Collapse-all and the "auto-expand on search"
+  // behaviour. Computed from the full matrix (counts span the whole
+  // module, not just the denied-only rows).
+  const matchingModuleNames = useMemo(() => {
+    if (!data) return [] as string[];
+    return data.modules
+      .filter((m) => m.permissions.some((p) => permMatchesQuery(m.name, p.key)))
+      .map((m) => m.name);
+  }, [data, permMatchesQuery]);
+
+  // Whole-matrix "granted" summary for the selected role. When no role is
+  // picked we fall back to the module/permission totals. Memoized.
+  const grantSummary = useMemo(() => {
+    if (!data) return { total: 0, granted: 0 };
+    let total = 0;
+    let granted = 0;
+    for (const m of data.modules) {
+      for (const p of m.permissions) {
+        if (!permMatchesQuery(m.name, p.key)) continue;
+        total += 1;
+        if (selectedRole && cellState(selectedRole, p.min_role, data.role_hierarchy) === 'allowed') {
+          granted += 1;
+        }
+      }
+    }
+    return { total, granted };
+  }, [data, selectedRole, permMatchesQuery]);
+
+  // A search query force-expands any group with matches; otherwise the
+  // group obeys the explicit per-group expand state (collapsed default).
+  const hasQuery = normalise(query).length > 0;
+  const isExpanded = (moduleName: string) =>
+    hasQuery ? true : Boolean(expandedGroups[moduleName]);
+
+  // Are *all* matching groups currently expanded? Drives the global
+  // Expand-all / Collapse-all toggle label + icon.
+  const allExpanded =
+    matchingModuleNames.length > 0 &&
+    (hasQuery || matchingModuleNames.every((name) => expandedGroups[name]));
+
+  const handleToggleAll = () => {
+    if (allExpanded) {
+      setExpandedGroups({});
+    } else {
+      const next: Record<string, boolean> = {};
+      for (const name of matchingModuleNames) next[name] = true;
+      setExpandedGroups(next);
+    }
+  };
+
+  // Per-module denied-only display perms (the existing role-filter
+  // semantic, kept verbatim) — extracted so we can render over the FULL
+  // module list (so fully-allowed modules stay reachable for bulk-revoke)
+  // while individual rows still honour "show only what the role can't do".
+  const displayPermsFor = (m: PermissionsMatrix['modules'][number]): MatrixPermission[] => {
+    if (!data || !selectedRole) return m.permissions;
+    const lvl = data.role_hierarchy[selectedRole] ?? -1;
+    return m.permissions.filter((p) => {
+      const minLvl = data.role_hierarchy[p.min_role] ?? Number.POSITIVE_INFINITY;
+      return lvl < minLvl;
+    });
+  };
+
   if (isLoading) {
     return (
       <div className="p-4" data-testid="permissions-matrix-loading">
@@ -591,7 +1060,11 @@ export function PermissionsMatrixPage() {
     );
   }
 
-  if (!visibleData || visibleData.modules.length === 0) {
+  // Genuine empty state = the backend registered no permissions at all.
+  // (We deliberately check `data`, not the role-filtered `visibleData`,
+  // so a fully-privileged role doesn't trip the "nothing registered"
+  // screen — those modules still render via the full module list below.)
+  if (!data || data.modules.length === 0 || !visibleData) {
     return (
       <div className="p-4">
         <EmptyState
@@ -643,6 +1116,37 @@ export function PermissionsMatrixPage() {
       key: confirmState.permissionKey,
     });
     confirmLabel = t('admin.permissions.lockout_dismiss', { defaultValue: 'Got it' });
+  } else if (confirmState?.kind === 'bulk') {
+    const moduleLabel = humanizeModule(confirmState.moduleName, t);
+    if (confirmState.grant) {
+      confirmTitle = t('admin.permissions.confirm_bulk_grant_title', {
+        defaultValue: 'Grant module to {{role}}?',
+        role: confirmState.role,
+      });
+      confirmMessage = t('admin.permissions.confirm_bulk_grant_message', {
+        defaultValue:
+          'Grant {{count}} "{{module}}" permission(s) to {{role}} (sets each minimum role to {{role}})? This is audit-logged.',
+        count: confirmState.keys.length,
+        module: moduleLabel,
+        role: confirmState.role,
+      });
+      confirmLabel = t('admin.permissions.confirm_bulk_grant_confirm', { defaultValue: 'Grant all' });
+    } else {
+      confirmTitle = t('admin.permissions.confirm_bulk_revoke_title', {
+        defaultValue: 'Revoke module from {{role}}?',
+        role: confirmState.role,
+      });
+      confirmMessage = t('admin.permissions.confirm_bulk_revoke_message', {
+        defaultValue:
+          'Revoke {{count}} "{{module}}" permission(s) from {{role}} (raises each minimum role to {{target}})? This is audit-logged.',
+        count: confirmState.keys.length,
+        module: moduleLabel,
+        role: confirmState.role,
+        target: confirmState.target,
+      });
+      confirmLabel = t('admin.permissions.confirm_bulk_revoke_confirm', { defaultValue: 'Revoke all' });
+      confirmVariant = 'danger';
+    }
   }
 
   return (
@@ -791,12 +1295,48 @@ export function PermissionsMatrixPage() {
                 ))}
               </div>
             )}
-            <div className="text-xs text-text-tertiary ml-auto">
-              {t('admin.permissions.summary', {
-                defaultValue: '{{modules}} modules · {{permissions}} permissions',
-                modules: visibleStats.modules,
-                permissions: visibleStats.permissions,
-              })}
+            <div className="ml-auto flex items-center gap-3">
+              {/* Global Expand all / Collapse all */}
+              <button
+                type="button"
+                onClick={handleToggleAll}
+                disabled={matchingModuleNames.length === 0 || hasQuery}
+                data-testid="permissions-matrix-toggle-all"
+                aria-expanded={allExpanded}
+                title={
+                  hasQuery
+                    ? t('admin.permissions.toggle_all_search_hint', {
+                        defaultValue: 'Groups auto-expand while searching',
+                      })
+                    : undefined
+                }
+                className="inline-flex items-center gap-1.5 rounded-md border border-border-light bg-white/80 px-2.5 py-1 text-xs font-medium text-text-secondary hover:bg-white disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-accent-primary"
+              >
+                {allExpanded ? (
+                  <ChevronsDownUp size={13} aria-hidden />
+                ) : (
+                  <ChevronsUpDown size={13} aria-hidden />
+                )}
+                {allExpanded
+                  ? t('admin.permissions.collapse_all', { defaultValue: 'Collapse all' })
+                  : t('admin.permissions.expand_all', { defaultValue: 'Expand all' })}
+              </button>
+
+              {/* Summary — "N of M granted" for the selected role, else
+                  the module/permission totals. */}
+              <div className="text-xs text-text-tertiary tabular-nums" data-testid="permissions-matrix-summary">
+                {selectedRole
+                  ? t('admin.permissions.summary_granted', {
+                      defaultValue: '{{granted}} of {{total}} permissions granted',
+                      granted: grantSummary.granted,
+                      total: grantSummary.total,
+                    })
+                  : t('admin.permissions.summary', {
+                      defaultValue: '{{modules}} modules · {{permissions}} permissions',
+                      modules: visibleStats.modules,
+                      permissions: visibleStats.permissions,
+                    })}
+              </div>
             </div>
           </div>
         </div>
@@ -846,27 +1386,45 @@ export function PermissionsMatrixPage() {
                 </tr>
               </thead>
               <tbody>
-                {visibleData.modules.map((module) => (
+                {data.modules.map((module) => (
                   <ModuleRows
                     key={module.name}
-                    module={module}
-                    roles={visibleData.roles}
-                    hierarchy={visibleData.role_hierarchy}
+                    module={{ ...module, permissions: displayPermsFor(module) }}
+                    fullPermissions={module.permissions}
+                    roles={data.roles}
+                    hierarchy={data.role_hierarchy}
                     hoveredRole={hoveredRole}
                     query={query}
-                    collapsed={!!collapsed[module.name]}
+                    collapsed={!isExpanded(module.name)}
                     onToggle={() =>
-                      setCollapsed((prev) => ({
+                      setExpandedGroups((prev) => ({
                         ...prev,
                         [module.name]: !prev[module.name],
                       }))
                     }
                     editable={canEdit}
+                    selectedRole={selectedRole}
                     pendingKey={pendingKey}
+                    bulkPending={bulkModule === module.name}
                     onCellToggle={handleCellToggle}
+                    onBulkToggle={handleBulkToggle}
                     t={t}
                   />
                 ))}
+                {matchingModuleNames.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={data.roles.length + 1}
+                      className="px-3 py-8 text-center text-sm text-text-tertiary"
+                      data-testid="permissions-matrix-no-results"
+                    >
+                      {t('admin.permissions.no_results', {
+                        defaultValue: 'No permissions match "{{query}}".',
+                        query,
+                      })}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -906,7 +1464,7 @@ export function PermissionsMatrixPage() {
         message={confirmMessage}
         confirmLabel={confirmLabel}
         variant={confirmState?.kind === 'lockout' ? 'warning' : confirmVariant}
-        loading={toggleMutation.isPending || presetMutation.isPending}
+        loading={toggleMutation.isPending || presetMutation.isPending || bulkMutation.isPending}
       />
     </div>
   );

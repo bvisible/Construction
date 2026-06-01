@@ -26,7 +26,7 @@ from app.modules.transmittals.schemas import (
 )
 from app.modules.transmittals.service import TransmittalService
 
-router = APIRouter()
+router = APIRouter(tags=["transmittals"])
 
 
 def _get_service(session: SessionDep) -> TransmittalService:

@@ -79,9 +79,7 @@ class InvoiceRepository:
         await self.session.flush()
         self.session.expire_all()
 
-    async def next_invoice_number(
-        self, project_id: uuid.UUID, direction: str
-    ) -> str:
+    async def next_invoice_number(self, project_id: uuid.UUID, direction: str) -> str:
         """Generate the next invoice number for a project and direction.
 
         Uses MAX of existing invoice numbers to avoid race conditions where
@@ -108,7 +106,6 @@ class InvoiceRepository:
 
         return f"{prefix}-001"
 
-
     async def aggregate_for_dashboard(
         self,
         *,
@@ -121,39 +118,56 @@ class InvoiceRepository:
         """
         from sqlalchemy import Numeric, cast
 
+        # Group by currency as well so the caller can FX-convert each
+        # currency's subtotal into the project base currency rather than
+        # blindly summing mixed currencies (domain money rule).
         base = select(
             Invoice.invoice_direction,
             Invoice.status,
+            Invoice.currency_code,
             func.count().label("cnt"),
             func.sum(cast(Invoice.amount_total, Numeric)).label("total"),
         )
         if project_id is not None:
             base = base.where(Invoice.project_id == project_id)
-        base = base.group_by(Invoice.invoice_direction, Invoice.status)
+        base = base.group_by(
+            Invoice.invoice_direction,
+            Invoice.status,
+            Invoice.currency_code,
+        )
 
         result = await self.session.execute(base)
         rows = result.all()
 
-        total_payable = 0.0
-        total_receivable = 0.0
+        # Per-currency subtotals: {currency_code: amount}. Empty currency_code
+        # is kept under "" so the service treats it as the base currency.
+        payable_by_currency: dict[str, float] = {}
+        receivable_by_currency: dict[str, float] = {}
         status_counts: dict[str, int] = {
-            "draft": 0, "pending": 0, "approved": 0, "paid": 0, "cancelled": 0,
+            "draft": 0,
+            "pending": 0,
+            "approved": 0,
+            "paid": 0,
+            "cancelled": 0,
         }
 
-        for direction, status, cnt, total in rows:
+        for direction, status, currency_code, cnt, total in rows:
             if status in status_counts:
                 status_counts[status] += cnt
             if status not in ("paid", "cancelled"):
+                code = currency_code or ""
+                amount = float(total or 0)
                 if direction == "payable":
-                    total_payable += float(total or 0)
+                    payable_by_currency[code] = payable_by_currency.get(code, 0.0) + amount
                 elif direction == "receivable":
-                    total_receivable += float(total or 0)
+                    receivable_by_currency[code] = receivable_by_currency.get(code, 0.0) + amount
 
-        # Overdue count + amount
+        # Overdue count + per-currency amount
         from datetime import date
 
         today = date.today().isoformat()
         overdue_base = select(
+            Invoice.currency_code,
             func.count().label("cnt"),
             func.coalesce(func.sum(cast(Invoice.amount_total, Numeric)), 0).label("total"),
         ).where(
@@ -163,9 +177,16 @@ class InvoiceRepository:
         )
         if project_id is not None:
             overdue_base = overdue_base.where(Invoice.project_id == project_id)
+        overdue_base = overdue_base.group_by(Invoice.currency_code)
 
-        overdue_result = await self.session.execute(overdue_base)
-        overdue_row = overdue_result.one()
+        overdue_rows = (await self.session.execute(overdue_base)).all()
+        overdue_by_currency: dict[str, float] = {}
+        overdue_count = 0
+        for currency_code, cnt, total in overdue_rows:
+            overdue_by_currency[currency_code or ""] = (
+                overdue_by_currency.get(currency_code or "", 0.0) + float(total or 0)
+            )
+            overdue_count += cnt
 
         # Dominant invoice currency — used as a dashboard fallback when no
         # budget line carries a currency yet.
@@ -181,10 +202,10 @@ class InvoiceRepository:
         currency = cur_row[0] if cur_row else ""
 
         return {
-            "total_payable": round(total_payable, 2),
-            "total_receivable": round(total_receivable, 2),
-            "total_overdue": round(float(overdue_row.total), 2),
-            "overdue_count": overdue_row.cnt,
+            "payable_by_currency": payable_by_currency,
+            "receivable_by_currency": receivable_by_currency,
+            "overdue_by_currency": overdue_by_currency,
+            "overdue_count": overdue_count,
             "status_counts": status_counts,
             "currency": currency,
         }
@@ -225,13 +246,27 @@ class PaymentRepository:
         self,
         *,
         invoice_id: uuid.UUID | None = None,
+        project_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Payment], int]:
-        """List payments with optional invoice filter."""
+        """List payments with optional invoice / project filter.
+
+        ``project_id`` scopes payments to a single project by joining to the
+        parent invoice (``Payment.invoice_id`` → ``Invoice.project_id``).
+        Without it (and without ``invoice_id``) the query is unscoped — the
+        router must therefore always supply one of the two so payments don't
+        leak across tenants.
+        """
         base = select(Payment)
         if invoice_id is not None:
             base = base.where(Payment.invoice_id == invoice_id)
+        if project_id is not None:
+            base = base.where(
+                Payment.invoice_id.in_(
+                    select(Invoice.id).where(Invoice.project_id == project_id)
+                )
+            )
 
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
@@ -255,13 +290,43 @@ class PaymentRepository:
         """
         from sqlalchemy import Numeric, cast
 
-        base = select(
-            func.coalesce(func.sum(cast(Payment.amount, Numeric)), 0)
-        )
+        base = select(func.coalesce(func.sum(cast(Payment.amount, Numeric)), 0))
         if invoice_id is not None:
             base = base.where(Payment.invoice_id == invoice_id)
         result = (await self.session.execute(base)).scalar_one()
         return round(float(result), 2)
+
+    async def aggregate_by_currency(
+        self,
+        *,
+        project_id: uuid.UUID | None = None,
+    ) -> dict[str, float]:
+        """Sum payment amounts grouped by currency, scoped to a project.
+
+        Payments inherit their currency from ``currency_code`` (or "" when
+        blank → treated as base by the caller). Scoped to a single project by
+        joining to the parent invoice so a project dashboard never blends in
+        other tenants' payments.
+        """
+        from sqlalchemy import Numeric, cast
+
+        base = select(
+            Payment.currency_code,
+            func.coalesce(func.sum(cast(Payment.amount, Numeric)), 0),
+        )
+        if project_id is not None:
+            base = base.where(
+                Payment.invoice_id.in_(
+                    select(Invoice.id).where(Invoice.project_id == project_id)
+                )
+            )
+        base = base.group_by(Payment.currency_code)
+
+        rows = (await self.session.execute(base)).all()
+        out: dict[str, float] = {}
+        for currency_code, total in rows:
+            out[currency_code or ""] = out.get(currency_code or "", 0.0) + float(total or 0)
+        return out
 
     async def get_by_idempotency_key(self, key: str) -> Payment | None:
         """Return an existing payment that matches *key*, or None.
@@ -269,11 +334,7 @@ class PaymentRepository:
         Used by create_payment() to implement idempotency: a second POST
         with the same key returns the existing row without writing a duplicate.
         """
-        stmt = (
-            select(Payment)
-            .where(Payment.idempotency_key == key)
-            .limit(1)
-        )
+        stmt = select(Payment).where(Payment.idempotency_key == key).limit(1)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -321,7 +382,11 @@ class BudgetRepository:
         """
         from sqlalchemy import Numeric, cast
 
+        # Group by currency so the caller can FX-convert each currency's
+        # subtotals into the project base currency instead of summing mixed
+        # currencies as if 1 EUR == 1 USD (domain money rule).
         base = select(
+            ProjectBudget.currency_code,
             func.coalesce(func.sum(cast(ProjectBudget.original_budget, Numeric)), 0),
             func.coalesce(func.sum(cast(ProjectBudget.revised_budget, Numeric)), 0),
             func.coalesce(func.sum(cast(ProjectBudget.committed, Numeric)), 0),
@@ -329,9 +394,20 @@ class BudgetRepository:
         )
         if project_id is not None:
             base = base.where(ProjectBudget.project_id == project_id)
+        base = base.group_by(ProjectBudget.currency_code)
 
-        result = await self.session.execute(base)
-        row = result.one()
+        rows = (await self.session.execute(base)).all()
+
+        original_by_currency: dict[str, float] = {}
+        revised_by_currency: dict[str, float] = {}
+        committed_by_currency: dict[str, float] = {}
+        actual_by_currency: dict[str, float] = {}
+        for currency_code, original, revised, committed, actual in rows:
+            code = currency_code or ""
+            original_by_currency[code] = original_by_currency.get(code, 0.0) + float(original)
+            revised_by_currency[code] = revised_by_currency.get(code, 0.0) + float(revised)
+            committed_by_currency[code] = committed_by_currency.get(code, 0.0) + float(committed)
+            actual_by_currency[code] = actual_by_currency.get(code, 0.0) + float(actual)
 
         # Resolve the dominant currency for the dashboard so the UI does
         # not have to hardcode one. We pick the most-used non-empty
@@ -353,10 +429,10 @@ class BudgetRepository:
         currency = cur_row[0] if cur_row else ""
 
         return {
-            "total_budget_original": round(float(row[0]), 2),
-            "total_budget_revised": round(float(row[1]), 2),
-            "total_committed": round(float(row[2]), 2),
-            "total_actual": round(float(row[3]), 2),
+            "original_by_currency": original_by_currency,
+            "revised_by_currency": revised_by_currency,
+            "committed_by_currency": committed_by_currency,
+            "actual_by_currency": actual_by_currency,
             "currency": currency,
         }
 

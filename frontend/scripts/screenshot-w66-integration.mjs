@@ -25,7 +25,7 @@ import path from 'node:path';
 
 const BASE_URL = process.env.OE_BASE_URL ?? 'http://localhost:5180';
 const OUT_DIR = path.resolve(process.cwd(), 'qa-tests/_w66-integration');
-const DEMO_EMAIL = process.env.OE_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.OE_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 const DEMO_PASSWORD = process.env.OE_DEMO_PASSWORD ?? 'demo';
 
 function ensureOut() {

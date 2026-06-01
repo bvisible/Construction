@@ -167,7 +167,18 @@ export default defineConfig({
         // Precache index + JS/CSS/HTML + the static SVGs above.  Vite's
         // build output lands in ``dist/``; workbox-build resolves the
         // patterns relative to that.
-        globPatterns: ['**/*.{js,css,html,svg,woff2,ico}'],
+        //
+        // ``.mjs`` MUST be in the glob — pdf.worker.min-*.mjs is shipped
+        // as an ESM module and is loaded via ``new Worker(url, {type:
+        // 'module'})``. If it isn't precached, workbox falls through to
+        // the CacheFirst runtime rule for /assets/, which has occasionally
+        // returned cached responses without the correct ``Content-Type``
+        // header in some browsers. The downstream symptom was a
+        // "Setting up fake worker failed: error loading dynamically
+        // imported module" on /takeoff. Including ``.mjs`` precaches the
+        // worker with its real headers and removes the runtime-cache
+        // intermediary altogether.
+        globPatterns: ['**/*.{js,mjs,css,html,svg,woff2,ico}'],
         // Skip huge prerendered marketing assets (handled by the static
         // host) and stats.html (visualizer output).
         globIgnores: ['stats.html', '**/*.map'],
@@ -186,8 +197,18 @@ export default defineConfig({
           {
             // Static assets (fonts, images shipped under /assets/) ─
             // hashed at build time so a CacheFirst lookup is safe.
+            //
+            // EXCLUDES ``request.destination === 'worker'``: dedicated
+            // workers (pdf.worker.min, cesium/Workers/*) need the
+            // browser's own fetch with the exact MIME the server sent.
+            // A CacheFirst hit was occasionally serving a response whose
+            // module/script disposition tripped ``new Worker(url, {type:
+            // 'module'})`` into the "fake worker" fallback, which then
+            // failed dynamic import. Workers are not user-perceived
+            // chatty traffic — letting them bypass the SW costs nothing.
             urlPattern: ({ url, request }) => {
               if (url.pathname.startsWith('/api/')) return false;
+              if (request.destination === 'worker') return false;
               return (
                 request.destination === 'font' ||
                 request.destination === 'image' ||
@@ -221,7 +242,7 @@ export default defineConfig({
             },
           },
           {
-            // API reads — NetworkFirst with 8 s timeout, cache only
+            // API reads — NetworkFirst with 30 s timeout, cache only
             // used as the offline fallback for idempotent GETs.  Other
             // verbs bypass the SW (no ``method`` match here means GET
             // by default).
@@ -232,7 +253,7 @@ export default defineConfig({
             handler: 'NetworkFirst',
             options: {
               cacheName: 'oce-api',
-              networkTimeoutSeconds: 8,
+              networkTimeoutSeconds: 30,
               expiration: {
                 maxEntries: 100,
                 maxAgeSeconds: 24 * 60 * 60, // 1 day

@@ -35,7 +35,7 @@ from app.modules.safety.schemas import (
 )
 from app.modules.safety.service import SafetyService
 
-router = APIRouter()
+router = APIRouter(tags=["safety"])
 logger = logging.getLogger(__name__)
 
 
@@ -51,6 +51,7 @@ def _incident_to_response(item: object) -> IncidentResponse:
         incident_date=item.incident_date,  # type: ignore[attr-defined]
         location=item.location,  # type: ignore[attr-defined]
         incident_type=item.incident_type,  # type: ignore[attr-defined]
+        severity=item.severity,  # type: ignore[attr-defined]
         description=item.description,  # type: ignore[attr-defined]
         injured_person_details=item.injured_person_details,  # type: ignore[attr-defined]
         treatment_type=item.treatment_type,  # type: ignore[attr-defined]
@@ -101,6 +102,7 @@ async def safety_stats(
     session: SessionDep,
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> SafetyStatsResponse:
     """‌⁠‍Return dashboard KPIs: incident counts, days without incident,
@@ -116,6 +118,7 @@ async def safety_trends(
     project_id: uuid.UUID = Query(...),
     period: str = Query(default="monthly", pattern=r"^(monthly|weekly)$"),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> SafetyTrendsResponse:
     """‌⁠‍Return time-series incident and observation data grouped by period."""
@@ -135,6 +138,7 @@ async def list_incidents(
     limit: int = Query(default=50, ge=1, le=100),
     type_filter: str | None = Query(default=None, alias="type"),
     status_filter: str | None = Query(default=None, alias="status"),
+    _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> list[IncidentResponse]:
     """List safety incidents for a project."""
@@ -168,6 +172,7 @@ async def export_incidents(
     project_id: uuid.UUID = Query(...),
     session: SessionDep = None,  # type: ignore[assignment]
     _user: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("safety.read")),
 ) -> StreamingResponse:
     """Export safety incidents for a project as Excel."""
     await verify_project_access(project_id, _user, session)
@@ -212,11 +217,7 @@ async def export_incidents(
         ws.cell(row=row_idx, column=3, value=item.incident_type)
         ws.cell(row=row_idx, column=4, value=item.location or "")
         ws.cell(row=row_idx, column=5, value=item.description)
-        # Severity is stored in metadata or injured_person_details; use type as proxy
-        severity = ""
-        if isinstance(item.injured_person_details, dict):
-            severity = item.injured_person_details.get("severity", "")
-        ws.cell(row=row_idx, column=6, value=severity)
+        ws.cell(row=row_idx, column=6, value=item.severity)
         ws.cell(row=row_idx, column=7, value=item.treatment_type or "")
         ws.cell(row=row_idx, column=8, value=item.days_lost)
         ws.cell(row=row_idx, column=9, value=item.root_cause or "")
@@ -237,11 +238,14 @@ async def export_incidents(
 @router.get("/incidents/{incident_id}", response_model=IncidentResponse)
 async def get_incident(
     incident_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> IncidentResponse:
     """Get a single safety incident."""
     incident = await service.get_incident(incident_id)
+    await verify_project_access(incident.project_id, user_id, session)
     return _incident_to_response(incident)
 
 
@@ -249,11 +253,14 @@ async def get_incident(
 async def update_incident(
     incident_id: uuid.UUID,
     data: IncidentUpdate,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("safety.update")),
     service: SafetyService = Depends(_get_service),
 ) -> IncidentResponse:
     """Update a safety incident."""
+    incident = await service.get_incident(incident_id)
+    await verify_project_access(incident.project_id, user_id, session)
     incident = await service.update_incident(incident_id, data)
     return _incident_to_response(incident)
 
@@ -261,11 +268,14 @@ async def update_incident(
 @router.delete("/incidents/{incident_id}", status_code=204)
 async def delete_incident(
     incident_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("safety.delete")),
     service: SafetyService = Depends(_get_service),
 ) -> None:
     """Delete a safety incident."""
+    incident = await service.get_incident(incident_id)
+    await verify_project_access(incident.project_id, user_id, session)
     await service.delete_incident(incident_id)
 
 
@@ -281,6 +291,7 @@ async def list_observations(
     limit: int = Query(default=50, ge=1, le=100),
     type_filter: str | None = Query(default=None, alias="type"),
     status_filter: str | None = Query(default=None, alias="status"),
+    _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> list[ObservationResponse]:
     """List safety observations for a project."""
@@ -314,6 +325,7 @@ async def export_observations(
     project_id: uuid.UUID = Query(...),
     session: SessionDep = None,  # type: ignore[assignment]
     _user: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("safety.read")),
 ) -> StreamingResponse:
     """Export safety observations for a project as Excel."""
     await verify_project_access(project_id, _user, session)
@@ -387,11 +399,14 @@ async def export_observations(
 @router.get("/observations/{observation_id}", response_model=ObservationResponse)
 async def get_observation(
     observation_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("safety.read")),
     service: SafetyService = Depends(_get_service),
 ) -> ObservationResponse:
     """Get a single safety observation."""
     observation = await service.get_observation(observation_id)
+    await verify_project_access(observation.project_id, user_id, session)
     return _observation_to_response(observation)
 
 
@@ -399,11 +414,14 @@ async def get_observation(
 async def update_observation(
     observation_id: uuid.UUID,
     data: ObservationUpdate,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("safety.update")),
     service: SafetyService = Depends(_get_service),
 ) -> ObservationResponse:
     """Update a safety observation."""
+    observation = await service.get_observation(observation_id)
+    await verify_project_access(observation.project_id, user_id, session)
     observation = await service.update_observation(observation_id, data)
     return _observation_to_response(observation)
 
@@ -411,9 +429,12 @@ async def update_observation(
 @router.delete("/observations/{observation_id}", status_code=204)
 async def delete_observation(
     observation_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("safety.delete")),
     service: SafetyService = Depends(_get_service),
 ) -> None:
     """Delete a safety observation."""
+    observation = await service.get_observation(observation_id)
+    await verify_project_access(observation.project_id, user_id, session)
     await service.delete_observation(observation_id)

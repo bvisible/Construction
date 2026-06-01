@@ -15,7 +15,7 @@
  * extra round trip.
  *
  * See backend/app/modules/cad/crs_detector.py for the detection
- * heuristic and .claude/research/crs_detection.md for the table of
+ * heuristic and internal CRS-detection research notes for the table of
  * EPSG codes covered.
  */
 

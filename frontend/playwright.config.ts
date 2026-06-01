@@ -20,7 +20,7 @@ import os from 'node:os';
  *   OE_TEST_BASE_URL    — defaults to http://localhost:5173
  *   OE_TEST_API_URL     — backend, defaults to http://localhost:8000
  *   OE_TEST_LOCALE      — en|de|ru|ar|es|fr|pt|it|pl|ja|ko|zh (default en)
- *   OE_TEST_DEMO_EMAIL  — demo account, defaults to demo@openestimator.io
+ *   OE_TEST_DEMO_EMAIL  — demo account, defaults to demo@openconstructionerp.com
  *   OE_TEST_DEMO_PASSWORD
  *   OE_TEST_WORKERS     — override worker count (cap is 4)
  *   CI                  — when set, retries=2 and forbidOnly=true

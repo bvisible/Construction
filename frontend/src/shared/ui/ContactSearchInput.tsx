@@ -226,6 +226,7 @@ export function ContactSearchInput({
             <button
               type="button"
               onClick={handleClear}
+              aria-label={t('common.clear', { defaultValue: 'Clear' })}
               className="absolute inset-y-0 right-0 flex items-center pr-2.5 text-content-tertiary hover:text-content-primary"
             >
               <X size={14} />

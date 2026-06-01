@@ -53,7 +53,7 @@ from app.modules.requirements.schemas import (
 )
 from app.modules.requirements.service import RequirementsService
 
-router = APIRouter()
+router = APIRouter(tags=["requirements"])
 logger = logging.getLogger(__name__)
 
 
@@ -156,11 +156,17 @@ def _set_to_detail(item: object) -> RequirementSetDetail:
 
 @router.get("/stats/", response_model=RequirementStats)
 async def get_stats(
+    session: SessionDep,
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("requirements.read")),
     service: RequirementsService = Depends(_get_service),
 ) -> RequirementStats:
     """Aggregated requirement stats for a project."""
+    # IDOR guard: the global requirements.read role is not project-scoped, so
+    # verify the caller can access this project before leaking its aggregate
+    # requirement counts/statuses (cross-tenant leak otherwise).
+    await verify_project_access(project_id, str(user_id), session)
     data = await service.get_stats(project_id)
     return RequirementStats(**data)
 
@@ -242,14 +248,20 @@ async def create_set(
 
 @router.get("/", response_model=list[RequirementSetResponse])
 async def list_sets(
+    session: SessionDep,
     project_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     status_filter: str | None = Query(default=None, alias="status"),
+    _perm: None = Depends(RequirePermission("requirements.read")),
     service: RequirementsService = Depends(_get_service),
 ) -> list[RequirementSetResponse]:
     """List requirement sets for a project."""
+    # IDOR guard: the global requirements.read role is not project-scoped, so
+    # verify the caller can access this project before listing its sets
+    # (names/descriptions/statuses) — cross-tenant leak otherwise.
+    await verify_project_access(project_id, str(user_id), session)
     items, _ = await service.list_sets(
         project_id,
         offset=offset,
@@ -300,9 +312,7 @@ async def download_requirements_template(
     payload = build_template_xlsx()
     return Response(
         content=payload,
-        media_type=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         headers={
             "Content-Disposition": 'attachment; filename="requirements_template.xlsx"',
         },
@@ -328,12 +338,13 @@ async def get_set(
 @router.get("/{set_id}/export/", response_model=None)
 async def export_requirements_legacy(
     set_id: uuid.UUID,
+    session: SessionDep,
     format: str = Query(default="csv", pattern="^(csv|json|xlsx)$"),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     service: RequirementsService = Depends(_get_service),
 ):
     """Export all requirements (legacy ``?format=`` flavour kept for callers)."""
-    return await _export_dispatch(set_id, format, service)
+    return await _export_dispatch(set_id, format, service, str(user_id), session)
 
 
 @router.get("/{set_id}/export.{ext}", response_model=None)
@@ -341,6 +352,7 @@ async def export_requirements(
     set_id: uuid.UUID,
     ext: str,
     user_id: CurrentUserId,
+    session: SessionDep,
     service: RequirementsService = Depends(_get_service),
 ):
     """Export all requirements as ``csv | json | xlsx``.
@@ -353,19 +365,25 @@ async def export_requirements(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported export format '{ext}'. Use csv, json, or xlsx.",
         )
-    return await _export_dispatch(set_id, ext, service)
+    return await _export_dispatch(set_id, ext, service, str(user_id), session)
 
 
 async def _export_dispatch(
     set_id: uuid.UUID,
     fmt: str,
     service: RequirementsService,
+    user_id: str,
+    session: SessionDep,
 ):
     item = await service.get_set(set_id)
+    # IDOR guard: gate the export on the set's owning project. The global
+    # requirements role is not project-scoped, so without this any holder
+    # could dump another tenant's requirement data via the set UUID.
+    await verify_project_access(item.project_id, user_id, session)
     rows = _export_rows(item)
-    safe_name = (
-        getattr(item, "name", None) or f"requirements_{set_id}"
-    ).replace("/", "_").replace("\\", "_").strip() or f"requirements_{set_id}"
+    safe_name = (getattr(item, "name", None) or f"requirements_{set_id}").replace("/", "_").replace(
+        "\\", "_"
+    ).strip() or f"requirements_{set_id}"
 
     if fmt == "json":
         return JSONResponse(
@@ -381,9 +399,7 @@ async def _export_dispatch(
         payload = export_xlsx(rows, title=safe_name)
         return Response(
             content=payload,
-            media_type=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
+            media_type=("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
             headers={
                 "Content-Disposition": f'attachment; filename="{safe_name}.xlsx"',
             },
@@ -459,6 +475,31 @@ async def import_requirements_file(
         )
 
     name = (file.filename or "").lower()
+
+    # Magic-byte sniff — filename is hostile-supplied. Reject any payload
+    # whose first bytes don't match the declared format before we hand the
+    # buffer to openpyxl / csv.reader. Mirrors the contacts importer.
+    head = payload[:8]
+    if name.endswith(".xlsx"):
+        if not head.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=415,
+                detail="File does not look like a valid .xlsx (missing ZIP signature).",
+            )
+    elif name.endswith(".xls"):
+        if not head.startswith(b"\xd0\xcf\x11\xe0"):
+            raise HTTPException(
+                status_code=415,
+                detail="File does not look like a valid .xls (missing OLE signature).",
+            )
+    elif name.endswith(".csv"):
+        for sig in (b"MZ", b"\x7fELF", b"\xca\xfe\xba\xbe", b"PK\x03\x04", b"\xd0\xcf\x11\xe0"):
+            if head.startswith(sig):
+                raise HTTPException(
+                    status_code=415,
+                    detail="File does not look like CSV (binary signature detected).",
+                )
+
     if name.endswith(".csv"):
         rows, warnings = parse_csv(payload)
     elif name.endswith(".xlsx") or name.endswith(".xls"):
@@ -561,7 +602,8 @@ async def delete_set(
 async def bulk_delete_requirements(
     set_id: uuid.UUID,
     data: RequirementBulkDeleteRequest,
-    _user_id: CurrentUserId,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("requirements.delete")),
     service: RequirementsService = Depends(_get_service),
 ) -> RequirementBulkDeleteResult:
@@ -574,13 +616,15 @@ async def bulk_delete_requirements(
     ``requirements.requirement.deleted`` event so vector indexes stay
     in sync.
     """
+    # IDOR guard: gate on the set's owning project. The service only scopes
+    # the deletes to set_id; without the project check any requirements.delete
+    # holder could wipe another tenant's set by UUID (the per-row set-membership
+    # check inside the service keeps the blast radius to this set only).
+    req_set = await service.get_set(set_id)
+    await verify_project_access(req_set.project_id, str(user_id), session)
     try:
-        deleted, skipped = await service.bulk_delete_requirements(
-            set_id, data.requirement_ids
-        )
-        return RequirementBulkDeleteResult(
-            deleted_count=deleted, skipped_count=skipped
-        )
+        deleted, skipped = await service.bulk_delete_requirements(set_id, data.requirement_ids)
+        return RequirementBulkDeleteResult(deleted_count=deleted, skipped_count=skipped)
     except HTTPException:
         raise
     except Exception:
@@ -603,10 +647,16 @@ async def add_requirement(
     set_id: uuid.UUID,
     data: RequirementCreate,
     user_id: CurrentUserId,
+    session: SessionDep,
     _perm: None = Depends(RequirePermission("requirements.create")),
     service: RequirementsService = Depends(_get_service),
 ) -> RequirementResponse:
     """Add a requirement to a set."""
+    # IDOR guard: gate on the target set's project before inserting into it.
+    # requirements.create is a global role, so without this any holder could
+    # write requirements into another tenant's set by its UUID.
+    req_set = await service.get_set(set_id)
+    await verify_project_access(req_set.project_id, str(user_id), session)
     try:
         item = await service.add_requirement(set_id, data, user_id=user_id)
         return _req_to_response(item)
@@ -660,11 +710,16 @@ async def update_requirement(
     set_id: uuid.UUID,
     req_id: uuid.UUID,
     data: RequirementUpdate,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("requirements.update")),
     service: RequirementsService = Depends(_get_service),
 ) -> RequirementResponse:
     """Update a requirement."""
+    # IDOR guard: gate on the requirement's REAL project (requirements.update
+    # is a global role, and the service ignores set_id when resolving req_id).
+    project_id = await service.get_requirement_project_id(req_id)
+    await verify_project_access(project_id, str(user_id), session)
     item = await service.update_requirement(req_id, data)
     return _req_to_response(item)
 
@@ -676,11 +731,16 @@ async def update_requirement(
 async def delete_requirement(
     set_id: uuid.UUID,
     req_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("requirements.delete")),
     service: RequirementsService = Depends(_get_service),
 ) -> None:
     """Delete a requirement from a set."""
+    # IDOR guard: gate on the set's project (the service additionally enforces
+    # that req_id belongs to set_id, so this covers the requirement too).
+    req_set = await service.get_set(set_id)
+    await verify_project_access(req_set.project_id, str(user_id), session)
     await service.delete_requirement(set_id, req_id)
 
 
@@ -738,11 +798,15 @@ async def link_to_position(
     set_id: uuid.UUID,
     req_id: uuid.UUID,
     position_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("requirements.update")),
     service: RequirementsService = Depends(_get_service),
 ) -> RequirementResponse:
     """Link a requirement to a BOQ position."""
+    # IDOR guard: gate on the requirement's real project.
+    project_id = await service.get_requirement_project_id(req_id)
+    await verify_project_access(project_id, str(user_id), session)
     item = await service.link_to_position(req_id, position_id)
     return _req_to_response(item)
 
@@ -813,9 +877,7 @@ async def link_requirement_to_bim(
     standardized ``requirements.requirement.linked_bim`` event so the
     vector indexer refreshes the embedding to reflect the new links.
     """
-    item = await service.link_to_bim_elements(
-        req_id, body.bim_element_ids, replace=body.replace
-    )
+    item = await service.link_to_bim_elements(req_id, body.bim_element_ids, replace=body.replace)
     if item.requirement_set_id != set_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -951,11 +1013,7 @@ async def requirement_similar(
     from app.modules.requirements.models import Requirement
     from app.modules.requirements.vector_adapter import requirement_vector_adapter
 
-    stmt = (
-        select(Requirement)
-        .options(selectinload(Requirement.requirement_set))
-        .where(Requirement.id == req_id)
-    )
+    stmt = select(Requirement).options(selectinload(Requirement.requirement_set)).where(Requirement.id == req_id)
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Requirement not found")
@@ -1026,9 +1084,7 @@ async def list_requirement_deliverables(
     service: RequirementsService = Depends(_get_service),
 ) -> list[DeliverableResponse]:
     """List EIR deliverables attached to a requirement."""
-    items = await service.list_deliverables(
-        requirement_id, deliverable_type=deliverable_type
-    )
+    items = await service.list_deliverables(requirement_id, deliverable_type=deliverable_type)
     return [_deliverable_to_response(i) for i in items]
 
 
@@ -1051,9 +1107,7 @@ async def create_requirement_deliverable(
     except HTTPException:
         raise
     except Exception:
-        logger.exception(
-            "Failed to add deliverable for requirement %s", requirement_id
-        )
+        logger.exception("Failed to add deliverable for requirement %s", requirement_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to add deliverable",
@@ -1104,10 +1158,7 @@ async def get_requirement_deliverable_coverage(
 ) -> DeliverableCoverage:
     """Coverage % roll-up for one requirement's EIR deliverables."""
     payload = await service.get_deliverable_coverage(requirement_id)
-    by_type = {
-        t: DeliverableTypeCoverage(**bucket)
-        for t, bucket in payload.get("by_type", {}).items()
-    }
+    by_type = {t: DeliverableTypeCoverage(**bucket) for t, bucket in payload.get("by_type", {}).items()}
     return DeliverableCoverage(
         requirement_id=payload["requirement_id"] or requirement_id,
         total=payload["total"],
@@ -1139,9 +1190,7 @@ async def get_project_eir_matrix(
     project's rows), cells carry the LOD/LOI/status triplet.
     """
     await verify_project_access(project_id, str(user_id), session)
-    payload = await service.get_project_matrix(
-        project_id, deliverable_type=deliverable_type
-    )
+    payload = await service.get_project_matrix(project_id, deliverable_type=deliverable_type)
     rows = [
         MatrixRow(
             requirement_id=row["requirement_id"],
@@ -1182,12 +1231,8 @@ from app.modules.requirements.vector_adapter import (  # noqa: E402
 )
 
 
-async def _requirements_loader(
-    session: Any, project_id: uuid.UUID | None
-) -> list[Any]:
-    stmt = select(_Requirement).options(
-        _selectinload(_Requirement.requirement_set)
-    )
+async def _requirements_loader(session: Any, project_id: uuid.UUID | None) -> list[Any]:
+    stmt = select(_Requirement).options(_selectinload(_Requirement.requirement_set))
     if project_id is not None:
         stmt = stmt.join(
             _RequirementSet,

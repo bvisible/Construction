@@ -27,6 +27,7 @@ matches ``expr`` and is strictly later than ``after``. Uses a minute-
 by-minute walk bounded at 366 days to guarantee termination on
 pathological inputs.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -91,9 +92,7 @@ def parse_cron(expr: str) -> tuple[set[int], set[int], set[int], set[int], set[i
     """
     fields = expr.strip().split()
     if len(fields) != 5:
-        raise CronParseError(
-            f"Expected 5 whitespace-separated cron fields, got {len(fields)}"
-        )
+        raise CronParseError(f"Expected 5 whitespace-separated cron fields, got {len(fields)}")
     minute, hour, dom, month, dow = fields
     return (
         _parse_field(minute, lo=0, hi=59),
@@ -102,6 +101,19 @@ def parse_cron(expr: str) -> tuple[set[int], set[int], set[int], set[int], set[i
         _parse_field(month, lo=1, hi=12),
         _parse_field(dow, lo=0, hi=6),
     )
+
+
+def _field_is_wildcard(raw: str) -> bool:
+    """Return True when a cron field is the unrestricted wildcard ``*``.
+
+    POSIX/Vixie cron treats day-of-month and day-of-week specially: when
+    BOTH are restricted (neither is ``*``) a timestamp matches if EITHER
+    field matches (logical OR), not both (AND). We need to know whether
+    each field was the literal wildcard to make that choice — the parsed
+    integer set alone can't tell ``*`` apart from an explicit ``0-6`` /
+    ``1-31`` range.
+    """
+    return raw.strip() == "*"
 
 
 def next_occurrence(expr: str, after: datetime) -> datetime:
@@ -117,6 +129,26 @@ def next_occurrence(expr: str, after: datetime) -> datetime:
 
     minutes, hours, doms, months, dows = parse_cron(expr)
 
+    # POSIX day-of-month / day-of-week OR semantics: when both fields are
+    # restricted (neither is ``*``), a date matches if EITHER the day-of-
+    # month OR the day-of-week matches. When one (or both) is the
+    # wildcard the wildcard field is satisfied trivially and the result
+    # is the same as ANDing them. We must inspect the raw fields because
+    # the parsed integer set can't distinguish ``*`` from an explicit
+    # full-range expression.
+    fields = expr.strip().split()
+    dom_is_wild = _field_is_wildcard(fields[2])
+    dow_is_wild = _field_is_wildcard(fields[4])
+    both_day_fields_restricted = not dom_is_wild and not dow_is_wild
+
+    def _day_matches(probe: datetime) -> bool:
+        # cron dow: 0 = Sunday; Python weekday() 0 = Monday, so convert.
+        dom_match = probe.day in doms
+        dow_match = ((probe.weekday() + 1) % 7) in dows
+        if both_day_fields_restricted:
+            return dom_match or dow_match
+        return dom_match and dow_match
+
     # Start from the next minute boundary so we never return ``after`` itself.
     probe = (after_utc + timedelta(minutes=1)).replace(second=0, microsecond=0)
     # Upper bound: 1 year of minutes — covers any realistic cron expr.
@@ -130,11 +162,8 @@ def next_occurrence(expr: str, after: datetime) -> datetime:
         if (
             probe.minute in minutes
             and probe.hour in hours
-            and probe.day in doms
             and probe.month in months
-            # cron dow: 0 = Sunday; Python weekday() 0 = Monday, so
-            # convert.
-            and ((probe.weekday() + 1) % 7) in dows
+            and _day_matches(probe)
         ):
             return probe
         # Skip ahead by hours / days when coarser fields don't match —
@@ -142,10 +171,7 @@ def next_occurrence(expr: str, after: datetime) -> datetime:
         if probe.hour not in hours:
             probe = (probe + timedelta(hours=1)).replace(minute=0)
             continue
-        if probe.day not in doms or probe.month not in months:
-            probe = (probe + timedelta(days=1)).replace(minute=0, hour=0)
-            continue
-        if ((probe.weekday() + 1) % 7) not in dows:
+        if probe.month not in months or not _day_matches(probe):
             probe = (probe + timedelta(days=1)).replace(minute=0, hour=0)
             continue
         probe += timedelta(minutes=1)

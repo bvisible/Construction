@@ -64,7 +64,7 @@ export function CPMView({ scheduleId }: CPMViewProps) {
   const activitiesQuery = useQuery<ActivityRow[]>({
     queryKey: ['schedule', scheduleId, 'activities'],
     queryFn: () =>
-      apiGet<ActivityRow[]>(`/v1/schedule/${scheduleId}/activities/`),
+      apiGet<ActivityRow[]>(`/v1/schedule/schedules/${scheduleId}/activities/`),
     enabled: Boolean(scheduleId),
   });
 
@@ -226,7 +226,7 @@ export function CPMView({ scheduleId }: CPMViewProps) {
                   setLevelResult(null);
                 }}
                 className="text-gray-400 hover:text-gray-600"
-                aria-label="close"
+                aria-label={t('common.close', { defaultValue: 'Close' })}
               >
                 <X className="h-5 w-5" />
               </button>

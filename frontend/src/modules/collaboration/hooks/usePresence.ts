@@ -60,6 +60,12 @@ export const usePresenceStore = create<PresenceState>((set, get) => ({
     Object.values(get().remoteUsers).filter((u) => u.boqId === boqId),
 
   seedDemoPresence: (boqIds) => {
+    // Only ever inject the fabricated Sarah/Max/Lena collaborators in an
+    // explicit demo build. A real logged-in user must never see invented
+    // co-editors on their own BOQs — that reads as a data-integrity bug
+    // (and a privacy red flag). Until the Yjs awareness backend lands,
+    // production simply shows no remote presence at all.
+    if (!import.meta.env.VITE_DEMO) return;
     if (boqIds.length === 0) return;
     const users: Record<string, PresenceUser> = {};
     // Assign 1-2 demo users to random BOQs

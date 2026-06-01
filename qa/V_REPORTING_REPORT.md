@@ -12,7 +12,7 @@ Branch: `feat/reporting-deep-improve`
 - `frontend/src/features/reports/ReportsPage.tsx` (1562 LOC — exports + custom builder)
 
 ### Existing report capabilities
-Per CLAUDE.md §8 "REPORT & EXPORT":
+Per the architecture guide §8 "REPORT & EXPORT":
 - PDF executive summary: present (Progress Report HTML, Custom Builder HTML)
 - BOQ Excel/CSV/GAEB XML: backend `boq/export/{pdf,excel,gaeb}` wired in `REPORT_CARDS`
 - Cost breakdown by KG/NRM/Division: partial — cost categories surfaced, no DIN276 grouping
@@ -32,7 +32,7 @@ Per CLAUDE.md §8 "REPORT & EXPORT":
 
 ### Implemented
 1. **`<GeneratedReportsHistory>` panel** — new component (`GeneratedReportsHistory.tsx`, 87 LOC). Lists last 10 reports per project via React Query + `apiGet`. Renders skeleton → empty state (`<EmptyState>`) → row list with `<DateDisplay format="relative">` and format badge. Wired into `ReportsPage.tsx:1118` and only mounts once a project is selected (avoids un-needed API call).
-2. **XSS hardening via `esc()` helper** in `ReportsPage.tsx:37-49`. 12 interpolation sites patched: Progress Report (title, h1, sched.name, r.code/title/severity) and Custom Builder (title, h1, cost category names, sched.name + status, risk fields, BOQ position fields). Local helper — no new dep (CLAUDE.md §1).
+2. **XSS hardening via `esc()` helper** in `ReportsPage.tsx:37-49`. 12 interpolation sites patched: Progress Report (title, h1, sched.name, r.code/title/severity) and Custom Builder (title, h1, cost category names, sched.name + status, risk fields, BOQ position fields). Local helper — no new dep (the architecture guide §1).
 3. **i18n keys added** to `en.ts:3302-3305`: `reports.history_title`, `reports.history_empty_title`, `reports.history_empty_desc`.
 
 ### Deferred (out of budget)

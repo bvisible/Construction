@@ -296,9 +296,9 @@ async def _strip_orphaned_bim_links(
     try:
         act_stmt = select(Activity).where(Activity.bim_element_ids.isnot(None))
         if project_id is not None:
-            act_stmt = act_stmt.join(
-                Schedule, Activity.schedule_id == Schedule.id
-            ).where(Schedule.project_id == project_id)
+            act_stmt = act_stmt.join(Schedule, Activity.schedule_id == Schedule.id).where(
+                Schedule.project_id == project_id
+            )
         act_rows = (await session.execute(act_stmt)).scalars().all()
         cleaned_activities = 0
         for activity in act_rows:
@@ -326,9 +326,9 @@ async def _strip_orphaned_bim_links(
     try:
         req_stmt = select(Requirement)
         if project_id is not None:
-            req_stmt = req_stmt.join(
-                RequirementSet, Requirement.requirement_set_id == RequirementSet.id
-            ).where(RequirementSet.project_id == project_id)
+            req_stmt = req_stmt.join(RequirementSet, Requirement.requirement_set_id == RequirementSet.id).where(
+                RequirementSet.project_id == project_id
+            )
         req_rows = (await session.execute(req_stmt)).scalars().all()
         cleaned_reqs = 0
         for req in req_rows:
@@ -355,6 +355,7 @@ async def _strip_orphaned_bim_links(
         )
 
     await session.flush()
+
 
 # On-disk directory for BIM geometry files (original.{ext}, geometry.dae,
 # dataframe.xlsx, …). Matches the layout used by ``bim_hub.router`` which
@@ -528,11 +529,7 @@ class BIMHubService:
                     continue
                 # Orphan — compute size then remove.
                 try:
-                    size = sum(
-                        f.stat().st_size
-                        for f in model_dir.rglob("*")
-                        if f.is_file()
-                    )
+                    size = sum(f.stat().st_size for f in model_dir.rglob("*") if f.is_file())
                 except OSError:
                     size = 0
                 try:
@@ -540,9 +537,7 @@ class BIMHubService:
                     removed_models += 1
                     bytes_freed += size
                     removed_details.append(str(model_dir))
-                    logger.info(
-                        "Orphan BIM dir removed: %s (%d bytes)", model_dir, size
-                    )
+                    logger.info("Orphan BIM dir removed: %s (%d bytes)", model_dir, size)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Failed to remove orphan %s: %s", model_dir, exc)
             # Drop now-empty project directories.
@@ -567,9 +562,7 @@ class BIMHubService:
         max_age_hours: int = 1,
     ) -> int:
         """Remove models stuck in 'processing' with 0 elements older than max_age_hours."""
-        count = await self.model_repo.cleanup_stale_processing(
-            project_id, max_age_hours=max_age_hours
-        )
+        count = await self.model_repo.cleanup_stale_processing(project_id, max_age_hours=max_age_hours)
         if count:
             logger.info(
                 "Cleaned up %d stale processing model(s) for project %s",
@@ -744,10 +737,7 @@ class BIMHubService:
         if group_id is not None:
             group = await self.get_element_group(group_id)
             member_ids_raw = group.element_ids or []
-            member_uuids = [
-                uuid.UUID(eid) if isinstance(eid, str) else eid
-                for eid in member_ids_raw
-            ]
+            member_uuids = [uuid.UUID(eid) if isinstance(eid, str) else eid for eid in member_ids_raw]
             if member_uuids:
                 base = base.where(BIMElement.id.in_(member_uuids))
             else:
@@ -758,10 +748,7 @@ class BIMHubService:
         total = (await self.session.execute(count_stmt)).scalar_one()
 
         stmt = (
-            base.options(selectinload(BIMElement.boq_links))
-            .order_by(BIMElement.created_at)
-            .offset(offset)
-            .limit(limit)
+            base.options(selectinload(BIMElement.boq_links)).order_by(BIMElement.created_at).offset(offset).limit(limit)
         )
         result = await self.session.execute(stmt)
         elements = list(result.scalars().all())
@@ -776,12 +763,17 @@ class BIMHubService:
         pos_info: dict[uuid.UUID, tuple[str | None, str | None, Any, str | None, Any, Any]] = {}
         if pos_ids:
             pos_stmt = select(
-                Position.id, Position.ordinal, Position.description,
-                Position.quantity, Position.unit, Position.unit_rate, Position.total,
+                Position.id,
+                Position.ordinal,
+                Position.description,
+                Position.quantity,
+                Position.unit,
+                Position.unit_rate,
+                Position.total,
             ).where(Position.id.in_(pos_ids))
             pos_result = await self.session.execute(pos_stmt)
-            for pid, ordinal, desc, qty, unit, urate, total in pos_result.all():
-                pos_info[pid] = (ordinal, desc, qty, unit, urate, total)
+            for pid, ordinal, desc, qty, unit, urate, pos_total in pos_result.all():
+                pos_info[pid] = (ordinal, desc, qty, unit, urate, pos_total)
 
         # ── Step 3: build BOQ brief dicts per element ───────────────────
         boq_links_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {}
@@ -791,21 +783,18 @@ class BIMHubService:
                 info = pos_info.get(lnk.boq_position_id)
                 ordinal = info[0] if info else None
                 desc = info[1] if info else None
-                qty = float(info[2]) if info and info[2] is not None else None
+                qty = None
+                if info and info[2] is not None:
+                    try:
+                        qty = float(info[2])
+                    except (TypeError, ValueError):
+                        qty = None  # non-numeric quantity must not 500 the list
                 unit = info[3] if info else None
                 # v3 §10 — money goes through Pydantic as the raw 4dp string
                 # from Position so Decimal() doesn't round-trip through float
                 # and re-introduce binary precision drift.
-                urate = (
-                    str(info[4])
-                    if info and info[4] is not None and str(info[4]).strip()
-                    else None
-                )
-                total = (
-                    str(info[5])
-                    if info and info[5] is not None and str(info[5]).strip()
-                    else None
-                )
+                urate = str(info[4]) if info and info[4] is not None and str(info[4]).strip() else None
+                brief_total = str(info[5]) if info and info[5] is not None and str(info[5]).strip() else None
                 briefs.append(
                     {
                         "id": lnk.id,
@@ -815,7 +804,7 @@ class BIMHubService:
                         "boq_position_quantity": qty,
                         "boq_position_unit": unit,
                         "boq_position_unit_rate": urate,
-                        "boq_position_total": total,
+                        "boq_position_total": brief_total,
                         "link_type": lnk.link_type,
                         "confidence": lnk.confidence,
                     }
@@ -823,9 +812,7 @@ class BIMHubService:
             boq_links_by_element_id[elem.id] = briefs
 
         # ── Step 4: fetch DocumentBIMLink rows joined with Document for this page
-        doc_links_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {
-            eid: [] for eid in element_ids
-        }
+        doc_links_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {eid: [] for eid in element_ids}
         if element_ids:
             doc_link_stmt = (
                 select(
@@ -859,9 +846,7 @@ class BIMHubService:
         # Tasks store bim_element_ids as a denormalised JSON array; pulling all
         # project tasks once and filtering in memory is cross-dialect safe and
         # fine for the bounded sizes we expect.
-        task_links_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {
-            eid: [] for eid in element_ids
-        }
+        task_links_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {eid: [] for eid in element_ids}
         if element_ids:
             element_id_strs = {str(eid) for eid in element_ids}
             task_stmt = select(Task).where(Task.project_id == model.project_id)
@@ -891,9 +876,7 @@ class BIMHubService:
         # We join through ``oe_schedule_schedule`` to scope by the model's
         # project, then filter in Python — same cross-dialect reasoning as
         # the task loop above.
-        activity_briefs_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {
-            eid: [] for eid in element_ids
-        }
+        activity_briefs_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {eid: [] for eid in element_ids}
         if element_ids:
             element_id_strs = {str(eid) for eid in element_ids}
             activity_stmt = (
@@ -933,9 +916,7 @@ class BIMHubService:
         # column to keep migrations cheap).  We load every requirement
         # in the project once and filter in Python — same cross-dialect
         # reasoning as the task and activity loops above.
-        requirement_briefs_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {
-            eid: [] for eid in element_ids
-        }
+        requirement_briefs_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {eid: [] for eid in element_ids}
         if element_ids:
             element_id_strs = {str(eid) for eid in element_ids}
             req_stmt = (
@@ -982,9 +963,7 @@ class BIMHubService:
         # ``_VALIDATION_REPORT_SENTINEL`` (UUID(int=0)) whose list contains
         # a single marker dict. The router inspects this key before the
         # per-element loop.
-        validation_summaries_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {
-            eid: [] for eid in element_ids
-        }
+        validation_summaries_by_element_id: dict[uuid.UUID, list[dict[str, Any]]] = {eid: [] for eid in element_ids}
         if element_ids:
             from app.modules.validation.repository import ValidationReportRepository
 
@@ -994,9 +973,7 @@ class BIMHubService:
                 target_id=str(model_id),
             )
             if latest_report is not None:
-                validation_summaries_by_element_id[_VALIDATION_REPORT_SENTINEL] = [
-                    {"report_id": str(latest_report.id)}
-                ]
+                validation_summaries_by_element_id[_VALIDATION_REPORT_SENTINEL] = [{"report_id": str(latest_report.id)}]
                 element_id_strs = {str(eid): eid for eid in element_ids}
                 raw_results = latest_report.results or []
                 for entry in raw_results:
@@ -1107,9 +1084,7 @@ class BIMHubService:
         offset = 0
         page_size = 5000
         while True:
-            batch, total = await self.element_repo.list_for_model(
-                model_id, offset=offset, limit=page_size
-            )
+            batch, total = await self.element_repo.list_for_model(model_id, offset=offset, limit=page_size)
             elements.extend(batch)
             if offset + page_size >= total or not batch:
                 break
@@ -1154,21 +1129,15 @@ class BIMHubService:
 
         stmt = select(BIMElement).where(BIMElement.model_id == model_id)
         if stable_id:
-            existing = (
-                await self.session.execute(stmt.where(BIMElement.stable_id == stable_id))
-            ).scalar_one_or_none()
+            existing = (await self.session.execute(stmt.where(BIMElement.stable_id == stable_id))).scalar_one_or_none()
             if existing is not None:
                 return existing
         if mesh_ref:
-            existing = (
-                await self.session.execute(stmt.where(BIMElement.mesh_ref == mesh_ref))
-            ).scalar_one_or_none()
+            existing = (await self.session.execute(stmt.where(BIMElement.mesh_ref == mesh_ref))).scalar_one_or_none()
             if existing is not None:
                 return existing
             # mesh_ref often equals stable_id (the Revit ElementId) for DDC exports
-            existing = (
-                await self.session.execute(stmt.where(BIMElement.stable_id == mesh_ref))
-            ).scalar_one_or_none()
+            existing = (await self.session.execute(stmt.where(BIMElement.stable_id == mesh_ref))).scalar_one_or_none()
             if existing is not None:
                 return existing
 
@@ -1188,9 +1157,7 @@ class BIMHubService:
         # instead of hard-coding ``id`` (which raised ValueError →
         # spurious 404 on every snapshot-seeded model).
         try:
-            schema = await asyncio.to_thread(
-                read_schema, str(model.project_id), str(model_id)
-            )
+            schema = await asyncio.to_thread(read_schema, str(model.project_id), str(model_id))
         except (OSError, ValueError):
             schema = []
         schema_cols = {c["name"] for c in schema}
@@ -1235,8 +1202,7 @@ class BIMHubService:
             element = await self.element_repo.create(element)
             await self.session.flush()
             logger.info(
-                "Lazy-created placeholder BIMElement id=%s model=%s ref=%s "
-                "(source=viewer, no parquet row)",
+                "Lazy-created placeholder BIMElement id=%s model=%s ref=%s (source=viewer, no parquet row)",
                 element.id,
                 model_id,
                 ref,
@@ -1313,9 +1279,7 @@ class BIMHubService:
         # Capture existing element ids so we can emit element.deleted
         # events for the vector store before wiping them.
         existing_ids_stmt = select(BIMElement.id).where(BIMElement.model_id == model_id)
-        existing_ids = [
-            row_id for (row_id,) in (await self.session.execute(existing_ids_stmt)).all()
-        ]
+        existing_ids = [row_id for (row_id,) in (await self.session.execute(existing_ids_stmt)).all()]
 
         # Delete existing elements
         deleted = await self.element_repo.delete_all_for_model(model_id)
@@ -1399,13 +1363,9 @@ class BIMHubService:
         # callers receive non-expired ORM instances that Pydantic can
         # serialise without lazy loads.
         refresh_stmt = (
-            select(BIMElement)
-            .where(BIMElement.id.in_(created_ids))
-            .options(selectinload(BIMElement.boq_links))
+            select(BIMElement).where(BIMElement.id.in_(created_ids)).options(selectinload(BIMElement.boq_links))
         )
-        refreshed = list(
-            (await self.session.execute(refresh_stmt)).scalars().all()
-        )
+        refreshed = list((await self.session.execute(refresh_stmt)).scalars().all())
         # Preserve the insertion order the caller requested — the IN
         # filter above returns in arbitrary order.
         order_index = {rid: idx for idx, rid in enumerate(created_ids)}
@@ -1480,14 +1440,10 @@ class BIMHubService:
                     # v3 §10 — pass money values as their raw 4dp string so
                     # Pydantic Decimal coercion is exact (not float-rounded).
                     "boq_position_unit_rate": (
-                        str(row.unit_rate)
-                        if row.unit_rate is not None and str(row.unit_rate).strip()
-                        else None
+                        str(row.unit_rate) if row.unit_rate is not None and str(row.unit_rate).strip() else None
                     ),
                     "boq_position_total": (
-                        str(row.total)
-                        if row.total is not None and str(row.total).strip()
-                        else None
+                        str(row.total) if row.total is not None and str(row.total).strip() else None
                     ),
                     "link_type": row.link_type,
                     "confidence": row.confidence,
@@ -1529,9 +1485,7 @@ class BIMHubService:
         link = await self.link_repo.create(link)
 
         # Keep Position.cad_element_ids in sync (legacy JSON mirror).
-        await self._append_cad_element_id(
-            data.boq_position_id, data.bim_element_id
-        )
+        await self._append_cad_element_id(data.boq_position_id, data.bim_element_id)
 
         # Auto-populate BOQ position quantity from linked element quantities.
         await self._sync_boq_quantity_from_links(data.boq_position_id)
@@ -1642,15 +1596,12 @@ class BIMHubService:
                 pos.quantity = str(count_total)
                 try:
                     rate = Decimal(pos.unit_rate or "0")
-                    pos.total = str(
-                        (Decimal(count_total) * rate).quantize(Decimal("0.01"))
-                    )
+                    pos.total = str((Decimal(count_total) * rate).quantize(Decimal("0.01")))
                 except (InvalidOperation, TypeError, ValueError):
                     pass
                 await self.session.flush()
                 logger.info(
-                    "BOQ position %s (count unit %r) quantity auto-set to "
-                    "%d linked BIM element(s)",
+                    "BOQ position %s (count unit %r) quantity auto-set to %d linked BIM element(s)",
                     position_id,
                     pos.unit,
                     count_total,
@@ -1837,9 +1788,7 @@ class BIMHubService:
         model = await self.get_model(request.model_id)
 
         # Get all elements for the model
-        elements, _ = await self.element_repo.list_for_model(
-            model.id, offset=0, limit=50000
-        )
+        elements, _ = await self.element_repo.list_for_model(model.id, offset=0, limit=50000)
 
         # Get active rules (project-scoped first, then global)
         rules = await self.qmap_repo.list_active(project_id=model.project_id)
@@ -1864,19 +1813,18 @@ class BIMHubService:
 
                 qty = self._extract_quantity(element, rule.quantity_source)
                 if qty is None:
-                    skipped.append({
-                        "element_id": str(element.id),
-                        "stable_id": element.stable_id,
-                        "element_type": element.element_type,
-                        "rule_id": str(rule.id),
-                        "rule_name": rule.name,
-                        "quantity_source": rule.quantity_source,
-                        "reason": "missing_property",
-                        "detail": (
-                            f"element has no value for "
-                            f"'{rule.quantity_source}' (property/quantity key)"
-                        ),
-                    })
+                    skipped.append(
+                        {
+                            "element_id": str(element.id),
+                            "stable_id": element.stable_id,
+                            "element_type": element.element_type,
+                            "rule_id": str(rule.id),
+                            "rule_name": rule.name,
+                            "quantity_source": rule.quantity_source,
+                            "reason": "missing_property",
+                            "detail": (f"element has no value for '{rule.quantity_source}' (property/quantity key)"),
+                        }
+                    )
                     continue
 
                 try:
@@ -1884,39 +1832,41 @@ class BIMHubService:
                     waste_pct = Decimal(rule.waste_factor_pct or "0")
                     adjusted = qty * multiplier * (Decimal("1") + waste_pct / Decimal("100"))
                 except (InvalidOperation, ValueError) as exc:
-                    skipped.append({
+                    skipped.append(
+                        {
+                            "element_id": str(element.id),
+                            "stable_id": element.stable_id,
+                            "element_type": element.element_type,
+                            "rule_id": str(rule.id),
+                            "rule_name": rule.name,
+                            "quantity_source": rule.quantity_source,
+                            "reason": "invalid_decimal",
+                            "detail": (
+                                f"could not convert quantity {qty!r} with "
+                                f"multiplier={rule.multiplier!r} / "
+                                f"waste={rule.waste_factor_pct!r}: {exc}"
+                            ),
+                        }
+                    )
+                    continue
+
+                per_rule_matches.setdefault(rule.id, []).append((element, qty, adjusted))
+                matched_element_ids.add(element.id)
+
+                results.append(
+                    {
                         "element_id": str(element.id),
                         "stable_id": element.stable_id,
                         "element_type": element.element_type,
                         "rule_id": str(rule.id),
                         "rule_name": rule.name,
                         "quantity_source": rule.quantity_source,
-                        "reason": "invalid_decimal",
-                        "detail": (
-                            f"could not convert quantity {qty!r} with "
-                            f"multiplier={rule.multiplier!r} / "
-                            f"waste={rule.waste_factor_pct!r}: {exc}"
-                        ),
-                    })
-                    continue
-
-                per_rule_matches.setdefault(rule.id, []).append(
-                    (element, qty, adjusted)
+                        "raw_quantity": float(qty),
+                        "adjusted_quantity": float(adjusted),
+                        "unit": rule.unit,
+                        "boq_target": rule.boq_target,
+                    }
                 )
-                matched_element_ids.add(element.id)
-
-                results.append({
-                    "element_id": str(element.id),
-                    "stable_id": element.stable_id,
-                    "element_type": element.element_type,
-                    "rule_id": str(rule.id),
-                    "rule_name": rule.name,
-                    "quantity_source": rule.quantity_source,
-                    "raw_quantity": float(qty),
-                    "adjusted_quantity": float(adjusted),
-                    "unit": rule.unit,
-                    "boq_target": rule.boq_target,
-                })
 
         matched_elements = len(matched_element_ids)
         rules_applied = sum(1 for matches in per_rule_matches.values() if matches)
@@ -1933,12 +1883,10 @@ class BIMHubService:
 
                 try:
                     async with self.session.begin_nested():
-                        created_links, created_positions = (
-                            await self._persist_rule_matches(
-                                rule=rule,
-                                model=model,
-                                matches=matches,
-                            )
+                        created_links, created_positions = await self._persist_rule_matches(
+                            rule=rule,
+                            model=model,
+                            matches=matches,
                         )
                         links_created += created_links
                         positions_created += created_positions
@@ -2005,9 +1953,7 @@ class BIMHubService:
 
         target = rule.boq_target or {}
         if not isinstance(target, dict):
-            logger.warning(
-                "Rule %s has non-dict boq_target; skipping persistence", rule.id
-            )
+            logger.warning("Rule %s has non-dict boq_target; skipping persistence", rule.id)
             return 0, 0
 
         # ── Resolve the target Position ───────────────────────────────
@@ -2124,12 +2070,7 @@ class BIMHubService:
         """
         # Find the project's first BOQ (oldest created_at, same as
         # ``BOQRepository.list_for_project`` order inverted).
-        stmt = (
-            select(BOQ)
-            .where(BOQ.project_id == project_id)
-            .order_by(BOQ.created_at.asc())
-            .limit(1)
-        )
+        stmt = select(BOQ).where(BOQ.project_id == project_id).order_by(BOQ.created_at.asc()).limit(1)
         boq = (await self.session.execute(stmt)).scalar_one_or_none()
         if boq is None:
             logger.warning(
@@ -2152,9 +2093,7 @@ class BIMHubService:
         ordinal = f"BIM-{str(rule.id)[:8]}"
 
         # Determine sort_order: after everything else.
-        max_order_stmt = select(func.coalesce(func.max(Position.sort_order), 0)).where(
-            Position.boq_id == boq.id
-        )
+        max_order_stmt = select(func.coalesce(func.max(Position.sort_order), 0)).where(Position.boq_id == boq.id)
         max_order = (await self.session.execute(max_order_stmt)).scalar_one() or 0
 
         # Pull a default unit_rate from the rule's boq_target dict if the
@@ -2187,24 +2126,21 @@ class BIMHubService:
                     parsed = Decimal(candidate)
                 except (InvalidOperation, ValueError):
                     logger.warning(
-                        "Rule %s prefilled a non-numeric unit_rate %r; "
-                        "falling back to 0",
+                        "Rule %s prefilled a non-numeric unit_rate %r; falling back to 0",
                         rule.id,
                         raw_rate,
                     )
                     parsed = Decimal("0")
                 if not parsed.is_finite() or parsed < 0:
                     logger.warning(
-                        "Rule %s prefilled a non-finite/negative "
-                        "unit_rate %r; clamped to 0",
+                        "Rule %s prefilled a non-finite/negative unit_rate %r; clamped to 0",
                         rule.id,
                         raw_rate,
                     )
                     parsed = Decimal("0")
                 elif parsed > _MAX_PREFILL_RATE:
                     logger.warning(
-                        "Rule %s prefilled an implausibly large "
-                        "unit_rate %r; clamped to %s",
+                        "Rule %s prefilled an implausibly large unit_rate %r; clamped to %s",
                         rule.id,
                         raw_rate,
                         _MAX_PREFILL_RATE,
@@ -2253,9 +2189,7 @@ class BIMHubService:
         position_id: uuid.UUID,
     ) -> set[uuid.UUID]:
         """Return the set of bim_element_ids already linked to a position."""
-        stmt = select(BOQElementLink.bim_element_id).where(
-            BOQElementLink.boq_position_id == position_id
-        )
+        stmt = select(BOQElementLink.bim_element_id).where(BOQElementLink.boq_position_id == position_id)
         result = await self.session.execute(stmt)
         return {row[0] for row in result.all()}
 
@@ -2286,9 +2220,7 @@ class BIMHubService:
                 .where(BOQ.project_id == project_id)
             )
         else:
-            stmt = select(
-                BOQElementLink.boq_position_id, BOQElementLink.bim_element_id
-            )
+            stmt = select(BOQElementLink.boq_position_id, BOQElementLink.bim_element_id)
 
         result = await self.session.execute(stmt)
         grouped: dict[uuid.UUID, set[str]] = {}
@@ -2301,11 +2233,7 @@ class BIMHubService:
         # links get their cad_element_ids reset to [] (so stale ids from a
         # previous state are cleared).
         if project_id is not None:
-            all_pos_stmt = (
-                select(Position.id)
-                .join(BOQ, BOQ.id == Position.boq_id)
-                .where(BOQ.project_id == project_id)
-            )
+            all_pos_stmt = select(Position.id).join(BOQ, BOQ.id == Position.boq_id).where(BOQ.project_id == project_id)
             all_pos = (await self.session.execute(all_pos_stmt)).scalars().all()
             for pid in all_pos:
                 grouped.setdefault(pid, set())
@@ -2397,22 +2325,14 @@ class BIMHubService:
         if isinstance(actual, list):
             if isinstance(expected, list):
                 return any(
-                    BIMHubService._property_value_matches(item, exp_item)
-                    for item in actual
-                    for exp_item in expected
+                    BIMHubService._property_value_matches(item, exp_item) for item in actual for exp_item in expected
                 )
             # Scalar expected → does the list contain a matching item?
-            return any(
-                BIMHubService._property_value_matches(item, expected)
-                for item in actual
-            )
+            return any(BIMHubService._property_value_matches(item, expected) for item in actual)
 
         # Dict actual + dict expected: recursive containment
         if isinstance(actual, dict) and isinstance(expected, dict):
-            return all(
-                BIMHubService._property_value_matches(actual.get(k), v)
-                for k, v in expected.items()
-            )
+            return all(BIMHubService._property_value_matches(actual.get(k), v) for k, v in expected.items())
 
         # String values: fnmatch wildcards (existing _rule_matches_element
         # behaviour, kept for backwards compatibility with rules that use
@@ -2436,7 +2356,7 @@ class BIMHubService:
         quantities = element.quantities or {}
 
         if source.startswith("property:"):
-            prop_name = source[len("property:"):]
+            prop_name = source[len("property:") :]
             value = (element.properties or {}).get(prop_name)
         elif source == "count":
             return Decimal("1")
@@ -2472,12 +2392,8 @@ class BIMHubService:
             return existing
 
         # Load all elements for both models
-        old_elements, _ = await self.element_repo.list_for_model(
-            old_model.id, offset=0, limit=50000
-        )
-        new_elements, _ = await self.element_repo.list_for_model(
-            new_model.id, offset=0, limit=50000
-        )
+        old_elements, _ = await self.element_repo.list_for_model(old_model.id, offset=0, limit=50000)
+        new_elements, _ = await self.element_repo.list_for_model(new_model.id, offset=0, limit=50000)
 
         old_by_sid = {e.stable_id: e for e in old_elements}
         new_by_sid = {e.stable_id: e for e in new_elements}
@@ -2499,36 +2415,46 @@ class BIMHubService:
             changes: list[dict[str, Any]] = []
             # Detect what changed across all tracked fields
             if old_e.geometry_hash != new_e.geometry_hash:
-                changes.append({
-                    "field": "geometry_hash",
-                    "old": old_e.geometry_hash,
-                    "new": new_e.geometry_hash,
-                })
+                changes.append(
+                    {
+                        "field": "geometry_hash",
+                        "old": old_e.geometry_hash,
+                        "new": new_e.geometry_hash,
+                    }
+                )
             if old_e.element_type != new_e.element_type:
-                changes.append({
-                    "field": "element_type",
-                    "old": old_e.element_type,
-                    "new": new_e.element_type,
-                })
+                changes.append(
+                    {
+                        "field": "element_type",
+                        "old": old_e.element_type,
+                        "new": new_e.element_type,
+                    }
+                )
             if old_e.quantities != new_e.quantities:
-                changes.append({
-                    "field": "quantities",
-                    "old": old_e.quantities,
-                    "new": new_e.quantities,
-                })
+                changes.append(
+                    {
+                        "field": "quantities",
+                        "old": old_e.quantities,
+                        "new": new_e.quantities,
+                    }
+                )
             if old_e.properties != new_e.properties:
-                changes.append({
-                    "field": "properties",
-                    "old": old_e.properties,
-                    "new": new_e.properties,
-                })
+                changes.append(
+                    {
+                        "field": "properties",
+                        "old": old_e.properties,
+                        "new": new_e.properties,
+                    }
+                )
 
             if changes:
-                modified.append({
-                    "stable_id": sid,
-                    "element_type": new_e.element_type,
-                    "changes": changes,
-                })
+                modified.append(
+                    {
+                        "stable_id": sid,
+                        "element_type": new_e.element_type,
+                        "changes": changes,
+                    }
+                )
             else:
                 unchanged += 1
 
@@ -2696,11 +2622,7 @@ class BIMHubService:
             fields["element_ids"] = [str(eid) for eid in fields["element_ids"]]
             fields["element_count"] = len(fields["element_ids"])
 
-        re_resolve = (
-            "filter_criteria" in fields
-            or "model_id" in fields
-            or "is_dynamic" in fields
-        )
+        re_resolve = "filter_criteria" in fields or "model_id" in fields or "is_dynamic" in fields
 
         for key, value in fields.items():
             setattr(group, key, value)
@@ -2834,10 +2756,6 @@ class BIMHubService:
         if name_contains:
             base = base.where(BIMElement.name.ilike(f"%{name_contains}%"))
 
-        # Detect dialect for JSON-based filters.
-        dialect_name = self.session.bind.dialect.name if self.session.bind else ""
-        is_postgres = dialect_name in ("postgresql", "postgres")
-
         # category — lives inside the JSON ``properties`` column.
         category = criteria.get("category")
         property_filter = criteria.get("property_filter") or {}
@@ -2858,19 +2776,15 @@ class BIMHubService:
         _DYNAMIC_GROUP_CAP = 50_000
         base = base.limit(_DYNAMIC_GROUP_CAP)
 
-        # On Postgres: use @> JSON containment when possible (property_filter
-        # only; category with multiple values still needs Python-side check).
-        if is_postgres and expected_props and not category_values:
-            from sqlalchemy import cast
-            from sqlalchemy.dialects.postgresql import JSONB
-
-            base = base.where(cast(BIMElement.properties, JSONB).contains(expected_props))
-            result = await self.session.execute(base)
-            elements = list(result.scalars().all())
-            return [e.id for e in elements]
-
-        # Fallback: load candidates and filter in Python. This is the path
-        # used on SQLite and whenever we need list-semantics for ``category``.
+        # Load candidates and filter in Python with the shared type-aware
+        # predicate. We deliberately do NOT push property_filter down to a
+        # PostgreSQL ``@>`` JSONB containment query: ``@>`` is exact, type-strict
+        # and case-sensitive, whereas ``_property_value_matches`` is
+        # case-insensitive, supports ``*``/``?`` wildcards and coerces scalar
+        # types (so ``{"count": 42}`` matches a stored ``"42"``). A ``@>``
+        # fast-path therefore returned a DIFFERENT element set on PostgreSQL
+        # than on SQLite for the same group filter. The 50K cap bounds the
+        # in-Python pass, so both backends now resolve groups identically.
         result = await self.session.execute(base)
         elements = list(result.scalars().all())
 
@@ -2885,11 +2799,141 @@ class BIMHubService:
             # rule engine.  Previously this used exact equality which
             # silently failed for multi-valued IFC properties.
             return all(
-                BIMHubService._property_value_matches(props.get(key), value)
-                for key, value in expected_props.items()
+                BIMHubService._property_value_matches(props.get(key), value) for key, value in expected_props.items()
             )
 
         return [e.id for e in elements if _matches(e)]
+
+    async def _scoped_element_ids_for_group(
+        self,
+        group: BIMElementGroup,
+    ) -> list[uuid.UUID] | None:
+        """Return the candidate-element id-list a group's filter runs over.
+
+        Group-scope rule:
+        - If ``group.model_id`` is set, restrict to that single model.
+        - Else, restrict to every model in the group's project.
+
+        Returns ``None`` (treated as "no candidates") when the project has
+        no BIM models at all so the caller can short-circuit to ``[]``.
+        """
+        if group.model_id is not None:
+            stmt = select(BIMElement.id).where(BIMElement.model_id == group.model_id)
+            return list((await self.session.execute(stmt)).scalars().all())
+
+        model_ids_stmt = select(BIMModel.id).where(BIMModel.project_id == group.project_id)
+        model_ids = [row[0] for row in (await self.session.execute(model_ids_stmt)).all()]
+        if not model_ids:
+            return None
+        stmt = select(BIMElement.id).where(BIMElement.model_id.in_(model_ids))
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    # ── Smart Views — property catalog + preview (canonical-format) ──────────
+
+    async def get_smart_view_property_catalog(
+        self,
+        model_id: uuid.UUID,
+    ) -> dict[str, Any]:
+        """Build the Smart View property catalog for a single model.
+
+        Returns the Identity / Geometry / Quantities / Properties grouped
+        view of every queryable field, with sample distinct values and a
+        source-format badge per row.  Caps element scan at 50K (the
+        ``DYNAMIC_GROUP_CAP``) so federated models with hundreds of
+        thousands of rows stay responsive.
+        """
+        from app.modules.bim_hub.smart_views import (
+            _source_format_of,
+            build_property_catalog,
+            catalog_to_dict,
+        )
+
+        model = await self.model_repo.get(model_id)
+        if model is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="BIM model not found",
+            )
+
+        elements, _total = await self.element_repo.list_for_model(
+            model_id,
+            offset=0,
+            limit=50_000,
+        )
+
+        catalog = build_property_catalog(
+            list(elements),
+            model_format=getattr(model, "model_format", None),
+        )
+        return {
+            "model_id": model_id,
+            "source_format": _source_format_of(getattr(model, "model_format", None)),
+            "element_count": len(elements),
+            "entries": [catalog_to_dict(e) for e in catalog],
+        }
+
+    async def preview_smart_view(
+        self,
+        rule_tree: dict[str, Any] | None,
+        legacy_criteria: dict[str, Any] | None,
+        model_id: uuid.UUID | None,
+        project_id: uuid.UUID | None,
+        sample_limit: int = 20,
+    ) -> dict[str, Any]:
+        """Resolve a (possibly unsaved) Smart View predicate to (count, ids).
+
+        Accepts either a new ``rule_tree`` or the legacy ``filter_criteria``
+        shape and runs it through the canonical evaluator.  When neither is
+        supplied the predicate is treated as "match every element in scope".
+        """
+        from app.modules.bim_hub.smart_views import (
+            evaluate as smartview_evaluate,
+        )
+        from app.modules.bim_hub.smart_views import (
+            legacy_criteria_to_tree,
+            validate_rule_tree,
+        )
+
+        if rule_tree is not None:
+            tree = validate_rule_tree(rule_tree)
+        elif legacy_criteria:
+            tree = legacy_criteria_to_tree(legacy_criteria)
+        else:
+            tree = {"op": "AND", "rules": []}
+
+        # Scope: explicit model_id wins; otherwise restrict to project's models.
+        base = select(BIMElement)
+        if model_id is not None:
+            base = base.where(BIMElement.model_id == model_id)
+        elif project_id is not None:
+            mids = await self.session.execute(select(BIMModel.id).where(BIMModel.project_id == project_id))
+            mid_list = [row[0] for row in mids.all()]
+            if not mid_list:
+                return {
+                    "matched_count": 0,
+                    "sample_element_ids": [],
+                    "truncated": False,
+                    "normalised_rule_tree": tree,
+                }
+            base = base.where(BIMElement.model_id.in_(mid_list))
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Either model_id or project_id is required for preview",
+            )
+
+        base = base.limit(50_000)
+        result = await self.session.execute(base)
+        elements = list(result.scalars().all())
+        matched = smartview_evaluate(tree, elements)
+
+        sample = [e.id for e in matched[: max(0, sample_limit)]]
+        return {
+            "matched_count": len(matched),
+            "sample_element_ids": sample,
+            "truncated": len(elements) >= 50_000,
+            "normalised_rule_tree": tree,
+        }
 
     @staticmethod
     def _group_to_response(group: BIMElementGroup) -> BIMElementGroupResponse:
@@ -2927,7 +2971,8 @@ class BIMHubService:
     # ── BIM Federation (v4.0 / Slice 1) ──────────────────────────────────────
 
     async def create_federation(
-        self, payload: FederationCreate,
+        self,
+        payload: FederationCreate,
     ) -> FederationResponse:
         """Persist a new federation header (no members yet)."""
         repo = BIMFederationRepository(self.session)
@@ -2957,12 +3002,15 @@ class BIMHubService:
         """List federations for a project."""
         repo = BIMFederationRepository(self.session)
         rows, total = await repo.list_for_project(
-            project_id, offset=offset, limit=limit,
+            project_id,
+            offset=offset,
+            limit=limit,
         )
         return [self._federation_to_response(f) for f in rows], total
 
     async def get_federation(
-        self, federation_id: uuid.UUID,
+        self,
+        federation_id: uuid.UUID,
     ) -> BIMFederation:
         """Fetch a federation with members or raise 404."""
         repo = BIMFederationRepository(self.session)
@@ -2975,7 +3023,8 @@ class BIMHubService:
         return federation
 
     async def get_federation_full(
-        self, federation_id: uuid.UUID,
+        self,
+        federation_id: uuid.UUID,
     ) -> FederationFullResponse:
         """Get a federation header plus its z-ordered member list."""
         federation = await self.get_federation(federation_id)
@@ -3128,15 +3177,14 @@ class BIMHubService:
             member_count=len(members_sorted),
             created_at=federation.created_at,
             updated_at=federation.updated_at,
-            members=[
-                FederationModelResponse.model_validate(m) for m in members_sorted
-            ],
+            members=[FederationModelResponse.model_validate(m) for m in members_sorted],
         )
 
     # ── Federation Type Tree (v4.0 / Slice 2) ───────────────────────────────
 
     async def aggregate_federation_type_tree(
-        self, federation_id: uuid.UUID,
+        self,
+        federation_id: uuid.UUID,
     ) -> FederationTypeTreeResponse:
         """Compute the federation-flat type tree.
 
@@ -3175,13 +3223,7 @@ class BIMHubService:
         #    of truth for federation context).
         member_model_ids = [m.bim_model_id for m in members]
         model_rows = (
-            (
-                await self.session.execute(
-                    select(BIMModel).where(BIMModel.id.in_(member_model_ids))
-                )
-            )
-            .scalars()
-            .all()
+            (await self.session.execute(select(BIMModel).where(BIMModel.id.in_(member_model_ids)))).scalars().all()
         )
         model_lookup: dict[uuid.UUID, tuple[str, str]] = {}
         for row in model_rows:
@@ -3267,9 +3309,7 @@ class BIMHubService:
         #    break by ifc_class ASC so the order is fully deterministic
         #    (tests + UI snapshots depend on this).
         classes_payload: list[FederationTypeTreeClass] = []
-        for ifc_class in sorted(
-            class_totals.keys(), key=lambda c: (-class_totals[c], c)
-        ):
+        for ifc_class in sorted(class_totals.keys(), key=lambda c: (-class_totals[c], c)):
             per_model = class_per_model.get(ifc_class, {})
             breakdown_rows: list[FederationTypeTreeMember] = []
             # Sort the breakdown by element_count DESC then model_name
@@ -3280,7 +3320,8 @@ class BIMHubService:
             )
             for model_id, count in sorted_pairs:
                 model_name, discipline = model_lookup.get(
-                    model_id, (f"model-{str(model_id)[:8]}", "other"),
+                    model_id,
+                    (f"model-{str(model_id)[:8]}", "other"),
                 )
                 breakdown_rows.append(
                     FederationTypeTreeMember(

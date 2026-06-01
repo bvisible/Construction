@@ -341,6 +341,10 @@ CWICR_V3_CATALOGUES: tuple[CwicrV3Catalogue, ...] = (
         ddc_path="PT___DDC_CWICR/BR_SAOPAULO_workitems_costs_resources_EMBEDDINGS_BGEM3_V3_DDC_CWICR.snapshot",
         size_mb=420,
         available=False,
+        # Brazil's de-facto reference cost base is Caixa/IBGE SINAPI; pin it
+        # so a project that picks the São Paulo catalogue without an explicit
+        # standard still gets the right validation pack at import time.
+        default_classification_standard="sinapi",
     ),
     CwicrV3Catalogue(
         region="AO_LUANDA",
@@ -625,9 +629,7 @@ CWICR_V3_CATALOGUES: tuple[CwicrV3Catalogue, ...] = (
 # the lexical drift (e.g. "vidrio templado" vs "cristal") tolerable; pricing
 # differences are folded in by the FX layer at match time.
 HF_CWICR_DATASET = "DataDrivenConstruction/cwicr-vector-db-bgem3-v3"
-HF_CWICR_BASE_URL = (
-    f"https://huggingface.co/datasets/{HF_CWICR_DATASET}/resolve/main"
-)
+HF_CWICR_BASE_URL = f"https://huggingface.co/datasets/{HF_CWICR_DATASET}/resolve/main"
 
 _HF_PUBLISHED: dict[str, tuple[str, str]] = {
     # internal region id -> (hf_folder, hf_filename_stem)
@@ -708,10 +710,7 @@ def _apply_hf_overrides(
         out.append(
             dataclasses.replace(
                 cat,
-                ddc_path=(
-                    f"{folder}/{stem}"
-                    "_workitems_costs_resources_EMBEDDINGS_BGEM3_V3_DDC_CWICR.snapshot"
-                ),
+                ddc_path=(f"{folder}/{stem}_workitems_costs_resources_EMBEDDINGS_BGEM3_V3_DDC_CWICR.snapshot"),
                 available=True,
                 size_mb=size_mb,
             )

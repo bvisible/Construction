@@ -345,10 +345,13 @@ export function DxfViewer({
     const canvas = canvasRef.current;
     if (!container || !canvas) return;
 
-    const syncSize = () => {
+    let retryRaf = 0;
+
+    // Returns true once the container had a non-zero size and was synced.
+    const syncSize = (): boolean => {
       const dpr = window.devicePixelRatio || 1;
       const rect = container.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return;
+      if (rect.width === 0 || rect.height === 0) return false;
       canvas.width = rect.width * dpr;
       canvas.height = rect.height * dpr;
       canvas.style.width = `${rect.width}px`;
@@ -361,13 +364,31 @@ export function DxfViewer({
         fittedRef.current = true;
       }
       forceRender((n) => n + 1);
+      return true;
     };
 
-    const ro = new ResizeObserver(syncSize);
+    const ro = new ResizeObserver(() => syncSize());
     ro.observe(container);
-    // Fire once immediately so the canvas gets sized before the first paint
-    syncSize();
-    return () => ro.disconnect();
+    // Fire once immediately so the canvas gets sized before the first paint.
+    // When the container is still 0×0 at mount (lazy-mounted tab, layout not
+    // yet settled) the early-return above would skip the initial
+    // fit-to-extents, leaving the viewer blank until some unrelated resize
+    // happens to fire the observer. Retry on the next animation frames until
+    // the first non-zero size lands; the ResizeObserver remains the
+    // long-term safety net for genuinely-later size changes.
+    if (!syncSize()) {
+      let attempts = 0;
+      const retry = (): void => {
+        if (syncSize() || attempts >= 60) return; // give up after ~1s of frames
+        attempts += 1;
+        retryRaf = requestAnimationFrame(retry);
+      };
+      retryRaf = requestAnimationFrame(retry);
+    }
+    return () => {
+      ro.disconnect();
+      if (retryRaf) cancelAnimationFrame(retryRaf);
+    };
   }, []);
 
   // Render loop
@@ -1129,6 +1150,7 @@ function TextPinPopup({
           <button
             type="button"
             onClick={onCancel}
+            aria-label={t('common.cancel', { defaultValue: 'Cancel' })}
             className="flex h-5 w-5 items-center justify-center rounded-md
                        text-white/40 hover:text-white/80 hover:bg-white/10 transition-colors"
           >

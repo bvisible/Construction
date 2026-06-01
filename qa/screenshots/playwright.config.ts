@@ -17,7 +17,7 @@ import { defineConfig, devices } from '@playwright/test';
  *                      falls back to 5173 if 5180 is unreachable —
  *                      see full-app.spec.ts).
  *   QA_API_URL       — backend URL (default http://localhost:8000)
- *   QA_DEMO_EMAIL    — demo account (default demo@openestimator.io)
+ *   QA_DEMO_EMAIL    — demo account (default demo@openconstructionerp.com)
  *   QA_PROJECT_ID    — demo project id (defaults to first project
  *                      returned by /api/v1/projects/).
  *   QA_BIM_MODEL_ID  — demo BIM model id (defaults to first model

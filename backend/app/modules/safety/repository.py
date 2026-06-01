@@ -8,6 +8,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.safety.models import SafetyIncident, SafetyObservation
 
 
+def _next_suffix(numbers: list[str]) -> int:
+    """Return MAX(trailing integer) + 1 over a list of ``PREFIX-NNN`` codes.
+
+    Robust to deletions (the highest issued suffix is never reused) and to
+    rows whose number doesn't match the expected ``PREFIX-<int>`` shape
+    (those are simply ignored). Returns 1 when nothing parseable exists.
+    """
+    highest = 0
+    for number in numbers:
+        if not number:
+            continue
+        suffix = number.rsplit("-", 1)[-1]
+        if suffix.isdigit():
+            highest = max(highest, int(suffix))
+    return highest + 1
+
+
 class IncidentRepository:
     """‌⁠‍Data access for SafetyIncident models."""
 
@@ -40,13 +57,15 @@ class IncidentRepository:
         return list(result.scalars().all()), total
 
     async def next_incident_number(self, project_id: uuid.UUID) -> str:
-        stmt = (
-            select(func.count())
-            .select_from(SafetyIncident)
-            .where(SafetyIncident.project_id == project_id)
-        )
-        count = (await self.session.execute(stmt)).scalar_one()
-        return f"INC-{count + 1:03d}"
+        # Derive the next number from MAX(numeric suffix)+1 rather than
+        # COUNT(*)+1: a COUNT drops after any delete, so the next create
+        # would re-issue an already-used INC- number. Scanning the existing
+        # numbers for this project and taking the highest suffix keeps the
+        # sequence monotonic across deletions. Numbers are bounded per
+        # project, so the column-only fetch is cheap.
+        stmt = select(SafetyIncident.incident_number).where(SafetyIncident.project_id == project_id)
+        numbers = (await self.session.execute(stmt)).scalars().all()
+        return f"INC-{_next_suffix(numbers):03d}"
 
     async def create(self, incident: SafetyIncident) -> SafetyIncident:
         self.session.add(incident)
@@ -54,11 +73,7 @@ class IncidentRepository:
         return incident
 
     async def update_fields(self, incident_id: uuid.UUID, **fields: object) -> None:
-        stmt = (
-            update(SafetyIncident)
-            .where(SafetyIncident.id == incident_id)
-            .values(**fields)
-        )
+        stmt = update(SafetyIncident).where(SafetyIncident.id == incident_id).values(**fields)
         await self.session.execute(stmt)
         await self.session.flush()
         self.session.expire_all()
@@ -88,9 +103,7 @@ class ObservationRepository:
         observation_type: str | None = None,
         status: str | None = None,
     ) -> tuple[list[SafetyObservation], int]:
-        base = select(SafetyObservation).where(
-            SafetyObservation.project_id == project_id
-        )
+        base = select(SafetyObservation).where(SafetyObservation.project_id == project_id)
         if observation_type is not None:
             base = base.where(SafetyObservation.observation_type == observation_type)
         if status is not None:
@@ -104,13 +117,11 @@ class ObservationRepository:
         return list(result.scalars().all()), total
 
     async def next_observation_number(self, project_id: uuid.UUID) -> str:
-        stmt = (
-            select(func.count())
-            .select_from(SafetyObservation)
-            .where(SafetyObservation.project_id == project_id)
-        )
-        count = (await self.session.execute(stmt)).scalar_one()
-        return f"OBS-{count + 1:03d}"
+        # MAX(numeric suffix)+1 — see next_incident_number for the rationale
+        # (COUNT(*)+1 reuses numbers after a delete).
+        stmt = select(SafetyObservation.observation_number).where(SafetyObservation.project_id == project_id)
+        numbers = (await self.session.execute(stmt)).scalars().all()
+        return f"OBS-{_next_suffix(numbers):03d}"
 
     async def create(self, observation: SafetyObservation) -> SafetyObservation:
         self.session.add(observation)
@@ -118,11 +129,7 @@ class ObservationRepository:
         return observation
 
     async def update_fields(self, observation_id: uuid.UUID, **fields: object) -> None:
-        stmt = (
-            update(SafetyObservation)
-            .where(SafetyObservation.id == observation_id)
-            .values(**fields)
-        )
+        stmt = update(SafetyObservation).where(SafetyObservation.id == observation_id).values(**fields)
         await self.session.execute(stmt)
         await self.session.flush()
         self.session.expire_all()

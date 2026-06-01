@@ -58,7 +58,6 @@ paths-ignore:
   - "backend/alembic/versions/**"
 
   # Worktrees & local-only scaffolding
-  - ".claude/**"
   - "modules/oe-module-template/**"
 
   # Generated / vendored CWICR data dumps

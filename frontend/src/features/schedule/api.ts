@@ -127,6 +127,10 @@ export const scheduleApi = {
     apiPatch<Activity>(`/v1/schedule/activities/${activityId}`, data),
   deleteActivity: (activityId: string) =>
     apiDelete(`/v1/schedule/activities/${activityId}`),
+  clearActivities: (scheduleId: string) =>
+    apiDelete<{ schedule_id: string; deleted: number }>(
+      `/v1/schedule/schedules/${scheduleId}/activities/`,
+    ),
   linkPosition: (activityId: string, positionId: string) =>
     apiPost(`/v1/schedule/activities/${activityId}/link-position/`, { boq_position_id: positionId }),
   updateProgress: (activityId: string, progressPct: number) =>
@@ -144,7 +148,9 @@ export const scheduleApi = {
     apiGet<RiskAnalysisResponse>(`/v1/schedule/schedules/${scheduleId}/risk-analysis/`),
 
   // Work Orders
-  listWorkOrders: (params: { schedule_id?: string; activity_id?: string }) =>
+  // The backend /work-orders/ endpoint requires schedule_id and has no
+  // activity_id filter, so schedule_id is mandatory here to avoid a 422.
+  listWorkOrders: (params: { schedule_id: string }) =>
     apiGet<WorkOrder[] | { items: WorkOrder[] }>(`/v1/schedule/work-orders/?${new URLSearchParams(params as Record<string, string>)}`).then(unwrapList),
   createWorkOrder: (activityId: string, data: Partial<WorkOrder>) =>
     apiPost<WorkOrder>(`/v1/schedule/activities/${activityId}/work-orders/`, data),

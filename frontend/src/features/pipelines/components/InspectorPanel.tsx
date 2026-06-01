@@ -29,6 +29,12 @@ export interface InspectorPanelProps {
   nodeTypes: NodeTypeDef[];
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  /**
+   * Plain-language summary of the whole pipeline, produced by the page's
+   * "Explain this pipeline" action. When set, it replaces the placeholder
+   * hint in the pipeline-mode summary slot.
+   */
+  summary?: string | null;
   testId?: string;
 }
 
@@ -79,6 +85,7 @@ export function InspectorPanel({
   nodeTypes,
   collapsed,
   onToggleCollapsed,
+  summary,
   testId,
 }: InspectorPanelProps) {
   const { t } = useTranslation();
@@ -368,11 +375,22 @@ export function InspectorPanel({
                 defaultValue: 'Published (can be triggered)',
               })}
             </label>
-            <div className="rounded-md border border-border-light bg-surface-primary px-3 py-2.5 text-xs text-content-secondary">
-              {t('pipeline.inspector.summary_stub', {
-                defaultValue:
-                  'A plain-language summary of what this pipeline does will appear here. Use "Explain this pipeline" for the full story.',
-              })}
+            <div
+              data-testid="pipeline-inspector-summary"
+              className="space-y-1.5 rounded-md border border-border-light bg-surface-primary px-3 py-2.5 text-xs text-content-secondary"
+            >
+              {summary ? (
+                summary.split('\n').map((line, i) => (
+                  <p key={i} className={line ? '' : 'h-1'}>
+                    {line}
+                  </p>
+                ))
+              ) : (
+                t('pipeline.inspector.summary_stub', {
+                  defaultValue:
+                    'A plain-language summary of what this pipeline does will appear here. Use "Explain this pipeline" for the full story.',
+                })
+              )}
             </div>
           </div>
         )}

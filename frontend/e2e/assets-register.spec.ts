@@ -14,7 +14,7 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 
-const DEMO = { email: 'demo@openestimator.io', password: 'DemoPass1234!' };
+const DEMO = { email: 'demo@openconstructionerp.com', password: 'DemoPass1234!' };
 const API = 'http://localhost:8000/api/v1';
 
 let REAL_PROJECT_ID = '00000000-0000-0000-0000-000000000000';
@@ -67,7 +67,7 @@ async function injectAuth(page: Page): Promise<void> {
         localStorage.setItem('oe_access_token', args.access);
         localStorage.setItem('oe_refresh_token', args.refresh);
         localStorage.setItem('oe_remember', '1');
-        localStorage.setItem('oe_user_email', 'demo@openestimator.io');
+        localStorage.setItem('oe_user_email', 'demo@openconstructionerp.com');
         localStorage.setItem('oe_onboarding_completed', 'true');
         localStorage.setItem('oe_welcome_dismissed', 'true');
         localStorage.setItem('oe_tour_completed', 'true');

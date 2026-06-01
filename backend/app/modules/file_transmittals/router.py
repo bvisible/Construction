@@ -51,32 +51,19 @@ def _get_service(session: SessionDep) -> TransmittalService:
     return TransmittalService(session)
 
 
-async def _require_project_access(
-    session: AsyncSession, project_id: uuid.UUID, user_id: str
-) -> None:
-    """Verify the caller owns or is admin on ``project_id``."""
-    from app.modules.projects.repository import ProjectRepository
-    from app.modules.users.repository import UserRepository
+async def _require_project_access(session: AsyncSession, project_id: uuid.UUID, user_id: str) -> None:
+    """Verify the caller may access ``project_id`` (owner, admin, or team member).
 
-    project = await ProjectRepository(session).get_by_id(project_id)
-    if project is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Project {project_id} not found",
-        )
-    try:
-        user = await UserRepository(session).get_by_id(uuid.UUID(str(user_id)))
-        if user is not None and getattr(user, "role", "") == "admin":
-            return
-    except Exception:  # noqa: BLE001
-        logger.exception(
-            "Admin-role lookup failed during transmittal access check"
-        )
-    if str(getattr(project, "owner_id", "")) != str(user_id):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied: you do not own this project",
-        )
+    RBAC fix: the previous owner-only check excluded legitimate project team
+    members from every transmittals endpoint. Delegate to the canonical
+    team-inclusive policy :func:`app.dependencies.verify_project_access`
+    (owner + global admin + team member), which raises HTTPException(404) on
+    denial to avoid leaking project existence (IDOR defence).
+    """
+    # Closes owner-only RBAC gap: team members were denied all transmittal access.
+    from app.dependencies import verify_project_access
+
+    await verify_project_access(project_id, user_id, session)
 
 
 def _to_list_item(transmittal) -> TransmittalListItem:  # noqa: ANN001
@@ -92,9 +79,7 @@ def _to_list_item(transmittal) -> TransmittalListItem:  # noqa: ANN001
         status=transmittal.status,
         item_count=len(transmittal.items),
         recipient_count=len(transmittal.recipients),
-        acknowledged_count=sum(
-            1 for r in transmittal.recipients if r.acknowledged_at is not None
-        ),
+        acknowledged_count=sum(1 for r in transmittal.recipients if r.acknowledged_at is not None),
         created_at=transmittal.created_at,
         updated_at=transmittal.updated_at,
     )
@@ -344,10 +329,7 @@ async def download_cover(
     await _require_project_access(session, transmittal.project_id, user_id)
     data, media_type = await service.read_cover(transmittal_id)
     ext = "pdf" if media_type == "application/pdf" else "txt"
-    safe_number = "".join(
-        c if c.isalnum() or c in ("-", "_") else "_"
-        for c in (transmittal.number or "transmittal")
-    )
+    safe_number = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in (transmittal.number or "transmittal"))
     filename = f"transmittal_{safe_number}.{ext}"
     return Response(
         content=data,

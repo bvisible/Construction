@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends
 from app.dependencies import get_current_user_id
 from app.modules.latam_pack.config import PACK_CONFIG
 
-router = APIRouter(dependencies=[Depends(get_current_user_id)])
+router = APIRouter(dependencies=[Depends(get_current_user_id)], tags=["latam_pack"])
 logger = logging.getLogger(__name__)
 
 

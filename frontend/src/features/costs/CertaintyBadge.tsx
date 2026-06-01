@@ -2,11 +2,16 @@
 // Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 //
 // Renders a green / yellow / red dot next to a cost item to communicate
-// rate certainty.  Backed by ``GET /v1/costs/{id}/certainty/`` —
-// frequency + recency of recorded usage drives the band.  Lazy by
-// design: a hover tooltip explains the rule, and the component caches
-// per-id via React Query so a grid of 50 rows costs 50 lookups once
-// and zero on re-render.
+// rate certainty.  Two modes:
+//
+//  * Controlled (preferred for lists) — the parent fetches every visible
+//    band once via ``POST /v1/costs/certainty/batch`` and passes the
+//    resolved ``band`` down as a prop. This avoids the per-row N+1 the
+//    list view used to fire (one ``GET /v1/costs/{id}/certainty`` per
+//    visible row, on every page).
+//  * Self-fetching (single, isolated badges) — when no ``band`` prop is
+//    given, the component falls back to ``GET /v1/costs/{id}/certainty/``
+//    and caches per-id via React Query.
 
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
@@ -16,6 +21,13 @@ import { fetchCertainty, type CertaintyBadge as CertaintyBadgeData } from './api
 
 interface CertaintyBadgeProps {
   costItemId: string;
+  /** Pre-resolved badge data, supplied by a parent that batch-fetched
+   *  every visible row in one request. When present, the component
+   *  renders this directly and skips its own HTTP fetch entirely. A
+   *  ``null`` value means "the parent looked it up and there is no
+   *  badge" (render nothing); ``undefined`` means "not batched — fall
+   *  back to self-fetch". */
+  band?: CertaintyBadgeData | null;
   /** Render a "..." placeholder while the request is in-flight.  Set to
    *  false in dense table cells where a spinner would jiggle the layout. */
   showLoadingPlaceholder?: boolean;
@@ -63,12 +75,17 @@ function formatAge(ageDays: number, t: ReturnType<typeof useTranslation>['t']): 
 
 export function CertaintyBadge({
   costItemId,
+  band,
   showLoadingPlaceholder = false,
   className,
 }: CertaintyBadgeProps) {
   const { t } = useTranslation();
 
-  const { data, isLoading, isError } = useQuery<CertaintyBadgeData | null>({
+  // Controlled mode: a parent batch-fetched the band. Skip the self-fetch
+  // (``enabled: false``) so a grid of N rows costs zero per-row requests.
+  const isControlled = band !== undefined;
+
+  const { data: fetched, isLoading, isError } = useQuery<CertaintyBadgeData | null>({
     queryKey: ['costs', 'certainty', costItemId],
     queryFn: () => fetchCertainty(costItemId),
     // Certainty changes only when somebody applies the rate elsewhere —
@@ -76,25 +93,29 @@ export function CertaintyBadge({
     staleTime: 60_000,
     // Single retry: the badge is decorative, not a blocker.
     retry: 1,
-    enabled: Boolean(costItemId),
+    enabled: Boolean(costItemId) && !isControlled,
   });
 
-  if (isError) {
-    // Decorative — hide on error.
-    return null;
-  }
+  const data = isControlled ? band : fetched;
 
-  if (isLoading) {
-    if (!showLoadingPlaceholder) return null;
-    return (
-      <span
-        className={clsx(
-          'inline-flex h-2 w-2 shrink-0 rounded-full bg-content-tertiary/20 animate-pulse',
-          className,
-        )}
-        aria-label={t('costs.certainty.loading', { defaultValue: 'Loading certainty…' })}
-      />
-    );
+  if (!isControlled) {
+    if (isError) {
+      // Decorative — hide on error.
+      return null;
+    }
+
+    if (isLoading) {
+      if (!showLoadingPlaceholder) return null;
+      return (
+        <span
+          className={clsx(
+            'inline-flex h-2 w-2 shrink-0 rounded-full bg-content-tertiary/20 animate-pulse',
+            className,
+          )}
+          aria-label={t('costs.certainty.loading', { defaultValue: 'Loading certainty…' })}
+        />
+      );
+    }
   }
 
   if (!data) return null;

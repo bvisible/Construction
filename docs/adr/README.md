@@ -13,6 +13,9 @@ architectural choices. Each file answers three questions:
 | ID | Status | Title | Date |
 |---|---|---|---|
 | [001](001-snapshot-storage-model.md) | Accepted | Snapshot storage model (SQL meta + Parquet data + DuckDB queries) | 2026-04-23 |
+| [002](002-no-ifcopenshell-ddc-canonical-only.md) | Accepted | No IfcOpenShell — DDC canonical format is the single source of truth | 2026-04-25 |
+| [003](003-vector-match-service.md) | Accepted | Vector match service | — |
+| [2026-05-28](2026-05-28-partner-pack-architecture.md) | Accepted | Partner-pack architecture (Shape A, single-tenant, entry-points) | 2026-05-28 |
 
 ## Writing a new ADR
 

@@ -99,6 +99,16 @@ function makeCesiumStub() {
         fromCssColorString: vi.fn((css: string) => css),
       },
       EllipsoidTerrainProvider: vi.fn(),
+      // OSM base imagery — viewer init wires
+      // ``baseLayer: new ImageryLayer(new UrlTemplateImageryProvider({...}))``
+      // so both must be present on the mock or the stubbed Viewer constructor
+      // never runs (vi.doMock throws on unknown property access).
+      ImageryLayer: vi.fn(),
+      UrlTemplateImageryProvider: vi.fn(),
+      // Cesium >= 1.107 keys "default Ion token" detection off
+      // ``Ion.defaultAccessToken``; we set a sentinel string at boot to
+      // silence the watermark. Stub it so the assignment is a no-op.
+      Ion: { defaultAccessToken: '' },
       Cesium3DTileset: { fromUrl },
       ScreenSpaceEventHandler,
       ScreenSpaceEventType: { MOUSE_MOVE: 15 },

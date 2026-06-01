@@ -17,9 +17,10 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies import CurrentUserId, SessionDep, verify_project_access
+from app.core.permissions import Role, permission_registry
+from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.formwork.models import (
     FormworkAssignment,
     FormworkScheduleLine,
@@ -38,7 +39,25 @@ from app.modules.formwork.schemas import (
 )
 from app.modules.formwork.service import FormworkService
 
-router = APIRouter()
+router = APIRouter(tags=["formwork"])
+
+
+# Register the catalogue-management permission at import time. The module
+# loader imports this router during ``load_all`` (after
+# ``register_core_permissions``), and the registry is never cleared
+# afterwards, so this is the formwork equivalent of the
+# ``register_*_permissions`` hook every other module ships. The catalogue is
+# tenant-wide/shared and mutating a system re-prices every project's
+# formwork assignments (FormworkService.create_assignment / update_assignment
+# recompute ``computed_total`` from ``system.unit_rate``), so writes are
+# gated at MANAGER level rather than left open to every authenticated viewer.
+permission_registry.register_module_permissions(
+    "formwork",
+    {
+        "formwork.read": Role.VIEWER,
+        "formwork.manage_catalogue": Role.MANAGER,
+    },
+)
 
 
 def _system_to_response(item: FormworkSystem) -> FormworkSystemResponse:
@@ -68,18 +87,22 @@ async def _load_system_or_404(session, system_id: uuid.UUID) -> FormworkSystem:
 
 
 async def _load_assignment_or_404(
-    session, assignment_id: uuid.UUID,
+    session,
+    assignment_id: uuid.UUID,
 ) -> FormworkAssignment:
     obj = await session.get(FormworkAssignment, assignment_id)
     if obj is None:
         raise HTTPException(
-            status_code=404, detail="Formwork assignment not found",
+            status_code=404,
+            detail="Formwork assignment not found",
         )
     return obj
 
 
 async def _verify_assignment_access(
-    session, assignment_id: uuid.UUID, user_id: str,
+    session,
+    assignment_id: uuid.UUID,
+    user_id: str,
 ) -> FormworkAssignment:
     obj = await _load_assignment_or_404(session, assignment_id)
     await verify_project_access(obj.project_id, user_id, session)
@@ -120,6 +143,7 @@ async def list_systems(
     "/systems/",
     response_model=FormworkSystemResponse,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("formwork.manage_catalogue"))],
 )
 async def create_system(
     data: FormworkSystemCreate,
@@ -141,7 +165,11 @@ async def get_system(
     return _system_to_response(obj)
 
 
-@router.patch("/systems/{system_id}", response_model=FormworkSystemResponse)
+@router.patch(
+    "/systems/{system_id}",
+    response_model=FormworkSystemResponse,
+    dependencies=[Depends(RequirePermission("formwork.manage_catalogue"))],
+)
 async def update_system(
     system_id: uuid.UUID,
     data: FormworkSystemUpdate,
@@ -156,7 +184,9 @@ async def update_system(
 
 
 @router.delete(
-    "/systems/{system_id}", status_code=status.HTTP_204_NO_CONTENT,
+    "/systems/{system_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(RequirePermission("formwork.manage_catalogue"))],
 )
 async def delete_system(
     system_id: uuid.UUID,
@@ -174,6 +204,7 @@ async def delete_system(
     "/systems/seed-defaults",
     response_model=FormworkSystemSeedResult,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("formwork.manage_catalogue"))],
 )
 async def seed_default_systems(
     session: SessionDep,
@@ -190,7 +221,8 @@ async def seed_default_systems(
 
 
 @router.get(
-    "/assignments/", response_model=list[FormworkAssignmentResponse],
+    "/assignments/",
+    response_model=list[FormworkAssignmentResponse],
 )
 async def list_assignments(
     session: SessionDep,
@@ -202,7 +234,9 @@ async def list_assignments(
     await verify_project_access(project_id, user_id, session)
     service = FormworkService(session)
     items = await service.assignment_repo.list_for_project(
-        project_id, offset=offset, limit=limit,
+        project_id,
+        offset=offset,
+        limit=limit,
     )
     return [_assignment_to_response(it) for it in items]
 
@@ -225,7 +259,8 @@ async def create_assignment(
         # Same IDOR rationale as ``/systems/{id}`` — a typo'd system
         # UUID is a 404, never 422.
         raise HTTPException(
-            status_code=404, detail="Formwork system not found",
+            status_code=404,
+            detail="Formwork system not found",
         ) from exc
     return _assignment_to_response(obj)
 
@@ -259,11 +294,13 @@ async def update_assignment(
         obj = await service.update_assignment(assignment_id, data)
     except LookupError as exc:
         raise HTTPException(
-            status_code=404, detail="Formwork system not found",
+            status_code=404,
+            detail="Formwork system not found",
         ) from exc
     if obj is None:  # defensive — load_or_404 already proved existence
         raise HTTPException(
-            status_code=404, detail="Formwork assignment not found",
+            status_code=404,
+            detail="Formwork assignment not found",
         )
     return _assignment_to_response(obj)
 
@@ -312,7 +349,9 @@ async def add_schedule_line(
     user_id: CurrentUserId,
 ) -> FormworkScheduleLineResponse:
     assignment = await _verify_assignment_access(
-        session, assignment_id, user_id,
+        session,
+        assignment_id,
+        user_id,
     )
     service = FormworkService(session)
     obj = await service.add_schedule_line(assignment, data)
@@ -320,7 +359,8 @@ async def add_schedule_line(
 
 
 @router.delete(
-    "/schedule-lines/{line_id}", status_code=status.HTTP_204_NO_CONTENT,
+    "/schedule-lines/{line_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
 )
 async def delete_schedule_line(
     line_id: uuid.UUID,
@@ -331,13 +371,15 @@ async def delete_schedule_line(
     if obj is None:
         # IDOR: probing /schedule-lines/<random-uuid> never leaks existence.
         raise HTTPException(
-            status_code=404, detail="Formwork schedule line not found",
+            status_code=404,
+            detail="Formwork schedule line not found",
         )
     # Reuse the assignment's project for the access check.
     parent = await session.get(FormworkAssignment, obj.assignment_id)
     if parent is None:
         raise HTTPException(
-            status_code=404, detail="Formwork schedule line not found",
+            status_code=404,
+            detail="Formwork schedule line not found",
         )
     await verify_project_access(parent.project_id, user_id, session)
     service = FormworkService(session)

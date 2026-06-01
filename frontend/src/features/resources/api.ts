@@ -142,6 +142,18 @@ export interface BoardConflict {
   conflicts: ConflictDetail[];
 }
 
+export interface BoardEntry {
+  resource: Resource;
+  assignments: Assignment[];
+}
+
+export interface BoardResponse {
+  period_start: string;
+  period_end: string;
+  project_id?: string | null;
+  entries: BoardEntry[];
+}
+
 export interface UtilizationResponse {
   resource_id: string;
   period_start: string;
@@ -368,6 +380,18 @@ export function listWindows(
 }
 
 /* ── Board / conflicts ──────────────────────────────────────────────────── */
+
+export function getBoard(params: {
+  start: string;
+  end: string;
+  project_id?: string;
+}): Promise<BoardResponse> {
+  const qs = new URLSearchParams();
+  qs.set('start', params.start);
+  qs.set('end', params.end);
+  if (params.project_id) qs.set('project_id', params.project_id);
+  return apiGet<BoardResponse>(`/v1/resources/board/?${qs.toString()}`);
+}
 
 export function listBoardConflicts(params: {
   start: string;

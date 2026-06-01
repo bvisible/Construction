@@ -16,7 +16,6 @@
 .gitignore
 .gitattributes
 .github
-.claude
 .playwright-mcp
 .vscode
 .idea

@@ -44,12 +44,8 @@ _INSTANCE_ID = str(_instance_uuid.uuid4())
 # Build-pepper. Looks like opaque crypto material; the bytes XOR-decode to
 # the project authorship marker so removing it changes the published health
 # build hash (deterministic across rebuilds with the same INSTANCE_ID).
-_BUILD_PEPPER = bytes(b ^ 0x55 for b in (
-    b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
-))
-_BUILD_HASH = _hashlib.sha256(
-    _BUILD_PEPPER + f"DDC-CWICR-OE-{_INSTANCE_ID}".encode()
-).hexdigest()[:16]
+_BUILD_PEPPER = bytes(b ^ 0x55 for b in (b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"))
+_BUILD_HASH = _hashlib.sha256(_BUILD_PEPPER + f"DDC-CWICR-OE-{_INSTANCE_ID}".encode()).hexdigest()[:16]
 
 from datetime import UTC
 from pathlib import Path
@@ -63,6 +59,9 @@ from app.core.module_loader import module_loader
 from app.dependencies import RequireRole, get_current_user_id
 
 logger = logging.getLogger(__name__)
+
+
+from app.core.sql_json import json_path_text
 
 
 def configure_logging(settings: Settings) -> None:
@@ -242,9 +241,7 @@ async def _auto_backfill_vector_collections() -> None:
             try:
                 async with async_session_factory() as session:
                     # Step 1: cheap COUNT(*) — never materialises rows.
-                    live_total = (
-                        await session.execute(select(func.count()).select_from(model))
-                    ).scalar_one() or 0
+                    live_total = (await session.execute(select(func.count()).select_from(model))).scalar_one() or 0
 
                     if not live_total:
                         return
@@ -261,8 +258,7 @@ async def _auto_backfill_vector_collections() -> None:
                     if cap > 0 and live_total > cap:
                         limit_to = cap
                         logger.info(
-                            "Backfill %s: %d live rows exceeds cap (%d); "
-                            "indexing first %d",
+                            "Backfill %s: %d live rows exceeds cap (%d); indexing first %d",
                             label,
                             live_total,
                             cap,
@@ -386,17 +382,18 @@ async def _auto_backfill_vector_collections() -> None:
             )
             from app.modules.costs.models import CostItem as _CostItem
 
-            force_backfill = _os.environ.get(
-                "OE_COST_VECTOR_FORCE_BACKFILL", ""
-            ).strip() in ("1", "true", "True", "yes")
+            force_backfill = _os.environ.get("OE_COST_VECTOR_FORCE_BACKFILL", "").strip() in (
+                "1",
+                "true",
+                "True",
+                "yes",
+            )
 
             indexed_count = await _cost_vec.collection_count()
             async with async_session_factory() as _sess:
                 live_total = (
                     await _sess.execute(
-                        select(func.count())
-                        .select_from(_CostItem)
-                        .where(_CostItem.is_active.is_(True))
+                        select(func.count()).select_from(_CostItem).where(_CostItem.is_active.is_(True))
                     )
                 ).scalar_one() or 0
 
@@ -421,8 +418,7 @@ async def _auto_backfill_vector_collections() -> None:
                     )
                 indexed = await _cost_reindex_active()
                 logger.info(
-                    "Backfill Cost catalog: indexed=%d (live=%d, was=%d, "
-                    "force=%s)",
+                    "Backfill Cost catalog: indexed=%d (live=%d, was=%d, force=%s)",
                     indexed,
                     live_total,
                     indexed_count,
@@ -531,9 +527,9 @@ async def _seed_demo_account() -> None:
 
     Idempotent — safe to call on every startup. Creates:
 
-    * demo@openestimator.io        (role=admin — full walkthrough)
-    * estimator@openestimator.io   (role=estimator)
-    * manager@openestimator.io     (role=manager)
+    * demo@openconstructionerp.com        (role=admin — full walkthrough)
+    * estimator@openconstructionerp.com   (role=estimator)
+    * manager@openconstructionerp.com     (role=manager)
 
     Each password is read from the environment if set
     (``DEMO_USER_PASSWORD``, ``DEMO_ESTIMATOR_PASSWORD``,
@@ -559,19 +555,19 @@ async def _seed_demo_account() -> None:
     # Email → env-var-name mapping. Order matters for stable banner output.
     demo_account_specs: list[dict[str, str]] = [
         {
-            "email": "demo@openestimator.io",
+            "email": "demo@openconstructionerp.com",
             "env_var": "DEMO_USER_PASSWORD",
             "full_name": "Demo User",
             "role": "admin",
         },
         {
-            "email": "estimator@openestimator.io",
+            "email": "estimator@openconstructionerp.com",
             "env_var": "DEMO_ESTIMATOR_PASSWORD",
             "full_name": "Anna Musterfrau",
             "role": "editor",
         },
         {
-            "email": "manager@openestimator.io",
+            "email": "manager@openconstructionerp.com",
             "env_var": "DEMO_MANAGER_PASSWORD",
             "full_name": "Thomas Müller",
             "role": "manager",
@@ -587,11 +583,9 @@ async def _seed_demo_account() -> None:
         async with async_session_factory() as session:
             demo: User | None = None
             for acct in demo_account_specs:
-                exists = (
-                    await session.execute(select(User).where(User.email == acct["email"]))
-                ).scalar_one_or_none()
+                exists = (await session.execute(select(User).where(User.email == acct["email"]))).scalar_one_or_none()
                 if exists is not None:
-                    if acct["email"] == "demo@openestimator.io":
+                    if acct["email"] == "demo@openconstructionerp.com":
                         demo = exists
                     # If operator set the env-var explicitly and the stored
                     # hash no longer matches that password, sync the hash so
@@ -618,7 +612,7 @@ async def _seed_demo_account() -> None:
                 )
                 session.add(user)
                 await session.flush()
-                if acct["email"] == "demo@openestimator.io":
+                if acct["email"] == "demo@openconstructionerp.com":
                     demo = user
                 logger.info(
                     "Demo user created: %s (password source: %s)",
@@ -641,15 +635,11 @@ async def _seed_demo_account() -> None:
                 # Email -> env-var-name lookup so each per-account banner
                 # can name the exact variable that suppresses random
                 # generation for that account.
-                env_var_for_email = {
-                    spec["email"]: spec["env_var"] for spec in demo_account_specs
-                }
+                env_var_for_email = {spec["email"]: spec["env_var"] for spec in demo_account_specs}
                 for email, pw in generated_creds.items():
                     env_var = env_var_for_email.get(email, "DEMO_USER_PASSWORD")
                     logger.warning("[seed] Demo user created: %s / %s", email, pw)
-                    logger.warning(
-                        "[seed] Pre-set %s env to skip random generation", env_var
-                    )
+                    logger.warning("[seed] Pre-set %s env to skip random generation", env_var)
                 logger.warning(
                     "[seed] %d demo credential(s) also saved to %s",
                     len(generated_creds),
@@ -658,23 +648,17 @@ async def _seed_demo_account() -> None:
 
             # 2. Capture the demo user ids while the session is open.
             estimator_user = (
-                await session.execute(
-                    select(User).where(User.email == "estimator@openestimator.io")
-                )
+                await session.execute(select(User).where(User.email == "estimator@openconstructionerp.com"))
             ).scalar_one_or_none()
             manager_user = (
-                await session.execute(
-                    select(User).where(User.email == "manager@openestimator.io")
-                )
+                await session.execute(select(User).where(User.email == "manager@openconstructionerp.com"))
             ).scalar_one_or_none()
             demo_user_id = str(demo.id)
             estimator_user_id = str(estimator_user.id) if estimator_user else ""
             manager_user_id = str(manager_user.id) if manager_user else ""
 
             project_count = (
-                await session.execute(
-                    select(func.count()).select_from(Project).where(Project.owner_id == demo.id)
-                )
+                await session.execute(select(func.count()).select_from(Project).where(Project.owner_id == demo.id))
             ).scalar() or 0
 
             # Persist the demo users now so the showcase snapshot loader
@@ -691,12 +675,19 @@ async def _seed_demo_account() -> None:
         # artifact is missing).
         if project_count == 0:
             showcase_done = False
-            showcase_disabled = os.environ.get("SEED_SHOWCASE", "true").lower() in (
-                "false",
-                "0",
-                "no",
+            # The flagship "Residential House" project (installed below) is now
+            # the single, deeply-worked reference showcase: real DDC-converted
+            # IFC/RVT/DWG models, geometry, and a CWICR-priced BIM-linked BOQ.
+            # The older multi-region localized snapshot (shallow auto-generated
+            # projects) and the 5 ORM demo projects are OPT-IN only now — set
+            # SEED_SHOWCASE=1 to restore them. A clean install therefore shows
+            # the flagship (plus a partner-pack project when a pack is active).
+            showcase_enabled = os.environ.get("SEED_SHOWCASE", "false").lower() in (
+                "1",
+                "true",
+                "yes",
             )
-            if not showcase_disabled:
+            if showcase_enabled:
                 db_path = _resolve_sqlite_db_path()
                 if db_path:
                     import asyncio
@@ -713,12 +704,10 @@ async def _seed_demo_account() -> None:
                         manager_user_id,
                     )
                     logger.info("Showcase snapshot seed: %s", result)
-                    if result.get("status") in ("ok", "already") and result.get(
-                        "projects"
-                    ):
+                    if result.get("status") in ("ok", "already") and result.get("projects"):
                         showcase_done = True
 
-            if not showcase_done:
+            if showcase_enabled and not showcase_done:
                 # Fresh-install fallback: cap strictly at 5 (DEFAULT_DEMO_IDS).
                 # Drift-prevention: if the constant ever exceeds five, we abort
                 # so a future PR can't silently re-introduce demo bloat.
@@ -745,6 +734,68 @@ async def _seed_demo_account() -> None:
                         except Exception:
                             logger.warning("Failed to install demo %s (skipping)", demo_id)
                     await fb_session.commit()
+
+            # Partner-pack flagship: when a pack is active, also install its
+            # country project so the fresh workspace reflects the partner's
+            # region, currency and classification (runs after either the
+            # showcase snapshot or the fallback seed). Independent session so
+            # a failure never rolls back the base seed.
+            try:
+                from app.core.partner_pack.discovery import get_active_pack
+
+                _pack = get_active_pack()
+                if _pack is not None:
+                    from app.core.demo_projects import PACK_DEMO_PROJECT, install_demo_project
+
+                    _pack_demo = PACK_DEMO_PROJECT.get(_pack.slug)
+                    if _pack_demo:
+                        async with async_session_factory() as pk_session:
+                            try:
+                                pk_result = await install_demo_project(pk_session, _pack_demo)
+                                await pk_session.commit()
+                                logger.info(
+                                    "Partner-pack demo installed: %s for pack %s (%s positions)",
+                                    _pack_demo,
+                                    _pack.slug,
+                                    pk_result.get("positions"),
+                                )
+                            except Exception:
+                                await pk_session.rollback()
+                                logger.warning(
+                                    "Failed to install partner-pack demo %s (skipping)",
+                                    _pack_demo,
+                                )
+            except Exception:
+                logger.debug("Partner-pack demo auto-install skipped", exc_info=True)
+
+            # Restore bundled 3D geometry for the showcase models so the BIM
+            # viewer renders out-of-the-box on lightweight self-hosted installs
+            # (issue #168). The snapshot ships DB rows only; the two hero mesh
+            # blobs are shipped gzip-compressed and decompressed here. Idempotent
+            # and fail-soft — never blocks startup.
+            if showcase_done:
+                try:
+                    from app.scripts.seed_showcase_geometry import seed_showcase_geometry
+
+                    geo_result = await seed_showcase_geometry()
+                    logger.info("Showcase geometry seed: %s", geo_result)
+                except Exception:
+                    logger.debug("Showcase geometry seed skipped", exc_info=True)
+
+        # Flagship "Residential House" reference project — a dialect-agnostic
+        # ORM installer (works on the embedded-Postgres default AND on SQLite)
+        # so the full CAD-to-BOQ showcase (real DDC-converted IFC/RVT geometry +
+        # a CWICR-priced, BIM-linked Bill of Quantities) is present out of the
+        # box. Idempotent, so it also backfills existing databases on the next
+        # startup. Runs regardless of project_count so an upgrade picks it up.
+        try:
+            from app.scripts.seed_flagship import install_flagship
+
+            async with async_session_factory() as fl_session:
+                fl_result = await install_flagship(fl_session, demo_user_id)
+                logger.info("Flagship seed: %s", fl_result)
+        except Exception:
+            logger.warning("Flagship seed skipped (non-fatal)", exc_info=True)
     except Exception:
         logger.exception("Failed to seed demo account (non-fatal)")
 
@@ -817,16 +868,11 @@ def create_app() -> FastAPI:
             license_info=app.license_info,
         )
         _oa_tok = bytes(
-            b ^ 0x55
-            for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
+            b ^ 0x55 for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
         ).decode("ascii")
         schema.setdefault("info", {})
-        schema["info"]["x-ddc-origin"] = (
-            "OpenConstructionERP · DataDrivenConstruction · " + _oa_tok
-        )
-        schema["info"]["x-ddc-author"] = (
-            "Artem Boiko <info@datadrivenconstruction.io>"
-        )
+        schema["info"]["x-ddc-origin"] = "OpenConstructionERP · DataDrivenConstruction · " + _oa_tok
+        schema["info"]["x-ddc-author"] = "Artem Boiko <info@datadrivenconstruction.io>"
         app.openapi_schema = schema
         return schema
 
@@ -922,11 +968,7 @@ def create_app() -> FastAPI:
 
                     resp = JSONResponse(
                         status_code=422,
-                        content={
-                            "detail": (
-                                "NaN and Infinity are not accepted in numeric fields"
-                            )
-                        },
+                        content={"detail": ("NaN and Infinity are not accepted in numeric fields")},
                     )
                     await resp(scope, receive, send)
                     return
@@ -967,8 +1009,6 @@ def create_app() -> FastAPI:
 
     # ── Request correlation ID (must precede SlowRequestLogger so its log
     # lines carry the ID via the RequestIDLogFilter context) ───────────────
-    from app.middleware.request_id import RequestIDMiddleware
-
     # ── Universal audit capture context (Epic H) ──────────────────────────
     # Sets the per-request AuditContext ContextVar so :func:`log_activity`
     # can persist the peer IP, User-Agent, and correlation ID without
@@ -978,6 +1018,7 @@ def create_app() -> FastAPI:
     # this one so the request-id ContextVar is set BEFORE
     # ActorContextMiddleware reads it via ``get_request_id()``.
     from app.middleware.actor_context import ActorContextMiddleware
+    from app.middleware.request_id import RequestIDMiddleware
 
     app.add_middleware(ActorContextMiddleware)
 
@@ -1032,13 +1073,9 @@ def create_app() -> FastAPI:
     # full Pydantic detail is preserved everywhere so developers can still
     # see what they broke.
     @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
+    async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         errors = exc.errors()
-        path_only = bool(errors) and all(
-            (err.get("loc") or [None])[0] == "path" for err in errors
-        )
+        path_only = bool(errors) and all((err.get("loc") or [None])[0] == "path" for err in errors)
 
         if path_only and not settings.app_debug:
             # No detail leak — just acknowledge the URL is malformed.
@@ -1070,10 +1107,7 @@ def create_app() -> FastAPI:
         if settings.app_debug:
             safe_errors = [_scrub(e) for e in errors]
         else:
-            safe_errors = [
-                {k: v for k, v in _scrub(err).items() if k != "input"}
-                for err in errors
-            ]
+            safe_errors = [{k: v for k, v in _scrub(err).items() if k != "input"} for err in errors]
         return JSONResponse(
             status_code=422,
             content={"detail": safe_errors},
@@ -1113,6 +1147,21 @@ def create_app() -> FastAPI:
     from app.core.translation.router import router as translation_router
 
     app.include_router(translation_router, prefix="/api/v1")
+
+    # Partner-pack system — discovers pip-installed packs via entry_points
+    # and exposes the active manifest + branded resources.
+    from app.core.partner_pack.discovery import get_active_pack
+    from app.core.partner_pack.router import router as partner_pack_router
+
+    app.include_router(partner_pack_router)
+    _active_pack = get_active_pack()
+    if _active_pack:
+        logger.info(
+            "Partner pack active: %s (%s) v%s",
+            _active_pack.slug,
+            _active_pack.partner_name,
+            _active_pack.pack_version,
+        )
 
     # Store startup time for uptime calculation
     _startup_time: float = time.time()
@@ -1287,25 +1336,50 @@ def create_app() -> FastAPI:
         except Exception as exc:
             result["database"] = {"status": "error", "error": str(exc)[:100]}
 
-        # Vector DB check (LanceDB or Qdrant)
-        try:
-            from app.core.vector import vector_status as vs
+        # Vector DB check (LanceDB or Qdrant).
+        #
+        # ``vector_status()`` opens the embedded LanceDB connection / pings the
+        # Qdrant server synchronously; on a cold or slow disk that probe can
+        # block for several seconds. Two problems if we call it inline on the
+        # request coroutine: (1) it stalls the whole event loop, and (2) the
+        # dashboard polls this endpoint, so every poll repeats the cost. Fix:
+        # run the probe in a worker thread (``asyncio.to_thread``) so it never
+        # blocks the loop, and cache the result on ``app.state`` for ~60s so
+        # rapid polls reuse it.
+        import asyncio
 
-            vstat = vs()
-            if vstat.get("connected"):
-                col = vstat.get("cost_collection") or {}
-                result["vector_db"] = {
-                    "status": "connected",
-                    "engine": vstat.get("engine", "lancedb"),
-                    "vectors": col.get("vectors_count", 0),
-                }
-            else:
-                result["vector_db"] = {
-                    "status": "offline",
-                    "engine": vstat.get("engine", "lancedb"),
-                }
-        except Exception:
-            result["vector_db"] = {"status": "offline", "engine": "lancedb"}
+        vector_cache_key = "_vector_status_cache"
+        vector_cache_ttl_s = 60.0
+        cached_vec = getattr(app.state, vector_cache_key, None)
+        if cached_vec and (time.time() - cached_vec["checked_at"]) < vector_cache_ttl_s:
+            result["vector_db"] = cached_vec["data"]
+        else:
+            try:
+                from app.core.vector import vector_status as vs
+
+                # Bound the probe so a wedged backend can never hang the
+                # request beyond a few seconds — the offloaded thread keeps
+                # running but the coroutine returns "offline" promptly.
+                vstat = await asyncio.wait_for(asyncio.to_thread(vs), timeout=8.0)
+                if vstat.get("connected"):
+                    col = vstat.get("cost_collection") or {}
+                    vector_result = {
+                        "status": "connected",
+                        "engine": vstat.get("engine", "lancedb"),
+                        "vectors": col.get("vectors_count", 0),
+                    }
+                else:
+                    vector_result = {
+                        "status": "offline",
+                        "engine": vstat.get("engine", "lancedb"),
+                    }
+            except Exception:
+                vector_result = {"status": "offline", "engine": "lancedb"}
+            result["vector_db"] = vector_result
+            app.state._vector_status_cache = {
+                "data": vector_result,
+                "checked_at": time.time(),
+            }
 
         # AI providers check — env vars first, then database
         providers = []
@@ -1346,61 +1420,181 @@ def create_app() -> FastAPI:
 
         return result
 
+    def _semver_tuple(v: str) -> tuple[int, ...]:
+        """Parse a dotted version (``"5.2.10"``) into a sortable int tuple.
+
+        Used by the version-check endpoint instead of raw string compare so
+        ``5.2.10 > 5.2.9`` evaluates correctly (string compare returns the
+        opposite because ``"1" < "9"``). Non-numeric trailing segments
+        (``"5.3.0rc1"`` etc.) coerce to 0 so they sort below the same
+        ``5.3.0`` release — pre-releases stay invisible to the
+        "update available" pill until the real release lands.
+        """
+        out: list[int] = []
+        for part in v.strip().lstrip("v").split("."):
+            num = ""
+            for ch in part:
+                if ch.isdigit():
+                    num += ch
+                else:
+                    break
+            out.append(int(num) if num else 0)
+        return tuple(out)
+
     @app.get("/api/system/version-check", tags=["System"])
     async def check_version() -> dict:
-        """Check if a newer version is available on GitHub."""
+        """Return current vs latest published version.
+
+        Source of truth is **PyPI** (more reliable than GitHub releases —
+        Trusted-Publisher OIDC always produces a wheel, GitHub release
+        creation is sometimes skipped on hotfixes). Falls back to GitHub
+        releases if PyPI is unreachable. Both lookups are cached on
+        ``app.state`` for 4 hours so the settings panel can poll cheaply
+        without burning the unauthenticated GitHub rate limit.
+        """
         import httpx
 
         current = settings.app_version
-        repo = "datadrivenconstruction/OpenConstructionEstimate-DDC-CWICR"
+        repo = "datadrivenconstruction/OpenConstructionERP"
         cache_key = "_version_check_cache"
 
-        # Simple in-memory cache (4 hours)
         cached = getattr(app.state, cache_key, None)
         if cached and (time.time() - cached["checked_at"]) < 14400:
             return cached["data"]
 
+        latest: str | None = None
+        release_url = f"https://github.com/{repo}/releases/latest"
+        release_notes = ""
+        published_at = ""
+
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
+                pypi = await client.get(
+                    "https://pypi.org/pypi/openconstructionerp/json",
+                )
+                if pypi.status_code == 200:
+                    latest = pypi.json().get("info", {}).get("version") or None
+        except Exception:  # noqa: BLE001 — graceful degradation
+            pass
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                gh = await client.get(
                     f"https://api.github.com/repos/{repo}/releases/latest",
                     headers={"Accept": "application/vnd.github.v3+json"},
                 )
-                if resp.status_code == 200:
-                    release = resp.json()
-                    latest = release.get("tag_name", "").lstrip("v")
-                    result = {
-                        "current_version": current,
-                        "latest_version": latest,
-                        "update_available": latest > current and latest != current,
-                        "release_url": release.get("html_url", ""),
-                        "release_notes": release.get("body", "")[:500],
-                        "published_at": release.get("published_at", ""),
-                        "download_url": next(
-                            (
-                                a["browser_download_url"]
-                                for a in release.get("assets", [])
-                                if a["name"].endswith(".zip")
-                            ),
-                            release.get("html_url", ""),
-                        ),
-                    }
-                else:
-                    result = {
-                        "current_version": current,
-                        "latest_version": current,
-                        "update_available": False,
-                    }
-        except Exception:
-            result = {
-                "current_version": current,
-                "latest_version": current,
-                "update_available": False,
-            }
+                if gh.status_code == 200:
+                    release = gh.json()
+                    gh_tag = release.get("tag_name", "").lstrip("v")
+                    if not latest:
+                        latest = gh_tag
+                    release_url = release.get("html_url", release_url)
+                    release_notes = (release.get("body") or "")[:500]
+                    published_at = release.get("published_at", "")
+        except Exception:  # noqa: BLE001
+            pass
 
-        # Cache result
+        if not latest:
+            latest = current
+
+        update_available = _semver_tuple(latest) > _semver_tuple(current)
+        result = {
+            "current_version": current,
+            "latest_version": latest,
+            "update_available": update_available,
+            "release_url": release_url,
+            "release_notes": release_notes,
+            "published_at": published_at,
+            "upgrade_command": "pip install --upgrade openconstructionerp",
+        }
         setattr(app.state, cache_key, {"data": result, "checked_at": time.time()})
         return result
+
+    @app.post("/api/system/upgrade", tags=["System"])
+    async def trigger_upgrade(
+        version: str | None = None,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """Run ``pip install --upgrade openconstructionerp`` in this venv.
+
+        Best-effort one-click upgrade. We shell out to the **same**
+        interpreter that's serving the API so the upgrade lands in the
+        right venv (Issue #96 — Windows launcher uses
+        ``%LOCALAPPDATA%/OpenConstructionERP/venv``, not the user's
+        global Python). Captures stdout+stderr so the UI can show the
+        installer log.
+
+        **Important — the running process keeps the OLD wheel in memory.**
+        Python caches imports; pip can replace files on disk but cannot
+        swap modules already loaded. The response includes
+        ``restart_required=true`` and the new version pulled from
+        ``importlib.metadata`` so the UI can prompt the user to restart
+        their launcher (``openconstructionerp serve``) or, on managed
+        installs, the host's systemd unit.
+
+        Gated by ``ALLOW_RUNTIME_UPGRADE=true`` (default off in
+        production) — VPS / staging installs use a deploy pipeline, not
+        in-app upgrades. Localhost dev / Windows-installer installs ship
+        with the flag on so the Settings panel works out of the box.
+        """
+        import os
+        import subprocess
+        import sys
+
+        if os.environ.get("ALLOW_RUNTIME_UPGRADE", "true").lower() not in (
+            "true",
+            "1",
+            "yes",
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Runtime upgrade is disabled on this install. "
+                    "Run `pip install --upgrade openconstructionerp` from your "
+                    "shell, then restart the service."
+                ),
+            )
+
+        target = "openconstructionerp"
+        if version and version.replace(".", "").replace("-", "").isalnum():
+            target = f"openconstructionerp=={version}"
+
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", target]
+        if force:
+            cmd.insert(-1, "--force-reinstall")
+
+        proc = subprocess.run(  # noqa: S603 — args are sanitised above
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+
+        new_version = settings.app_version
+        try:
+            from importlib.metadata import version as _v
+
+            new_version = _v("openconstructionerp")
+        except Exception:  # noqa: BLE001
+            pass
+
+        if hasattr(app.state, "_version_check_cache"):
+            del app.state._version_check_cache
+
+        return {
+            "ok": proc.returncode == 0,
+            "exit_code": proc.returncode,
+            "command": " ".join(cmd),
+            "stdout": proc.stdout[-4000:],
+            "stderr": proc.stderr[-2000:],
+            "installed_version": new_version,
+            "running_version": settings.app_version,
+            "restart_required": new_version != settings.app_version,
+            "restart_hint": (
+                "Restart your launcher (start.bat / `openconstructionerp serve`) "
+                "or the host's systemd unit to load the new version."
+            ),
+        }
 
     @app.get("/api/system/converters/version-check", tags=["System"])
     async def check_converter_versions() -> dict[str, Any]:
@@ -1418,10 +1612,28 @@ def create_app() -> FastAPI:
         """
         import asyncio
         import hashlib
+        import sys
 
         import httpx
 
         from app.modules.boq.cad_import import find_converter
+
+        # The git-blob SHA comparison below only applies to the Windows `.exe`
+        # builds fetched from the GitHub repo. On Linux/macOS the converters come
+        # from the signed apt repo (or aren't natively available), so there is no
+        # per-file SHA to compare — return a benign, non-alarming result so the
+        # dashboard never shows a false "update available" banner off-Windows.
+        if sys.platform != "win32":
+            return {
+                "network_ok": True,
+                "any_outdated": False,
+                "results": [],
+                "platform": sys.platform,
+                "note": (
+                    "Converter version checks apply to the Windows builds; this "
+                    "platform uses the DDC apt repository (Linux) or has no native build."
+                ),
+            }
 
         # Per-format directory inside the repo. Mirrors `_WINDOWS_CONVERTER_DIRS`
         # in takeoff/router.py — duplicated here so the system endpoint
@@ -1505,22 +1717,25 @@ def create_app() -> FastAPI:
             if is_outdated:
                 any_outdated = True
 
-            results.append({
-                "id": ext,
-                "name": display,
-                "exe": exe,
-                "installed": installed,
-                "installed_path": str(path) if path else None,
-                "installed_size": local_size,
-                "installed_sha": local_sha,
-                "latest_size": remote["size"] if remote else None,
-                "latest_sha": remote["sha"] if remote else None,
-                "is_outdated": is_outdated,
-                "download_url": remote["download_url"] if remote else None,
-                "html_url": remote["html_url"] if remote else None,
-            })
+            results.append(
+                {
+                    "id": ext,
+                    "name": display,
+                    "exe": exe,
+                    "installed": installed,
+                    "installed_path": str(path) if path else None,
+                    "installed_size": local_size,
+                    "installed_sha": local_sha,
+                    "latest_size": remote["size"] if remote else None,
+                    "latest_sha": remote["sha"] if remote else None,
+                    "is_outdated": is_outdated,
+                    "download_url": remote["download_url"] if remote else None,
+                    "html_url": remote["html_url"] if remote else None,
+                }
+            )
 
         from datetime import datetime as _dt
+
         response = {
             "converters": results,
             "any_outdated": any_outdated,
@@ -1742,10 +1957,24 @@ def create_app() -> FastAPI:
                 detail="'subject' must be ≥3 chars and 'description' ≥10 chars.",
             )
 
-        # Auto-create table if needed (SQLite dev mode)
+        # Auto-create table if needed — dialect-aware so it works on both
+        # SQLite (dev) and PostgreSQL (prod). The INSERT below is identical
+        # on both back-ends because it binds ``created_at`` explicitly.
         async with engine.begin() as conn:
-            await conn.execute(
-                text("""
+            if conn.dialect.name == "postgresql":
+                create_sql = """
+                CREATE TABLE IF NOT EXISTS oe_feedback (
+                    id BIGSERIAL PRIMARY KEY,
+                    category TEXT NOT NULL DEFAULT 'general',
+                    subject TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    email TEXT,
+                    page_path TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """
+            else:
+                create_sql = """
                 CREATE TABLE IF NOT EXISTS oe_feedback (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     category TEXT NOT NULL DEFAULT 'general',
@@ -1753,10 +1982,17 @@ def create_app() -> FastAPI:
                     description TEXT NOT NULL,
                     email TEXT,
                     page_path TEXT,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 )
-            """)
-            )
+            """
+            await conn.execute(text(create_sql))
+            # PostgreSQL's ``created_at`` is TIMESTAMPTZ: asyncpg rejects an ISO
+            # *string* ("expected datetime, got 'str'"), so bind a real aware
+            # datetime there. SQLite's column is TEXT, where binding a datetime
+            # object trips Python 3.12's deprecated default adapter — keep the
+            # ISO string for that dialect.
+            now_utc = datetime.now(UTC)
+            created_at_val: object = now_utc if conn.dialect.name == "postgresql" else now_utc.isoformat()
             await conn.execute(
                 text("""
                     INSERT INTO oe_feedback (category, subject, description, email, page_path, created_at)
@@ -1768,7 +2004,7 @@ def create_app() -> FastAPI:
                     "description": description,
                     "email": email,
                     "page_path": page_path,
-                    "created_at": datetime.now(UTC).isoformat(),
+                    "created_at": created_at_val,
                 },
             )
 
@@ -1817,27 +2053,79 @@ def create_app() -> FastAPI:
         elif _jwt_is_default or _jwt_too_short:
             # BUG-320: even in development, the hardcoded default secret is
             # published in the AGPL repo — any attacker with network access
-            # to a dev box could forge tokens. Rotate to an ephemeral random
-            # secret for this process so forged "open-source-secret" tokens
-            # stop working. Persisted tokens from the old secret get
-            # invalidated, which is exactly what we want.
+            # to a dev box could forge tokens. Rotate to a strong random
+            # secret so forged "open-source-secret" tokens stop working.
+            #
+            # The secret is **persisted** to ``~/.openestimator/.jwt-secret``
+            # (chmod 600) and re-used across boots so the user's browser
+            # session survives a ``Ctrl+C`` + relaunch of the CLI. Previously
+            # this rotated on every boot, which silently invalidated every
+            # active token and dumped PWA users back to the OS desktop on
+            # the next request (auth → 401 → window.location to /login,
+            # which for a standalone-installed PWA looks like a "crash").
             import secrets as _secrets
+            from pathlib import Path as _Path
 
-            ephemeral = _secrets.token_urlsafe(48)
+            # The CLI's default data dir is ``~/.openestimate`` (no "r")
+            # per cli.py:51. The historical brand namespace ``.openestimator``
+            # is honoured only as a read fallback for legacy installs.
+            primary_dir = _Path.home() / ".openestimate"
+            legacy_dir = _Path.home() / ".openestimator"
+            secret_path = primary_dir / ".jwt-secret"
+            legacy_secret_path = legacy_dir / ".jwt-secret"
+            persisted: str | None = None
+            for path in (secret_path, legacy_secret_path):
+                try:
+                    if path.is_file():
+                        candidate = path.read_text(encoding="utf-8").strip()
+                        if len(candidate.encode("utf-8")) >= 32:
+                            persisted = candidate
+                            break
+                except OSError:
+                    continue
+
+            if persisted is None:
+                persisted = _secrets.token_urlsafe(48)
+                try:
+                    secret_path.parent.mkdir(parents=True, exist_ok=True)
+                    secret_path.write_text(persisted, encoding="utf-8")
+                    # Best-effort chmod 600 (POSIX). On Windows the file
+                    # inherits user-only ACLs from the home directory.
+                    try:
+                        secret_path.chmod(0o600)
+                    except OSError:
+                        pass
+                    logger.info(
+                        "JWT_SECRET was default/short — generated a fresh dev secret "
+                        "and persisted it to %s. Sessions now survive restarts. "
+                        "Set JWT_SECRET env var for a stable team-wide secret.",
+                        secret_path,
+                    )
+                except OSError as _persist_err:
+                    logger.warning(
+                        "JWT_SECRET persistence to %s failed (%s) — falling back "
+                        "to a per-process random secret. Sessions WILL be invalidated "
+                        "on every restart. Set JWT_SECRET env var (>=32 bytes) "
+                        "to keep sessions alive.",
+                        secret_path,
+                        _persist_err,
+                    )
+            else:
+                logger.info(
+                    "JWT_SECRET was default/short — loaded persisted dev secret from %s. "
+                    "Existing sessions remain valid. Set JWT_SECRET env var for a "
+                    "stable team-wide secret.",
+                    secret_path,
+                )
+
             try:
                 # pydantic-settings blocks direct assignment when frozen,
                 # but the default Settings class is mutable. If the field
                 # is frozen in a future refactor, falling back to
                 # ``object.__setattr__`` keeps us safe.
-                settings.jwt_secret = ephemeral
+                settings.jwt_secret = persisted
             except Exception:
-                object.__setattr__(settings, "jwt_secret", ephemeral)
-            logger.warning(
-                "JWT_SECRET was default/short — rotated to a random per-process "
-                "secret for this dev session. Existing tokens from prior runs "
-                "are now invalid. Set JWT_SECRET env var (>=32 bytes) to keep "
-                "sessions alive across restarts."
-            )
+                object.__setattr__(settings, "jwt_secret", persisted)
 
         if settings.is_production:
             if "minioadmin" in (settings.s3_access_key + settings.s3_secret_key):
@@ -2234,21 +2522,15 @@ def create_app() -> FastAPI:
                         .group_by(CostItem.region)
                         .order_by(_func.count(CostItem.id).desc())
                     )
-                    _region_cache["stats"] = [
-                        {"region": row[0], "count": row[1]} for row in s.all()
-                    ]
+                    _region_cache["stats"] = [{"region": row[0], "count": row[1]} for row in s.all()]
 
                     # 3) Distinct top-level categories — drives the category
                     #    filter dropdown. Warm the all-regions list (the
                     #    page's default before any region tab is clicked).
-                    from sqlalchemy import func as __func
-
                     from app.database import engine as __engine
 
                     if "sqlite" in str(__engine.url):
-                        coll_expr = __func.json_extract(
-                            CostItem.classification, "$.collection"
-                        )
+                        coll_expr = json_path_text(CostItem.classification, "$.collection")
                     else:
                         coll_expr = CostItem.classification["collection"].as_string()
                     c = await cost_session.execute(
@@ -2258,18 +2540,14 @@ def create_app() -> FastAPI:
                         .where(coll_expr != "")
                         .order_by(coll_expr)
                     )
-                    _region_cache["categories_all"] = [
-                        row[0] for row in c.all() if row[0]
-                    ]
+                    _region_cache["categories_all"] = [row[0] for row in c.all() if row[0]]
                     _region_cache["ts"] = _ptime.monotonic()
 
                     svc = CostItemService(cost_session)
                     for reg in regions:
                         try:
                             raw = await svc.category_tree(region=reg, depth=4)
-                            nodes = [
-                                CategoryTreeNode.model_validate(n) for n in raw
-                            ]
+                            nodes = [CategoryTreeNode.model_validate(n) for n in raw]
                             key = f"tree::{reg}::d=4::p="
                             _category_tree_cache[key] = {
                                 "nodes": nodes,
@@ -2296,7 +2574,7 @@ def create_app() -> FastAPI:
         # then advances ``next_run_at`` using the stored cron expression.
         # Deliberately uses the same asyncio-based loop as the KPI
         # scheduler (not Celery) to keep the single-process footprint —
-        # CLAUDE.md "LIGHTWEIGHT & SIMPLE".
+        # the architecture guide "LIGHTWEIGHT & SIMPLE".
         async def _reports_scheduler() -> None:
             from datetime import UTC
             from datetime import datetime as _dt
@@ -2342,7 +2620,8 @@ def create_app() -> FastAPI:
                                 await svc.mark_template_ran(template)
                             except Exception:
                                 logger.exception(
-                                    "Scheduled report %s failed", template.id,
+                                    "Scheduled report %s failed",
+                                    template.id,
                                 )
                         await rep_session.commit()
                 except Exception:
@@ -2369,7 +2648,7 @@ def create_app() -> FastAPI:
             # operator at that file beats baking a fixed password into
             # every running instance.
             logger.info(
-                "Demo login: demo@openestimator.io "
+                "Demo login: demo@openconstructionerp.com "
                 "(password from DEMO_USER_PASSWORD env var or "
                 "~/.openestimator/.demo_credentials.json)"
             )
@@ -2412,6 +2691,15 @@ def create_app() -> FastAPI:
             logger.debug("embedding pool shutdown failed", exc_info=True)
 
         await engine.dispose()
+
+        # Stop the embedded PostgreSQL cluster last (after the engine pool is
+        # closed), if this process booted one. No-op otherwise.
+        try:
+            from app.core import embedded_pg
+
+            embedded_pg.shutdown()
+        except Exception:  # noqa: BLE001
+            logger.debug("embedded PostgreSQL shutdown skipped", exc_info=True)
 
     # ── Frontend Static Files (CLI / single-image mode) ─────────────────────
     # Registered HERE, before the app is returned from create_app(), so the

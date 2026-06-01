@@ -137,6 +137,16 @@
       "fail": "Ungültiger SINAPI-Code '{code}' in Position {ordinal}"
     }
   },
+  "nbr": {
+    "classification_required": {
+      "fail": "Position {ordinal} ohne NBR 12721 Abschnitt",
+      "suggestion": "Position einem NBR 12721 Abschnitt zuordnen (S1..S11)"
+    },
+    "valid_section": {
+      "fail": "NBR 12721 Abschnitt '{code}' in Position {ordinal} ist nicht S1..S11",
+      "suggestion": "Codes S1 bis S11 verwenden (z.B. S3 für Tragwerk)"
+    }
+  },
   "gesn": {
     "code_required": {
       "fail": "Position {ordinal} hat keinen ГЭСН/ФЕР-Code",

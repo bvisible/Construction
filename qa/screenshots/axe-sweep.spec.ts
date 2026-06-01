@@ -27,7 +27,7 @@ import { dirname, join } from 'node:path';
 
 const API_URL = process.env.QA_API_URL ?? 'http://localhost:8000';
 const BASE_URL = process.env.QA_BASE_URL ?? 'http://localhost:5180';
-const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 const FORCE_LOCALE = (process.env.QA_LOCALE ?? '').trim();
 const TODAY = new Date().toISOString().slice(0, 10);
 const OUT_PATH =
@@ -84,7 +84,7 @@ async function hydrateAuth(page: Page, token: string): Promise<void> {
     localStorage.setItem('oe_access_token', p.token);
     localStorage.setItem('oe_refresh_token', p.token);
     localStorage.setItem('oe_remember', '1');
-    localStorage.setItem('oe_user_email', 'demo@openestimator.io');
+    localStorage.setItem('oe_user_email', 'demo@openconstructionerp.com');
     localStorage.setItem('oe_onboarding_completed', 'true');
     localStorage.setItem('oe_welcome_dismissed', 'true');
     localStorage.setItem('oe_tour_completed', 'true');

@@ -13,7 +13,7 @@
 import { test, expect, Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
-const DEMO_EMAIL = process.env.OE_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.OE_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 
 async function login(page: Page) {
   // Demo accounts use magic-link (no password); hit the dedicated

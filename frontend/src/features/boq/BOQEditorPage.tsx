@@ -7,7 +7,7 @@ import { Database, Download, ExternalLink, X, Sparkles, AlertTriangle as WarnTri
 import { Button, Badge, Breadcrumb, ModuleHelpButton, ConfirmDialog } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useProgressStore } from '@/shared/ui/GlobalProgress';
-import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
+import { apiGet, apiPost, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useRecentStore } from '@/stores/useRecentStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -28,7 +28,7 @@ import {
   DEFAULT_MAX_NESTING_DEPTH,
 } from './api';
 import { ApiError } from '@/shared/lib/api';
-import { projectsApi } from '@/features/projects/api';
+import { projectsApi, type Project, type ProjectFxRate } from '@/features/projects/api';
 import { fetchBIMModels } from '@/features/bim/api';
 // AutocompleteInput used in sub-components, not directly here
 // import { AutocompleteInput } from './AutocompleteInput';
@@ -69,6 +69,7 @@ import {
   createFormatter,
   fmtWithCurrency,
   resourceAwareTotalInBase,
+  convertToBase,
   computeQualityScore,
   type QualityBreakdown,
   type Tip,
@@ -262,6 +263,67 @@ export function BOQEditorPage() {
   const addToast = useToastStore((s) => s.addToast);
   const removeToast = useToastStore((s) => s.removeToast);
   const addRecent = useRecentStore((s) => s.addRecent);
+
+  /**
+   * Issue #157 (skolodi) — persist an FX rate typed in the per-resource
+   * currency popover straight into the PROJECT ``fx_rates``.
+   *
+   * Root cause of the long-standing "section total doesn't update when I
+   * change a resource's currency" report: the inline rate editor only wrote
+   * to the device-local global FX store, but the section subtotal converts
+   * exclusively through the PROJECT ``fx_rates`` table (so does the backend
+   * rollup and every export). A rate that never reached the project was
+   * therefore invisible to the sum — switching EUR↔USD (neither in the
+   * project) produced an identical, unconverted total while ARS (which the
+   * user HAD added to the project) recomputed. Writing the rate to the
+   * project closes the gap everywhere at once.
+   *
+   * Optimistically patches the cached project so the grid recomputes the
+   * instant the rate is entered; rolls back and warns if the save is
+   * rejected (e.g. a viewer without project-edit access).
+   */
+  const handleUpsertProjectFxRate = useCallback(
+    async (code: string, rate: number) => {
+      const projectId = boq?.project_id;
+      const upper = (code || '').trim().toUpperCase();
+      if (!projectId || !upper || !Number.isFinite(rate) || rate <= 0) return;
+      const base = getCurrencyCode(project?.currency).toUpperCase();
+      if (upper === base) return; // base currency never needs a rate
+      const rateStr = String(rate);
+      const existing = (project?.fx_rates ?? []) as ProjectFxRate[];
+      const has = existing.some((r) => (r.code || '').toUpperCase() === upper);
+      const next: ProjectFxRate[] = has
+        ? existing.map((r) =>
+            (r.code || '').toUpperCase() === upper ? { ...r, rate: rateStr } : r,
+          )
+        : [...existing, { code: upper, rate: rateStr }];
+
+      const key = ['project', projectId];
+      const prev = queryClient.getQueryData<Project>(key);
+      queryClient.setQueryData<Project>(key, (p) =>
+        p ? { ...p, fx_rates: next } : p,
+      );
+      try {
+        await projectsApi.update(projectId, { fx_rates: next });
+        queryClient.invalidateQueries({ queryKey: key });
+      } catch {
+        // Restore the pre-optimistic project; the device-global store still
+        // holds the rate so the resource row keeps showing the conversion.
+        if (prev) queryClient.setQueryData<Project>(key, prev);
+        addToast({
+          type: 'warning',
+          title: t('boq.fx_rate_save_failed', {
+            defaultValue: 'Could not save the FX rate to the project',
+          }),
+          message: t('boq.fx_rate_save_failed_hint', {
+            defaultValue:
+              'The rate is applied on this device but was not saved to the shared project — you may not have edit access. Ask the project owner to add it under Settings → FX rates.',
+          }),
+        });
+      }
+    },
+    [boq?.project_id, project?.currency, project?.fx_rates, queryClient, addToast, t],
+  );
 
   // Track BOQ as recent item
   useEffect(() => {
@@ -2543,6 +2605,27 @@ export function BOQEditorPage() {
 
   /* ── Resource management ────────────────────────────────────────────── */
 
+  /** Derive a position's per-unit rate from its resource list, in the
+   *  project BASE currency. Issue #88 / #111 — each resource may carry its
+   *  own ``currency`` (per-resource currency picker), so every subtotal is
+   *  converted via the project FX table BEFORE summing. Mirrors the grid
+   *  render path (``BOQGrid.insertResourceRows`` line ~1288) so the value we
+   *  persist matches what the editor displays — never a blended-currency sum.
+   *  Resource currency wins; absent ⇒ project base (no conversion). */
+  const perUnitRateInBase = useCallback(
+    (resources: Array<Record<string, unknown>>): number => {
+      let acc = 0;
+      for (const r of resources) {
+        const sub =
+          (r.total as number) ?? (((r.quantity as number) ?? 0) * ((r.unit_rate as number) ?? 0));
+        const ccy = ((r.currency as string) || '').trim() || currencyCode;
+        acc += convertToBase(sub, ccy, currencyCode, fxRates ?? null);
+      }
+      return Math.round(acc * 10000) / 10000;
+    },
+    [currencyCode, fxRates],
+  );
+
   /** Remove a resource from a position's metadata.resources array. */
   const handleRemoveResource = useCallback(
     (positionId: string, resourceIndex: number) => {
@@ -2552,18 +2635,15 @@ export function BOQEditorPage() {
       if (resourceIndex < 0 || resourceIndex >= resources.length) return;
       resources.splice(resourceIndex, 1);
       const newMeta = { ...pos.metadata, resources };
-      // Recalculate unit_rate from remaining resources
-      let computedRate = 0;
-      for (const r of resources) {
-        computedRate += ((r.quantity as number) ?? 0) * ((r.unit_rate as number) ?? 0);
-      }
-      computedRate = Math.round(computedRate * 100) / 100;
+      // Recalculate unit_rate from remaining resources, currency-converted
+      // into the project base (never blend currencies).
+      const computedRate = perUnitRateInBase(resources);
       updateMutation.mutate({
         id: positionId,
         data: { unit_rate: computedRate, metadata: newMeta },
       });
     },
-    [boq?.positions, updateMutation],
+    [boq?.positions, updateMutation, perUnitRateInBase],
   );
 
   /** Apply one or more field updates to a resource in a single mutation.
@@ -2585,17 +2665,15 @@ export function BOQEditorPage() {
       const rRate = (resources[resourceIndex].unit_rate as number) ?? 0;
       resources[resourceIndex].total = Math.round(rQty * rRate * 100) / 100;
       const newMeta = { ...pos.metadata, resources };
-      let resourceTotal = 0;
-      for (const r of resources) {
-        resourceTotal += (r.total as number) ?? (((r.quantity as number) ?? 0) * ((r.unit_rate as number) ?? 0));
-      }
-      const derivedUnitRate = Math.round(resourceTotal * 10000) / 10000;
+      // Convert each resource subtotal into the project base before summing
+      // (a resource may be priced in a foreign currency) — never blend.
+      const derivedUnitRate = perUnitRateInBase(resources);
       updateMutation.mutate({
         id: positionId,
         data: { unit_rate: derivedUnitRate, metadata: newMeta },
       });
     },
-    [boq?.positions, updateMutation],
+    [boq?.positions, updateMutation, perUnitRateInBase],
   );
 
   /** Single-field shim — delegates to the batched implementation. */
@@ -3085,18 +3163,16 @@ export function BOQEditorPage() {
       };
       const existing = [...((pos.metadata?.resources ?? []) as Array<Record<string, unknown>>)];
       const merged = [...existing, newRes];
-      let computedRate = 0;
-      for (const r of merged) {
-        computedRate += ((r.quantity as number) ?? 0) * ((r.unit_rate as number) ?? 0);
-      }
-      computedRate = Math.round(computedRate * 100) / 100;
+      // Convert each resource subtotal into the project base before summing
+      // (the new resource may carry a foreign currency) — never blend.
+      const computedRate = perUnitRateInBase(merged);
       updateMutation.mutate({
         id: positionId,
         data: { unit_rate: computedRate, metadata: { ...pos.metadata, resources: merged } },
       });
       addToast({ type: 'success', title: t('boq.resource_added', { defaultValue: 'Resource added' }) });
     },
-    [boq?.positions, updateMutation, addToast, t],
+    [boq?.positions, updateMutation, addToast, t, perUnitRateInBase],
   );
 
   /** Issue #133 — project-wide resource-code lookup for the manual
@@ -3509,7 +3585,7 @@ export function BOQEditorPage() {
 
         if (!res.ok) {
           const body = await res.json().catch(() => ({ detail: res.statusText }));
-          throw new Error(body.detail || 'Import failed');
+          throw new Error(extractErrorMessageFromBody(body) ?? 'Import failed');
         }
 
         const result: {
@@ -4008,6 +4084,7 @@ export function BOQEditorPage() {
           currencySymbol={currencySymbol}
           currencyCode={currencyCode}
           fxRates={fxRates}
+          onUpsertProjectFxRate={handleUpsertProjectFxRate}
           displayCurrency={
             displayCurrencyMeta
               ? { code: displayCurrencyMeta.currency, rate: displayCurrencyMeta.rate }
@@ -4223,7 +4300,7 @@ export function BOQEditorPage() {
           onApplied={() => {
             setAssemblyModalOpen(false);
             invalidateAll();
-            addToast({ type: 'success', title: 'Assembly applied to BOQ' });
+            addToast({ type: 'success', title: t('boq.toasts.assembly_applied', { defaultValue: 'Assembly applied to BOQ' }) });
           }}
         />
       )}

@@ -193,7 +193,8 @@ _DEFAULT_ALERTS: list[dict] = [
 
 
 async def _seed_kpi_definitions(
-    session: AsyncSession, service: BIDashboardsService,
+    session: AsyncSession,
+    service: BIDashboardsService,
 ) -> int:
     return await service.bootstrap_system_kpis()
 
@@ -260,7 +261,8 @@ async def _seed_reports(session: AsyncSession) -> list[ReportDefinition]:
 
 
 async def _seed_schedules(
-    session: AsyncSession, reports: list[ReportDefinition],
+    session: AsyncSession,
+    reports: list[ReportDefinition],
 ) -> list[ReportSchedule]:
     if not reports:
         return []
@@ -315,7 +317,8 @@ async def _seed_alerts(session: AsyncSession) -> list[AlertRule]:
     created: list[AlertRule] = []
     for spec in _DEFAULT_ALERTS:
         existing_q = select(AlertRule).where(
-            AlertRule.name == spec["name"], AlertRule.kpi_code == spec["kpi_code"],
+            AlertRule.name == spec["name"],
+            AlertRule.kpi_code == spec["kpi_code"],
         )
         if (await session.execute(existing_q)).scalar_one_or_none() is not None:
             continue
@@ -336,34 +339,48 @@ async def _seed_alerts(session: AsyncSession) -> list[AlertRule]:
 
 
 async def _seed_kpi_history(session: AsyncSession) -> int:
-    """‌⁠‍Seed 8 historical rows per registered system KPI (12-week trend)."""
+    """‌⁠‍Persist one REAL portfolio-level snapshot per registered system KPI.
+
+    Earlier revisions fabricated an 8-week trend of ``0.85 + offset*0.02``
+    for every KPI regardless of unit, so currency/days/ratio KPIs all showed
+    a fake ~0.9 history that the KPI Library presented as live metrics. That
+    violated the no-stubs / data-integrity rule.
+
+    Instead we compute each KPI's real current value over the whole
+    portfolio and persist a single history point — but only when the KPI
+    actually has source data (``source_record_count > 0``), exactly the same
+    guard ``compute_kpi(persist=True)`` uses. A KPI with no underlying rows
+    yet gets no row: the library shows "—" with an empty sparkline rather
+    than an invented number. As real records accrue, on-demand computes
+    (and dashboard renders) append further real points over time.
+    """
+    from app.modules.bi_dashboards import kpis as _kpis
+
     total = 0
     now = datetime.now(UTC)
     today = now.date()
-    for code, meta in SYSTEM_KPI_META.items():
+    period_start = today - timedelta(days=6)
+    for code in SYSTEM_KPI_META:
         # Skip if any history already exists for this KPI (idempotent)
         q = select(KPIValue).where(KPIValue.kpi_code == code).limit(1)
         if (await session.execute(q)).scalar_one_or_none() is not None:
             continue
-        unit = meta.get("unit", "ratio")
-        for week_offset in range(8):
-            period_end = today - timedelta(weeks=week_offset)
-            period_start = period_end - timedelta(days=6)
-            # Synthetic but plausible values — never persist if real values
-            # will overwrite them via the live computer.
-            value = Decimal(str(0.85 + week_offset * 0.02))
-            kv = KPIValue(
-                kpi_code=code,
-                project_id=None,
-                period_start=period_start,
-                period_end=period_end,
-                value=value,
-                unit=unit,
-                computed_at=now,
-                source_record_count=0,
-            )
-            session.add(kv)
-            total += 1
+        result = await _kpis.compute(code, session, project_id=None)
+        # Never persist a fabricated/empty value — only real measurements.
+        if result.source_record_count <= 0:
+            continue
+        kv = KPIValue(
+            kpi_code=code,
+            project_id=None,
+            period_start=period_start,
+            period_end=today,
+            value=result.value,
+            unit=result.unit,
+            computed_at=now,
+            source_record_count=result.source_record_count,
+        )
+        session.add(kv)
+        total += 1
     await session.flush()
     return total
 

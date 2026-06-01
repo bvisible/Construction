@@ -49,8 +49,13 @@ interface PurchaseOrder {
   vendor_name: string;
   issue_date: string;
   delivery_date: string | null;
-  total_amount: number;
-  currency: string;
+  // Money bug fix: the list endpoint (POResponse in backend/.../schemas.py)
+  // returns `amount_total` + `currency_code` (amount is a Decimal-serialized
+  // STRING), NOT `total_amount`/`currency`. The old field names were always
+  // undefined, so MoneyDisplay rendered an em-dash for every PO. Match the
+  // real wire contract here.
+  amount_total: string | number;
+  currency_code: string;
   status: string;
   description: string;
   line_items_count: number;
@@ -546,10 +551,16 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
   const createInvoiceMut = useMutation({
     mutationFn: (poId: string) =>
       apiPost<{ invoice_id: string; invoice_number: string; po_number: string }>(
-        `/v1/procurement/${poId}/create-invoice`,
+        `/v1/procurement/${poId}/create-invoice/`,
         {},
       ),
     onSuccess: (data) => {
+      // Creating an invoice can advance PO-derived counts and posts a new
+      // payable, so refresh both the PO list and the Finance views that
+      // surface it (dashboard rollup + invoice list).
+      queryClient.invalidateQueries({ queryKey: ['procurement-po', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['finance', 'dashboard', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['finance-invoices', projectId] });
       addToast({
         type: 'success',
         title: t('procurement.invoice_created', { defaultValue: 'Invoice created' }),
@@ -1017,7 +1028,13 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
                   </div>
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={po.total_amount} currency={po.currency} />
+                  {/* Money bug fix: feed MoneyDisplay the REAL wire fields
+                      `amount_total` (Decimal string) + `currency_code`. The
+                      old `po.total_amount`/`po.currency` did not exist on the
+                      list response, so every row showed an em-dash. MoneyDisplay
+                      accepts string amounts and parses them internally, so no
+                      Number() wrapping is needed here. */}
+                  <MoneyDisplay amount={po.amount_total} currency={po.currency_code} />
                 </td>
                 <td className="px-4 py-3 text-center">
                   <div className="flex flex-col items-center gap-1">
@@ -1079,16 +1096,35 @@ function PurchaseOrdersTab({ projectId }: { projectId: string }) {
                         {t('procurement.action_issue_short', { defaultValue: 'Issue' })}
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => createInvoiceMut.mutate(po.id)}
-                      disabled={createInvoiceMut.isPending}
-                      title={t('procurement.create_invoice', { defaultValue: 'Create Invoice from PO' })}
-                    >
-                      <FileText size={14} className="mr-1" />
-                      {t('procurement.create_invoice_short', { defaultValue: 'Invoice' })}
-                    </Button>
+                    {/* Invoicing is only valid once the PO has been issued —
+                        a draft/cancelled PO must never become a payable
+                        (mirrors the backend status guard). Keep the control
+                        visible but disabled so the reason is explained. */}
+                    {(() => {
+                      const invoiceable = ['issued', 'partially_received', 'completed'].includes(
+                        po.status,
+                      );
+                      return (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => createInvoiceMut.mutate(po.id)}
+                          disabled={createInvoiceMut.isPending || !invoiceable}
+                          title={
+                            invoiceable
+                              ? t('procurement.create_invoice', {
+                                  defaultValue: 'Create Invoice from PO',
+                                })
+                              : t('procurement.invoice_requires_issue', {
+                                  defaultValue: 'Issue the purchase order before invoicing',
+                                })
+                          }
+                        >
+                          <FileText size={14} className="mr-1" />
+                          {t('procurement.create_invoice_short', { defaultValue: 'Invoice' })}
+                        </Button>
+                      );
+                    })()}
                   </div>
                   )}
                 </td>

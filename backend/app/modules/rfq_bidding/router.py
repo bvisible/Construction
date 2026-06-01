@@ -33,7 +33,7 @@ from app.modules.rfq_bidding.schemas import (
 )
 from app.modules.rfq_bidding.service import RFQService
 
-router = APIRouter()
+router = APIRouter(tags=["rfq_bidding"])
 
 
 def _get_service(session: SessionDep) -> RFQService:

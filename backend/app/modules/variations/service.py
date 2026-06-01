@@ -11,7 +11,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 from datetime import date as dt_date
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Iterable
 
 from fastapi import HTTPException
@@ -197,6 +197,149 @@ def _to_decimal(value: Any) -> Decimal:
         return Decimal("0")
 
 
+def _project_fx_map(project: Any) -> dict[str, Decimal]:
+    """Project ``Project.fx_rates`` into ``{CODE: rate}`` as exact Decimals.
+
+    Mirrors ``changeorders/repository.py::_project_fx_map`` and
+    ``boq/service.py::_project_fx_map`` (shape
+    ``[{"code": "USD", "rate": "1.08", "label": "US Dollar"}]`` where
+    ``rate`` is BASE units per 1 unit of the foreign currency). Defensive
+    against missing attribute / malformed entries -- a bad row is skipped.
+    """
+    if project is None:
+        return {}
+    raw = getattr(project, "fx_rates", None)
+    if not isinstance(raw, list):
+        return {}
+    out: dict[str, Decimal] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        code = str(entry.get("code") or "").strip().upper()
+        rate = _to_decimal(entry.get("rate"))
+        if code and rate > 0:
+            out[code] = rate
+    return out
+
+
+def _convert_money_buckets(
+    by_currency: dict[str, Decimal],
+    base_code: str,
+    fx_map: dict[str, Decimal],
+) -> tuple[Decimal, dict[str, Decimal]]:
+    """Fold per-currency money buckets into a single base-currency total.
+
+    Currency bug fix: blending raw amounts of different ISO currencies is
+    meaningless, so each bucket is converted to the project BASE currency
+    via ``fx_map`` before summing. A bucket that is already in the base
+    currency (or carries a blank currency -- treated as "already base")
+    passes through unchanged. A FOREIGN bucket with NO FX rate is NEVER
+    folded into the base total; it is returned separately under
+    ``unconverted`` so the figure stays honest rather than silently wrong.
+
+    Returns ``(base_total, unconverted_by_currency)``.
+    """
+    base = (base_code or "").strip().upper()
+    total = Decimal("0")
+    unconverted: dict[str, Decimal] = {}
+    for raw_code, amount in by_currency.items():
+        code = (raw_code or "").strip().upper()
+        if not code or code == base:
+            # Already in the project base currency (or no currency stamp).
+            total += amount
+            continue
+        fx = fx_map.get(code)
+        if fx is not None:
+            total += amount * fx
+        else:
+            # Foreign currency with no FX rate -- keep it visible per
+            # currency instead of mis-stamping it as base currency.
+            unconverted[code] = unconverted.get(code, Decimal("0")) + amount
+    return total, unconverted
+
+
+def _money_str_map(by_currency: dict[str, Decimal]) -> dict[str, str]:
+    """Render a ``{code: Decimal}`` money map as ``{code: decimal-string}``.
+
+    Quantises to 2dp and uses the same plain-decimal string wire format
+    as the scalar money fields so the per-currency breakdown is exact and
+    JS-safe. Blank-currency keys are normalised to ``""``.
+    """
+    out: dict[str, str] = {}
+    for raw_code, amount in sorted(by_currency.items()):
+        code = (raw_code or "").strip().upper()
+        out[code] = format(_to_decimal(amount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP), "f")
+    return out
+
+
+async def _load_project_currency_meta(session: AsyncSession, project_id: uuid.UUID) -> Any:
+    """Load the owning ``Project`` (currency + fx_rates) for FX conversion.
+
+    Currency bug fix support: the dashboard money roll-ups must be
+    labelled and FX-converted to the PROJECT currency, never a row
+    currency. Imported lazily to avoid a hard import cycle and so the
+    variations module stays decoupled from projects at import time.
+    Returns ``None`` defensively if the project can't be loaded.
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.modules.projects.models import Project
+
+        result = await session.execute(select(Project).where(Project.id == project_id))
+        return result.scalar_one_or_none()
+    except Exception:  # noqa: BLE001 -- dashboard must never 500 on FX metadata
+        return None
+
+
+async def _safe_by_currency(repo: Any, method_name: str, project_id: uuid.UUID) -> dict[str, Decimal]:
+    """Call a repo's ``*_by_currency`` helper if present, else return ``{}``.
+
+    Mirrors the ``hasattr(... "pending_count")`` guard already used in
+    ``get_dashboard`` so in-memory test stubs (which don't implement the
+    new per-currency aggregations) keep working without a hard failure.
+    """
+    method = getattr(repo, method_name, None)
+    if method is None:
+        return {}
+    result = await method(project_id)
+    return result if isinstance(result, dict) else {}
+
+
+async def _load_project_currency_meta(session: AsyncSession, project_id: uuid.UUID) -> Any:
+    """Load the owning ``Project`` (currency + fx_rates) for FX conversion.
+
+    Currency bug fix support: the dashboard money roll-ups must be
+    labelled and FX-converted to the PROJECT currency, never a row
+    currency. Imported lazily to avoid a hard import cycle and so the
+    variations module stays decoupled from projects at import time.
+    Returns ``None`` defensively if the project can't be loaded.
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.modules.projects.models import Project
+
+        result = await session.execute(select(Project).where(Project.id == project_id))
+        return result.scalar_one_or_none()
+    except Exception:  # noqa: BLE001 -- dashboard must never 500 on FX metadata
+        return None
+
+
+async def _safe_by_currency(repo: Any, method_name: str, project_id: uuid.UUID) -> dict[str, Decimal]:
+    """Call a repo's ``*_by_currency`` helper if present, else return ``{}``.
+
+    Mirrors the ``hasattr(... "pending_count")`` guard already used in
+    ``get_dashboard`` so in-memory test stubs (which don't implement the
+    new per-currency aggregations) keep working without a hard failure.
+    """
+    method = getattr(repo, method_name, None)
+    if method is None:
+        return {}
+    result = await method(project_id)
+    return result if isinstance(result, dict) else {}
+
+
 def compute_cost_impact_total(impacts: Iterable[Any]) -> Decimal:
     """Sum the ``total`` of every cost-impact line.
 
@@ -246,7 +389,11 @@ def is_within_response_window(notice: Any, today: dt_date | None = None) -> bool
     """
     if today is None:
         today = dt_date.today()
-    target = getattr(notice, "target_response_date", None) if not isinstance(notice, dict) else notice.get("target_response_date")
+    target = (
+        getattr(notice, "target_response_date", None)
+        if not isinstance(notice, dict)
+        else notice.get("target_response_date")
+    )
     if not target:
         return True
     try:
@@ -312,9 +459,7 @@ def validate_variation_request(payload: Any) -> tuple[bool, list[str]]:
     classification = _get("classification") or "scope_change"
     title = (_get("title") or "").strip() if isinstance(_get("title"), str) else (_get("title") or "")
     description = (
-        (_get("description") or "").strip()
-        if isinstance(_get("description"), str)
-        else (_get("description") or "")
+        (_get("description") or "").strip() if isinstance(_get("description"), str) else (_get("description") or "")
     )
 
     if classification == "regulatory":
@@ -411,7 +556,8 @@ def compute_nec4_timers(
 
 
 def is_nec4_overdue(
-    request: Any, today: dt_date | None = None,
+    request: Any,
+    today: dt_date | None = None,
 ) -> dict[str, bool]:
     """Return overdue flags for the NEC4 quotation + assessment timers.
 
@@ -495,9 +641,7 @@ def compute_disruption_lost_hours(
         return Decimal("0")
     hours_per_unit_impacted = Decimal("1") / impacted
     hours_per_unit_baseline = Decimal("1") / baseline
-    return (qty * (hours_per_unit_impacted - hours_per_unit_baseline)).quantize(
-        Decimal("0.01")
-    )
+    return (qty * (hours_per_unit_impacted - hours_per_unit_baseline)).quantize(Decimal("0.01"))
 
 
 # ── FIDIC 20.1 time-bar (Red/Yellow/Silver 2017) ──────────────────────────
@@ -626,11 +770,9 @@ def recommend_rerate(
     else:
         direction = "decrease"
     reason = (
-        f"Quantity variance {variance.quantize(Decimal('0.01'))}% exceeds "
-        f"±{thr}% threshold — re-rating recommended"
+        f"Quantity variance {variance.quantize(Decimal('0.01'))}% exceeds ±{thr}% threshold — re-rating recommended"
         if rerate
-        else f"Quantity variance {variance.quantize(Decimal('0.01'))}% "
-        f"within ±{thr}% threshold — contract rate stands"
+        else f"Quantity variance {variance.quantize(Decimal('0.01'))}% within ±{thr}% threshold — contract rate stands"
     )
     return {
         "variance_pct": variance.quantize(Decimal("0.01")),
@@ -685,6 +827,7 @@ def ensure_high_value_authorised(
     if role == "admin":
         return
     from app.core.permissions import permission_registry as _reg
+
     perms = payload.get("permissions", []) or []
     if "variations.approve_high_value" in perms:
         return
@@ -849,10 +992,7 @@ class VariationsService:
         # Clause 62.5 — 4 weeks for assessment).
         quotation_due = getattr(data, "quotation_due_at", None)
         assessment_due = getattr(data, "assessment_due_at", None)
-        if (
-            standard.startswith("NEC4")
-            and (quotation_due is None or assessment_due is None)
-        ):
+        if standard.startswith("NEC4") and (quotation_due is None or assessment_due is None):
             timers = compute_nec4_timers(data.requested_at or _now_iso())
             quotation_due = quotation_due or timers["quotation_due_at"]
             assessment_due = assessment_due or timers["assessment_due_at"]
@@ -910,10 +1050,7 @@ class VariationsService:
         if vr.status in {"approved", "rejected", "converted_to_vo"}:
             raise HTTPException(
                 status_code=http_status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Variation request is {vr.status} and can no longer be "
-                    "edited; create a new request instead"
-                ),
+                detail=(f"Variation request is {vr.status} and can no longer be edited; create a new request instead"),
             )
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
@@ -986,6 +1123,7 @@ class VariationsService:
         # same transaction so the trail is atomic with the status write.
         try:
             from app.core.audit_log import log_activity as _log_act
+
             await _log_act(
                 self.session,
                 actor_id=user_id,
@@ -1082,10 +1220,7 @@ class VariationsService:
         if vo.status in {"completed", "voided"}:
             raise HTTPException(
                 status_code=http_status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Variation order is {vo.status} and is no longer "
-                    "editable"
-                ),
+                detail=(f"Variation order is {vo.status} and is no longer editable"),
             )
         fields = data.model_dump(exclude_unset=True)
         if "metadata" in fields:
@@ -1187,6 +1322,43 @@ class VariationsService:
                 status_code=http_status.HTTP_409_CONFLICT,
                 detail=f"Only approved VRs can be converted (current: {vr.status})",
             )
+
+        # R8 race-safety: flip the VR status to ``converted_to_vo`` BEFORE
+        # creating the VO. Without this, two concurrent calls both pass the
+        # ``status == "approved"`` guard above and both reach ``create_order``,
+        # resulting in two VOs (and two COs) for one VR — a commercial ledger
+        # integrity violation. The conditional UPDATE below is atomic at the
+        # database level: only ONE caller's WHERE clause can match a row that is
+        # still ``approved``; the loser sees rowcount == 0 and 409s cleanly.
+        # This replaces the earlier ``vr_repo.update_fields(status=…)`` call at
+        # the bottom of the method which was a TOCTOU window.
+        from sqlalchemy import update as _sa_update
+
+        guard_stmt = (
+            _sa_update(VariationRequest)
+            .where(VariationRequest.id == vr_id)
+            .where(VariationRequest.status == "approved")
+            .values(status="converted_to_vo")
+        )
+        guard_result = await self.session.execute(guard_stmt)
+        affected = getattr(guard_result, "rowcount", None)
+        if affected == 0:
+            # A concurrent call already flipped the status — re-fetch for the
+            # current status so the error message is accurate.
+            refreshed = await self.vr_repo.get_by_id(vr_id)
+            current_status = getattr(refreshed, "status", "unknown") if refreshed else "unknown"
+            raise HTTPException(
+                status_code=http_status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Variation request was concurrently converted (current: {current_status}). "
+                    "Only one VO may be created per approved VR."
+                ),
+            )
+        # Keep the in-memory VR instance in sync so subsequent code and the
+        # ActivityLog writer see the new status without an extra round-trip.
+        vr.status = "converted_to_vo"
+        await self.session.flush()
+
         # Force link to the source VR.
         payload_dict = vo_payload.model_dump()
         payload_dict["project_id"] = vr.project_id
@@ -1209,8 +1381,7 @@ class VariationsService:
                 project_id=vr.project_id,
                 title=vo.title or vr.title or f"VO {vo.code}",
                 description=(
-                    f"Auto-created from variation order {vo.code} "
-                    f"(VR {vr.code}). Cost impact mirrors the VO."
+                    f"Auto-created from variation order {vo.code} (VR {vr.code}). Cost impact mirrors the VO."
                 ),
                 reason_category="design_change",
                 schedule_impact_days=max(0, int(vo.final_schedule_days or 0)),
@@ -1225,7 +1396,8 @@ class VariationsService:
             co = await co_service.create_order(co_payload)
             co_id = co.id
             await self.vo_repo.update_fields(
-                vo.id, reference_change_order_id=co_id,
+                vo.id,
+                reference_change_order_id=co_id,
             )
         except HTTPException:
             raise
@@ -1234,21 +1406,17 @@ class VariationsService:
             # whole point of doing it in the same txn is to avoid an
             # orphan VO with no CO. Re-raise as 500.
             logger.exception(
-                "Failed to mirror VR %s -> VO %s into ChangeOrder; "
-                "rolling back the promotion",
-                vr_id, vo.id,
+                "Failed to mirror VR %s -> VO %s into ChangeOrder; rolling back the promotion",
+                vr_id,
+                vo.id,
             )
             await self.session.rollback()
             raise HTTPException(
                 status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=(
-                    "Failed to mirror variation order into change orders "
-                    "module; promotion rolled back."
-                ),
+                detail=("Failed to mirror variation order into change orders module; promotion rolled back."),
             )
 
-        # Flip VR.status -> converted_to_vo
-        await self.vr_repo.update_fields(vr_id, status="converted_to_vo")
+        # VR.status was already flipped to converted_to_vo by the guard above.
         await self.session.refresh(vr)
         await self.session.refresh(vo)
 
@@ -1270,7 +1438,8 @@ class VariationsService:
     # ── Cost impact lines ─────────────────────────────────────────────────
 
     async def add_cost_impact(
-        self, data: VariationCostImpactCreate,
+        self,
+        data: VariationCostImpactCreate,
     ) -> VariationCostImpact:
         # Validate VO exists.
         vo = await self.get_order(data.variation_order_id)
@@ -1344,7 +1513,8 @@ class VariationsService:
     # ── Schedule impact lines ─────────────────────────────────────────────
 
     async def add_schedule_impact(
-        self, data: VariationScheduleImpactCreate,
+        self,
+        data: VariationScheduleImpactCreate,
     ) -> VariationScheduleImpact:
         await self.get_order(data.variation_order_id)
         row = VariationScheduleImpact(
@@ -1407,9 +1577,7 @@ class VariationsService:
             {
                 "project_id": str(data.project_id),
                 "measurement_id": str(sm.id),
-                "variation_order_id": (
-                    str(data.variation_order_id) if data.variation_order_id else None
-                ),
+                "variation_order_id": (str(data.variation_order_id) if data.variation_order_id else None),
                 "quantity": str(sm.measured_quantity),
                 "unit": sm.unit,
             },
@@ -1440,13 +1608,16 @@ class VariationsService:
         return sm
 
     async def agree_site_measurement(
-        self, sm_id: uuid.UUID, user_id: str | None = None,
+        self,
+        sm_id: uuid.UUID,
+        user_id: str | None = None,
     ) -> SiteMeasurement:
         sm = await self.site_measurement_repo.get_by_id(sm_id)
         if sm is None:
             raise HTTPException(status_code=404, detail=translate("errors.measurement_not_found", locale=get_locale()))
         await self.site_measurement_repo.update_fields(
-            sm_id, agreed_with_owner_at=_now_iso(),
+            sm_id,
+            agreed_with_owner_at=_now_iso(),
         )
         await self.session.refresh(sm)
         _safe_publish(
@@ -1519,7 +1690,9 @@ class VariationsService:
         return ds
 
     async def sign_daywork_sheet(
-        self, sheet_id: uuid.UUID, signer_id: str | None,
+        self,
+        sheet_id: uuid.UUID,
+        signer_id: str | None,
     ) -> DayworkSheet:
         ds = await self.get_daywork_sheet(sheet_id)
         if "signed" not in allowed_daywork_transitions(ds.status):
@@ -1556,7 +1729,9 @@ class VariationsService:
         return ds
 
     async def transition_daywork(
-        self, sheet_id: uuid.UUID, to_status: str,
+        self,
+        sheet_id: uuid.UUID,
+        to_status: str,
     ) -> DayworkSheet:
         ds = await self.get_daywork_sheet(sheet_id)
         if to_status not in allowed_daywork_transitions(ds.status):
@@ -1579,7 +1754,8 @@ class VariationsService:
     # ── Daywork lines ─────────────────────────────────────────────────────
 
     async def add_daywork_line(
-        self, data: DayworkSheetLineCreate,
+        self,
+        data: DayworkSheetLineCreate,
     ) -> DayworkSheetLine:
         await self.get_daywork_sheet(data.sheet_id)
         qty = _to_decimal(data.quantity)
@@ -1602,7 +1778,9 @@ class VariationsService:
         sheet = await self.get_daywork_sheet(data.sheet_id)
         total = apply_daywork_markup(subtotal, getattr(sheet, "markup_percent", 0))
         await self.daywork_repo.update_fields(
-            data.sheet_id, subtotal_amount=subtotal, total_amount=total,
+            data.sheet_id,
+            subtotal_amount=subtotal,
+            total_amount=total,
         )
         # ``update_fields`` calls ``session.expire_all()`` which also
         # expires the just-created ``row``. Re-load it so the caller can
@@ -1635,7 +1813,9 @@ class VariationsService:
         sheet = await self.get_daywork_sheet(row.sheet_id)
         total = apply_daywork_markup(subtotal, getattr(sheet, "markup_percent", 0))
         await self.daywork_repo.update_fields(
-            row.sheet_id, subtotal_amount=subtotal, total_amount=total,
+            row.sheet_id,
+            subtotal_amount=subtotal,
+            total_amount=total,
         )
         # The sheet ``update_fields`` above ran ``session.expire_all()``,
         # re-expiring ``row``; reload before returning so the response
@@ -1654,7 +1834,9 @@ class VariationsService:
         sheet = await self.get_daywork_sheet(sheet_id)
         total = apply_daywork_markup(subtotal, getattr(sheet, "markup_percent", 0))
         await self.daywork_repo.update_fields(
-            sheet_id, subtotal_amount=subtotal, total_amount=total,
+            sheet_id,
+            subtotal_amount=subtotal,
+            total_amount=total,
         )
 
     async def bulk_daywork_lines(
@@ -1690,7 +1872,9 @@ class VariationsService:
         labour_hours = getattr(data, "labour_hours_lost", None)
         if labour_hours is None and baseline is not None and impacted is not None:
             labour_hours = compute_disruption_lost_hours(
-                baseline, impacted, measured_qty,
+                baseline,
+                impacted,
+                measured_qty,
             )
         claim = DisruptionClaim(
             project_id=data.project_id,
@@ -1714,9 +1898,7 @@ class VariationsService:
         claim = await self.disruption_repo.create(claim)
         # If status is submitted at creation, emit submitted event too.
         _safe_publish(
-            "variations.disruption.submitted"
-            if claim.status == "submitted"
-            else "variations.disruption.created",
+            "variations.disruption.submitted" if claim.status == "submitted" else "variations.disruption.created",
             {
                 "project_id": str(data.project_id),
                 "claim_id": str(claim.id),
@@ -1733,7 +1915,9 @@ class VariationsService:
         return row
 
     async def update_disruption_claim(
-        self, claim_id: uuid.UUID, data: DisruptionClaimUpdate,
+        self,
+        claim_id: uuid.UUID,
+        data: DisruptionClaimUpdate,
     ) -> DisruptionClaim:
         claim = await self.get_disruption_claim(claim_id)
         fields = data.model_dump(exclude_unset=True)
@@ -1803,9 +1987,7 @@ class VariationsService:
         )
         claim = await self.eot_repo.create(claim)
         _safe_publish(
-            "variations.eot.submitted"
-            if claim.status == "submitted"
-            else "variations.eot.created",
+            "variations.eot.submitted" if claim.status == "submitted" else "variations.eot.created",
             {
                 "project_id": str(data.project_id),
                 "claim_id": str(claim.id),
@@ -1822,7 +2004,9 @@ class VariationsService:
         return row
 
     async def update_eot_claim(
-        self, claim_id: uuid.UUID, data: ExtensionOfTimeClaimUpdate,
+        self,
+        claim_id: uuid.UUID,
+        data: ExtensionOfTimeClaimUpdate,
     ) -> ExtensionOfTimeClaim:
         claim = await self.get_eot_claim(claim_id)
         fields = data.model_dump(exclude_unset=True)
@@ -1885,10 +2069,7 @@ class VariationsService:
         doesn't override.
         """
         claim = await self.get_eot_claim(claim_id)
-        cp_impact = (
-            critical_path_impact if critical_path_impact is not None
-            else (tia_delta_days > 0)
-        )
+        cp_impact = critical_path_impact if critical_path_impact is not None else (tia_delta_days > 0)
         await self.eot_repo.update_fields(
             claim_id,
             tia_delta_days=int(tia_delta_days),
@@ -1910,7 +2091,8 @@ class VariationsService:
     # ── Final account ─────────────────────────────────────────────────────
 
     async def create_final_account(
-        self, data: FinalAccountCreate,
+        self,
+        data: FinalAccountCreate,
     ) -> FinalAccount:
         existing = await self.final_account_repo.for_project(data.project_id)
         if existing is not None:
@@ -1934,6 +2116,7 @@ class VariationsService:
             fa = await self.final_account_repo.create(fa)
         except Exception as exc:  # broad-catch: SQLA wraps dialect errors
             from sqlalchemy.exc import IntegrityError
+
             if isinstance(exc, IntegrityError):
                 raise HTTPException(
                     status_code=http_status.HTTP_409_CONFLICT,
@@ -1946,11 +2129,15 @@ class VariationsService:
     async def get_final_account(self, fa_id: uuid.UUID) -> FinalAccount:
         row = await self.final_account_repo.get_by_id(fa_id)
         if row is None:
-            raise HTTPException(status_code=404, detail=translate("errors.final_account_not_found", locale=get_locale()))
+            raise HTTPException(
+                status_code=404, detail=translate("errors.final_account_not_found", locale=get_locale())
+            )
         return row
 
     async def update_final_account(
-        self, fa_id: uuid.UUID, data: FinalAccountUpdate,
+        self,
+        fa_id: uuid.UUID,
+        data: FinalAccountUpdate,
     ) -> FinalAccount:
         fa = await self.get_final_account(fa_id)
         fields = data.model_dump(exclude_unset=True)
@@ -1974,7 +2161,9 @@ class VariationsService:
         return fa
 
     async def close_final_account(
-        self, fa_id: uuid.UUID, signer_id: str | None = None,
+        self,
+        fa_id: uuid.UUID,
+        signer_id: str | None = None,
     ) -> FinalAccount:
         fa = await self.get_final_account(fa_id)
         if "closed" not in allowed_final_account_transitions(fa.status):
@@ -1984,7 +2173,9 @@ class VariationsService:
             )
         now = _now_iso()
         await self.final_account_repo.update_fields(
-            fa_id, status="closed", closed_at=now,
+            fa_id,
+            status="closed",
+            closed_at=now,
         )
         await self.session.refresh(fa)
         _safe_publish(
@@ -2000,7 +2191,9 @@ class VariationsService:
         return fa
 
     async def apply_variation_to_final_account(
-        self, vo_id: uuid.UUID, final_account_id: uuid.UUID,
+        self,
+        vo_id: uuid.UUID,
+        final_account_id: uuid.UUID,
     ) -> FinalAccount:
         """Add the VO total to ``variations_total`` and recompute ``final_value``.
 
@@ -2109,13 +2302,12 @@ class VariationsService:
         # Only agreed claims count toward totals -- pending_claims excludes agreed,
         # so re-query agreed via a list-for-project filter.
         agreed_disruption, _ = await self.disruption_repo.list_for_project(
-            project_id, limit=1000, status="agreed",
+            project_id,
+            limit=1000,
+            status="agreed",
         )
         disruption_total = sum(
-            (
-                _to_decimal(c.decided_amount or c.cost_amount)
-                for c in agreed_disruption if _accept(c)
-            ),
+            (_to_decimal(c.decided_amount or c.cost_amount) for c in agreed_disruption if _accept(c)),
             Decimal("0"),
         )
 
@@ -2156,7 +2348,8 @@ class VariationsService:
         row = await self.schedule_impact_repo.get_by_id(line_id)
         if row is None:
             raise HTTPException(
-                status_code=404, detail="Schedule-impact line not found",
+                status_code=404,
+                detail="Schedule-impact line not found",
             )
         vo = await self.get_order(row.variation_order_id)
         return vo.project_id
@@ -2175,25 +2368,17 @@ class VariationsService:
         # Status histograms via GROUP BY (no row materialisation / N+1).
         notice_counts = await self.notice_repo.status_counts(project_id)
         n_total = sum(notice_counts.values())
-        notices_open = sum(
-            c for s, c in notice_counts.items()
-            if s in {"issued", "acknowledged", "responded"}
-        )
+        notices_open = sum(c for s, c in notice_counts.items() if s in {"issued", "acknowledged", "responded"})
 
         vr_counts = await self.vr_repo.status_counts(project_id)
         vr_total = sum(vr_counts.values())
-        vr_pending = sum(
-            c for s, c in vr_counts.items()
-            if s in {"draft", "submitted", "under_review"}
-        )
+        vr_pending = sum(c for s, c in vr_counts.items() if s in {"draft", "submitted", "under_review"})
         vr_approved = vr_counts.get("approved", 0)
         vr_rejected = vr_counts.get("rejected", 0)
 
         vo_counts = await self.vo_repo.status_counts(project_id)
         vo_total = sum(vo_counts.values())
-        vo_active = sum(
-            c for s, c in vo_counts.items() if s in {"issued", "in_progress"}
-        )
+        vo_active = sum(c for s, c in vo_counts.items() if s in {"issued", "in_progress"})
         vo_completed = vo_counts.get("completed", 0)
         # Money / schedule roll-ups exclude voided VOs (no commercial value).
         cost_total = await self.vo_repo.cost_impact_sum(project_id)
@@ -2201,10 +2386,35 @@ class VariationsService:
 
         dw_counts = await self.daywork_repo.status_counts(project_id)
         dw_total = sum(dw_counts.values())
-        dw_signed = sum(
-            c for s, c in dw_counts.items() if s in {"signed", "billed"}
-        )
+        dw_signed = sum(c for s, c in dw_counts.items() if s in {"signed", "billed"})
         dw_value = await self.daywork_repo.signed_value(project_id)
+
+        # Currency bug fix: ``cost_total`` / ``dw_value`` above are scalar
+        # SUMs that blend VOs / daywork sheets of different ISO currencies
+        # into one number. Re-derive them per-currency and FX-convert to
+        # the project BASE currency so the scalar totals are honest rather
+        # than a meaningless mix. Falls back gracefully when the repos
+        # don't expose the by-currency helpers (e.g. in-memory test stubs).
+        project = await _load_project_currency_meta(self.session, project_id)
+        base_code = ((getattr(project, "currency", "") if project is not None else "") or "").strip().upper()
+        fx_map = _project_fx_map(project)
+        cost_by_cur = await _safe_by_currency(self.vo_repo, "cost_impact_by_currency", project_id)
+        dw_by_cur = await _safe_by_currency(self.daywork_repo, "signed_value_by_currency", project_id)  # noqa: E501
+        # Only override the legacy scalar totals when the by-currency
+        # breakdown is actually available (production repos). If a repo
+        # doesn't expose the helper (in-memory test stubs return ``{}``),
+        # keep the original ``cost_impact_sum`` / ``signed_value`` scalar
+        # so we never replace a real figure with a spurious 0.
+        cost_unconverted: dict[str, Decimal] = {}
+        dw_unconverted: dict[str, Decimal] = {}
+        if cost_by_cur:
+            cost_total, cost_unconverted = _convert_money_buckets(cost_by_cur, base_code, fx_map)
+        if dw_by_cur:
+            dw_value, dw_unconverted = _convert_money_buckets(dw_by_cur, base_code, fx_map)
+        # ``multi_currency`` = more than one DISTINCT non-blank currency
+        # seen across either money stream.
+        distinct_codes = {c for c in (*cost_by_cur.keys(), *dw_by_cur.keys()) if c}
+        multi_currency = len(distinct_codes) > 1
 
         # R5 audit: COUNT-only — previous code materialised the full claim
         # rows just to read ``len(...)``. Fallback to ``len(pending_claims)``
@@ -2221,7 +2431,13 @@ class VariationsService:
 
         fa = await self.final_account_repo.for_project(project_id)
         fa_status = fa.status if fa is not None else "none"
-        currency = (
+        # Currency bug fix: the dashboard currency is now the project BASE
+        # currency (the one the FX-converted scalar totals are expressed
+        # in), NOT ``first_currency`` (the earliest-created row's currency,
+        # which silently mis-labelled a blended sum). Fall back to the
+        # earliest VO / daywork / final-account currency only when the
+        # project carries no currency of its own.
+        currency = base_code or (
             await self.vo_repo.first_currency(project_id)
             or await self.daywork_repo.first_currency(project_id)
             or (fa.currency if fa else "")
@@ -2247,4 +2463,10 @@ class VariationsService:
             "eot_claims_open": eot_open,
             "final_account_status": fa_status,
             "currency": currency,
+            # Additive multi-currency disclosure (optional response fields).
+            "cost_impact_by_currency": _money_str_map(cost_by_cur),
+            "cost_impact_unconverted_by_currency": _money_str_map(cost_unconverted),
+            "daywork_value_by_currency": _money_str_map(dw_by_cur),
+            "daywork_value_unconverted_by_currency": _money_str_map(dw_unconverted),
+            "multi_currency": multi_currency,
         }

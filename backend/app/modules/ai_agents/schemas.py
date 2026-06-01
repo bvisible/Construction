@@ -106,4 +106,4 @@ class AgentHealthResponse(BaseModel):
     llm_configured: bool
     provider: str | None = None
     model: str | None = None
-    settings_url: str = "/settings/ai"
+    settings_url: str = "/settings?tab=ai"

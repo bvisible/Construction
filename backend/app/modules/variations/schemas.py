@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer
 # locale-neutral and exact. NaN/Infinity collapse to "0" rather than
 # crashing the encoder.
 
+
 def _serialize_money_string(value: Any) -> str | None:
     """Render a Decimal-ish value as a plain-decimal string, or ``None``."""
     if value is None:
@@ -30,6 +31,7 @@ def _serialize_money_string(value: Any) -> str | None:
     if not value.is_finite():
         return "0"
     return format(value, "f")
+
 
 # Status / category patterns
 _NOTICE_STATUS = r"^(issued|acknowledged|responded|closed)$"
@@ -458,7 +460,10 @@ class DayworkSheetResponse(BaseModel):
     updated_at: datetime
 
     @field_serializer(
-        "subtotal_amount", "markup_percent", "total_amount", when_used="json",
+        "subtotal_amount",
+        "markup_percent",
+        "total_amount",
+        when_used="json",
     )
     @classmethod
     def _ser_money(cls, v: Decimal) -> str:
@@ -761,6 +766,29 @@ class VariationDashboardResponse(BaseModel):
     eot_claims_open: int = 0
     final_account_status: str = "none"
     currency: str = ""
+
+    # ── Multi-currency disclosure (additive, optional) ────────────────
+    #
+    # Currency bug fix: ``cost_impact_total`` / ``daywork_value_signed``
+    # are scalar SUMs that historically blended VOs / daywork sheets of
+    # different ISO currencies into one number labelled with whichever
+    # currency was created first. These optional fields make the dashboard
+    # honest WITHOUT changing the existing scalar fields (the frontend
+    # still reads them). ``currency`` is now the project BASE currency
+    # (not the earliest row's), and the scalar totals are FX-converted to
+    # it via the project's ``fx_rates`` when a rate exists.
+    #
+    # ``*_by_currency`` maps hold the raw per-currency breakdown (ISO code
+    # -> money string). ``*_unconverted_by_currency`` maps hold foreign
+    # amounts that have NO FX rate, so the UI can show "+ 5,000.00 USD (no
+    # rate)" alongside -- never inside -- the base total. ``multi_currency``
+    # flags that more than one currency is present so the UI can warn the
+    # scalar total is a converted figure.
+    cost_impact_by_currency: dict[str, str] = Field(default_factory=dict)
+    cost_impact_unconverted_by_currency: dict[str, str] = Field(default_factory=dict)
+    daywork_value_by_currency: dict[str, str] = Field(default_factory=dict)
+    daywork_value_unconverted_by_currency: dict[str, str] = Field(default_factory=dict)
+    multi_currency: bool = False
 
     @field_serializer("cost_impact_total", "daywork_value_signed", when_used="json")
     @classmethod

@@ -342,7 +342,7 @@ VITE_API_TARGET=http://127.0.0.1:8765 npm run dev
    backend log, e.g.:
 
    ```
-   [seed] Demo user created: demo@openestimator.io / xK7p_Q2nR8sT4uV6wX9yZ
+   [seed] Demo user created: demo@openconstructionerp.com / xK7p_Q2nR8sT4uV6wX9yZ
    [seed] Pre-set DEMO_USER_PASSWORD env to skip random generation
    ```
 
@@ -363,7 +363,7 @@ VITE_API_TARGET=http://127.0.0.1:8765 npm run dev
    To pin a known password (e.g. for a team demo or CI), export
    `DEMO_USER_PASSWORD=YourSecret` **before** the first boot.
 
-   Look up `demo@openestimator.io` (note the trailing **`r`** — a common
+   Look up `demo@openconstructionerp.com` (note the trailing **`r`** — a common
    typo is `openestimate.io` which silently returns 401 because that
    user does not exist).
 
@@ -397,10 +397,10 @@ from a third terminal with the backend up.
 curl -s http://127.0.0.1:8000/api/health | python -m json.tool
 
 # 2. login + grab token (Linux/macOS/Git Bash, with jq)
-PW=$(python -c "import json,os;print(json.load(open(os.path.expanduser('~/.openestimator/.demo_credentials.json')))['demo@openestimator.io'])")
+PW=$(python -c "import json,os;print(json.load(open(os.path.expanduser('~/.openestimator/.demo_credentials.json')))['demo@openconstructionerp.com'])")
 TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/v1/users/auth/login/ \
   -H "Content-Type: application/json" \
-  -d "{\"email\":\"demo@openestimator.io\",\"password\":\"$PW\"}" \
+  -d "{\"email\":\"demo@openconstructionerp.com\",\"password\":\"$PW\"}" \
   | python -c "import json,sys;print(json.load(sys.stdin)['access_token'])")
 
 # 3. /api/system/modules — needs admin token
@@ -446,20 +446,20 @@ install.
 auto-generated one. Solutions in order of preference:
 
 1. Scroll back through the backend startup log for a `[seed]` line:
-   `[seed] Demo user created: demo@openestimator.io / <password>`.
+   `[seed] Demo user created: demo@openconstructionerp.com / <password>`.
 2. Read `~/.openestimator/.demo_credentials.json` and use that password.
 3. Set `DEMO_USER_PASSWORD=YourSecret` (and the matching
    `DEMO_ESTIMATOR_PASSWORD` / `DEMO_MANAGER_PASSWORD`) **before** the
    first backend boot, delete `backend/openestimate.db`, and start the
    backend again — that re-seeds the demo accounts with your password.
-4. Double-check the email: it must be `demo@openestimator.io`
+4. Double-check the email: it must be `demo@openconstructionerp.com`
    (with the trailing `r`). `demo@openestimate.io` (no `r`) does not
    exist and silently returns 401.
 
 ### `/api/system/modules` returns `{"detail":"Not authenticated"}`
 
 **Cause**: it's an admin-only endpoint. Solution: log in as
-`demo@openestimator.io` (admin) and pass `Authorization: Bearer <token>`
+`demo@openconstructionerp.com` (admin) and pass `Authorization: Bearer <token>`
 header.
 
 ### Vite dev server starts but every API call 502s

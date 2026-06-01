@@ -21,7 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSearchParams } from 'react-router-dom';
 
-import { EmptyState, OnboardingTour } from '@/shared/ui';
+import { BetaBanner, EmptyState, OnboardingTour } from '@/shared/ui';
 import type { TourStep } from '@/shared/ui';
 import { getErrorMessage } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
@@ -55,6 +55,7 @@ export function PipelinesPage() {
   const [dockExpanded, setDockExpanded] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | undefined>(undefined);
   const [loadToken, setLoadToken] = useState(0);
+  const [explainSummary, setExplainSummary] = useState<string | null>(null);
   const fitViewRef = useRef<(() => void) | null>(null);
 
   // ── Server state ────────────────────────────────────────────────────────
@@ -85,10 +86,17 @@ export function PipelinesPage() {
   const applyRunDetail = usePipelineStore((s) => s.applyRunDetail);
   const clearRun = usePipelineStore((s) => s.clearRun);
   const toGraphJSON = usePipelineStore((s) => s.toGraphJSON);
+  const clearSelection = usePipelineStore((s) => s.clearSelection);
   const reset = usePipelineStore((s) => s.reset);
 
   // Reset the store on unmount so a fresh visit starts clean.
   useEffect(() => () => reset(), [reset]);
+
+  // The explain summary is a point-in-time snapshot of the graph, so drop it
+  // whenever the graph changes — a stale summary would misrepresent the canvas.
+  useEffect(() => {
+    setExplainSummary(null);
+  }, [nodeCount, edgeCount, loadToken]);
 
   // Set the project binding once from the URL.
   useEffect(() => {
@@ -238,17 +246,90 @@ export function PipelinesPage() {
   }, [clearRun]);
 
   const handleExplain = useCallback(() => {
-    addToast({
-      type: 'info',
-      title: t('pipeline.explain.coming_soon_title', {
-        defaultValue: 'Explain this pipeline',
+    // Deterministic plain-language summary built from the current graph JSON.
+    // No LLM / network — describes the steps and how they are wired together.
+    const graph = toGraphJSON();
+    const meta = usePipelineStore.getState().meta;
+
+    const labelFor = (n: { type: string; label?: string }): string => {
+      if (n.label && n.label.trim()) return n.label.trim();
+      const def = nodeTypes.find((d) => d.type === n.type);
+      return def?.label?.trim() || n.type;
+    };
+    const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+    const nameFor = (id: string): string => {
+      const n = byId.get(id);
+      return n ? labelFor(n) : id;
+    };
+
+    const lines: string[] = [];
+    const title =
+      meta.name.trim() ||
+      t('pipeline.untitled', { defaultValue: 'Untitled pipeline' });
+
+    if (graph.nodes.length === 0) {
+      setExplainSummary(
+        t('pipeline.explain.empty', {
+          defaultValue:
+            'This pipeline is empty. Drag a few steps from the palette and connect them, then ask again.',
+        }),
+      );
+      clearSelection();
+      setInspectorCollapsed(false);
+      return;
+    }
+
+    lines.push(
+      t('pipeline.explain.heading', {
+        defaultValue: '"{{name}}" has {{nodes}} step(s) and {{edges}} connection(s).',
+        name: title,
+        nodes: graph.nodes.length,
+        edges: graph.edges.length,
       }),
-      message: t('pipeline.explain.coming_soon_body', {
-        defaultValue:
-          'The plain-language story view arrives in the next release.',
-      }),
-    });
-  }, [addToast, t]);
+    );
+    lines.push('');
+
+    lines.push(t('pipeline.explain.steps_label', { defaultValue: 'Steps:' }));
+    for (const n of graph.nodes) {
+      lines.push(
+        t('pipeline.explain.step_line', {
+          defaultValue: '• {{label}} ({{type}})',
+          label: labelFor(n),
+          type: n.type,
+        }),
+      );
+    }
+
+    if (graph.edges.length > 0) {
+      lines.push('');
+      lines.push(t('pipeline.explain.flow_label', { defaultValue: 'Data flow:' }));
+      for (const e of graph.edges) {
+        lines.push(
+          t('pipeline.explain.flow_line', {
+            defaultValue: '• {{from}} → {{to}}',
+            from: nameFor(e.source),
+            to: nameFor(e.target),
+          }),
+        );
+      }
+    }
+
+    // Surface authoring issues so the summary is honest about gaps.
+    if (issueCount > 0) {
+      lines.push('');
+      lines.push(
+        t('pipeline.explain.issues_line', {
+          defaultValue:
+            '{{count}} step(s) still need an input connected before this can run.',
+          count: issueCount,
+        }),
+      );
+    }
+
+    setExplainSummary(lines.join('\n'));
+    clearSelection();
+    setInspectorCollapsed(false);
+  }, [clearSelection, issueCount, nodeTypes, t, toGraphJSON]);
 
   // The shared OnboardingTour resolves `title`/`description` via its internal
   // STEP_DEFAULTS map and falls back to the raw value when a key is unknown —
@@ -302,6 +383,7 @@ export function PipelinesPage() {
       data-tour="pipelines"
       className="flex h-[calc(100vh-var(--oe-header-height,56px))] w-full overflow-hidden bg-surface-primary"
     >
+      <BetaBanner moduleKey="pipelines" className="mt-3" />
       <NodePalette
         nodeTypes={nodeTypes}
         loading={nodeTypesQuery.isLoading}
@@ -360,6 +442,7 @@ export function PipelinesPage() {
         nodeTypes={nodeTypes}
         collapsed={inspectorCollapsed}
         onToggleCollapsed={() => setInspectorCollapsed((v) => !v)}
+        summary={explainSummary}
       />
 
       <OnboardingTour steps={tourSteps} />

@@ -43,7 +43,6 @@ import {
   Crosshair,
   Scan,
   FileText,
-  Image as ImageIcon,
   Sparkles,
   Layers,
   List,
@@ -58,6 +57,7 @@ import { useAuthStore } from '../../stores/useAuthStore';
 import { boqApi, type CreatePositionData, type Position } from '../../features/boq/api';
 import { takeoffApi } from '../../features/takeoff/api';
 import { apiGet } from '../../shared/lib/api';
+import { formatFileSize } from '../../shared/lib/formatters';
 import { useMeasurementPersistence } from './useMeasurementPersistence';
 import {
   type ScaleConfig,
@@ -225,16 +225,39 @@ type UndoOperation =
 
 /* ── Component ─────────────────────────────────────────────────────── */
 
+/** Minimal shape of a previously-uploaded takeoff document, surfaced as a
+ *  "Recent drawings" list on the landing page so the user can reopen a PDF
+ *  in one click instead of re-uploading it. */
+export interface RecentTakeoffDocument {
+  id: string;
+  filename: string;
+  pages: number;
+  size_bytes: number;
+  uploaded_at: string | null;
+}
+
 interface TakeoffViewerModuleProps {
   /** URL to pre-load a PDF from (e.g. `/api/v1/takeoff/documents/{id}/download/`). */
   initialPdfUrl?: string;
   /** Optional filename to associate with the pre-loaded PDF (used for persistence key). */
   initialPdfName?: string;
+  /** Optional measurement id to auto-select + scroll-to once the measurement
+   *  list lands (used by the /markups → /takeoff deep-link). Matches either
+   *  the frontend id or the server-side UUID. */
+  initialMeasurementId?: string | null;
+  /** Previously-uploaded documents for the active project, shown on the
+   *  landing page as a "Recent drawings" quick-open list. */
+  recentDocuments?: RecentTakeoffDocument[];
+  /** Open one of the recent documents in the viewer (parent owns navigation). */
+  onOpenRecentDocument?: (docId: string) => void;
 }
 
 export default function TakeoffViewerModule({
   initialPdfUrl,
   initialPdfName,
+  initialMeasurementId,
+  recentDocuments,
+  onOpenRecentDocument,
 }: TakeoffViewerModuleProps = {}) {
   const { t } = useTranslation();
 
@@ -379,6 +402,32 @@ export default function TakeoffViewerModule({
     setScale: (s) => setScale(s),
     projectId: activeProjectId,
   });
+
+  /* ── Deep-link: auto-select measurement from /markups ─────────────────
+   * The /markups hub deep-links here with ``?measurementId=<uuid>``. After
+   * the persistence hook hydrates the measurement list we look up the row
+   * by either the frontend id or the server-side UUID, switch to its page
+   * if needed, swap the sidebar to the Ledger tab (so the scroll-to-flash
+   * has somewhere visible to land) and select it. The MeasurementLedger
+   * scrolls the matching row into view + flashes via CSS.
+   *
+   * Guarded by a ref so we only consume the param once per mount — the
+   * user is free to click around afterwards without us yanking them back. */
+  const deepLinkConsumedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialMeasurementId) return;
+    if (deepLinkConsumedRef.current === initialMeasurementId) return;
+    if (measurements.length === 0) return;
+    const match = measurements.find(
+      (m) => m.id === initialMeasurementId || m.serverId === initialMeasurementId,
+    );
+    if (!match) return;
+    deepLinkConsumedRef.current = initialMeasurementId;
+    const targetPage = Math.max(1, Math.min(match.page || 1, totalPages || 1));
+    if (targetPage !== currentPage) setCurrentPage(targetPage);
+    setSidebarTab('ledger');
+    setSelectedMeasurementId(match.id);
+  }, [initialMeasurementId, measurements, totalPages, currentPage]);
 
   /* ── Load PDF ────────────────────────────────────────────────────── */
 
@@ -588,7 +637,18 @@ export default function TakeoffViewerModule({
     ctx.lineWidth = 2 * dpr;
     ctx.font = `${12 * dpr}px sans-serif`;
 
-    /** Draw an annotation label with a semi-transparent background at (lx, ly). */
+    /** Draw an annotation label with a semi-transparent background at (lx, ly).
+     *
+     * Dark-mode fix (D-TKC-DK01): the label pill background was hardcoded
+     * to '#ffffff', which made it invisible against a light canvas in light
+     * mode when globalAlpha was low, and looked jarring in dark mode where
+     * the app chrome is dark but the PDF canvas itself is always white.
+     * We now read the actual dark-mode state from the html element so the
+     * pill adapts correctly: white background in light mode, dark-grey in
+     * dark mode. The text color is always the measurement group color so
+     * the label remains legible regardless of theme.
+     */
+    const isDark = document.documentElement.classList.contains('dark');
     const drawAnnotationLabel = (text: string, lx: number, ly: number, color: string) => {
       const fontSize = 11 * dpr;
       ctx.font = `bold ${fontSize}px sans-serif`;
@@ -599,9 +659,9 @@ export default function TakeoffViewerModule({
       const boxH = fontSize + padY * 2;
       const bx = lx - padX;
       const by = ly - fontSize - padY;
-      // Semi-transparent background
-      ctx.globalAlpha = 0.75;
-      ctx.fillStyle = '#ffffff';
+      // Semi-transparent background — white in light mode, dark-grey in dark mode
+      ctx.globalAlpha = 0.82;
+      ctx.fillStyle = isDark ? '#1e293b' : '#ffffff';
       ctx.fillRect(bx, by, boxW, boxH);
       ctx.globalAlpha = 1;
       // Border
@@ -1900,24 +1960,7 @@ export default function TakeoffViewerModule({
 
   /* ── Export measurements to BOQ ────────────────────────────────── */
 
-  const openExportDialog = useCallback(async () => {
-    setShowExportDialog(true);
-    try {
-      const projects = await apiGet<{ id: string; name: string }[]>('/v1/projects/');
-      setExportProjects(projects);
-    } catch (err) {
-      setExportProjects([]);
-      addToast({
-        type: 'error',
-        title: t('takeoff.load_projects_failed', { defaultValue: 'Failed to load projects' }),
-        message: err instanceof Error ? err.message : '',
-      });
-    }
-  }, [addToast, t]);
-
-  const handleProjectChange = useCallback(async (projectId: string) => {
-    setSelectedProjectId(projectId);
-    setSelectedBoqId('');
+  const loadExportBoqs = useCallback(async (projectId: string) => {
     if (!projectId) { setExportBoqs([]); return; }
     try {
       const boqs = await apiGet<{ id: string; name: string }[]>(`/v1/boq/boqs/?project_id=${projectId}`);
@@ -1930,7 +1973,38 @@ export default function TakeoffViewerModule({
         message: err instanceof Error ? err.message : '',
       });
     }
-  }, []);
+  }, [addToast, t]);
+
+  const openExportDialog = useCallback(async () => {
+    setShowExportDialog(true);
+    // Seed the picker from the app's active project context so the
+    // estimator doesn't have to reselect the project they're already
+    // working in. The BOQ list loads in step with it.
+    const seedProject = selectedProjectId || activeProjectId || '';
+    if (seedProject) {
+      setSelectedProjectId(seedProject);
+      if (exportBoqs.length === 0) {
+        await loadExportBoqs(seedProject);
+      }
+    }
+    try {
+      const projects = await apiGet<{ id: string; name: string }[]>('/v1/projects/');
+      setExportProjects(projects);
+    } catch (err) {
+      setExportProjects([]);
+      addToast({
+        type: 'error',
+        title: t('takeoff.load_projects_failed', { defaultValue: 'Failed to load projects' }),
+        message: err instanceof Error ? err.message : '',
+      });
+    }
+  }, [addToast, t, selectedProjectId, activeProjectId, exportBoqs.length, loadExportBoqs]);
+
+  const handleProjectChange = useCallback(async (projectId: string) => {
+    setSelectedProjectId(projectId);
+    setSelectedBoqId('');
+    await loadExportBoqs(projectId);
+  }, [loadExportBoqs]);
 
   const handleExportToBOQ = useCallback(async () => {
     if (!selectedBoqId || measurements.length === 0) return;
@@ -2544,8 +2618,8 @@ export default function TakeoffViewerModule({
       icon: Scan,
       color: 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-800',
       ic: 'text-emerald-500',
-      title: t('takeoff.landing_feat_symbol_title', { defaultValue: 'Auto symbol detection' }),
-      desc: t('takeoff.landing_feat_symbol_desc', { defaultValue: 'AI spots doors, windows and MEP symbols and proposes counts with confidence scores.' }),
+      title: t('takeoff.landing_feat_extract_title', { defaultValue: 'AI text & table extraction' }),
+      desc: t('takeoff.landing_feat_extract_desc', { defaultValue: 'Pull schedules and BOQ tables straight out of the PDF text — each row comes back with a confidence score to review.' }),
     },
     {
       icon: Ruler,
@@ -2578,11 +2652,8 @@ export default function TakeoffViewerModule({
   ];
 
   const landingFormats = [
-    { ext: 'PDF', label: t('takeoff.landing_fmt_pdf', { defaultValue: 'Vector drawings, floor plans, sections' }), icon: FileText, size: 'up to 50MB', primary: true },
-    { ext: 'PNG', label: t('takeoff.landing_fmt_png', { defaultValue: 'Raster plan images' }), icon: ImageIcon, size: 'up to 50MB' },
-    { ext: 'JPG', label: t('takeoff.landing_fmt_jpg', { defaultValue: 'Scanned or photographed plans' }), icon: ImageIcon, size: 'up to 50MB' },
-    { ext: 'TIFF', label: t('takeoff.landing_fmt_tiff', { defaultValue: 'High-resolution scans' }), icon: ImageIcon, size: 'up to 50MB' },
-    { ext: 'DWG', label: t('takeoff.landing_fmt_dwg', { defaultValue: 'Use DWG Takeoff module instead' }), icon: Box, size: 'via DWG module', muted: true },
+    { ext: 'PDF', label: t('takeoff.landing_fmt_pdf', { defaultValue: 'Vector drawings, floor plans, sections' }), icon: FileText, primary: true, muted: false },
+    { ext: 'DWG', label: t('takeoff.landing_fmt_dwg', { defaultValue: 'Use DWG Takeoff module instead' }), icon: Box, primary: false, muted: true },
   ];
 
   return (
@@ -2710,7 +2781,7 @@ export default function TakeoffViewerModule({
                         addToast({
                           type: 'warning',
                           title: t('takeoff.landing_drop_pdf_only_title', { defaultValue: 'PDF only' }),
-                          message: t('takeoff.landing_drop_pdf_only_msg', { defaultValue: 'Image support is coming soon — drop a PDF for now.' }),
+                          message: t('takeoff.landing_drop_pdf_only_msg', { defaultValue: 'This viewer measures PDF drawings. Drop a PDF file to get started.' }),
                         });
                       }
                     }}
@@ -2724,7 +2795,7 @@ export default function TakeoffViewerModule({
                         {t('takeoff.landing_drop_here', { defaultValue: 'Drop a PDF here or click to browse' })}
                       </p>
                       <p className="text-xs text-content-tertiary mt-1">
-                        {t('takeoff.landing_size_hint', { defaultValue: 'PDF — up to 50MB' })}
+                        {t('takeoff.landing_size_hint', { defaultValue: 'Vector or scanned PDF drawings' })}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 flex-wrap justify-center">
@@ -2736,6 +2807,47 @@ export default function TakeoffViewerModule({
                     <input type="file" accept="application/pdf" onChange={handleFileUpload} className="hidden" />
                   </label>
                 </div>
+
+                {/* Recent drawings — previously uploaded PDFs for this
+                    project, so the estimator can reopen one in a click
+                    instead of re-uploading the same file. */}
+                {recentDocuments && recentDocuments.length > 0 && (
+                  <div className="mt-4">
+                    <h2 className="text-[10px] font-bold text-content-tertiary uppercase tracking-widest mb-2">
+                      {t('takeoff.landing_recent_drawings', { defaultValue: 'Recent drawings' })}
+                    </h2>
+                    <ul className="space-y-1.5">
+                      {recentDocuments.slice(0, 5).map((doc) => (
+                        <li key={doc.id}>
+                          <button
+                            type="button"
+                            onClick={() => onOpenRecentDocument?.(doc.id)}
+                            className="group/recent flex w-full items-center gap-2.5 rounded-lg border border-border-light/60 bg-white dark:bg-gray-800/40 px-2.5 py-2 text-left transition-all hover:border-oe-blue/40 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+                          >
+                            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border-light bg-surface-secondary text-content-tertiary group-hover/recent:text-oe-blue">
+                              <FileText size={13} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-[11px] font-semibold text-content-primary">
+                                {doc.filename}
+                              </p>
+                              <p className="text-[10px] text-content-tertiary">
+                                {doc.pages > 0
+                                  ? `${doc.pages} ${t('takeoff.pages_short', { defaultValue: 'p' })} · `
+                                  : ''}
+                                {formatFileSize(doc.size_bytes)}
+                              </p>
+                            </div>
+                            <ChevronRight
+                              size={13}
+                              className="shrink-0 text-content-quaternary group-hover/recent:text-oe-blue"
+                            />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
 
               {/* RIGHT — Hero text + supported formats cards */}

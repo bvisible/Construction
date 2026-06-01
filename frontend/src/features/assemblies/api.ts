@@ -93,11 +93,13 @@ export interface AssemblyExport {
   tags: string[];
   components: Array<{
     description: string;
+    resource_type?: ResourceType | null;
     factor: number;
     quantity: number;
     unit: string;
     unit_cost: number;
     sort_order: number;
+    metadata?: ComponentMetadata;
   }>;
 }
 

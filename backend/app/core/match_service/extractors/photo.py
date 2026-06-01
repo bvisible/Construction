@@ -9,7 +9,7 @@ partial-quality envelope so tests pass and the rest of the system
 doesn't block waiting on CV.
 
 # v2.8 follow-up: depends on CV pipeline build (B=full CV pipeline from scratch)
-# Tracked in: CLAUDE.md Phase 3 "AI Takeoff" → ``services/cv-pipeline/``.
+# Tracked in: the architecture guide Phase 3 "AI Takeoff" → ``services/cv-pipeline/``.
 # Replace ``description`` synthesis with the structured CV output
 # (object detections + dimension OCR + symbol classification).
 """

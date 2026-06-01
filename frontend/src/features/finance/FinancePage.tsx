@@ -48,6 +48,7 @@ import {
 } from '@/shared/ui/WideModal';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
+import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { apiGet, apiPost, apiPatch, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { ContactSearchInput } from '@/shared/ui/ContactSearchInput';
@@ -117,23 +118,46 @@ interface Invoice {
   updated_at: string;
 }
 
-type InvoiceWire = Omit<Invoice, 'counterparty_name'> & {
+// The API (InvoiceResponse) emits the canonical wire names —
+// invoice_direction / invoice_date / currency_code / amount_total — rather
+// than the legacy display aliases the table reads (direction / issue_date /
+// currency / amount). The list/table columns and totals consume the display
+// aliases, so normaliseInvoice MUST map every one of them, not just the
+// counterparty name. Reading inv.amount / inv.currency / inv.issue_date off a
+// raw wire row otherwise yields undefined (em-dash amount, blank date).
+type InvoiceWire = Omit<
+  Invoice,
+  'counterparty_name' | 'direction' | 'issue_date' | 'amount' | 'currency'
+> & {
   counterparty_name?: string | null;
   contact_id?: string | null;
+  direction?: 'payable' | 'receivable';
+  invoice_direction?: 'payable' | 'receivable';
+  issue_date?: string | null;
+  invoice_date?: string | null;
+  amount?: number | string | null;
   amount_total?: string | null;
+  currency?: string | null;
+  currency_code?: string | null;
 };
 
 function normaliseInvoice(i: InvoiceWire): Invoice {
+  const amountRaw = i.amount_total ?? i.amount;
   return {
     ...i,
     counterparty_name: i.counterparty_name ?? i.contact_id ?? '',
+    direction: i.invoice_direction ?? i.direction ?? 'payable',
+    issue_date: i.invoice_date ?? i.issue_date ?? '',
+    amount: amountRaw != null ? Number(amountRaw) : 0,
+    currency: i.currency_code ?? i.currency ?? '',
   } as Invoice;
 }
 
 interface Payment {
   id: string;
   invoice_id: string;
-  invoice_number: string;
+  // Enriched server-side from the parent invoice (PaymentResponse.invoice_number).
+  invoice_number?: string | null;
   // Backend serialises Decimal as string ("250000.00") per Wave 8 sweep.
   // Accept both for back-compat with older fixtures.
   amount: string | number;
@@ -141,9 +165,11 @@ interface Payment {
   currency?: string;
   currency_code?: string;
   payment_date: string;
-  method: string;
-  reference: string;
-  status: string;
+  reference?: string | null;
+  // Derived lifecycle label from PaymentResponse: "completed" | "refunded".
+  // (A payment is an immutable ledger entry, so it has no pending state.)
+  status?: string;
+  is_refund?: boolean;
   created_at: string;
 }
 
@@ -175,7 +201,12 @@ type InvoiceSubTab = 'payable' | 'receivable';
  *  project's resolved currency is merged in dynamically so a project priced
  *  in e.g. BRL/INR still has its own currency selectable. */
 const COMMON_CURRENCIES = [
-  'EUR', 'USD', 'GBP', 'CHF', 'PLN', 'CZK', 'SEK', 'NOK', 'DKK', 'AED', 'SAR',
+  // Construction-market headliners. BRL added 2026-05-27 in response to
+  // a Brazilian user reporting "there is no invoice support for BRL" —
+  // the picker still allowed entering BRL via the project-currency
+  // injection below, but having it in the shortlist saves the click and
+  // signals first-class support.
+  'EUR', 'USD', 'GBP', 'CHF', 'BRL', 'PLN', 'CZK', 'SEK', 'NOK', 'DKK', 'AED', 'SAR',
 ] as const;
 
 function currencyOptions(active: string): string[] {
@@ -250,7 +281,7 @@ async function importBudgetsFile(
     let detail = 'Import failed';
     try {
       const body = await response.json();
-      detail = body.detail || detail;
+      detail = extractErrorMessageFromBody(body) ?? detail;
     } catch {
       // ignore parse error
     }
@@ -285,9 +316,16 @@ interface FinanceDashboardData {
   budget_warning_level: string;
   total_payments: number;
   cash_flow_net: number;
-  /** Dominant project currency resolved server-side (budgets → invoices).
-   *  Empty string when no financial record carries a currency yet. */
+  /** Base currency the totals are expressed in. For a project-scoped
+   *  dashboard the server FX-converts every foreign record into this
+   *  currency via Project.fx_rates; empty when no record carries one. */
   currency: string;
+  /** True when financial records span more than one currency (totals are
+   *  still in `currency`, converted where an FX rate exists). */
+  mixed_currencies?: boolean;
+  /** Foreign currency codes present but with no FX rate configured — their
+   *  amounts are summed unconverted, so the total is approximate. */
+  missing_fx_rates?: string[];
 }
 
 function FinanceSummaryCards({ projectId }: { projectId: string }) {
@@ -309,17 +347,18 @@ function FinanceSummaryCards({ projectId }: { projectId: string }) {
   // backend cannot resolve one (no priced records yet) MoneyDisplay still
   // renders, falling back to the user's preferred currency for the symbol.
   //
-  // Wave-10 follow-up: backend ``/v1/finance/dashboard/`` collapses mixed
-  // currencies to a single "dominant" code server-side, so we cannot do
-  // a per-currency split here yet (the per-currency totals are not in
-  // the payload). When the backend grows a ``totals_by_currency`` array
-  // — see /v1/property-dev/dashboards/cashflow_waterfall/ for the shape
-  // — switch these cards to <MultiCurrencyTotal variant="kpi">. The
-  // single-currency MoneyDisplay below is preserved as a transitional
-  // fallback. Tracked separately from this PR.
+  // The backend now FX-converts every foreign-currency record into the
+  // project base currency (via Project.fx_rates, mirroring boq.service) and
+  // returns the totals already expressed in `currency`, so the single-
+  // currency cards below are correct. When records span more than one
+  // currency it also returns `mixed_currencies` / `missing_fx_rates` so we
+  // can surface an honest "converted / approximate" hint rather than passing
+  // off a blended number as a native-currency sum.
   const currency = dashboard?.currency || undefined;
   const consumedPct = Number(dashboard?.budget_consumed_pct ?? 0);
   const warningLevel = dashboard?.budget_warning_level ?? 'normal';
+  const mixedCurrencies = !!dashboard?.mixed_currencies;
+  const missingFx = dashboard?.missing_fx_rates ?? [];
 
   if (
     !dashboard ||
@@ -393,6 +432,27 @@ function FinanceSummaryCards({ projectId }: { projectId: string }) {
           </Card>
         ))}
       </div>
+
+      {/* Mixed-currency honesty hint. When records span several currencies
+          the totals above are FX-converted into the project currency; if a
+          currency has no configured rate it was summed unconverted, so we
+          flag the figure as approximate rather than presenting it as exact. */}
+      {mixedCurrencies && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-300">
+          {missingFx.length > 0
+            ? t('finance.mixed_currency_missing_fx', {
+                defaultValue:
+                  'Totals are converted to {{currency}}. No FX rate is set for {{codes}}, so amounts in those currencies are added unconverted and the total is approximate.',
+                currency: currency || '',
+                codes: missingFx.join(', '),
+              })
+            : t('finance.mixed_currency_converted', {
+                defaultValue:
+                  'Records span multiple currencies; totals are converted to {{currency}} using the project exchange rates.',
+                currency: currency || '',
+              })}
+        </div>
+      )}
 
       {/* Budget consumption — makes the budget→actual money flow legible at
           a glance and surfaces the over-budget risk the cards only imply. */}
@@ -1030,19 +1090,19 @@ function BudgetsTab({ projectId }: { projectId: string }) {
 
   const totals = useMemo(() => {
     if (!filtered.length) return null;
-    // Coerce to Number — DECIMAL columns can come back as strings from
-    // the API and "+" would concat instead of summing.  See the dashboard
-    // total above for the same defence.
+    // Each budget line carries its own currency; summing rows into one
+    // scalar and stamping the first row's code is financially meaningless
+    // across mixed currencies. Build per-column {amount, currency} item
+    // lists and let <MultiCurrencyTotal> group + render per ISO code
+    // (degrading to a single MoneyDisplay when only one currency is used).
+    const cur = (b: BudgetLine) => b.currency_code || b.currency || undefined;
     return {
-      original: filtered.reduce((s, b) => s + Number(b.original_budget ?? 0), 0),
-      revised: filtered.reduce((s, b) => s + Number(b.revised_budget ?? 0), 0),
-      committed: filtered.reduce((s, b) => s + Number(b.committed ?? 0), 0),
-      actual: filtered.reduce((s, b) => s + Number(b.actual ?? 0), 0),
-      forecast: filtered.reduce((s, b) => s + Number(b.forecast_final ?? b.forecast ?? 0), 0),
-      variance: filtered.reduce((s, b) => s + Number(b.variance ?? 0), 0),
-      // Currency from data, never hardcoded (task #217). undefined →
-      // MoneyDisplay falls back to the user's preferred currency symbol.
-      currency: filtered[0]?.currency_code || filtered[0]?.currency || undefined,
+      original: filtered.map((b) => ({ amount: Number(b.original_budget ?? 0), currency: cur(b) })),
+      revised: filtered.map((b) => ({ amount: Number(b.revised_budget ?? 0), currency: cur(b) })),
+      committed: filtered.map((b) => ({ amount: Number(b.committed ?? 0), currency: cur(b) })),
+      actual: filtered.map((b) => ({ amount: Number(b.actual ?? 0), currency: cur(b) })),
+      forecast: filtered.map((b) => ({ amount: Number(b.forecast_final ?? b.forecast ?? 0), currency: cur(b) })),
+      variance: filtered.map((b) => ({ amount: Number(b.variance ?? 0), currency: cur(b) })),
     };
   }, [filtered]);
 
@@ -1277,26 +1337,22 @@ function BudgetsTab({ projectId }: { projectId: string }) {
                   {t('common.total')}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={totals.original} currency={totals.currency} />
+                  <MultiCurrencyTotal items={totals.original} variant="inline" compact />
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={totals.revised} currency={totals.currency} />
+                  <MultiCurrencyTotal items={totals.revised} variant="inline" compact />
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={totals.committed} currency={totals.currency} />
+                  <MultiCurrencyTotal items={totals.committed} variant="inline" compact />
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={totals.actual} currency={totals.currency} />
+                  <MultiCurrencyTotal items={totals.actual} variant="inline" compact />
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={totals.forecast} currency={totals.currency} />
+                  <MultiCurrencyTotal items={totals.forecast} variant="inline" compact />
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay
-                    amount={totals.variance}
-                    currency={totals.currency}
-                    colorize
-                  />
+                  <MultiCurrencyTotal items={totals.variance} variant="inline" compact />
                 </td>
                 <td />
               </tr>
@@ -1578,7 +1634,9 @@ function InvoicesTab({ projectId }: { projectId: string }) {
       subtotal,
       tax,
       amount: total,
-      currency: inv.currency_code || inv.currency || 'EUR',
+      // Never hardcode EUR — fall back to the project's resolved currency so
+      // an editor on a BRL/USD/etc. project keeps that currency (task #217).
+      currency: inv.currency_code || inv.currency || projectCurrency || '',
       description: inv.notes ?? inv.description ?? '',
     });
     setInvoiceErrors({});
@@ -1741,11 +1799,22 @@ function InvoicesTab({ projectId }: { projectId: string }) {
 
   const invoiceTotals = useMemo(() => {
     if (!filtered.length) return null;
-    const totalAmount = filtered.reduce((s, inv) => s + Number(inv.amount ?? 0), 0);
-    const totalPaid = filtered.filter((inv) => inv.status === 'paid').reduce((s, inv) => s + Number(inv.amount ?? 0), 0);
-    const currency = filtered[0]?.currency || projectCurrency || undefined;
-    return { totalAmount, totalPaid, currency };
-  }, [filtered]);
+    // Invoices can be in different currencies; summing them into one
+    // scalar and stamping the first row's code blends currencies. Build
+    // per-column {amount, currency} item lists for <MultiCurrencyTotal>,
+    // which groups per ISO code (single MoneyDisplay when homogeneous).
+    const totalAmount = filtered.map((inv) => ({
+      amount: Number(inv.amount ?? 0),
+      currency: inv.currency || projectCurrency || undefined,
+    }));
+    const totalPaid = filtered
+      .filter((inv) => inv.status === 'paid')
+      .map((inv) => ({
+        amount: Number(inv.amount ?? 0),
+        currency: inv.currency || projectCurrency || undefined,
+      }));
+    return { totalAmount, totalPaid };
+  }, [filtered, projectCurrency]);
 
   const approveMutation = useMutation({
     mutationFn: (invoiceId: string) =>
@@ -2065,11 +2134,11 @@ function InvoicesTab({ projectId }: { projectId: string }) {
                         {t('common.total')}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <MoneyDisplay amount={invoiceTotals.totalAmount} currency={invoiceTotals.currency} />
+                        <MultiCurrencyTotal items={invoiceTotals.totalAmount} variant="inline" compact />
                       </td>
                       <td className="px-4 py-3 text-center text-xs text-content-tertiary">
                         {t('finance.total_paid', { defaultValue: 'Paid' })}:{' '}
-                        <MoneyDisplay amount={invoiceTotals.totalPaid} currency={invoiceTotals.currency} />
+                        <MultiCurrencyTotal items={invoiceTotals.totalPaid} variant="inline" compact />
                       </td>
                       <td />
                     </tr>
@@ -2435,14 +2504,18 @@ function PaymentsTab({
 
   const paymentTotals = useMemo(() => {
     if (!payments || !payments.length) return null;
-    const total = payments.reduce((s, p) => s + Number(p.amount ?? 0), 0);
-    // Currency from the payment data; undefined → MoneyDisplay uses the
-    // user's preferred currency symbol (never hardcode EUR — task #217).
-    const currency = payments[0]?.currency_code || payments[0]?.currency || undefined;
-    return { total, currency };
+    // Payments may be recorded in different currencies; summing into one
+    // scalar and stamping the first row's code blends them. Map rows to
+    // {amount, currency} for <MultiCurrencyTotal>, which groups per ISO
+    // code (and degrades to a single MoneyDisplay when homogeneous).
+    const total = payments.map((p) => ({
+      amount: Number(p.amount ?? 0),
+      currency: p.currency_code || p.currency || undefined,
+    }));
+    return { total };
   }, [payments]);
 
-  if (isLoading) return <SkeletonTable rows={5} columns={6} />;
+  if (isLoading) return <SkeletonTable rows={5} columns={5} />;
 
   if (isError) return <RecoveryCard error={error} onRetry={() => refetch()} />;
 
@@ -2497,9 +2570,6 @@ function PaymentsTab({
                 {t('finance.amount', { defaultValue: 'Amount' })}
               </th>
               <th className="px-4 py-3 text-left font-medium text-content-tertiary">
-                {t('finance.method', { defaultValue: 'Method' })}
-              </th>
-              <th className="px-4 py-3 text-left font-medium text-content-tertiary">
                 {t('finance.reference', { defaultValue: 'Reference' })}
               </th>
               <th className="px-4 py-3 text-center font-medium text-content-tertiary">
@@ -2514,7 +2584,7 @@ function PaymentsTab({
                 className="border-b border-border-light hover:bg-surface-secondary/30 transition-colors"
               >
                 <td className="px-4 py-3 font-mono text-xs text-content-primary">
-                  {p.invoice_number}
+                  {p.invoice_number || '\u2014'}
                 </td>
                 <td className="px-4 py-3 text-content-secondary">
                   <DateDisplay value={p.payment_date} />
@@ -2522,21 +2592,21 @@ function PaymentsTab({
                 <td className="px-4 py-3 text-right">
                   <MoneyDisplay amount={p.amount} currency={p.currency_code || p.currency} />
                 </td>
-                <td className="px-4 py-3 text-content-secondary capitalize">
-                  {p.method}
-                </td>
                 <td className="px-4 py-3 text-content-secondary font-mono text-xs">
                   {p.reference || '\u2014'}
                 </td>
                 <td className="px-4 py-3 text-center">
-                  <Badge
-                    variant={p.status === 'completed' ? 'success' : 'warning'}
-                    size="sm"
-                  >
-                    {t(`finance.payment_status_${p.status}`, {
-                      defaultValue: p.status,
-                    })}
-                  </Badge>
+                  {(() => {
+                    // PaymentResponse derives status server-side: "completed"
+                    // for a forward payment, "refunded" for a refund. Fall
+                    // back to the is_refund flag for older payloads.
+                    const status = p.status || (p.is_refund ? 'refunded' : 'completed');
+                    return (
+                      <Badge variant={status === 'refunded' ? 'warning' : 'success'} size="sm">
+                        {t(`finance.payment_status_${status}`, { defaultValue: status })}
+                      </Badge>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}
@@ -2548,9 +2618,9 @@ function PaymentsTab({
                   {t('common.total', { defaultValue: 'Total' })}
                 </td>
                 <td className="px-4 py-3 text-right">
-                  <MoneyDisplay amount={paymentTotals.total} currency={paymentTotals.currency} />
+                  <MultiCurrencyTotal items={paymentTotals.total} variant="inline" compact />
                 </td>
-                <td colSpan={3} />
+                <td colSpan={2} />
               </tr>
             </tfoot>
           )}

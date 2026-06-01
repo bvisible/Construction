@@ -88,10 +88,7 @@ def _validate_job_transition(current: str, target: str) -> None:
     if target not in allowed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Invalid TileGenerationJob transition {current!r} -> "
-                f"{target!r}. Allowed: {sorted(allowed)}"
-            ),
+            detail=(f"Invalid TileGenerationJob transition {current!r} -> {target!r}. Allowed: {sorted(allowed)}"),
         )
 
 
@@ -110,10 +107,7 @@ def _validate_tileset_transition(current: str, target: str) -> None:
     if target not in allowed:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"Invalid Tileset transition {current!r} -> {target!r}. "
-                f"Allowed: {sorted(allowed)}"
-            ),
+            detail=(f"Invalid Tileset transition {current!r} -> {target!r}. Allowed: {sorted(allowed)}"),
         )
 
 
@@ -166,22 +160,44 @@ class GeoHubService:
         """
         if payload is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail,
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=not_found_detail,
             )
         if payload.get("role") == "admin":
             return
         user_id = payload.get("sub") or payload.get("user_id")
         if user_id is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail,
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=not_found_detail,
             )
         from app.modules.projects.repository import ProjectRepository
+        from app.modules.teams.access import is_project_member
 
         project = await ProjectRepository(self.session).get_by_id(project_id)
-        if project is None or str(project.owner_id) != str(user_id):
+        if project is None:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail=not_found_detail,
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=not_found_detail,
             )
+        # Owner OR team member — mirror the projects module's access model
+        # (app.modules.teams.access) so collaborators who can open a project
+        # everywhere else aren't locked out of its geo map / anchors / pins.
+        if str(project.owner_id) == str(user_id):
+            return
+        try:
+            user_uuid = user_id if isinstance(user_id, uuid.UUID) else uuid.UUID(str(user_id))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=not_found_detail,
+            ) from None
+        if await is_project_member(self.session, project_id, user_uuid):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=not_found_detail,
+        )
 
     # ── Auto-anchor from address ────────────────────────────────────────
 
@@ -210,9 +226,11 @@ class GeoHubService:
         from app.modules.projects.repository import ProjectRepository
 
         await self._verify_project_owner(
-            project_id, payload,
+            project_id,
+            payload,
             not_found_detail=translate(
-                "errors.project_not_found", locale=get_locale(),
+                "errors.project_not_found",
+                locale=get_locale(),
             ),
         )
         project = await ProjectRepository(self.session).get_by_id(project_id)
@@ -220,7 +238,8 @@ class GeoHubService:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=translate(
-                    "errors.project_not_found", locale=get_locale(),
+                    "errors.project_not_found",
+                    locale=get_locale(),
                 ),
             )
 
@@ -254,15 +273,13 @@ class GeoHubService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail={
                     "code": "geocoder_unavailable",
-                    "message": (
-                        "Geocoder did not return a usable result. "
-                        "Try again later or anchor manually."
-                    ),
+                    "message": ("Geocoder did not return a usable result. Try again later or anchor manually."),
                 },
             )
 
         address_line = ", ".join(
-            part for part in (
+            part
+            for part in (
                 address.street,
                 address.house_number,
                 address.postal_code,
@@ -355,11 +372,7 @@ class GeoHubService:
                 "results": [],
             }
 
-        stmt = (
-            select(Project)
-            .where(Project.status != "archived")
-            .where(Project.address.is_not(None))
-        )
+        stmt = select(Project).where(Project.status != "archived").where(Project.address.is_not(None))
         if not is_admin:
             stmt = stmt.where(Project.owner_id == user_id)
         # Hard cap so a runaway admin doesn't pin Nominatim for hours;
@@ -377,9 +390,7 @@ class GeoHubService:
             # geocodes them. Otherwise the first bulk run after a fresh
             # ``project.created`` event silently skips every project.
             is_placeholder = bool(
-                existing is not None
-                and existing.lat == Decimal("0")
-                and existing.lon == Decimal("0")
+                existing is not None and existing.lat == Decimal("0") and existing.lon == Decimal("0")
             )
             if existing is not None and not is_placeholder:
                 skipped += 1
@@ -395,10 +406,10 @@ class GeoHubService:
                 )
                 continue
             try:
-                anchor, precision, source, _display = (
-                    await self.anchor_from_address(
-                        project.id, payload=payload, force=is_placeholder,
-                    )
+                anchor, precision, source, _display = await self.anchor_from_address(
+                    project.id,
+                    payload=payload,
+                    force=is_placeholder,
                 )
             except HTTPException as exc:
                 # Re-classify common no-op outcomes as "skipped" instead
@@ -453,11 +464,14 @@ class GeoHubService:
     # ── GeoAnchor ────────────────────────────────────────────────────────
 
     async def create_anchor(
-        self, data: GeoAnchorCreate,
+        self,
+        data: GeoAnchorCreate,
         payload: dict[str, Any] | None = None,
     ) -> GeoAnchor:
         await self._verify_project_owner(
-            data.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            data.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         existing = await self.anchors.get_by_project(data.project_id)
         if existing is not None:
@@ -507,7 +521,8 @@ class GeoHubService:
         return obj
 
     async def get_anchor_for_project(
-        self, project_id: uuid.UUID,
+        self,
+        project_id: uuid.UUID,
     ) -> GeoAnchor | None:
         return await self.anchors.get_by_project(project_id)
 
@@ -519,7 +534,9 @@ class GeoHubService:
     ) -> GeoAnchor:
         obj = await self.get_anchor(anchor_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Anchor not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Anchor not found",
         )
         await self.anchors.update_fields(anchor_id, **_dump(data))
         return await self.get_anchor(anchor_id)
@@ -531,7 +548,9 @@ class GeoHubService:
     ) -> None:
         obj = await self.get_anchor(anchor_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Anchor not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Anchor not found",
         )
         await self.anchors.delete(anchor_id)
 
@@ -543,7 +562,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> Tileset:
         await self._verify_project_owner(
-            data.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            data.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         obj = Tileset(
             project_id=data.project_id,
@@ -577,7 +598,9 @@ class GeoHubService:
     ) -> Tileset:
         obj = await self.get_tileset(tileset_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Tileset not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Tileset not found",
         )
         if data.status is not None:
             _validate_tileset_transition(obj.status, data.status)
@@ -594,10 +617,15 @@ class GeoHubService:
         tileset_status: str | None = None,
     ) -> list[Tileset]:
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         return await self.tilesets.list_for_project(
-            project_id, offset=offset, limit=limit, status=tileset_status,
+            project_id,
+            offset=offset,
+            limit=limit,
+            status=tileset_status,
         )
 
     async def delete_tileset(
@@ -605,11 +633,54 @@ class GeoHubService:
         tileset_id: uuid.UUID,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        """Delete a tileset row AND its storage artefacts.
+
+        Pre-v5.2.9 this only removed the DB row, leaving the
+        ``tilesets/{id}/tileset.json`` and ``…/tile_0.b3dm`` blobs orphaned
+        forever — a slow disk leak that broke the "delete frees storage"
+        contract surfaced to the user. We now sweep the per-tileset prefix
+        through the storage backend before removing the row. Failures are
+        logged but never abort the DB delete: a stuck blob is a sysadmin
+        problem, never a reason to keep dead metadata in the user's sidebar.
+        """
         obj = await self.get_tileset(tileset_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Tileset not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Tileset not found",
         )
+        # Storage cleanup runs first because a successful DB delete with a
+        # failed blob delete leaves the user with a "lost" tileset they
+        # can't see but that's still consuming bytes. Doing storage first
+        # means a transient backend error surfaces as a 500 and the user
+        # can retry; the row stays visible for next attempt.
+        try:
+            from app.core.storage import get_storage_backend
+
+            backend = get_storage_backend()
+            # ``prefix`` is the canonical layout used by ``upload_artifacts``
+            # (``tilesets/{tileset_id}/*``) and ``package_canonical_as_tileset``
+            # (``prefix=tilesets/{tileset_id}``). Be defensive: fall back to
+            # the canonical layout when the row's ``prefix`` was never set
+            # (older rows pre-v5.0.0).
+            sweep_prefix = obj.prefix or f"tilesets/{tileset_id}"
+            await backend.delete_prefix(sweep_prefix)
+        except Exception as exc:  # noqa: BLE001 — log + continue
+            logger.warning(
+                "geo_hub: storage cleanup failed for tileset %s: %s",
+                tileset_id,
+                exc,
+            )
         await self.tilesets.delete(tileset_id)
+        await event_bus.publish(
+            "geo_hub.tileset.deleted",
+            {
+                "tileset_id": str(tileset_id),
+                "project_id": str(obj.project_id),
+                "source_kind": obj.source_kind,
+            },
+            source_module="geo_hub",
+        )
 
     # ── TileGenerationJob ────────────────────────────────────────────────
 
@@ -619,14 +690,18 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> TileGenerationJob:
         await self._verify_project_owner(
-            data.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            data.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         # IDOR guard: scope the reuse lookup to the caller's project so a
         # ``(source_kind, source_id)`` pair belonging to another tenant
         # cannot be reattached to this tenant's job (which would leak
         # ``tileset_json_uri`` of the foreign tileset via ``output_uri``).
         existing = await self.tilesets.find_for_source(
-            data.source_kind, data.source_id, project_id=data.project_id,
+            data.source_kind,
+            data.source_id,
+            project_id=data.project_id,
         )
         if existing is not None and existing.status == "ready" and not data.force:
             # Idempotent: hand the user back the existing tileset by
@@ -681,7 +756,9 @@ class GeoHubService:
         if job is None:
             raise HTTPException(status_code=404, detail="Job not found")
         await self._verify_project_owner(
-            job.project_id, payload, not_found_detail="Job not found",
+            job.project_id,
+            payload,
+            not_found_detail="Job not found",
         )
         _validate_job_transition(job.state, "cancelled")
         await self.jobs.update_fields(
@@ -707,10 +784,15 @@ class GeoHubService:
         limit: int = 50,
     ) -> list[TileGenerationJob]:
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         return await self.jobs.list_for_project(
-            project_id, state=state, offset=offset, limit=limit,
+            project_id,
+            state=state,
+            offset=offset,
+            limit=limit,
         )
 
     # ── ImageryLayer ─────────────────────────────────────────────────────
@@ -721,7 +803,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> ImageryLayer:
         await self._verify_project_owner(
-            data.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            data.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         if data.default_for_project:
             await self.imagery.clear_default_for_project(data.project_id)
@@ -752,7 +836,9 @@ class GeoHubService:
     ) -> ImageryLayer:
         obj = await self.get_imagery_layer(layer_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Imagery layer not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Imagery layer not found",
         )
         if data.default_for_project is True:
             await self.imagery.clear_default_for_project(obj.project_id)
@@ -765,7 +851,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> list[ImageryLayer]:
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         return await self.imagery.list_for_project(project_id)
 
@@ -776,14 +864,17 @@ class GeoHubService:
     ) -> None:
         obj = await self.get_imagery_layer(layer_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Imagery layer not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Imagery layer not found",
         )
         await self.imagery.delete(layer_id)
 
     # ── TerrainSource (system-wide) ──────────────────────────────────────
 
     async def create_terrain_source(
-        self, data: TerrainSourceCreate,
+        self,
+        data: TerrainSourceCreate,
     ) -> TerrainSource:
         if data.is_default:
             await self.terrain.clear_default()
@@ -804,7 +895,9 @@ class GeoHubService:
         return obj
 
     async def update_terrain_source(
-        self, src_id: uuid.UUID, data: TerrainSourceUpdate,
+        self,
+        src_id: uuid.UUID,
+        data: TerrainSourceUpdate,
     ) -> TerrainSource:
         obj = await self.get_terrain_source(src_id)
         if data.is_default is True:
@@ -827,7 +920,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> GeoViewpoint:
         await self._verify_project_owner(
-            data.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            data.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         obj = GeoViewpoint(
             project_id=data.project_id,
@@ -858,7 +953,9 @@ class GeoHubService:
     ) -> GeoViewpoint:
         obj = await self.get_viewpoint(vp_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Viewpoint not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Viewpoint not found",
         )
         await self.viewpoints.update_fields(vp_id, **_dump(data))
         return await self.get_viewpoint(vp_id)
@@ -869,7 +966,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> list[GeoViewpoint]:
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         return await self.viewpoints.list_for_project(project_id)
 
@@ -880,7 +979,9 @@ class GeoHubService:
     ) -> None:
         obj = await self.get_viewpoint(vp_id)
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Viewpoint not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Viewpoint not found",
         )
         await self.viewpoints.delete(vp_id)
 
@@ -892,7 +993,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> GeoOverlay:
         await self._verify_project_owner(
-            data.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            data.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         if data.geojson:
             try:
@@ -923,7 +1026,9 @@ class GeoHubService:
         if obj is None:
             raise HTTPException(status_code=404, detail="Overlay not found")
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Overlay not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Overlay not found",
         )
         if data.geojson is not None:
             try:
@@ -939,7 +1044,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> GeoOverlay:
         await self._verify_project_owner(
-            req.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            req.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         try:
             geojson = validate_geojson(req.geojson)
@@ -965,7 +1072,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> GeoOverlay:
         await self._verify_project_owner(
-            req.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            req.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         # Magic-byte gate: reject obviously non-KML payloads with 415
         # before the XML parser sees them. The wrapping JSON request
@@ -1002,7 +1111,9 @@ class GeoHubService:
         kind: str | None = None,
     ) -> list[GeoOverlay]:
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         return await self.overlays.list_for_project(project_id, kind=kind)
 
@@ -1015,10 +1126,14 @@ class GeoHubService:
     ) -> dict[str, Any]:
         """Merge every overlay for the project into one FeatureCollection."""
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         overlays = await self.overlays.list_for_project(
-            project_id, kind=kind, limit=1000,
+            project_id,
+            kind=kind,
+            limit=1000,
         )
         merged_features: list[dict[str, Any]] = []
         for ov in overlays:
@@ -1036,7 +1151,9 @@ class GeoHubService:
         if obj is None:
             raise HTTPException(status_code=404, detail="Overlay not found")
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Overlay not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Overlay not found",
         )
         await self.overlays.delete(overlay_id)
 
@@ -1050,10 +1167,13 @@ class GeoHubService:
         include_hidden: bool = True,
     ) -> list[GeoRasterOverlay]:
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         return await self.raster_overlays.list_for_project(
-            project_id, include_hidden=include_hidden,
+            project_id,
+            include_hidden=include_hidden,
         )
 
     async def get_raster_overlay(
@@ -1066,7 +1186,9 @@ class GeoHubService:
         if obj is None:
             raise HTTPException(status_code=404, detail="Overlay not found")
         await self._verify_project_owner(
-            obj.project_id, payload, not_found_detail="Overlay not found",
+            obj.project_id,
+            payload,
+            not_found_detail="Overlay not found",
         )
         return obj
 
@@ -1077,7 +1199,9 @@ class GeoHubService:
         payload: dict[str, Any] | None = None,
     ) -> GeoRasterOverlay:
         await self._verify_project_owner(
-            data.project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            data.project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         corners = data.corners_geojson or await self._default_corners_for_project(
             data.project_id,
@@ -1123,8 +1247,84 @@ class GeoHubService:
         *,
         payload: dict[str, Any] | None = None,
     ) -> None:
+        """Soft-delete the overlay row.
+
+        Storage blobs are kept on the soft-delete path so a future
+        "Restore" feature can revive the overlay without re-uploading.
+        Hard cleanup of orphaned blobs is handled by
+        :meth:`sweep_deleted_raster_overlays` (call from a maintenance
+        job or admin endpoint after a grace period).
+        """
         obj = await self.get_raster_overlay(overlay_id, payload=payload)
         await self.raster_overlays.soft_delete(obj.id)
+
+    async def sweep_deleted_raster_overlays(
+        self,
+        *,
+        older_than_days: int = 30,
+    ) -> dict[str, int]:
+        """Hard-delete soft-deleted raster overlays older than the grace window.
+
+        Sweeps the storage blobs (source + rasterised PNG) before removing
+        the DB row so the disk is actually freed. Returns a summary dict
+        with ``swept`` (rows removed) and ``blob_errors`` (blob deletes
+        that failed — usually a "key not found" because the row was
+        already partially cleaned up).
+
+        Designed to be safe to call repeatedly: each pass picks up where
+        the last left off. The grace window defaults to 30 days, matching
+        the geocode cache TTL so operators have one mental model for
+        soft-deleted data lifetimes across the module.
+        """
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import delete as sql_delete
+        from sqlalchemy import select as sql_select
+
+        from app.modules.geo_hub.models import GeoRasterOverlay
+
+        if older_than_days < 0:
+            return {"swept": 0, "blob_errors": 0}
+        cutoff = datetime.now(UTC) - timedelta(days=int(older_than_days))
+        rows = (
+            (
+                await self.session.execute(
+                    sql_select(GeoRasterOverlay)
+                    .where(GeoRasterOverlay.deleted_at.is_not(None))
+                    .where(GeoRasterOverlay.deleted_at < cutoff)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not rows:
+            return {"swept": 0, "blob_errors": 0}
+        from app.core.storage import get_storage_backend
+
+        backend = get_storage_backend()
+        blob_errors = 0
+        ids: list[uuid.UUID] = []
+        for r in rows:
+            for key in (r.source_blob_url, r.raster_blob_url):
+                if not key:
+                    continue
+                try:
+                    await backend.delete(key)
+                except Exception:  # noqa: BLE001 — log + continue
+                    blob_errors += 1
+                    logger.debug(
+                        "geo_hub.sweeper: blob delete failed for key=%s",
+                        key,
+                    )
+            ids.append(r.id)
+        if ids:
+            await self.session.execute(
+                sql_delete(GeoRasterOverlay).where(
+                    GeoRasterOverlay.id.in_(ids),
+                )
+            )
+            await self.session.flush()
+        return {"swept": len(ids), "blob_errors": blob_errors}
 
     async def upload_pdf_overlay(
         self,
@@ -1353,7 +1553,8 @@ class GeoHubService:
             ) from exc
 
     async def _default_corners_for_project(
-        self, project_id: uuid.UUID,
+        self,
+        project_id: uuid.UUID,
     ) -> list[list[float]]:
         """Return a small bbox centered on the project anchor.
 
@@ -1475,7 +1676,8 @@ class GeoHubService:
             )
 
         elements = await self._load_canonical_elements_for_bim_model(
-            bim_model, BIMElementRepository(self.session),
+            bim_model,
+            BIMElementRepository(self.session),
         )
         if not elements:
             raise HTTPException(
@@ -1506,10 +1708,7 @@ class GeoHubService:
             else:
                 pivot_x = (combined.min_x + combined.max_x) / 2.0
                 pivot_y = (combined.min_y + combined.max_y) / 2.0
-            rotated = [
-                _rotate_element(e, heading, pivot_x=pivot_x, pivot_y=pivot_y)
-                for e in elements
-            ]
+            rotated = [_rotate_element(e, heading, pivot_x=pivot_x, pivot_y=pivot_y) for e in elements]
         else:
             rotated = elements
 
@@ -1614,7 +1813,9 @@ class GeoHubService:
                 )
 
         elements, _total = await element_repo.list_for_model(
-            bim_model.id, offset=0, limit=10_000,
+            bim_model.id,
+            offset=0,
+            limit=10_000,
         )
         return [_bim_element_to_canonical(e) for e in elements]
 
@@ -1626,37 +1827,58 @@ class GeoHubService:
         *,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        """Return anchored projects the caller can access.
+        """Return locatable projects the caller can access.
 
         Powers the global Geo Hub's project-pin layer — non-admin users
-        see only their own projects, admins see everything. Projects
-        without a ``GeoAnchor`` are excluded so the pin layer never
-        contains zero-coord placeholders. Cheap single-join query.
+        see only their own projects, admins see everything.
+
+        A project is "locatable" (and thus pinned) when EITHER:
+
+        * it has a ``GeoAnchor`` row (manual or auto-geocoded), OR
+        * its ``address`` JSONB carries usable ``lat`` + ``lng``/``lon``
+          coordinates (as the showcase / demo seeds do).
+
+        The anchor takes precedence when both exist. This is a LEFT OUTER
+        join — projects with address coords but no anchor used to be
+        silently dropped, so the global map looked empty even though the
+        projects clearly had a location. Projects with neither an anchor
+        nor address coordinates are still excluded so the pin layer never
+        paints null-island placeholders.
         """
         if payload is None:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Authentication required",
             )
-        from sqlalchemy import select
+        from sqlalchemy import or_, select
 
         from app.modules.projects.models import Project
+        from app.modules.teams.access import member_project_ids_subquery
 
         is_admin = payload.get("role") == "admin"
         user_id = payload.get("sub") or payload.get("user_id")
         if user_id is None and not is_admin:
             return []
 
+        # LEFT OUTER join so address-only projects survive — the previous
+        # inner join silently dropped every project without a GeoAnchor.
         stmt = (
-            select(GeoAnchor, Project)
-            .join(Project, Project.id == GeoAnchor.project_id)
+            select(Project, GeoAnchor)
+            .outerjoin(GeoAnchor, GeoAnchor.project_id == Project.id)
             .where(Project.status != "archived")
         )
         if not is_admin:
-            # 404-safe scoping: non-admins only see projects they own.
-            # Cast user_id through ``str`` because JWT subs can arrive as
-            # either UUID or string depending on the auth path.
-            stmt = stmt.where(Project.owner_id == user_id)
+            # 404-safe scoping: non-admins see projects they own OR are a
+            # team member of — mirrors the projects module's access model so
+            # collaborators aren't shown an empty global map. Cast user_id
+            # through ``str`` because JWT subs can arrive as either UUID or
+            # string depending on the auth path.
+            stmt = stmt.where(
+                or_(
+                    Project.owner_id == user_id,
+                    Project.id.in_(member_project_ids_subquery(user_id)),
+                )
+            )
         stmt = stmt.order_by(Project.created_at.desc()).limit(limit)
 
         result = await self.session.execute(stmt)
@@ -1683,22 +1905,75 @@ class GeoHubService:
             line = ", ".join(p for p in parts if isinstance(p, str) and p.strip())
             return line or None
 
-        return [
-            {
-                "project_id": project.id,
-                "project_name": project.name,
-                "anchor_id": anchor.id,
-                "lat": anchor.lat,
-                "lon": anchor.lon,
-                "alt": anchor.alt,
-                "region_code": anchor.region_code,
-                "address": anchor.address,
-                "project_type": project.project_type,
-                "status": project.status,
-                "project_address_text": _project_address_text(project.address),
-            }
-            for (anchor, project) in rows
-        ]
+        def _address_coords(addr: Any) -> tuple[Decimal, Decimal] | None:
+            """Lift ``lat`` + ``lng``/``lon`` out of the project address JSONB.
+
+            Seeds store the geocoded point on the address dict (``lat`` +
+            ``lng``); some hand-entered data uses ``lon``. Returns
+            ``(lat, lon)`` only when both are present and inside the valid
+            WGS-84 range — bad/partial coords are treated as "no location"
+            rather than dropping a pin on null island.
+            """
+            if not isinstance(addr, dict):
+                return None
+            lat_raw = addr.get("lat")
+            # Seeds use ``lng``; accept ``lon`` as an alias for hand-entered data.
+            lon_raw = addr.get("lng")
+            if lon_raw is None:
+                lon_raw = addr.get("lon")
+            if lat_raw is None or lon_raw is None:
+                return None
+            try:
+                lat = Decimal(str(lat_raw))
+                lon = Decimal(str(lon_raw))
+            except (ArithmeticError, ValueError, TypeError):
+                return None
+            if not (Decimal("-90") <= lat <= Decimal("90")):
+                return None
+            if not (Decimal("-180") <= lon <= Decimal("180")):
+                return None
+            return lat, lon
+
+        out: list[dict[str, Any]] = []
+        for project, anchor in rows:
+            if anchor is not None:
+                lat = anchor.lat
+                lon = anchor.lon
+                alt = anchor.alt
+                anchor_id = anchor.id
+                region_code = anchor.region_code
+                anchor_address = anchor.address
+            else:
+                coords = _address_coords(project.address)
+                if coords is None:
+                    # No anchor and no usable address coords — not locatable.
+                    continue
+                lat, lon = coords
+                alt = Decimal("0")
+                anchor_id = None
+                # Derive a country region hint from the address when present
+                # so the rail's region chip still renders for address-only
+                # pins. ``country_code`` is what the seeds store.
+                addr = project.address if isinstance(project.address, dict) else {}
+                cc = addr.get("country_code")
+                region_code = str(cc).upper() if isinstance(cc, str) and cc.strip() else None
+                anchor_address = None
+            out.append(
+                {
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "anchor_id": anchor_id,
+                    "lat": lat,
+                    "lon": lon,
+                    "alt": alt,
+                    "region_code": region_code,
+                    "address": anchor_address,
+                    "project_type": project.project_type,
+                    "status": project.status,
+                    "project_address_text": _project_address_text(project.address),
+                }
+            )
+        return out
 
     # ── Map-config one-shot bundle ──────────────────────────────────────
 
@@ -1721,7 +1996,9 @@ class GeoHubService:
         leak unrelated buildings into the buyer's view.
         """
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
 
         if development_id is not None:
@@ -1740,30 +2017,26 @@ class GeoHubService:
         anchor = await self.anchors.get_by_project(project_id)
         imagery = await self.imagery.list_for_project(project_id)
         terrain = await self.terrain.get_default()
+        # Push dev_id filter into SQL on the tileset list so a PropDev
+        # customer with many tilesets per project doesn't load 50 only to
+        # throw 49 away. The overlay-side filter still happens in Python
+        # because GeoOverlay.metadata is opaque JSON — but that path is
+        # bounded by the 200-row hard cap and SQLite has no portable
+        # JSON-extract on arbitrary metadata.development_id.
         tilesets = await self.tilesets.list_for_project(
-            project_id, limit=50,
+            project_id,
+            limit=50,
+            development_id=(str(development_id) if development_id is not None else None),
         )
         overlays = await self.overlays.list_for_project(
-            project_id, limit=200,
+            project_id,
+            limit=200,
         )
         viewpoints = await self.viewpoints.list_for_project(project_id)
         active_jobs = await self.jobs.list_active_for_project(project_id)
 
         if development_id is not None:
             dev_str = str(development_id)
-
-            def _ts_matches(t: Any) -> bool:
-                if (
-                    t.source_kind == "development"
-                    and str(t.source_id) == dev_str
-                ):
-                    return True
-                meta = t.metadata_ or {}
-                if isinstance(meta, dict):
-                    val = meta.get("development_id")
-                    if isinstance(val, str) and val == dev_str:
-                        return True
-                return False
 
             def _ov_matches(o: Any) -> bool:
                 meta = o.metadata_ or {}
@@ -1773,7 +2046,6 @@ class GeoHubService:
                         return True
                 return False
 
-            tilesets = [t for t in tilesets if _ts_matches(t)]
             overlays = [o for o in overlays if _ov_matches(o)]
 
         return {
@@ -1810,7 +2082,9 @@ class GeoHubService:
     ) -> list[dict[str, Any]]:
         """Return geo-pinned safety incidents for the project."""
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         from sqlalchemy import select
 
@@ -1848,7 +2122,9 @@ class GeoHubService:
     ) -> list[dict[str, Any]]:
         """Return geo-pinned punch list items for the project."""
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         from sqlalchemy import select
 
@@ -1885,7 +2161,9 @@ class GeoHubService:
     ) -> list[dict[str, Any]]:
         """Return geo-tagged Daily Diary photos for the project."""
         await self._verify_project_owner(
-            project_id, payload, not_found_detail=translate("errors.project_not_found", locale=get_locale()),
+            project_id,
+            payload,
+            not_found_detail=translate("errors.project_not_found", locale=get_locale()),
         )
         from sqlalchemy import select
 
@@ -1924,11 +2202,7 @@ def _bim_element_to_canonical(element: Any) -> dict[str, Any]:
     bbox = element.bounding_box or {}
     classification: dict[str, Any] = {}
     for key in ("din276", "nrm", "masterformat", "uniclass"):
-        val = (
-            props.get(key)
-            or props.get(key.upper())
-            or props.get(f"classification.{key}")
-        )
+        val = props.get(key) or props.get(key.upper()) or props.get(f"classification.{key}")
         if val:
             classification[key] = val
 
@@ -1944,8 +2218,12 @@ def _bim_element_to_canonical(element: Any) -> dict[str, Any]:
         ):
             try:
                 geometry["aabb"] = [
-                    float(min_pt[0]), float(min_pt[1]), float(min_pt[2]),
-                    float(max_pt[0]), float(max_pt[1]), float(max_pt[2]),
+                    float(min_pt[0]),
+                    float(min_pt[1]),
+                    float(min_pt[2]),
+                    float(max_pt[0]),
+                    float(max_pt[1]),
+                    float(max_pt[2]),
                 ]
             except (TypeError, ValueError):
                 pass
@@ -2010,7 +2288,12 @@ def _rotate_element(
     ys = [cx * sin_r + cy * cos_r + pivot_y for cx, cy in corners_xy]
     new_geom = dict(geom)
     new_geom["aabb"] = [
-        min(xs), min(ys), min_z, max(xs), max(ys), max_z,
+        min(xs),
+        min(ys),
+        min_z,
+        max(xs),
+        max(ys),
+        max_z,
     ]
     new_element = dict(element)
     new_element["geometry"] = new_geom

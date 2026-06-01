@@ -27,6 +27,14 @@ export interface CoordinationTradeMatrixProps {
    * from an external link (no global project context selected yet).
    */
   projectId?: string | null;
+  /**
+   * When `true` the component drops its own card chrome (outer border /
+   * padding / shadow) and inner title+subtitle — it is being rendered
+   * inside a `GlassPanel` that already supplies them, so the standalone
+   * wrapper would double the title and nest a card-in-a-card. Standalone
+   * callers leave it `false` to keep the self-contained card.
+   */
+  embedded?: boolean;
 }
 
 /** Background-color ramp by clash count. Pure Tailwind so it tree-shakes. */
@@ -65,6 +73,7 @@ export function CoordinationTradeMatrix({
   data,
   isLoading,
   projectId,
+  embedded = false,
 }: CoordinationTradeMatrixProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -73,10 +82,20 @@ export function CoordinationTradeMatrix({
     return (
       <div
         data-testid="coordination-matrix-skeleton"
-        className="animate-pulse rounded-xl border border-border bg-surface p-4 shadow-sm"
+        className={
+          embedded
+            ? 'animate-pulse'
+            : 'animate-pulse rounded-xl border border-border bg-surface p-4 shadow-sm'
+        }
       >
-        <div className="h-4 w-1/3 rounded bg-slate-200" />
-        <div className="mt-4 h-64 w-full rounded bg-slate-100" />
+        {!embedded ? <div className="h-4 w-1/3 rounded bg-slate-200" /> : null}
+        <div
+          className={
+            embedded
+              ? 'h-64 w-full rounded bg-slate-100'
+              : 'mt-4 h-64 w-full rounded bg-slate-100'
+          }
+        />
       </div>
     );
   }
@@ -96,6 +115,48 @@ export function CoordinationTradeMatrix({
     0,
   );
 
+  const grid = (
+    <div className="overflow-x-auto">
+      <div
+        className="grid gap-1"
+        style={{
+          gridTemplateColumns: `auto repeat(${trades.length}, minmax(60px, 1fr))`,
+        }}
+      >
+        {/* Top-left corner */}
+        <div />
+        {/* Column headers */}
+        {trades.map((col) => (
+          <div
+            key={`col-${col}`}
+            className="text-center text-xs font-medium uppercase tracking-wide text-content-secondary"
+          >
+            {DISCIPLINE_LABELS[col] ?? col}
+          </div>
+        ))}
+        {/* Rows */}
+        {trades.map((row) => (
+          <RowFragment
+            key={`row-${row}`}
+            row={row}
+            trades={trades}
+            cellMap={cellMap}
+            maxOpen={maxOpen}
+            navigate={navigate}
+            projectId={projectId ?? null}
+            t={t}
+          />
+        ))}
+      </div>
+    </div>
+  );
+
+  // Embedded inside a GlassPanel: it already paints the card + title, so
+  // we drop our own chrome to avoid a card-in-a-card with a doubled title.
+  if (embedded) {
+    return <div data-testid="coordination-trade-matrix">{grid}</div>;
+  }
+
   return (
     <div
       data-testid="coordination-trade-matrix"
@@ -111,44 +172,12 @@ export function CoordinationTradeMatrix({
           <p className="text-xs text-content-tertiary">
             {t('coordination.trade_matrix_subtitle', {
               defaultValue:
-                'Open clashes by discipline pair — click a cell to drill down.',
+                'Open clashes by discipline pair - click a cell to drill down.',
             })}
           </p>
         </div>
       </div>
-      <div className="overflow-x-auto">
-        <div
-          className="grid gap-1"
-          style={{
-            gridTemplateColumns: `auto repeat(${trades.length}, minmax(60px, 1fr))`,
-          }}
-        >
-          {/* Top-left corner */}
-          <div />
-          {/* Column headers */}
-          {trades.map((col) => (
-            <div
-              key={`col-${col}`}
-              className="text-center text-xs font-medium uppercase tracking-wide text-content-secondary"
-            >
-              {DISCIPLINE_LABELS[col] ?? col}
-            </div>
-          ))}
-          {/* Rows */}
-          {trades.map((row) => (
-            <RowFragment
-              key={`row-${row}`}
-              row={row}
-              trades={trades}
-              cellMap={cellMap}
-              maxOpen={maxOpen}
-              navigate={navigate}
-              projectId={projectId ?? null}
-              t={t}
-            />
-          ))}
-        </div>
-      </div>
+      {grid}
     </div>
   );
 }

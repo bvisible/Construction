@@ -43,7 +43,7 @@ class BIMModel(Base):
     discipline: Mapped[str | None] = mapped_column(String(50), nullable=True)
     model_format: Mapped[str | None] = mapped_column(String(20), nullable=True)
     version: Mapped[str] = mapped_column(String(20), nullable=False, default="1")
-    import_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    import_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="processing")
     element_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     storey_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -168,9 +168,7 @@ class BOQElementLink(Base):
     """Link between a BOQ position and a BIM element."""
 
     __tablename__ = "oe_bim_boq_link"
-    __table_args__ = (
-        UniqueConstraint("boq_position_id", "bim_element_id", name="uq_bim_boq_link_pos_elem"),
-    )
+    __table_args__ = (UniqueConstraint("boq_position_id", "bim_element_id", name="uq_bim_boq_link_pos_elem"),)
 
     boq_position_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -235,9 +233,7 @@ class BIMModelDiff(Base):
     """Diff result between two BIM model versions."""
 
     __tablename__ = "oe_bim_model_diff"
-    __table_args__ = (
-        UniqueConstraint("old_model_id", "new_model_id", name="uq_bim_model_diff_pair"),
-    )
+    __table_args__ = (UniqueConstraint("old_model_id", "new_model_id", name="uq_bim_model_diff_pair"),)
 
     old_model_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -362,9 +358,7 @@ class BIMFederation(Base):
     """
 
     __tablename__ = "oe_bim_federation"
-    __table_args__ = (
-        Index("ix_bim_federation_project", "project_id"),
-    )
+    __table_args__ = (Index("ix_bim_federation_project", "project_id"),)
 
     project_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -470,7 +464,4 @@ class BIMFederationModel(Base):
     federation: Mapped[BIMFederation] = relationship(back_populates="members")
 
     def __repr__(self) -> str:
-        return (
-            f"<BIMFederationModel fed={self.federation_id} "
-            f"model={self.bim_model_id} z={self.z_order}>"
-        )
+        return f"<BIMFederationModel fed={self.federation_id} model={self.bim_model_id} z={self.z_order}>"

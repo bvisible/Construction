@@ -29,7 +29,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 const SCREENSHOT_DIR = '.tests-artifacts/r6/property_dev/drawer_a11y';
-const DEMO_ADMIN = 'demo@openestimator.io';
+const DEMO_ADMIN = 'demo@openconstructionerp.com';
 
 async function demoLogin(page: Page, email: string): Promise<boolean> {
   const response = await page.request.post(

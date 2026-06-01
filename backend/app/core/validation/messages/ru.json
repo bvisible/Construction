@@ -137,6 +137,16 @@
       "fail": "Неверный код SINAPI '{code}' в позиции {ordinal}"
     }
   },
+  "nbr": {
+    "classification_required": {
+      "fail": "У позиции {ordinal} отсутствует раздел NBR 12721",
+      "suggestion": "Присвойте раздел NBR 12721 (S1..S11)"
+    },
+    "valid_section": {
+      "fail": "Раздел NBR 12721 '{code}' в позиции {ordinal} вне диапазона S1..S11",
+      "suggestion": "Используйте коды S1..S11 (например, S3 для несущих конструкций)"
+    }
+  },
   "gesn": {
     "code_required": {
       "fail": "У позиции {ordinal} отсутствует код ГЭСН/ФЕР",

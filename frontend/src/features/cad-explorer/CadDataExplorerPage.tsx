@@ -20,7 +20,7 @@ import {
 import { Button, Card, Badge, Breadcrumb, EmptyState } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { useUploadQueueStore } from '@/stores/useUploadQueueStore';
-import { apiGet, apiPost } from '@/shared/lib/api';
+import { apiGet, apiPost, ApiError, getErrorMessage, extractErrorMessageFromBody } from '@/shared/lib/api';
 import {
   describeSession,
   valueCounts,
@@ -127,6 +127,87 @@ function formatNumber(n: number | null | undefined): string {
   if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 1 });
   if (Math.abs(n) >= 1) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
   return n.toLocaleString(undefined, { maximumFractionDigits: 4 });
+}
+
+/* ── Describe-fetch error classification ───────────────────────────────────
+   The `describe` query can fail for very different reasons, and a single
+   generic "session expired" screen hid the real cause. We classify the
+   thrown error into three buckets so the UI can react honestly:
+
+     - `expired`   → 410 Gone (or a 404 whose body says the session is
+                     gone). The backend issues 410 for a discarded/expired
+                     CAD session — the right UX is "re-upload your file".
+     - `no_data`   → the takeoff/converter surface isn't available or this
+                     model has nothing extracted yet (module not loaded /
+                     404 routing / "no converter" / "no elements"). The
+                     right UX is a friendly empty-state, not a red error.
+     - `error`     → anything else (500, network, permission, …). We surface
+                     the real message + HTTP status instead of masking it.
+
+   `status` is the HTTP status when the error is an {@link ApiError}, else
+   `null` (network/timeout). `message` is always a human-readable string. */
+type DescribeErrorKind = 'expired' | 'no_data' | 'error';
+
+interface ClassifiedDescribeError {
+  kind: DescribeErrorKind;
+  status: number | null;
+  message: string;
+}
+
+function classifyDescribeError(err: unknown): ClassifiedDescribeError {
+  const message = getErrorMessage(err);
+  if (err instanceof ApiError) {
+    const status = err.status;
+    const lower = message.toLowerCase();
+    const looksGone = lower.includes('expired') || lower.includes('not found or expired');
+    const looksNoData =
+      lower.includes('no converter') ||
+      lower.includes('not installed') ||
+      lower.includes('no canonical') ||
+      lower.includes('no elements') ||
+      lower.includes('no extracted') ||
+      lower.includes('not extracted') ||
+      (lower.includes('module') && lower.includes('not'));
+
+    if (status === 410) return { kind: 'expired', status, message };
+    // A 404 here means either the takeoff module/route is absent (no
+    // converter surface) or the session record is gone. Treat a "gone"
+    // body as expired (re-upload), otherwise as "nothing extracted yet".
+    if (status === 404) {
+      return looksGone
+        ? { kind: 'expired', status, message }
+        : { kind: 'no_data', status, message };
+    }
+    if (status === 422 || looksNoData) return { kind: 'no_data', status, message };
+    return { kind: 'error', status, message };
+  }
+  return { kind: 'error', status: null, message };
+}
+
+/* ── Client-side pivot row puller ───────────────────────────────────────
+   count / count_unique aggregations are computed in the browser because the
+   backend rejects count_unique and returns a meaningless group size for
+   count. To keep the reported numbers honest we page through ALL rows (the
+   backend caps each page at 1 000) up to a hard safety ceiling rather than
+   silently sampling the first page. Returns the rows plus the model's true
+   total so callers can surface a "sampled" caption when the ceiling clips a
+   very large model. */
+const CLIENT_PIVOT_PAGE = 1000;
+const CLIENT_PIVOT_MAX_ROWS = 50000;
+
+async function fetchAllElements(
+  sessionId: string,
+): Promise<{ rows: Record<string, unknown>[]; total: number; complete: boolean }> {
+  const first = await fetchElements(sessionId, { limit: CLIENT_PIVOT_PAGE, offset: 0 });
+  const total = first.total;
+  const rows = [...first.rows];
+  const ceiling = Math.min(total, CLIENT_PIVOT_MAX_ROWS);
+  while (rows.length < ceiling) {
+    const next = await fetchElements(sessionId, { limit: CLIENT_PIVOT_PAGE, offset: rows.length });
+    if (next.rows.length === 0) break;
+    rows.push(...next.rows);
+  }
+  return { rows, total, complete: rows.length >= total };
 }
 
 /* ── (Stats now rendered as header pills in the session view) ──────────── */
@@ -353,27 +434,90 @@ function DataTableTab({ sessionId, describe }: { sessionId: string; describe: De
     return rows;
   }, [data?.rows, globalSearch, slicers]);
 
-  // Export current view to CSV
-  const handleExportCSV = useCallback(() => {
-    if (!data?.rows || data.rows.length === 0) return;
-    const cols = visibleCols;
-    const header = cols.join(',');
-    const rows = displayRows.map((row) =>
-      cols.map((col) => {
-        const val = String(row[col] ?? '');
-        return val.includes(',') || val.includes('"') || val.includes('\n') ? `"${val.replace(/"/g, '""')}"` : val;
-      }).join(',')
-    );
-    const csv = [header, ...rows].join('\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `cad-data-export.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    addToast({ type: 'success', title: t('explorer.exported', { defaultValue: 'Exported to CSV' }) });
-  }, [data?.rows, visibleCols, displayRows, addToast, t]);
+  const [exporting, setExporting] = useState(false);
+
+  // Apply the client-side filter chain (cross-filter slicers + global search)
+  // to an arbitrary row set \u2014 shared by the live table and the CSV export so
+  // both honour the same visible scope.
+  const applyClientFilters = useCallback(
+    (rows: Record<string, unknown>[]) => {
+      let out = rows;
+      if (slicers.length > 0) {
+        out = out.filter((row) =>
+          slicers.every((s) => {
+            if (s.values.length === 0) return true;
+            const cell = row[s.column];
+            return s.values.includes(cell == null ? '' : String(cell));
+          }),
+        );
+      }
+      if (globalSearch.trim()) {
+        const q = globalSearch.toLowerCase();
+        out = out.filter((row) =>
+          Object.values(row).some((v) => v != null && String(v).toLowerCase().includes(q)),
+        );
+      }
+      return out;
+    },
+    [slicers, globalSearch],
+  );
+
+  // Export the COMPLETE dataset (not just the current 50-row page) to CSV.
+  // Pages through all rows honouring the active server-side sort/filter, then
+  // applies the same client-side slicer/search filters the table shows, so
+  // the file matches the row count displayed in the toolbar.
+  const handleExportCSV = useCallback(async () => {
+    if (!data || data.total === 0) return;
+    setExporting(true);
+    try {
+      const PAGE = 1000;
+      const allRows: Record<string, unknown>[] = [];
+      for (let offset = 0; offset < data.total; offset += PAGE) {
+        const resp = await fetchElements(sessionId, {
+          offset,
+          limit: PAGE,
+          sort_by: sortBy || undefined,
+          sort_order: sortOrder,
+          filter_column: activeFilter?.col || undefined,
+          filter_value: activeFilter?.val || undefined,
+        });
+        if (resp.rows.length === 0) break;
+        allRows.push(...resp.rows);
+      }
+      const exportRows = applyClientFilters(allRows);
+      const cols = visibleCols;
+      const header = cols.join(',');
+      const rows = exportRows.map((row) =>
+        cols.map((col) => {
+          const val = String(row[col] ?? '');
+          return val.includes(',') || val.includes('"') || val.includes('\n') ? `"${val.replace(/"/g, '""')}"` : val;
+        }).join(',')
+      );
+      const csv = [header, ...rows].join('\n');
+      const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cad-data-export.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      addToast({
+        type: 'success',
+        title: t('explorer.exported_rows', {
+          defaultValue: 'Exported {{count}} rows to CSV',
+          count: exportRows.length,
+        }),
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('explorer.export_failed', { defaultValue: 'Export failed' }),
+        message: err instanceof Error ? err.message : '',
+      });
+    } finally {
+      setExporting(false);
+    }
+  }, [data, sessionId, sortBy, sortOrder, activeFilter, applyClientFilters, visibleCols, addToast, t]);
 
   const handleSort = useCallback((col: string) => {
     if (sortBy === col) {
@@ -431,7 +575,7 @@ function DataTableTab({ sessionId, describe }: { sessionId: string; describe: De
             />
           )}
           {filterCol && filterVal && (
-            <button onClick={applyFilter} className="h-7 px-2 rounded-md text-2xs font-medium bg-oe-blue text-white">OK</button>
+            <button onClick={applyFilter} className="h-9 px-3 rounded-md text-2xs font-medium bg-oe-blue text-white">OK</button>
           )}
         </div>
 
@@ -487,13 +631,19 @@ function DataTableTab({ sessionId, describe }: { sessionId: string; describe: De
           {t('explorer.heatmap_short', { defaultValue: 'Heatmap' })}
         </button>
 
-        {/* Export CSV */}
+        {/* Export CSV — exports the full dataset, not just the visible page */}
         <button
           onClick={handleExportCSV}
-          className="h-7 px-2 rounded-md border border-border bg-surface-primary text-xs text-content-secondary hover:bg-surface-secondary flex items-center gap-1"
-          title={t('explorer.export_csv', { defaultValue: 'Export CSV' })}
+          disabled={exporting}
+          data-testid="explorer-export-csv-btn"
+          className="h-7 px-2 rounded-md border border-border bg-surface-primary text-xs text-content-secondary hover:bg-surface-secondary flex items-center gap-1 disabled:opacity-60 disabled:cursor-wait"
+          title={t('explorer.export_csv_all_hint', {
+            defaultValue: 'Export all {{count}} rows (current sort & filters) to CSV',
+            count: data?.total ?? 0,
+          })}
         >
-          <DownloadIcon size={13} /> CSV
+          {exporting ? <Loader2 size={13} className="animate-spin" /> : <DownloadIcon size={13} />}
+          {t('explorer.export_csv_all', { defaultValue: 'Export all (CSV)' })}
         </button>
 
         {/* Row count */}
@@ -1095,6 +1245,10 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
   const [sortCol, setSortCol] = useState<string | null>(null);
   const [sortDesc, setSortDesc] = useState(true);
   const [showCreateBOQ, setShowCreateBOQ] = useState(false);
+  // When a categorical (count / count_unique) pivot pulls rows client-side
+  // and the model exceeds the safety ceiling, record how many rows actually
+  // backed the figures so the UI can show an honest "sampled" caption.
+  const [sampled, setSampled] = useState<{ used: number; total: number } | null>(null);
 
   // Persist the live pivot config to the analysis store so Save View
   // captures the current layout and a restored view reapplies it here.
@@ -1137,30 +1291,30 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
   // Categorical aggregations (count / count_unique) are computed on the
   // client: the backend endpoint rejects `count_unique` as an unknown
   // function, and `count` returns the same group size for every column
-  // which defeats per-column semantics. For those fns we pull raw rows
-  // via `/cad-data/elements/` (up to 5 000) and reduce locally. Numeric
-  // fns continue to hit the server for best performance on large models.
+  // which defeats per-column semantics. For those fns we page through ALL
+  // raw rows via `/cad-data/elements/` (up to a safety ceiling) and reduce
+  // locally, surfacing a "sampled" caption only when the ceiling clips a
+  // very large model. Numeric fns hit the server for best performance.
   const runPivot = useCallback(async () => {
     if (groupBy.length === 0 || aggCols.length === 0) return;
     setLoading(true);
     try {
       if (isCategoricalAggFn(aggFn)) {
-        // Client-side path. `limit=5000` is the largest row pull the
-        // backend allows in a single call (current cap 1 000 — we request
-        // the max and document the limit in the UI caption below).
-        const rowsResp = await fetchElements(sessionId, { limit: 1000, offset: 0 });
+        const { rows, total, complete } = await fetchAllElements(sessionId);
         const clientResult = computeClientPivot(
-          rowsResp.rows,
+          rows,
           groupBy,
           aggCols,
           aggFn as 'count' | 'count_unique',
         );
         setResult(clientResult);
+        setSampled(complete ? null : { used: rows.length, total });
       } else {
         const aggs: Record<string, string> = {};
         for (const col of aggCols) aggs[col] = aggFn;
         const data = await aggregate(sessionId, groupBy, aggs);
         setResult(data);
+        setSampled(null);
       }
       setExpanded(new Set());
       setSortCol(aggCols[0] || null);
@@ -1416,6 +1570,25 @@ function PivotTab({ sessionId, describe, thresholdRules, setThresholdRules }: Pi
           matrixEnabled={groupBy.length >= 2}
         />
       </Card>
+
+      {/* Sampling notice — categorical counts are computed client-side and
+          a very large model is clipped at the safety ceiling. Be honest
+          about the partial figures rather than presenting them as totals. */}
+      {sampled && (
+        <div
+          data-testid="pivot-sampled-notice"
+          className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50/60 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+        >
+          <AlertCircle size={14} className="shrink-0" />
+          <span>
+            {t('explorer.count_sampled', {
+              defaultValue: 'Counts based on the first {{used}} of {{total}} rows.',
+              used: sampled.used.toLocaleString(),
+              total: sampled.total.toLocaleString(),
+            })}
+          </span>
+        </div>
+      )}
 
       {/* Results */}
       {loading ? (
@@ -1788,6 +1961,9 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
   const [chartData, setChartData] = useState<AggregateResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [drill, setDrill] = useState<DrillContext | null>(null);
+  // See PivotTab: categorical figures are reduced client-side; record when a
+  // large model is clipped at the safety ceiling so the chart can say so.
+  const [sampled, setSampled] = useState<{ used: number; total: number } | null>(null);
 
   const loadChart = useCallback(async () => {
     if (!chart.category || !chart.value) return;
@@ -1798,18 +1974,21 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
         // count / count_unique — client-side (backend rejects
         // count_unique, and count returns the group size for every
         // column regardless of which one is asked). Mirrors the Pivot
-        // tab's handling so both tabs agree on value semantics.
-        const rowsResp = await fetchElements(sessionId, { limit: 1000, offset: 0 });
+        // tab's handling so both tabs agree on value semantics. Pages
+        // through all rows (up to the safety ceiling) for honest counts.
+        const { rows, total, complete } = await fetchAllElements(sessionId);
         const clientResult = computeClientPivot(
-          rowsResp.rows,
+          rows,
           [chart.category],
           [chart.value],
           fn as 'count' | 'count_unique',
         );
         setChartData(clientResult);
+        setSampled(complete ? null : { used: rows.length, total });
       } else {
         const data = await aggregate(sessionId, [chart.category], { [chart.value]: fn });
         setChartData(data);
+        setSampled(null);
       }
     } catch { /* */ } finally { setLoading(false); }
   }, [sessionId, chart.category, chart.value, chart.aggFn]);
@@ -1984,6 +2163,22 @@ function ChartsTab({ sessionId, describe }: { sessionId: string; describe: Descr
         </p>
       </Card>
 
+      {sampled && (
+        <div
+          data-testid="chart-sampled-notice"
+          className="flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50/60 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
+        >
+          <AlertCircle size={14} className="shrink-0" />
+          <span>
+            {t('explorer.count_sampled', {
+              defaultValue: 'Counts based on the first {{used}} of {{total}} rows.',
+              used: sampled.used.toLocaleString(),
+              total: sampled.total.toLocaleString(),
+            })}
+          </span>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center py-12" data-testid="chart-loading">
           <div className="h-5 w-5 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" />
@@ -2105,9 +2300,39 @@ function LazyRechart({ slices, kind, formatAxis, onSliceClick, onSliceDoubleClic
     if (d?.index != null && slices[d.index]) onSliceDoubleClick(slices[d.index]!);
   }) as unknown as () => void;
 
+  // Category legend. Scatter and pie encode the category only by colour — the
+  // axes carry count/value, so without a swatch→label key the user cannot tell
+  // which point or wedge is which group. Each item is clickable to select the
+  // matching slice, mirroring the on-chart click behaviour.
+  const categoryLegend = (
+    <ul
+      data-testid="chart-legend"
+      className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 max-h-24 overflow-y-auto px-1"
+    >
+      {slices.map((s, i) => (
+        <li key={`lg-${i}`}>
+          <button
+            type="button"
+            onClick={() => onSliceClick(s)}
+            className="flex items-center gap-1.5 text-[11px] text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-gray-100 transition-colors"
+            title={`${s.label}: ${formatAxis(s.value)}`}
+          >
+            <span
+              aria-hidden
+              className="inline-block h-2.5 w-2.5 rounded-sm shrink-0"
+              style={{ backgroundColor: s.colour }}
+            />
+            <span className="truncate max-w-[160px]">{s.label}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+
   if (kind === 'pie') {
     return (
-      <div data-testid="chart-pie" className="w-full h-[360px]">
+      <>
+        <div data-testid="chart-pie" className="w-full h-[360px]">
         <ResponsiveContainer width="100%" height="100%">
           <RPieChart>
             <Pie
@@ -2131,7 +2356,9 @@ function LazyRechart({ slices, kind, formatAxis, onSliceClick, onSliceDoubleClic
             <Tooltip formatter={tooltipFormatter} />
           </RPieChart>
         </ResponsiveContainer>
-      </div>
+        </div>
+        {categoryLegend}
+      </>
     );
   }
 
@@ -2161,7 +2388,8 @@ function LazyRechart({ slices, kind, formatAxis, onSliceClick, onSliceDoubleClic
 
   if (kind === 'scatter') {
     return (
-      <div data-testid="chart-scatter" className="w-full h-[360px]">
+      <>
+        <div data-testid="chart-scatter" className="w-full h-[360px]">
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 10, right: 20, left: 10, bottom: 40 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -2181,7 +2409,9 @@ function LazyRechart({ slices, kind, formatAxis, onSliceClick, onSliceDoubleClic
             </Scatter>
           </ScatterChart>
         </ResponsiveContainer>
-      </div>
+        </div>
+        {categoryLegend}
+      </>
     );
   }
 
@@ -2276,6 +2506,7 @@ function DrillDownModal({
           <button
             onClick={onClose}
             data-testid="chart-drill-close"
+            aria-label={t('common.close', { defaultValue: 'Close' })}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-hover"
           >
             <X size={18} />
@@ -2355,7 +2586,12 @@ function ViewsDrawer({ open, onClose }: ViewsDrawerProps) {
           <h3 className="text-sm font-semibold text-content-primary">
             {t('explorer.saved_views', { defaultValue: 'Saved views' })}
           </h3>
-          <button onClick={onClose} className="h-7 w-7 rounded-lg hover:bg-surface-hover flex items-center justify-center" data-testid="views-drawer-close">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="h-7 w-7 rounded-lg hover:bg-surface-hover flex items-center justify-center"
+            data-testid="views-drawer-close"
+          >
             <X size={16} />
           </button>
         </div>
@@ -2666,9 +2902,11 @@ function CreateBOQFromPivotModal({ open, onClose, groups, groupByColumns, aggCol
           .filter(Boolean)
           .join(' — ');
 
-        const quantity = group.results[`sum_${quantityCol}`]
-          ?? group.results[`avg_${quantityCol}`]
-          ?? group.count;
+        // Aggregate results are keyed by the bare column name (both the
+        // backend endpoint and computeClientPivot write results[col]); the
+        // prefixed sum_/avg_ keys never exist, which previously made every
+        // position fall through to the element count.
+        const quantity = group.results[quantityCol] ?? group.count;
 
         await apiPost(`/v1/boq/boqs/${boqId}/positions/`, {
           boq_id: boqId,
@@ -2726,7 +2964,11 @@ function CreateBOQFromPivotModal({ open, onClose, groups, groupByColumns, aggCol
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-hover transition-colors">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-hover transition-colors"
+          >
             <X size={18} />
           </button>
         </div>
@@ -2775,7 +3017,7 @@ function CreateBOQFromPivotModal({ open, onClose, groups, groupByColumns, aggCol
             <div className="space-y-1">
               {groups.slice(0, 8).map((g, i) => {
                 const desc = groupByColumns.map((col) => g.key[col] || '').filter(Boolean).join(' — ');
-                const qty = g.results[`sum_${quantityCol}`] ?? g.results[`avg_${quantityCol}`] ?? g.count;
+                const qty = g.results[quantityCol] ?? g.count;
                 return (
                   <div key={Object.values(g.key).join('-') || `group-${i}`} className="flex items-center justify-between text-xs">
                     <span className="text-content-primary truncate flex-1 mr-2">{desc || `Group ${i + 1}`}</span>
@@ -2872,7 +3114,11 @@ function UploadConvertZone({
       const pct = Math.min(95, (sec / estimatedSec) * 100);
       updateQueueTask(taskId, {
         progress: pct,
-        message: `${Math.round(pct)}% — ~${Math.max(0, Math.round(estimatedSec - sec))}s`,
+        message: t('explorer.convert_progress', {
+          defaultValue: '{{pct}}% - ~{{secs}}s',
+          pct: Math.round(pct),
+          secs: Math.max(0, Math.round(estimatedSec - sec)),
+        }),
       });
     }, 1000);
 
@@ -2894,7 +3140,7 @@ function UploadConvertZone({
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(body.detail || 'Conversion failed');
+        throw new Error(extractErrorMessageFromBody(body) ?? 'Conversion failed');
       }
 
       const data = await res.json();
@@ -2976,7 +3222,7 @@ function UploadConvertZone({
               <Loader2 size={20} className="text-oe-blue animate-spin shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-content-primary truncate">{t('explorer.converting', { defaultValue: 'Converting {{name}}...', name: fileName })}</p>
-                <p className="text-2xs text-content-tertiary">{remaining > 0 ? `~${remaining}s remaining` : 'Finalizing...'}</p>
+                <p className="text-2xs text-content-tertiary">{remaining > 0 ? t('explorer.seconds_remaining', { defaultValue: '~{{count}}s remaining', count: remaining }) : t('explorer.finalizing', { defaultValue: 'Finalizing...' })}</p>
               </div>
               <span className="text-lg font-bold text-oe-blue tabular-nums shrink-0">{Math.round(progressPct)}%</span>
             </div>
@@ -3244,7 +3490,7 @@ function KpiStrip({ describe }: { describe: DescribeResponse }) {
     if (volume?.sum != null) {
       out.push({
         icon: Box,
-        label: t('explorer.kpi_volume', { defaultValue: 'Volume m³' }),
+        label: t('explorer.kpi_volume', { defaultValue: 'Volume' }),
         value: formatNumber(volume.sum),
         accent: 'text-emerald-600 dark:text-emerald-400',
         hint: volume.name,
@@ -3255,7 +3501,7 @@ function KpiStrip({ describe }: { describe: DescribeResponse }) {
     if (area?.sum != null) {
       out.push({
         icon: Square,
-        label: t('explorer.kpi_area', { defaultValue: 'Area m²' }),
+        label: t('explorer.kpi_area', { defaultValue: 'Area' }),
         value: formatNumber(area.sum),
         accent: 'text-amber-600 dark:text-amber-400',
         hint: area.name,
@@ -3266,7 +3512,7 @@ function KpiStrip({ describe }: { describe: DescribeResponse }) {
     if (length?.sum != null) {
       out.push({
         icon: Ruler,
-        label: t('explorer.kpi_length', { defaultValue: 'Length m' }),
+        label: t('explorer.kpi_length', { defaultValue: 'Length' }),
         value: formatNumber(length.sum),
         accent: 'text-purple-600 dark:text-purple-400',
         hint: length.name,
@@ -3277,7 +3523,7 @@ function KpiStrip({ describe }: { describe: DescribeResponse }) {
     if (weight?.sum != null) {
       out.push({
         icon: TrendingUp,
-        label: t('explorer.kpi_weight', { defaultValue: 'Weight kg' }),
+        label: t('explorer.kpi_weight', { defaultValue: 'Weight' }),
         value: formatNumber(weight.sum),
         accent: 'text-rose-600 dark:text-rose-400',
         hint: weight.name,
@@ -3740,59 +3986,64 @@ export function CadDataExplorerPage() {
               const timeAgo = s.created_at ? (() => {
                 const diff = Date.now() - new Date(s.created_at).getTime();
                 const mins = Math.floor(diff / 60000);
-                if (mins < 60) return `${mins}m ago`;
+                if (mins < 60) return t('explorer.minutes_ago', { defaultValue: '{{count}}m ago', count: mins });
                 const hrs = Math.floor(mins / 60);
-                if (hrs < 24) return `${hrs}h ago`;
-                return `${Math.floor(hrs / 24)}d ago`;
+                if (hrs < 24) return t('explorer.hours_ago', { defaultValue: '{{count}}h ago', count: hrs });
+                return t('explorer.days_ago', { defaultValue: '{{count}}d ago', count: Math.floor(hrs / 24) });
               })() : '';
 
               return (
-                <button
+                <div
                   key={s.session_id}
-                  onClick={() => setSearchParams({ session: s.session_id })}
-                  className="group relative shrink-0 w-64 text-start rounded-xl border border-border-light bg-surface-secondary hover:bg-surface-tertiary hover:border-oe-blue/30 hover:shadow-lg transition-all duration-200 overflow-hidden"
+                  className="group relative shrink-0 w-64 rounded-xl border border-border-light bg-surface-secondary hover:bg-surface-tertiary hover:border-oe-blue/30 hover:shadow-lg transition-all duration-200 overflow-hidden"
                 >
-                  <span
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => {
-                      e.stopPropagation();
+                  {/* Card body — single native button, opens the session */}
+                  <button
+                    type="button"
+                    onClick={() => setSearchParams({ session: s.session_id })}
+                    className="block w-full text-start"
+                  >
+                    {/* Format accent stripe */}
+                    <div className={`h-1 w-full ${
+                      fmt === 'RVT' ? 'bg-blue-500' :
+                      fmt === 'IFC' ? 'bg-green-500' :
+                      fmt === 'DWG' ? 'bg-orange-500' :
+                      fmt === 'DGN' ? 'bg-purple-500' :
+                      fmt === 'DXF' ? 'bg-amber-500' :
+                      'bg-gray-400'
+                    }`} />
+                    <div className="px-3.5 py-3">
+                      <div className="flex items-center gap-2 mb-1.5 pr-6">
+                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-[9px] font-black tracking-tighter leading-none ${
+                          fmt === 'RVT' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' :
+                          fmt === 'IFC' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' :
+                          fmt === 'DWG' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300' :
+                          fmt === 'DGN' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' :
+                          'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                        }`}>{fmt || '?'}</div>
+                        <span className="text-xs font-semibold text-content-primary truncate">{s.display_name}</span>
+                      </div>
+                      <div className="flex items-center gap-2.5 text-[11px] text-content-tertiary">
+                        <span className="font-medium tabular-nums">{s.element_count.toLocaleString()} {t('explorer.elements_short', { defaultValue: 'elements' })}</span>
+                        {s.is_permanent && <span className="text-emerald-500 font-medium">{t('explorer.saved_badge', { defaultValue: 'saved' })}</span>}
+                        {timeAgo && <span className="ml-auto text-content-quaternary">{timeAgo}</span>}
+                      </div>
+                    </div>
+                  </button>
+                  {/* Delete — sibling button, not nested inside the card button */}
+                  <button
+                    type="button"
+                    aria-label={t('explorer.delete_session', { defaultValue: 'Delete analysis' })}
+                    onClick={() => {
                       if (confirm(t('explorer.delete_session_confirm', { defaultValue: 'Delete this analysis?' }))) {
                         deleteSessionMutation.mutate(s.session_id);
                       }
                     }}
-                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.click(); }}
-                    className="absolute top-2 right-2 p-1 rounded text-content-quaternary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 opacity-0 group-hover:opacity-100 transition-all z-10"
+                    className="absolute top-2 right-2 p-1 rounded text-content-quaternary hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all z-10"
                   >
                     <X size={12} />
-                  </span>
-                  {/* Format accent stripe */}
-                  <div className={`h-1 w-full ${
-                    fmt === 'RVT' ? 'bg-blue-500' :
-                    fmt === 'IFC' ? 'bg-green-500' :
-                    fmt === 'DWG' ? 'bg-orange-500' :
-                    fmt === 'DGN' ? 'bg-purple-500' :
-                    fmt === 'DXF' ? 'bg-amber-500' :
-                    'bg-gray-400'
-                  }`} />
-                  <div className="px-3.5 py-3">
-                    <div className="flex items-center gap-2 mb-1.5">
-                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-[9px] font-black tracking-tighter leading-none ${
-                        fmt === 'RVT' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' :
-                        fmt === 'IFC' ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' :
-                        fmt === 'DWG' ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300' :
-                        fmt === 'DGN' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' :
-                        'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
-                      }`}>{fmt || '?'}</div>
-                      <span className="text-xs font-semibold text-content-primary truncate">{s.display_name}</span>
-                    </div>
-                    <div className="flex items-center gap-2.5 text-[11px] text-content-tertiary">
-                      <span className="font-medium tabular-nums">{s.element_count.toLocaleString()} {t('explorer.elements_short', { defaultValue: 'elements' })}</span>
-                      {s.is_permanent && <span className="text-emerald-500 font-medium">saved</span>}
-                      {timeAgo && <span className="ml-auto text-content-quaternary">{timeAgo}</span>}
-                    </div>
-                  </div>
-                </button>
+                  </button>
+                </div>
               );
             })}
           </div>
@@ -3898,6 +4149,17 @@ export function CadDataExplorerPage() {
             {t('explorer.save_filters', { defaultValue: 'Save Filters' })}
           </button>
           <button
+            onClick={() => setShowSaveToProjectDialog(true)}
+            data-testid="explorer-save-to-project-btn"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border text-content-secondary bg-surface-secondary border-border-light hover:bg-surface-tertiary"
+            title={t('explorer.save_to_project_hint', {
+              defaultValue: 'Save these elements as a BIM model in a project so you can view them in the BIM Viewer.',
+            })}
+          >
+            <Box size={13} />
+            <span className="hidden sm:inline">{t('explorer.save_to_project', { defaultValue: 'Save to Project (BIM Hub)' })}</span>
+          </button>
+          <button
             onClick={() => { setSearchParams({}); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors border text-content-secondary bg-surface-secondary border-border-light hover:bg-surface-tertiary"
           >
@@ -3914,19 +4176,78 @@ export function CadDataExplorerPage() {
             <div className="h-6 w-6 animate-spin rounded-full border-2 border-oe-blue border-t-transparent" />
           </div>
         ) : error ? (
-          /* Session expired or invalid — show upload zone to re-upload */
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            <Card className="p-4 border-amber-200 bg-amber-50/50 dark:bg-amber-900/10 dark:border-amber-800">
-              <div className="flex items-center gap-3">
-                <AlertCircle size={18} className="text-amber-600 shrink-0" />
-                <div>
-                  <p className="text-sm font-medium text-content-primary">{t('explorer.session_expired_title', { defaultValue: 'Session expired or not found' })}</p>
-                  <p className="text-xs text-content-tertiary">{t('explorer.session_expired_desc', { defaultValue: 'CAD sessions are valid for 24 hours. Upload your file again to continue.' })}</p>
+          (() => {
+            // Don't mask the real failure behind a blanket "session expired"
+            // screen. Classify the error so an expired session, an
+            // empty/unconverted model, and a genuine fault each get the
+            // right treatment.
+            const classified = classifyDescribeError(error);
+
+            // Nothing extracted yet / converter unavailable → friendly
+            // empty-state (NOT a red error) that tells the user what to do.
+            if (classified.kind === 'no_data') {
+              return (
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  <EmptyState
+                    icon={<Database size={28} />}
+                    title={t('explorer.no_data_title', {
+                      defaultValue: 'No extracted data yet',
+                    })}
+                    description={t('explorer.no_data_desc', {
+                      defaultValue:
+                        'This model has no extracted data yet — convert a CAD/BIM file (RVT, IFC, DWG) to populate the explorer.',
+                    })}
+                  />
+                  <UploadConvertZone onSessionReady={handleSessionReady} />
                 </div>
+              );
+            }
+
+            // Expired / discarded session → keep the re-upload prompt.
+            if (classified.kind === 'expired') {
+              return (
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  <Card className="p-4 border-amber-200 bg-amber-50/50 dark:bg-amber-900/10 dark:border-amber-800">
+                    <div className="flex items-center gap-3">
+                      <AlertCircle size={18} className="text-amber-600 shrink-0" />
+                      <div>
+                        <p className="text-sm font-medium text-content-primary">{t('explorer.session_expired_title', { defaultValue: 'Session expired or not found' })}</p>
+                        <p className="text-xs text-content-tertiary">{t('explorer.session_expired_desc', { defaultValue: 'CAD sessions are valid for 24 hours. Upload your file again to continue.' })}</p>
+                      </div>
+                    </div>
+                  </Card>
+                  <UploadConvertZone onSessionReady={handleSessionReady} />
+                </div>
+              );
+            }
+
+            // Genuine failure → surface the real message + HTTP status so the
+            // cause isn't swallowed. Re-upload stays available as a recovery.
+            return (
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                <Card className="p-4 border-red-200 bg-red-50/50 dark:bg-red-900/10 dark:border-red-800">
+                  <div className="flex items-start gap-3">
+                    <AlertCircle size={18} className="text-red-600 shrink-0 mt-0.5" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-content-primary">
+                        {t('explorer.load_failed_title', { defaultValue: 'Could not load explorer data' })}
+                      </p>
+                      <p className="text-xs text-content-tertiary break-words">
+                        {classified.status != null
+                          ? t('explorer.load_failed_desc_status', {
+                              defaultValue: 'HTTP {{status}} — {{message}}',
+                              status: classified.status,
+                              message: classified.message,
+                            })
+                          : classified.message}
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+                <UploadConvertZone onSessionReady={handleSessionReady} />
               </div>
-            </Card>
-            <UploadConvertZone onSessionReady={handleSessionReady} />
-          </div>
+            );
+          })()
         ) : describe ? (
           <>
             {/* KPI dashboard strip — project-wide totals */}

@@ -12,7 +12,7 @@
  *        - `accessToken`: the raw JWT (for API fixture and helpers).
  *
  * Demo creds: per MEMORY, the canonical demo user is
- *   demo@openestimator.io (NOT openestimate.io — note the "r").
+ *   demo@openconstructionerp.com (NOT openestimate.io — note the "r").
  */
 import { test as base, type Page, type APIRequestContext } from '@playwright/test';
 import fs from 'node:fs';
@@ -26,7 +26,7 @@ const AUTH_FILE = path.join(AUTH_DIR, 'demo.json');
 
 const API_URL = process.env.OE_TEST_API_URL ?? 'http://localhost:8000';
 export const DEMO_USER = {
-  email: process.env.OE_TEST_DEMO_EMAIL ?? 'demo@openestimator.io',
+  email: process.env.OE_TEST_DEMO_EMAIL ?? 'demo@openconstructionerp.com',
   password: process.env.OE_TEST_DEMO_PASSWORD ?? 'OpenEstimate2024!',
 };
 

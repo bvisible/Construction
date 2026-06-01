@@ -97,7 +97,9 @@ class SavedViewService:
     # ── Get ───────────────────────────────────────────────────────────────
 
     async def _load(
-        self, view_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        view_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> FileSavedView:
         """Load a view if the caller can see it, else raise NotFound."""
         view = await self.session.get(FileSavedView, view_id)
@@ -170,6 +172,13 @@ class SavedViewService:
         except IntegrityError as exc:
             await self.session.rollback()
             raise SavedViewConflictError(view.name) from exc
+        # ``updated_at`` carries an ``onupdate=func.now()`` server-default,
+        # so SQLAlchemy expires the column after the flush to refetch the
+        # DB-computed value. Touching it during response serialisation would
+        # trigger a synchronous lazy-load outside the active greenlet and
+        # raise MissingGreenlet under asyncio. Refresh explicitly so every
+        # column is hydrated before the row leaves the service.
+        await self.session.refresh(view)
         return view
 
     # ── Delete ────────────────────────────────────────────────────────────
@@ -202,7 +211,9 @@ class SavedViewService:
     # ── Duplicate ─────────────────────────────────────────────────────────
 
     async def duplicate(
-        self, view_id: uuid.UUID, user_id: uuid.UUID,
+        self,
+        view_id: uuid.UUID,
+        user_id: uuid.UUID,
     ) -> FileSavedView:
         """Clone a view into the caller's own list as "<name> (copy)".
 
@@ -243,11 +254,7 @@ class SavedViewService:
         stmt = select(FileSavedView.id).where(
             FileSavedView.user_id == user_id,
             FileSavedView.name == name,
-            (
-                FileSavedView.project_id.is_(None)
-                if project_id is None
-                else FileSavedView.project_id == project_id
-            ),
+            (FileSavedView.project_id.is_(None) if project_id is None else FileSavedView.project_id == project_id),
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none() is not None

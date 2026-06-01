@@ -25,7 +25,6 @@ from pathlib import Path
 import pathspec
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_ROOT = REPO_ROOT / "backend"
 
@@ -83,7 +82,6 @@ def backend_spec() -> pathspec.PathSpec:
         # VCS / scratch / OS.
         ".git/HEAD",
         ".github/workflows/ci.yml",
-        ".claude/worktrees/foo/file.py",
         ".vscode/settings.json",
         ".DS_Store",
         "frontend/Thumbs.db",
@@ -108,12 +106,9 @@ def backend_spec() -> pathspec.PathSpec:
         "qa_install.zip",
     ],
 )
-def test_root_context_excludes_dangerous_paths(
-    root_spec: pathspec.PathSpec, path: str
-) -> None:
+def test_root_context_excludes_dangerous_paths(root_spec: pathspec.PathSpec, path: str) -> None:
     assert root_spec.match_file(path), (
-        f"{path} should be excluded by root .dockerignore but is NOT — "
-        "this would leak it into the unified Docker image"
+        f"{path} should be excluded by root .dockerignore but is NOT — this would leak it into the unified Docker image"
     )
 
 
@@ -139,12 +134,9 @@ def test_root_context_excludes_dangerous_paths(
         ".env.example",
     ],
 )
-def test_root_context_keeps_source_files(
-    root_spec: pathspec.PathSpec, path: str
-) -> None:
+def test_root_context_keeps_source_files(root_spec: pathspec.PathSpec, path: str) -> None:
     assert not root_spec.match_file(path), (
-        f"{path} is required by the Dockerfile.unified build but the "
-        ".dockerignore is excluding it"
+        f"{path} is required by the Dockerfile.unified build but the .dockerignore is excluding it"
     )
 
 
@@ -173,9 +165,7 @@ def test_root_context_keeps_source_files(
         ".git/HEAD",
     ],
 )
-def test_backend_worker_context_excludes_dangerous_paths(
-    backend_spec: pathspec.PathSpec, path: str
-) -> None:
+def test_backend_worker_context_excludes_dangerous_paths(backend_spec: pathspec.PathSpec, path: str) -> None:
     assert backend_spec.match_file(path), (
         f"{path} should be excluded by backend/.dockerignore but is NOT — "
         "this would leak it into the Celery worker image"
@@ -194,12 +184,9 @@ def test_backend_worker_context_excludes_dangerous_paths(
         "alembic/env.py",
     ],
 )
-def test_backend_worker_context_keeps_source_files(
-    backend_spec: pathspec.PathSpec, path: str
-) -> None:
+def test_backend_worker_context_keeps_source_files(backend_spec: pathspec.PathSpec, path: str) -> None:
     assert not backend_spec.match_file(path), (
-        f"{path} is required by the worker build but backend/.dockerignore "
-        "is excluding it"
+        f"{path} is required by the worker build but backend/.dockerignore is excluding it"
     )
 
 
@@ -230,7 +217,7 @@ def test_no_env_file_could_leak_into_image(root_spec: pathspec.PathSpec) -> None
     the question we're answering is "does the .dockerignore excludes
     every secret-bearing file the build context could see?".
     """
-    skipped_dirs = {".git", "node_modules", ".venv", ".claude", ".next"}
+    skipped_dirs = {".git", "node_modules", ".venv", ".next"}
     leaks: list[str] = []
     for env_file in REPO_ROOT.rglob(".env*"):
         if not env_file.is_file():

@@ -15,7 +15,8 @@ export type SubmittalStatus =
   | 'approved'
   | 'approved_as_noted'
   | 'revise_and_resubmit'
-  | 'rejected';
+  | 'rejected'
+  | 'closed';
 
 export type SubmittalType =
   | 'shop_drawing'
@@ -31,7 +32,7 @@ export interface Submittal {
   project_id: string;
   submittal_number: string;
   title: string;
-  spec_section: string;
+  spec_section: string | null;
   type: SubmittalType;
   status: SubmittalStatus;
   ball_in_court: string | null;
@@ -66,9 +67,15 @@ export interface UpdateSubmittalPayload {
 }
 
 export interface ReviewSubmittalPayload {
-  comments: string;
+  status: 'approved' | 'approved_as_noted' | 'revise_and_resubmit' | 'rejected';
+  notes?: string;
 }
 
+/**
+ * The review-modal decision shape. ``approved`` is routed to the body-less
+ * ``/approve/`` endpoint (final approval, MANAGER-gated, rate-limited);
+ * every other decision is routed to ``/review/`` with the notes persisted.
+ */
 export interface ApproveSubmittalPayload {
   status: 'approved' | 'approved_as_noted' | 'revise_and_resubmit' | 'rejected';
   comments?: string;
@@ -92,6 +99,7 @@ function normaliseSubmittal(s: SubmittalWire): Submittal {
     ...s,
     type,
     revision,
+    spec_section: s.spec_section ?? null,
     description: s.description ?? null,
     ball_in_court_name: s.ball_in_court_name ?? null,
   } as Submittal;
@@ -128,7 +136,29 @@ export async function reviewSubmittal(id: string, data: ReviewSubmittalPayload):
   return normaliseSubmittal(row);
 }
 
-export async function approveSubmittal(id: string, data: ApproveSubmittalPayload): Promise<Submittal> {
-  const row = await apiPost<SubmittalWire>(`/v1/submittals/${id}/approve/`, data);
+/**
+ * Final approval. The backend ``/approve/`` endpoint takes no body and
+ * unconditionally forces ``status='approved'`` (it is MANAGER-gated and
+ * rate-limited), so this helper sends nothing. Non-approve decisions
+ * (reject / revise / approve-as-noted) must go through {@link reviewSubmittal}.
+ */
+export async function approveSubmittal(id: string): Promise<Submittal> {
+  const row = await apiPost<SubmittalWire>(`/v1/submittals/${id}/approve/`);
   return normaliseSubmittal(row);
+}
+
+/**
+ * Submit a review decision from the review modal. Routes ``approved`` to
+ * the final-approval endpoint and every other decision to ``/review/`` so
+ * Reject / Revise / Approve-as-Noted are persisted faithfully (and never
+ * silently become ``approved``). Comments are forwarded as ``notes``.
+ */
+export async function submitReviewDecision(
+  id: string,
+  data: ApproveSubmittalPayload,
+): Promise<Submittal> {
+  if (data.status === 'approved') {
+    return approveSubmittal(id);
+  }
+  return reviewSubmittal(id, { status: data.status, notes: data.comments });
 }

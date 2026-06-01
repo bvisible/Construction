@@ -172,7 +172,10 @@ class CollaborationService:
             edited_at=datetime.now(UTC),
         )
 
-        updated = await self.comment_repo.get(comment_id)
+        # Return with the reply tree pinned in memory: the PATCH response is a
+        # CommentResponse whose nested ``replies`` serialize recursively, which
+        # would otherwise lazy-load and raise MissingGreenlet on asyncpg.
+        updated = await self.comment_repo.get_with_reply_tree(comment_id)
         if updated is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

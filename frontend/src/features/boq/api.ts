@@ -140,7 +140,13 @@ export interface ResourceCodeLookupResponse {
 
 export interface BOQWithPositions extends BOQ {
   positions: Position[];
-  grand_total: number;
+  /**
+   * v3 §10 contract: money fields serialise as Decimal-as-string
+   * (e.g. ``"634204086.52"``). Keep the type honest so call-sites coerce
+   * with ``Number()`` at the boundary instead of string-concatenating
+   * ("123" + "456" → "123456") or comparing strings.
+   */
+  grand_total: number | string;
 }
 
 /* ── Markup types ────────────────────────────────────────────────────── */

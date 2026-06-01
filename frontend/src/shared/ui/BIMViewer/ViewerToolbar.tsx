@@ -31,8 +31,13 @@ export interface ViewerToolbarProps {
   onToolChange?: (tool: ActiveViewerTool) => void;
   /** Hook called when the user clicks "Fit to selection" / "Fit to all" /
    *  "Reset" — the host component knows the current selection / model
-   *  bounds and should drive `sectionBox.setBoundsToBox(...)` from here. */
-  onSectionAction?: (action: 'fit_selection' | 'fit_all' | 'reset') => void;
+   *  bounds and should drive `sectionBox.setBoundsToBox(...)` from here.
+   *  Return `false` from a `fit_*` action when there is no usable geometry
+   *  to clip (empty selection / degenerate bounds) so the toolbar can show
+   *  a "No geometry to clip" hint instead of leaving an invisible model. */
+  onSectionAction?: (
+    action: 'fit_selection' | 'fit_all' | 'reset',
+  ) => boolean | void;
   /**
    * Called BEFORE a tool is enabled / AFTER a tool is disabled so the host
    * can flip externally-owned dependencies (most importantly: disable
@@ -75,6 +80,9 @@ export function ViewerToolbar({
   const [flightSpeed, setFlightSpeedState] = useState<number>(
     initialFlightSpeed ?? walkMode.getFlightSpeed(),
   );
+  /** Transient "No geometry to clip" hint shown when a Fit action found no
+   *  usable bounds. Auto-clears so it doesn't linger after a later success. */
+  const [noGeometryHint, setNoGeometryHint] = useState(false);
 
   // Subscribe to MeasureTool completions so the badge updates.
   useEffect(() => {
@@ -89,6 +97,9 @@ export function ViewerToolbar({
     (next: ActiveViewerTool) => {
       // Disable everything currently active.
       const prev = active;
+      // Leaving section mode clears any stale "no geometry" hint so it
+      // doesn't flash back on the next activation.
+      if (next !== 'section') setNoGeometryHint(false);
       if (sectionBox.isEnabled() && next !== 'section') sectionBox.disable();
       if (walkMode.isEnabled() && next !== 'walk') walkMode.disable();
       if (measureTool.isEnabled() && next !== 'measure') measureTool.disable();
@@ -139,6 +150,26 @@ export function ViewerToolbar({
       setFlightSpeedState(next);
     },
     [walkMode],
+  );
+
+  const handleSectionAction = useCallback(
+    (action: 'fit_selection' | 'fit_all' | 'reset') => {
+      // Reset must ALWAYS succeed regardless of host wiring: drop the clip
+      // here so an empty / mis-fitted box can never strand the user with an
+      // invisible model. The host's onSectionAction can do extra cleanup.
+      if (action === 'reset') {
+        if (sectionBox.isEnabled()) sectionBox.disable();
+        setNoGeometryHint(false);
+        onSectionAction?.('reset');
+        return;
+      }
+      // Fit actions: the host owns the bounds (selection / whole model) and
+      // returns false when there is nothing usable to clip. Surface the
+      // hint in that case instead of leaving everything clipped away.
+      const applied = onSectionAction?.(action);
+      setNoGeometryHint(applied === false);
+    },
+    [sectionBox, onSectionAction],
   );
 
   const handleClearMeasurements = useCallback(() => {
@@ -239,7 +270,7 @@ export function ViewerToolbar({
           <button
             type="button"
             className="px-2 py-1 rounded hover:bg-surface-secondary text-start"
-            onClick={() => onSectionAction?.('fit_selection')}
+            onClick={() => handleSectionAction('fit_selection')}
             data-testid="viewer-section-fit-selection"
           >
             {t('viewerTools.fit_selection', { defaultValue: 'Fit to selection' })}
@@ -247,7 +278,7 @@ export function ViewerToolbar({
           <button
             type="button"
             className="px-2 py-1 rounded hover:bg-surface-secondary text-start"
-            onClick={() => onSectionAction?.('fit_all')}
+            onClick={() => handleSectionAction('fit_all')}
             data-testid="viewer-section-fit-all"
           >
             {t('viewerTools.fit_all', { defaultValue: 'Fit to all' })}
@@ -255,12 +286,23 @@ export function ViewerToolbar({
           <button
             type="button"
             className="px-2 py-1 rounded hover:bg-surface-secondary text-start inline-flex items-center gap-1.5"
-            onClick={() => onSectionAction?.('reset')}
+            onClick={() => handleSectionAction('reset')}
             data-testid="viewer-section-reset"
           >
             <RotateCcw size={11} />
             {t('viewerTools.reset', { defaultValue: 'Reset' })}
           </button>
+          {noGeometryHint && (
+            <p
+              className="mt-0.5 px-1 text-[10px] text-amber-600 leading-tight"
+              data-testid="viewer-section-no-geometry"
+              role="status"
+            >
+              {t('viewerTools.no_geometry_to_clip', {
+                defaultValue: 'No geometry to clip',
+              })}
+            </p>
+          )}
           <SectionOffsetsReadout sectionBox={sectionBox} />
           <p className="mt-1 px-1 text-[10px] text-content-tertiary leading-tight">
             {t('viewerTools.section_hint', {

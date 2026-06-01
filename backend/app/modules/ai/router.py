@@ -26,6 +26,8 @@ from app.core.file_signature import (
     ALLOWED_PHOTO_TYPES,
     SIGNATURE_BYTES_REQUIRED,
     FileSignatureMismatch,
+)
+from app.core.file_signature import (
     require as require_signature,
 )
 from app.core.i18n import get_locale
@@ -51,7 +53,7 @@ from app.modules.ai.schemas import (
 )
 from app.modules.ai.service import AIService
 
-router = APIRouter()
+router = APIRouter(tags=["ai"])
 
 # Maximum upload size for photos: 10 MB
 MAX_PHOTO_SIZE = 10 * 1024 * 1024
@@ -128,6 +130,10 @@ _AI_PROVIDERS: list[dict[str, Any]] = [
     {"id": "cohere", "display_name": "Cohere", "supports_streaming": True, "model_choices": []},
     {"id": "ai21", "display_name": "AI21 Labs", "supports_streaming": False, "model_choices": []},
     {"id": "xai", "display_name": "xAI Grok", "supports_streaming": True, "model_choices": []},
+    {"id": "zhipu", "display_name": "Zhipu AI (GLM)", "supports_streaming": True, "model_choices": []},
+    {"id": "baidu", "display_name": "Baidu (ERNIE Bot)", "supports_streaming": True, "model_choices": []},
+    {"id": "yandex", "display_name": "Yandex GPT", "supports_streaming": True, "model_choices": []},
+    {"id": "gigachat", "display_name": "Sber GigaChat", "supports_streaming": True, "model_choices": []},
     {"id": "ollama", "display_name": "Ollama (Local)", "supports_streaming": True, "model_choices": []},
     {"id": "kimi", "display_name": "Kimi (Moonshot AI)", "supports_streaming": True, "model_choices": []},
     {"id": "vllm", "display_name": "vLLM (Local)", "supports_streaming": True, "model_choices": []},
@@ -217,9 +223,26 @@ async def test_ai_connection(
     Returns success status and response latency.
     """
     _VALID_PROVIDERS = (
-        "anthropic", "openai", "gemini", "openrouter", "mistral", "groq", "deepseek",
-        "together", "fireworks", "perplexity", "cohere", "ai21", "xai",
-        "ollama", "kimi", "vllm",
+        "anthropic",
+        "openai",
+        "gemini",
+        "openrouter",
+        "mistral",
+        "groq",
+        "deepseek",
+        "together",
+        "fireworks",
+        "perplexity",
+        "cohere",
+        "ai21",
+        "xai",
+        "zhipu",
+        "baidu",
+        "yandex",
+        "gigachat",
+        "ollama",
+        "kimi",
+        "vllm",
     )
     provider = body.get("provider", "").strip()
     if provider not in _VALID_PROVIDERS:
@@ -562,7 +585,8 @@ async def create_boq_from_estimate(
     Takes a completed AI estimate job and creates a new BOQ in the specified
     project. Each estimated work item becomes a BOQ position with:
     - Source set to "ai_estimate"
-    - Confidence score of 0.7
+    - Confidence carried from the model's per-item score when provided, else
+      left unset (no placeholder value)
     - Validation status "pending"
 
     The created BOQ is in "draft" status and ready for manual review and editing.
@@ -639,14 +663,33 @@ async def enrich_estimate(
             "total_items": 0,
         }
 
-    # 4. Enrich each item
-    from app.modules.costs.repository import CostItemRepository
+    # 4. Enrich each item.
+    #
+    # Cap the number of items we enrich so a pathologically large estimate
+    # can't issue an unbounded number of cost-DB queries. Items beyond the
+    # cap are still returned (unmatched) so the caller sees the full list.
+    from sqlalchemy import or_, select
 
-    cost_repo = CostItemRepository(session)
+    from app.modules.costs.models import CostItem
+
+    MAX_ENRICH_ITEMS = 200
+
     enriched_items: list[dict[str, Any]] = []
     total_matched = 0
 
     for idx, item in enumerate(items):
+        if idx >= MAX_ENRICH_ITEMS:
+            enriched_items.append(
+                {
+                    "index": idx,
+                    "description": item.get("description", ""),
+                    "unit": item.get("unit", ""),
+                    "ai_rate": float(item.get("unit_rate", 0.0) or item.get("rate", 0.0) or 0.0),
+                    "matches": [],
+                    "best_match": None,
+                }
+            )
+            continue
         description = item.get("description", "")
         item_unit = item.get("unit", "")
         ai_rate = item.get("unit_rate", 0.0) or item.get("rate", 0.0) or 0.0
@@ -666,6 +709,7 @@ async def enrich_estimate(
                         "description": m.get("description", ""),
                         "unit": m.get("unit", ""),
                         "rate": float(m.get("rate", 0)),
+                        "currency": m.get("currency", ""),
                         "region": m.get("region", ""),
                         "score": float(m.get("score", 0)),
                     }
@@ -673,7 +717,10 @@ async def enrich_estimate(
         except Exception as vec_err:
             logger.debug("Vector search unavailable for item %d: %s", idx, vec_err)
 
-        # 5b. If vector search returned nothing, fall back to text search
+        # 5b. If vector search returned nothing, fall back to text search.
+        #     Batch all keywords into ONE OR query per item (mirroring
+        #     advisor_chat) instead of one query per keyword — keeps the
+        #     query count at 1 (or 2 when a region retry is needed) per item.
         if not matches:
             try:
                 # Extract meaningful keywords (skip short/common words)
@@ -681,37 +728,41 @@ async def enrich_estimate(
                 keywords = [w for w in description.lower().split() if len(w) > 2 and w not in stop][:5]
 
                 if keywords:
-                    # Search each keyword separately with OR
-                    # Try with region first, then without if no results
-                    for kw in keywords:
-                        kw_results, _, _ = await cost_repo.search(
-                            q=kw,
-                            region=region or None,
-                            limit=3,
+                    conditions = [CostItem.description.ilike(f"%{kw}%") for kw in keywords]
+
+                    async def _kw_search(use_region: bool) -> list[CostItem]:
+                        stmt = select(CostItem).where(
+                            CostItem.is_active.is_(True), or_(*conditions)
                         )
-                        # Fallback: search without region filter
-                        if not kw_results and region:
-                            kw_results, _, _ = await cost_repo.search(
-                                q=kw,
-                                limit=3,
+                        if use_region and region:
+                            stmt = stmt.where(CostItem.region == region)
+                        stmt = stmt.limit(15)
+                        res = await session.execute(stmt)
+                        return list(res.scalars().all())
+
+                    kw_results = await _kw_search(use_region=True)
+                    # Retry without region filter if the regional query was empty.
+                    if not kw_results and region:
+                        kw_results = await _kw_search(use_region=False)
+
+                    for ci in kw_results:
+                        # Avoid duplicates
+                        if not any(m["code"] == ci.code for m in matches):
+                            # Score: count how many keywords match description
+                            desc_lower = (ci.description or "").lower()
+                            kw_hits = sum(1 for k in keywords if k in desc_lower)
+                            score = min(0.9, 0.3 + kw_hits * 0.15)
+                            matches.append(
+                                {
+                                    "code": ci.code,
+                                    "description": (ci.description or "")[:200],
+                                    "unit": ci.unit or "",
+                                    "rate": float(ci.rate) if ci.rate else 0.0,
+                                    "currency": ci.currency or "",
+                                    "region": ci.region or "",
+                                    "score": score,
+                                }
                             )
-                        for ci in kw_results:
-                            # Avoid duplicates
-                            if not any(m["code"] == ci.code for m in matches):
-                                # Score: count how many keywords match description
-                                desc_lower = (ci.description or "").lower()
-                                kw_hits = sum(1 for k in keywords if k in desc_lower)
-                                score = min(0.9, 0.3 + kw_hits * 0.15)
-                                matches.append(
-                                    {
-                                        "code": ci.code,
-                                        "description": (ci.description or "")[:200],
-                                        "unit": ci.unit or "",
-                                        "rate": float(ci.rate) if ci.rate else 0.0,
-                                        "region": ci.region or "",
-                                        "score": score,
-                                    }
-                                )
                     # Keep top 5
                     matches.sort(key=lambda m: m["score"], reverse=True)
                     matches = matches[:5]
@@ -870,6 +921,7 @@ async def advisor_chat(
                         "description": item.description[:200],
                         "unit": item.unit,
                         "rate": float(item.rate) if item.rate else 0,
+                        "currency": item.currency or "",
                         "region": item.region or "",
                     }
                 )
@@ -879,7 +931,8 @@ async def advisor_chat(
         items_text = "\n".join(
             [
                 f"- {it.get('code', '')}: {it.get('description', '')[:100]} | "
-                f"{it.get('unit', '')} | {it.get('rate', 0)} | {it.get('region', '')}"
+                f"{it.get('unit', '')} | {it.get('rate', 0)} {it.get('currency', '')} | "
+                f"{it.get('region', '')}"
                 for it in context_items[:8]
             ]
         )
@@ -1009,23 +1062,21 @@ async def advisor_chat(
             model=model_override,
         )
         answer = text
-    except (ValueError, Exception) as exc:
-        # Provider error bodies (especially from third-party LLM APIs) can
-        # echo back masked key prefixes, org IDs, or stale CORS headers.
-        # We log the full error for ops, but only show the user a generic
-        # localized fallback — never the raw upstream message.
+    except ValueError as exc:
+        # call_ai (and resolve_provider_key_model) raise *sanitized* ValueErrors
+        # — they never echo credentials, only actionable detail such as the
+        # rejected model id, "invalid/expired key", "rate limit", or "no key
+        # configured". Surface that real message instead of collapsing every
+        # failure into a vague "AI is not configured" (which mis-described
+        # invalid-key and stale-model cases). The full error is also logged.
         logger.warning(
             "advisor_chat: AI call failed for user=%s provider-error=%r",
-            user_id, exc,
+            user_id,
+            exc,
         )
-        # ai_client raises a sanitized ValueError (only the model id +
-        # truncated provider text — no credentials) when the provider
-        # rejects the *model name*. Surface a clear, localized, actionable
-        # message in that case so users with a stale model id (issue #129)
-        # know to change it instead of seeing a vague "not configured".
-        is_model_problem = isinstance(exc, ValueError) and (
-            "set the model name" in str(exc) or "denied access to model" in str(exc)
-        )
+        # For the stale-model-name case (issue #129) prefer a localized,
+        # explicitly actionable message; otherwise forward the sanitized text.
+        is_model_problem = "set the model name" in str(exc) or "denied access to model" in str(exc)
         if is_model_problem:
             _model_msgs = {
                 "ru": "Имя модели ИИ устарело или недоступно. Откройте Настройки > ИИ и укажите актуальное имя модели.",
@@ -1039,13 +1090,23 @@ async def advisor_chat(
                 "and set a currently valid model name for your provider.",
             )
         else:
-            _err_msgs = {
-                "ru": "ИИ не настроен. Пожалуйста, добавьте API-ключ в Настройках.",
-                "de": "KI nicht konfiguriert. Bitte fügen Sie Ihren API-Schlüssel in den Einstellungen hinzu.",
-                "fr": "IA non configurée. Veuillez ajouter votre clé API dans les Paramètres.",
-                "es": "IA no configurada. Agregue su clave API en Configuración.",
-            }
-            answer = _err_msgs.get(locale, "AI is not configured. Please set up an AI provider in Settings.")
+            answer = str(exc)
+        used_db = False
+    except Exception as exc:
+        # Truly unexpected (non-ValueError) failure — body may carry raw
+        # upstream detail, so fall back to a generic localized message.
+        logger.warning(
+            "advisor_chat: unexpected AI error for user=%s error=%r",
+            user_id,
+            exc,
+        )
+        _err_msgs = {
+            "ru": "ИИ не настроен. Пожалуйста, добавьте API-ключ в Настройках.",
+            "de": "KI nicht konfiguriert. Bitte fügen Sie Ihren API-Schlüssel in den Einstellungen hinzu.",
+            "fr": "IA non configurée. Veuillez ajouter votre clé API dans les Paramètres.",
+            "es": "IA no configurada. Agregue su clave API en Configuración.",
+        }
+        answer = _err_msgs.get(locale, "AI is not configured. Please set up an AI provider in Settings.")
         used_db = False
 
     # 6. Build source references — only include if items seem relevant
@@ -1055,6 +1116,7 @@ async def advisor_chat(
                 "code": it.get("code", ""),
                 "description": it.get("description", "")[:80],
                 "rate": it.get("rate", 0),
+                "currency": it.get("currency", ""),
                 "unit": it.get("unit", ""),
                 "region": it.get("region", ""),
             }

@@ -923,10 +923,22 @@ export function ClashDetectionPage() {
     },
   });
 
-  // Wave A2 — bulk assignee set (sibling mutation; same optimistic contract).
-  const assignMut = useMutation({
-    mutationFn: (v: { id: string; assigned_to: string | null }) =>
-      clashApi.updateResult(projectId, runId, v.id, {
+  // Wave A2 — bulk triage in ONE request. The toolbar fans status / severity
+  // / assignee changes to the whole selection via a single batch PATCH (was
+  // one PATCH per row, which fired thousands of requests + invalidations on a
+  // large selection). Optimistic over the cached rows; invalidate once on
+  // settle.
+  const bulkMut = useMutation({
+    mutationFn: (v: {
+      ids: string[];
+      status?: string;
+      severity?: ClashSeverity;
+      assigned_to?: string | null;
+    }) =>
+      clashApi.bulkUpdateResults(projectId, runId, {
+        result_ids: v.ids,
+        status: v.status,
+        severity: v.severity,
         assigned_to: v.assigned_to,
       }),
     onMutate: async (v) => {
@@ -938,6 +950,7 @@ export function ClashDetectionPage() {
         projectId,
         runId,
       ]);
+      const idSet = new Set(v.ids);
       qc.setQueryData<{ items: ClashResult[] }>(
         ['clash-results', projectId, runId],
         (old) =>
@@ -945,7 +958,20 @@ export function ClashDetectionPage() {
             ? {
                 ...old,
                 items: old.items.map((r) =>
-                  r.id === v.id ? { ...r, assigned_to: v.assigned_to } : r,
+                  idSet.has(r.id)
+                    ? {
+                        ...r,
+                        ...(v.status !== undefined
+                          ? { status: v.status }
+                          : {}),
+                        ...(v.severity !== undefined
+                          ? { severity: v.severity }
+                          : {}),
+                        ...(v.assigned_to !== undefined
+                          ? { assigned_to: v.assigned_to }
+                          : {}),
+                      }
+                    : r,
                 ),
               }
             : old,
@@ -957,16 +983,26 @@ export function ClashDetectionPage() {
         qc.setQueryData(['clash-results', projectId, runId], ctx.prev);
       addToast({
         type: 'error',
-        title: t('clash.assign_failed', {
-          defaultValue: 'Could not update assignee',
+        title: t('clash.bulk_failed', {
+          defaultValue: 'Bulk update failed',
         }),
         message: e.message,
+      });
+    },
+    onSuccess: (res) => {
+      addToast({
+        type: 'success',
+        title: t('clash.bulk_done', {
+          defaultValue: '{{n}} clash(es) updated',
+          n: res.updated,
+        }),
       });
     },
     onSettled: () => {
       qc.invalidateQueries({
         queryKey: ['clash-results', projectId, runId],
       });
+      qc.invalidateQueries({ queryKey: ['clash-run', projectId, runId] });
     },
   });
 
@@ -1119,7 +1155,19 @@ export function ClashDetectionPage() {
         p.delete('run');
         return p;
       });
+      addToast({
+        type: 'success',
+        title: t('clash.run_deleted', { defaultValue: 'Run deleted' }),
+      });
     },
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('clash.run_delete_failed', {
+          defaultValue: 'Failed to delete run',
+        }),
+        message: e.message,
+      }),
   });
 
   // CSV export — server-rendered, honouring the same single-value
@@ -2291,7 +2339,24 @@ export function ClashDetectionPage() {
                     aria-label={t('common.delete', {
                       defaultValue: 'Delete',
                     })}
-                    onClick={() => delMut.mutate(r.id)}
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: t('clash.run_delete_title', {
+                          defaultValue: 'Delete run?',
+                        }),
+                        message: t('clash.run_delete_confirm', {
+                          defaultValue:
+                            'Delete run "{{name}}" and all its results, comments and history? This cannot be undone.',
+                          name: r.name,
+                        }),
+                        confirmLabel: t('common.delete', {
+                          defaultValue: 'Delete',
+                        }),
+                        variant: 'danger',
+                      });
+                      if (!ok) return;
+                      delMut.mutate(r.id);
+                    }}
                     className="text-content-tertiary hover:text-semantic-error"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -3602,18 +3667,15 @@ export function ClashDetectionPage() {
                   </div>
                 )}
 
-                {/* Wave A2 — Bulk-actions toolbar. Fans severity / status
-                    / assignee mutations across the current selection.
+                {/* Wave A2 — Bulk-actions toolbar. Applies severity / status
+                    / assignee changes to the whole selection in ONE batch
+                    request (`bulkMut`) instead of one PATCH per row.
                     Severity gated by a confirm in the caller (the most
                     disruptive of the three). */}
                 {selResults.size > 0 && sorted.length > 0 && (
                   <BulkActionsBar
                     count={selResults.size}
-                    busy={
-                      severityMut.isPending ||
-                      assignMut.isPending ||
-                      statusMut.isPending
-                    }
+                    busy={bulkMut.isPending}
                     onSetSeverity={async (sv) => {
                       const ok = await confirm({
                         title: t('clash.bulk_severity_title', {
@@ -3629,23 +3691,23 @@ export function ClashDetectionPage() {
                         variant: 'warning',
                       });
                       if (!ok) return;
-                      for (const id of selResults) {
-                        severityMut.mutate({ id, severity: sv });
-                      }
+                      bulkMut.mutate({
+                        ids: Array.from(selResults),
+                        severity: sv,
+                      });
                     }}
                     onSetStatus={(s) => {
-                      for (const id of selResults) {
-                        statusMut.mutate({ id, status: s });
-                      }
+                      bulkMut.mutate({
+                        ids: Array.from(selResults),
+                        status: s,
+                      });
                     }}
                     onSetAssignee={(v) => {
                       const trimmed = v.trim();
-                      for (const id of selResults) {
-                        assignMut.mutate({
-                          id,
-                          assigned_to: trimmed || null,
-                        });
-                      }
+                      bulkMut.mutate({
+                        ids: Array.from(selResults),
+                        assigned_to: trimmed || null,
+                      });
                     }}
                     onClear={() => setSelResults(new Set())}
                     t={t}

@@ -202,11 +202,7 @@ async def assert_no_booking_overlap(
     PATCH skip the row being edited so re-saving its own window is a
     no-op.
     """
-    stmt = (
-        select(Booking.id)
-        .where(Booking.room_id == room_id)
-        .where(Booking.status.in_(_LIVE_BOOKING_STATUSES))
-    )
+    stmt = select(Booking.id).where(Booking.room_id == room_id).where(Booking.status.in_(_LIVE_BOOKING_STATUSES))
     if exclude_booking_id is not None:
         stmt = stmt.where(Booking.id != exclude_booking_id)
 
@@ -258,21 +254,11 @@ async def bootstrap_from_propdev_block(
         )
 
     # Pull every plot under this block.
-    plot_rows = (
-        await session.execute(
-            select(Plot).where(Plot.block_id == block_id)
-        )
-    ).scalars().all()
+    plot_rows = (await session.execute(select(Plot).where(Plot.block_id == block_id))).scalars().all()
 
     # Pre-load existing room labels so we can dedupe in one pass.
     existing_labels: set[str] = set(
-        (
-            await session.execute(
-                select(Room.label).where(Room.accommodation_id == accommodation.id)
-            )
-        )
-        .scalars()
-        .all()
+        (await session.execute(select(Room.label).where(Room.accommodation_id == accommodation.id))).scalars().all()
     )
 
     created = 0
@@ -348,6 +334,13 @@ async def suggest_room_for_employee(
     # iteration can prefer a room near the employee's project. For the
     # MVP we just ensure the contact exists (gate against random UUIDs)
     # and otherwise ignore it.
+    #
+    # IDOR posture (Wave-5): the contact must belong to the caller's
+    # tenant — otherwise a caller could probe the existence of any Contact
+    # UUID (404 vs proceed). Admins bypass the scope. We return 404, never
+    # 403, on a contact the caller is not allowed to see (consistent with
+    # the module's 404-on-not-owned stance). The contacts module gates on
+    # ``tenant_id`` with a ``created_by`` fallback for pre-v2.3.1 rows.
     from app.modules.contacts.models import Contact
 
     contact = await session.get(Contact, employee_contact_id)
@@ -356,6 +349,19 @@ async def suggest_room_for_employee(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Employee contact not found",
         )
+
+    if not await _user_is_admin(session, user_id):
+        caller = str(user_id)
+        tenant = getattr(contact, "tenant_id", None)
+        created_by = getattr(contact, "created_by", None)
+        owns = (tenant is not None and str(tenant) == caller) or (
+            tenant is None and created_by is not None and str(created_by) == caller
+        )
+        if not owns:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Employee contact not found",
+            )
 
     project_ids = await _accessible_project_ids(session, user_id)
 
@@ -476,7 +482,10 @@ async def list_bookings_for_accommodation(
         .offset(offset)
     )
     stmt = _apply_booking_filters(
-        stmt, statuses=statuses, from_date=from_date, to_date=to_date,
+        stmt,
+        statuses=statuses,
+        from_date=from_date,
+        to_date=to_date,
     )
     rows = (await session.execute(stmt)).scalars().all()
     return list(rows), room_label_by_id
@@ -508,7 +517,10 @@ async def list_bookings_for_room(
         .offset(offset)
     )
     stmt = _apply_booking_filters(
-        stmt, statuses=statuses, from_date=from_date, to_date=to_date,
+        stmt,
+        statuses=statuses,
+        from_date=from_date,
+        to_date=to_date,
     )
     rows = (await session.execute(stmt)).scalars().all()
     return list(rows), {room.id: room.label}

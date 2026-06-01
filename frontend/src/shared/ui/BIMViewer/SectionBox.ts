@@ -31,10 +31,22 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 /** Snap step for Ctrl/Cmd-drag, in metres (= 1 mm). */
 const SNAP_STEP_M = 0.001;
 
+/** Smallest accepted box edge, in metres. A box thinner than this on every
+ *  axis is treated as degenerate — fitting to it would collapse the six
+ *  planes onto each other and clip the whole model away. 1 mm matches the
+ *  snap granularity, so anything finer is below the tool's usable scale. */
+const MIN_BOX_SIZE_M = 0.001;
+
 export interface SectionBoxArgs {
   scene: THREE.Scene;
   camera: THREE.Camera;
   renderer: THREE.WebGLRenderer;
+  /** Optional callback fired whenever the section state mutates in a way
+   *  that affects rendered pixels (enable / disable / bounds-change). The
+   *  host wires this to `SceneManager.requestRender()` so the on-demand
+   *  render loop redraws — without it the clip would only become visible
+   *  on the user's next camera move. */
+  onChange?: () => void;
 }
 
 /** Internal state held per scene-mesh while clipping is active, so we
@@ -49,6 +61,7 @@ export class SectionBox {
   private scene: THREE.Scene;
   private camera: THREE.Camera;
   private renderer: THREE.WebGLRenderer;
+  private onChange?: () => void;
 
   /** Current AABB in world space. */
   private box = new THREE.Box3();
@@ -85,6 +98,7 @@ export class SectionBox {
     this.scene = args.scene;
     this.camera = args.camera;
     this.renderer = args.renderer;
+    this.onChange = args.onChange;
   }
 
   /** Whether the section is currently clipping geometry. */
@@ -117,6 +131,10 @@ export class SectionBox {
       this.applyToScene();
       this.refreshWireframe();
     }
+    // Materials + renderer flag mutated → ask the host to re-render so the
+    // clip becomes visible immediately (the parent SceneManager renders
+    // on-demand and would otherwise skip the next frame).
+    this.onChange?.();
   }
 
   /** Deactivate the section: restore previous clipping planes on every
@@ -146,15 +164,23 @@ export class SectionBox {
     if (this.transformHelper) {
       this.transformHelper.visible = false;
     }
+    // Restoring planes / overlay visibility doesn't trigger any internal
+    // event — the host's render loop is on-demand, so request a redraw
+    // explicitly to make the un-clipped view appear immediately.
+    this.onChange?.();
   }
 
-  /** Fit the section to an arbitrary world-space AABB. */
-  setBoundsToBox(box: THREE.Box3): void {
-    if (box.isEmpty()) {
-      // Defensive: an empty box would produce degenerate planes that
-      // clip everything. Treat as "no bounds yet".
-      this.hasBounds = false;
-      return;
+  /** Fit the section to an arbitrary world-space AABB. Returns `true` if
+   *  the bounds were accepted, `false` if the box was empty or degenerate
+   *  (near-zero size on every axis) — callers can use the result to skip
+   *  enabling the clip and surface a "nothing to clip" hint instead. */
+  setBoundsToBox(box: THREE.Box3): boolean {
+    if (!SectionBox.isUsableBox(box)) {
+      // Defensive: an empty OR zero/near-zero-size box would produce
+      // degenerate planes that clip everything (the six inward planes
+      // collapse onto each other). Leave the previous bounds untouched
+      // and report failure so the caller can react.
+      return false;
     }
     this.box.copy(box);
     this.hasBounds = true;
@@ -162,11 +188,33 @@ export class SectionBox {
       this.recomputePlanes();
       this.applyToScene();
       this.refreshWireframe();
+      this.onChange?.();
     }
+    return true;
   }
 
-  /** Fit the section to the union AABB of a selection. */
-  setBoundsToSelection(selectedObjects: THREE.Object3D[]): void {
+  /** Whether a box is safe to clip with: non-empty AND larger than the
+   *  minimum usable edge on at least one axis. An AABB collapsed to a
+   *  point/line/plane (size ≈ 0) is rejected because fitting the six
+   *  inward-facing planes to it leaves no interior, hiding everything. */
+  static isUsableBox(box: THREE.Box3): boolean {
+    if (box.isEmpty()) return false;
+    const size = box.getSize(new THREE.Vector3());
+    if (!Number.isFinite(size.x) || !Number.isFinite(size.y) || !Number.isFinite(size.z)) {
+      return false;
+    }
+    return (
+      size.x > MIN_BOX_SIZE_M ||
+      size.y > MIN_BOX_SIZE_M ||
+      size.z > MIN_BOX_SIZE_M
+    );
+  }
+
+  /** Fit the section to the union AABB of a selection. Returns `true` if a
+   *  usable box was found and applied, `false` if the selection was empty
+   *  or produced a degenerate box (so the caller can show a hint instead
+   *  of silently enabling a clip that hides everything). */
+  setBoundsToSelection(selectedObjects: THREE.Object3D[]): boolean {
     const union = new THREE.Box3();
     const tmp = new THREE.Box3();
     for (const obj of selectedObjects) {
@@ -175,8 +223,8 @@ export class SectionBox {
         union.union(tmp);
       }
     }
-    if (union.isEmpty()) return;
-    this.setBoundsToBox(union);
+    if (!SectionBox.isUsableBox(union)) return false;
+    return this.setBoundsToBox(union);
   }
 
   /** Toggle manual face dragging. When enabled, a TransformControls gizmo

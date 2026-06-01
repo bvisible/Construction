@@ -27,7 +27,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 const DEMO_USER = {
-  email: process.env.E2E_USER_EMAIL ?? 'demo@openestimator.io',
+  email: process.env.E2E_USER_EMAIL ?? 'demo@openconstructionerp.com',
 };
 
 const ROUTES_UNDER_TEST = ['/dashboard', '/finance', '/crm'] as const;

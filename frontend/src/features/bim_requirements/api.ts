@@ -16,8 +16,8 @@ import type {
   PreviewYamlResponse,
 } from './types';
 
-const PREVIEW_URL = '/v1/bim/requirements/preview-yaml/';
-const INSTALL_URL = '/v1/bim/requirements/install-from-yaml/';
+const PREVIEW_URL = '/v1/bim_requirements/preview-yaml/';
+const INSTALL_URL = '/v1/bim_requirements/install-from-yaml/';
 
 export interface PreviewYamlRequest {
   yaml_text: string;

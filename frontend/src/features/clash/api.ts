@@ -12,7 +12,7 @@
  *   POST   /v1/clash/projects/{pid}/runs/{rid}/export-bcf
  */
 
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPatch, apiDelete, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 export interface ClashModelOption {
@@ -472,6 +472,28 @@ export const clashApi = {
       body,
     ),
 
+  /**
+   * Apply ONE triage change (status / severity / assignee) to many clashes
+   * in a single request. Backs the review-table bulk-actions toolbar so a
+   * large selection no longer fires one PATCH per row (and invalidates the
+   * results query once, not per row). Returns how many rows actually
+   * changed plus how many were requested.
+   */
+  bulkUpdateResults: (
+    projectId: string,
+    runId: string,
+    body: {
+      result_ids: string[];
+      status?: string;
+      severity?: ClashSeverity;
+      assigned_to?: string | null;
+    },
+  ) =>
+    apiPatch<{ updated: number; requested: number }>(
+      `/v1/clash/projects/${projectId}/runs/${runId}/results`,
+      body,
+    ),
+
   /** Diff the active run against an earlier one (same models/config).
    *  Returns new / resolved / persistent buckets + summary stats. */
   compare: (projectId: string, runId: string, baseRunId: string) =>
@@ -529,7 +551,7 @@ export const clashApi = {
       const body = await res
         .json()
         .catch(() => ({ detail: res.statusText }));
-      throw new Error(body.detail || 'CSV export failed');
+      throw new Error(extractErrorMessageFromBody(body) ?? 'CSV export failed');
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -577,7 +599,7 @@ export const clashApi = {
       const body = await res
         .json()
         .catch(() => ({ detail: res.statusText }));
-      throw new Error(body.detail || 'BCF import failed');
+      throw new Error(extractErrorMessageFromBody(body) ?? 'BCF import failed');
     }
     return (await res.json()) as {
       matched: number;

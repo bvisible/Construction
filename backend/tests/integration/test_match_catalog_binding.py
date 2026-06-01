@@ -32,7 +32,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
@@ -58,7 +57,9 @@ async def engine_factory():
         await conn.run_sync(Base.metadata.create_all)
 
     factory = async_sessionmaker(
-        engine, class_=AsyncSession, expire_on_commit=False,
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
     )
 
     yield engine, factory, tmp_db
@@ -145,6 +146,22 @@ def _set_user(role: str = "admin") -> None:
     _current_user_payload["role"] = role
 
 
+@pytest.fixture(autouse=True)
+def _clear_catalog_status_cache():
+    """Reset the resolver's process-local memo between tests.
+
+    ``_resolve_catalog_status`` caches ``(catalog_id -> status)`` with a
+    short TTL so a single ``run_match`` doesn't re-probe per group. Tests
+    share one process, so without clearing it the first case for a given
+    ``catalog_id`` (including ``None``) decides every later case's result.
+    """
+    from app.core.match_service import ranker_qdrant
+
+    ranker_qdrant._catalog_status_cache.clear()
+    yield
+    ranker_qdrant._catalog_status_cache.clear()
+
+
 # ── _resolve_catalog_status ──────────────────────────────────────────────
 
 
@@ -184,12 +201,24 @@ async def test_no_catalog_with_rows_returns_no_catalog_selected(
 @pytest.mark.asyncio
 async def test_picked_unknown_catalog_with_others_loaded_falls_to_no_catalog_selected(
     engine_factory,
+    monkeypatch,
 ) -> None:
     """v2.8.2 fix: if user picked a stale id but other catalogues exist,
-    don't claim "no catalogues loaded" — degrade to ``no_catalog_selected``
+    don't claim "no catalogues loaded", degrade to ``no_catalog_selected``
     so the picker can recover the user with one click."""
     _engine, factory, _tmp = engine_factory
     await _add_cost_items(factory, "RU_STPETERSBURG", 3)
+
+    # Stub the Qdrant probe so the resolver doesn't reach the real local
+    # vector store (an embedded dev install would otherwise report points
+    # for the probed collection and flip the status to ``ok``).
+    async def _zero(_catalog_id):  # noqa: ANN001
+        return 0
+
+    monkeypatch.setattr(
+        "app.core.match_service.ranker_qdrant._qdrant_vector_count",
+        _zero,
+    )
 
     from app.core.match_service.ranker_qdrant import _resolve_catalog_status
 
@@ -204,9 +233,18 @@ async def test_picked_unknown_catalog_with_others_loaded_falls_to_no_catalog_sel
 @pytest.mark.asyncio
 async def test_picked_unknown_catalog_with_no_others_returns_no_catalogs_loaded(
     engine_factory,
+    monkeypatch,
 ) -> None:
     """Pure-empty DB + binding to a non-loaded id → ``no_catalogs_loaded``."""
     _engine, factory, _tmp = engine_factory
+
+    async def _zero(_catalog_id):  # noqa: ANN001
+        return 0
+
+    monkeypatch.setattr(
+        "app.core.match_service.ranker_qdrant._qdrant_vector_count",
+        _zero,
+    )
 
     from app.core.match_service.ranker_qdrant import _resolve_catalog_status
 
@@ -218,7 +256,8 @@ async def test_picked_unknown_catalog_with_no_others_returns_no_catalogs_loaded(
 
 @pytest.mark.asyncio
 async def test_picked_loaded_catalog_no_vectors_returns_catalog_not_vectorized(
-    engine_factory, monkeypatch,
+    engine_factory,
+    monkeypatch,
 ) -> None:
     """SQL rows present but Qdrant collection empty for this region → not_vectorized."""
     _engine, factory, _tmp = engine_factory
@@ -247,7 +286,8 @@ async def test_picked_loaded_catalog_no_vectors_returns_catalog_not_vectorized(
 
 @pytest.mark.asyncio
 async def test_picked_loaded_catalog_with_vectors_returns_ok(
-    engine_factory, monkeypatch,
+    engine_factory,
+    monkeypatch,
 ) -> None:
     """Happy path: SQL rows + vectors → ``ok``."""
     _engine, factory, _tmp = engine_factory
@@ -319,10 +359,40 @@ def test_vector_count_accepts_valid_cwicr_ids(monkeypatch) -> None:
     monkeypatch.setattr(vector_mod, "_get_lancedb", lambda: _StubDB())
 
     out = vector_mod.vector_count_with_payload_substring(
-        "oe_cost_items", "RU_STPETERSBURG",
+        "oe_cost_items",
+        "RU_STPETERSBURG",
     )
     assert out == 7
     assert any("RU_STPETERSBURG" in c for c in calls)
+
+
+def test_vector_count_for_region_filters_canonical_store(monkeypatch) -> None:
+    """#170: the badge counts the canonical ``cost_items`` store filtered
+    by ``region``, not a substring scan of the wrong collection."""
+    from app.core import vector as vector_mod
+
+    filters: list[str] = []
+
+    class _StubTbl:
+        def count_rows(self, filter: str) -> int:  # noqa: A002
+            filters.append(filter)
+            return 42
+
+    class _StubDB:
+        def table_names(self) -> list[str]:
+            return [vector_mod.COST_TABLE]
+
+        def open_table(self, _name: str) -> _StubTbl:
+            return _StubTbl()
+
+    monkeypatch.setattr(vector_mod, "_backend", lambda: "lancedb")
+    monkeypatch.setattr(vector_mod, "_get_lancedb", lambda: _StubDB())
+
+    assert vector_mod.vector_count_for_region("RU_STPETERSBURG") == 42
+    # The filter targets the ``region`` column with a safely-quoted value.
+    assert any("region" in f and "RU_STPETERSBURG" in f for f in filters)
+    # Empty region short-circuits to 0 without touching the store.
+    assert vector_mod.vector_count_for_region("") == 0
 
 
 # ── /v1/costs/loaded-databases/ endpoint ─────────────────────────────────
@@ -330,7 +400,9 @@ def test_vector_count_accepts_valid_cwicr_ids(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_loaded_databases_returns_one_entry_per_region(
-    http_client: AsyncClient, engine_factory, monkeypatch,
+    http_client: AsyncClient,
+    engine_factory,
+    monkeypatch,
 ) -> None:
     """Every distinct region with at least one active row gets one entry."""
     _engine, factory, _tmp = engine_factory
@@ -339,11 +411,13 @@ async def test_loaded_databases_returns_one_entry_per_region(
 
     # Stub the vector counter so the endpoint doesn't try to open LanceDB.
     # The router imports this lazily from ``app.core.vector`` inside the
-    # handler body (PLC0415-tagged), so we must patch the source module —
-    # not a re-exported alias on the router.
+    # handler body (PLC0415-tagged), so we must patch the source module,
+    # not a re-exported alias on the router. The badge counts vectors for
+    # a region via ``vector_count_for_region`` (filters the canonical
+    # ``cost_items`` store by the ``region`` field).
     monkeypatch.setattr(
-        "app.core.vector.vector_count_with_payload_substring",
-        lambda _coll, sub: 10 if sub == "RU_STPETERSBURG" else 0,
+        "app.core.vector.vector_count_for_region",
+        lambda region: 10 if region == "RU_STPETERSBURG" else 0,
     )
 
     _set_user()
@@ -378,7 +452,9 @@ async def test_loaded_databases_empty_when_no_rows(
 
 @pytest.mark.asyncio
 async def test_loaded_databases_skips_inactive_rows(
-    http_client: AsyncClient, engine_factory, monkeypatch,
+    http_client: AsyncClient,
+    engine_factory,
+    monkeypatch,
 ) -> None:
     """Soft-deleted rows are ignored — they shouldn't count toward the badge."""
     _engine, factory, _tmp = engine_factory
@@ -400,8 +476,8 @@ async def test_loaded_databases_skips_inactive_rows(
         await session.commit()
 
     monkeypatch.setattr(
-        "app.core.vector.vector_count_with_payload_substring",
-        lambda _coll, _sub: 0,
+        "app.core.vector.vector_count_for_region",
+        lambda _region: 0,
     )
     _set_user()
     resp = await http_client.get("/api/v1/costs/loaded-databases/")

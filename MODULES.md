@@ -176,7 +176,7 @@ Then enable it from the UI: **Settings → Modules & Marketplace → System Modu
 1. **i18n everywhere** — every user-visible string goes through `t()`. No
    hardcoded English. Fallbacks live in `frontend/src/app/i18n-fallbacks.ts`.
 2. **No IfcOpenShell / BCF / native IFC** — CAD/BIM is always converted
-   through DDC cad2data to the canonical JSON format (see `CLAUDE.md`).
+   through DDC cad2data to the canonical JSON format (see `the architecture guide`).
 3. **Validation is not optional** — any module that ingests data must declare
    validation rules. See `backend/app/core/validation/`.
 4. **AI-augmented, human-confirmed** — AI suggestions must show a confidence
@@ -198,7 +198,7 @@ Then enable it from the UI: **Settings → Modules & Marketplace → System Modu
 | Hook into events                    | `backend/app/core/events.py` + `<your_module>/events.py`                 |
 | Add/override translations           | `frontend/src/app/i18n-fallbacks.ts`                                     |
 | Contribute back                     | [`CONTRIBUTING.md`](CONTRIBUTING.md)                                     |
-| Overall architecture                | [`CLAUDE.md`](CLAUDE.md) — §Архитектура                                  |
+| Overall architecture                | [`the architecture guide`](the architecture guide) — §Архитектура                                  |
 
 ---
 
@@ -208,7 +208,7 @@ If you are an AI agent creating a module on behalf of a user:
 
 - Copy the template, don't start from scratch — the manifest contract changes
   faster than this doc.
-- Read the relevant module's `CLAUDE.md` (if present) before modifying it.
+- Read the relevant module's `the architecture guide` (if present) before modifying it.
 - Run `npm run typecheck` (frontend) and `ruff check` + `pytest` (backend)
   before reporting the module done.
 - Never edit `frontend/src/modules/_types.ts` or `_registry.ts` contract —

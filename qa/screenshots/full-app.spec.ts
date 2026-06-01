@@ -27,7 +27,7 @@ import { join } from 'node:path';
 // ── Config ────────────────────────────────────────────────────────────
 const API_URL = process.env.QA_API_URL ?? 'http://localhost:8000';
 const BASE_URL = process.env.QA_BASE_URL ?? 'http://localhost:5180';
-const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 
 // Wave 16/17/18 parameterisation. Empty string / undefined = use app default.
 //   QA_LOCALE   — i18next language code (en, de, ru, ar, ja, …) seeded into
@@ -267,7 +267,7 @@ async function hydrateAuth(page: Page, accessToken: string): Promise<void> {
     localStorage.setItem('oe_access_token', p.token);
     localStorage.setItem('oe_refresh_token', p.token);
     localStorage.setItem('oe_remember', '1');
-    localStorage.setItem('oe_user_email', 'demo@openestimator.io');
+    localStorage.setItem('oe_user_email', 'demo@openconstructionerp.com');
     // Suppress onboarding/tour overlays — they paint above page content
     // and would pollute every screenshot.
     localStorage.setItem('oe_onboarding_completed', 'true');

@@ -5,6 +5,790 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.2] - 2026-05-31
+
+### Added
+
+- Linux CAD and BIM converters now download and install automatically on first
+  use, exactly like on Windows. The proprietary DDC converter binaries ship as
+  signed .deb packages; the app fetches the package index, resolves the
+  transitive dependencies, downloads them and unpacks them into a private
+  per-architecture directory under ~/.openestimator with no root, no Docker and
+  no apt setup. The same one-click flow backs the Install button on the
+  Quantities and BIM pages. amd64 is fully supported; on an architecture the
+  upstream repository does not publish yet, the app falls back to a clear apt
+  command instead of failing.
+
+### Fixed
+
+- macOS: the converters no longer try to launch a Windows .exe. There is no
+  native macOS build, so the app now says so plainly and points to the two
+  paths that work on a Mac: run in Docker, or upload an IFC file (IFC is read by
+  a built-in text parser that needs no native converter on any platform).
+- Claude and the other AI providers connect again. The model identifiers were
+  refreshed to the current Claude generation, the API key is now read from the
+  environment and from ~/.openestimate/config.json in addition to the database,
+  and provider and key problems are reported with the real reason instead of a
+  generic failure.
+- The converter version check no longer shows a false "update available" banner
+  on Linux and macOS, where the Windows binary comparison does not apply.
+
+## [6.1.1] - 2026-05-31
+
+### Fixed
+
+- Release pipeline: the Docker image tag is now lowercased before it is pushed
+  to GHCR, so the container image publishes correctly. GHCR rejects any tag
+  whose repository path contains uppercase letters.
+- Desktop builds: raised the Node heap limit for the frontend build so the
+  macOS installer job no longer runs out of memory.
+
+## [6.1.0] - 2026-05-31
+
+### Added
+
+- Flagship reference project: a single residential house built from one real
+  DWG drawing, one Revit model, one IFC model and one PDF plan set. Each CAD
+  and BIM file is converted through the DDC cad2data console converters into
+  our canonical JSON, with no IfcOpenShell and no native IFC parsing. Element
+  groups are linked to bill-of-quantities positions with real quantities, real
+  CWICR cost rates and real resources, with navigation both ways: from a BOQ
+  line to its model elements and from any element back to its BOQ line.
+- Automatic CAD and BIM converter download on first use, with no manual install
+  step.
+
+### Changed
+
+- Showcase demo seeding is now opt-in (set `SEED_SHOWCASE=true`); the flagship
+  reference project always installs.
+
+### Fixed
+
+- Broad audit fix wave: owner checks and IDOR hardening on BOQ exports,
+  currency-correct money handling, RBAC and permission registration fixes,
+  API contract corrections, project geo-hub map rendering with OpenStreetMap
+  tiles, a PWA service-worker MIME-type fix, and silent session refresh so long
+  sessions no longer drop to the login screen.
+
+## [6.0.0] - 2026-05-30
+
+### Changed
+
+- **PostgreSQL is now the default database, with zero setup.** A fresh
+  `openconstructionerp serve` boots a real in-process PostgreSQL 16 cluster
+  (bundled binaries, no Docker, no separate install) and stores its data under
+  `~/.openestimate/pgdata`. The single-file SQLite database is still available
+  as an opt-out escape hatch - run with `--sqlite` or set `OE_USE_SQLITE=1`.
+  This is the headline change of the 6.0 series and the reason for the major
+  version bump.
+- **Transparent one-time data migration.** On first boot, if a legacy
+  `openestimate.db` is present and the embedded cluster is empty, its data is
+  copied into PostgreSQL automatically and the old file is retired to
+  `openestimate.db.migrated`. Nothing to run by hand.
+- The PostgreSQL drivers (`asyncpg`, `psycopg2-binary`) and the embedded server
+  (`pixeltable-pgserver`) moved into the base dependencies, so `pip install
+  openconstructionerp` ships everything needed for the default PostgreSQL path.
+  The `[server]` extra is now just Celery + boto3.
+
+### Fixed
+
+- **15 PostgreSQL dialect bugs** that previously only worked on SQLite: tolerant
+  numeric coercion for money-as-text columns (no more `invalid input syntax` on
+  a malformed row), timezone-aware datetime binding for `TIMESTAMPTZ` columns,
+  `GROUP BY` on JSONB expressions instead of output aliases, `jsonb_array_length`
+  on JSONB columns, `string_agg` in place of SQLite-only `GROUP_CONCAT`,
+  UTC-normalised timestamp writes for lexically-ordered date columns, and
+  consistent BIM dynamic-group filtering across both backends.
+- A dedicated embedded-PostgreSQL regression suite (`backend/tests/pg`) runs in
+  CI against a real PG16 cluster so these dialect differences cannot regress.
+
+## [5.9.2] - 2026-05-30
+
+### Added
+
+- **PostgreSQL scale foundation** - generic JSON columns now emit `JSONB`
+  on PostgreSQL (GIN-indexable, fast containment queries); SQLite is
+  unchanged. PostgreSQL is fully optional - the default zero-dependency
+  SQLite path (`pip install openconstructionerp` and one command, no
+  Docker) is untouched.
+- **Automatic performance indexes on PostgreSQL** - foreign-key btree
+  indexes, composite `(project_id, created_at)` and `(project_id, status)`
+  indexes, and GIN indexes on path-queried JSON columns, emitted at
+  schema creation.
+- **SQLite-to-PostgreSQL migration script**
+  (`backend/app/scripts/migrate_sqlite_to_postgres.py`) - streams every
+  table, resets sequences, with `--truncate` / `--dry-run` / `--only`.
+
+### Changed
+
+- **Connection pooling hardening** - `pool_pre_ping` and `pool_recycle`
+  on PostgreSQL; configurable pool size and overflow on both backends.
+- **CWICR cost-database bulk import** is now PostgreSQL-safe
+  (`INSERT ... ON CONFLICT DO NOTHING`), with the fast raw-SQLite path
+  retained.
+- **Packaging** - removed stale "openestimate" branding from the
+  PyPI-facing metadata (keywords) so the project page reads as
+  OpenConstructionERP throughout.
+
+## [5.9.1] - 2026-05-30
+
+**Stability and correctness hardening, plus sharper flags and partner logos.**
+
+A focused, module-by-module QA sweep took every reachable button, endpoint and
+permission check and verified it behaves. The result is a long list of small,
+concrete fixes rather than new features. Eight reachable server errors were
+traced to their source and removed, several buttons that looked active but went
+nowhere are now wired to real handlers, and a number of access checks that were
+either too loose or silently denying were corrected.
+
+Access control was tightened where it was wrong in either direction. Cross
+project and cross tenant read holes were closed, sub resources under BOQ and
+requirements now enforce the same guards as their parents, and a few endpoints
+that conflated read and write permission were split so that viewers can read
+without being able to change anything. The money handling started in 5.9.0 was
+carried the rest of the way: amounts are never blended across ISO currencies,
+totals are grouped by currency or converted through a project's own rates, and
+the currency code travels with every value end to end.
+
+The API contracts that drifted between the backend and the frontend were
+reconciled - HSE advanced, procurement goods receipts, transmittals, smart
+views and bid management now agree on their request and response shapes.
+
+Finally, two visual fixes. The inline country flags were rebuilt with proper
+geometry: the United States canton no longer relies on a star glyph font that
+renders as empty boxes inside an image, and China, Turkey, Saudi Arabia,
+Australia, New Zealand, South Africa and the India chakra were redrawn cleanly.
+Five partner packs that shared a placeholder logo now carry their own emblem.
+
+### Fixed
+
+- Removed eight reachable HTTP 500s found by the QA sweep across the touched modules.
+- Wired up buttons and actions that were unreachable or had no handler, including bid management open bids, the match wizard setup panels, smart view sharing and the transmittals payload.
+- Closed cross project and cross tenant access holes (IDOR/RBAC), added the missing file distribution subscribe guard, and added RBAC guards on BOQ and requirements sub resources.
+- Split read and write permissions where they were conflated, made access team inclusive where intended, scoped list queries to the caller, and gated high value actions.
+- Reconciled drifted API contracts: HSE advanced (seven entities), procurement goods receipts, transmittals, smart views and bid management.
+- Fixed the procurement goods receipts project query and response enrichment, and a dashboards snapshot route ordering shadow.
+- Settings backup and restore now use the correct restore and validate request shapes.
+
+### Changed
+
+- Money totals are grouped by currency or converted through project `fx_rates`, never blended; the ISO code is shown next to every amount, and the EUR fallback default was removed from the compare and rollup paths.
+- Rebuilt the inline country flags (US, CN, TR, SA, AU, NZ, ZA and the India chakra) with proper SVG geometry so they render correctly at small sizes on every platform.
+- Gave the five placeholder partner pack logos (Australia, New Zealand, UK, Modular & Prefab, Renewables EPC) distinctive emblems consistent with the packs that already shipped real marks.
+
+## [5.9.0] - 2026-05-30
+
+**Quality wave, full localization, and partner-pack country projects.**
+
+A large multi-agent quality pass swept roughly 26 modules and fixed every
+confirmed high and medium severity finding from the deep-review audits. The
+money handling is now consistent everywhere: amounts in a foreign currency are
+converted inside a project through that project's `fx_rates`, totals across
+projects are grouped by currency rather than blended into a single number, and
+the ISO currency code is always shown next to a value. Touched areas include
+finance, BOQ compare, costs, assemblies, catalog, coordination, dashboard,
+schedule, tendering, reporting, RFI, submittals, risk, QMS, safety, geo, and
+property development.
+
+Localization is now complete. The earlier backlog of missing strings across the
+26 locales is closed, and every new key introduced by this release - the quality
+wave plus the dashboard greeting, the country onboarding, the tendering levelling
+and addendum work, and the QMS sign-off - is translated into all of them. Every
+one of the 27 locale files is up to date (de, fr, es, pt, ru, zh, ar, hi, tr, it,
+nl, pl, cs, ja, ko, sv, no, da, fi, bg, hr, id, ro, th, vi, mn, plus the English
+master).
+
+Partner packs now ship a flagship country project each. Twelve realistic,
+fully worked-out demo projects (Sydney, Auckland, Montréal, Frankfurt, São
+Paulo, Delhi, Riyadh, London, Denver, a German formwork structure, a modular
+housing scheme, and a solar plus storage EPC) are authored as standalone demo
+templates, each in its own currency, classification standard, and locale, with
+88 to 136 priced positions. They appear automatically in the project
+marketplace, and when a partner pack is active its country project installs on
+first boot. The merge between the pack templates and the core registry is now
+order independent, with a regression test guarding it.
+
+### Added
+- `GET /api/v1/projects/{id}/activity` returns a project-scoped, cross-module
+  recent-activity feed (RFIs, tasks, change orders, documents, punch items,
+  field reports), which restores the project overview activity widget.
+- Twelve partner-pack flagship demo projects under `app/core/demo_packs/`, with
+  auto-derived marketplace catalog rows and `OE_PARTNER_PACK` driven auto-install.
+- Backend groundwork for in-app partner-pack apply (state, apply, discovery, router).
+- One-click country setup in onboarding. A "Set up by country" step installs a
+  localized workspace - interface language, a matching cost database (CWICR
+  region preload), the right classification standard, and a sample project - in a
+  single click for 21 countries, or piece by piece from a customize panel. The
+  manual region picker and the AI connection move into an Advanced section.
+- Time-aware dashboard greeting that addresses the signed-in user by name (Good
+  morning / Good afternoon / Good evening / Welcome back), localized in all 27
+  languages.
+- Bundled showcase 3D geometry. The demo BIM models now ship their GLB geometry
+  and seed it on first boot, so the 3D viewer works out of the box on a fresh
+  install (issue #168).
+
+### Changed
+- The dashboard "Weather & Site" panel is off by default. It stays available as
+  an opt-in widget through dashboard customization.
+- Access tokens no longer embed the full permission set. The server re-derives
+  permissions from the user's role on every request, which shrinks the token and
+  removes the intermittent HTTP 431 (request header too large) error that could
+  blank the UI or make projects appear to be missing.
+
+### Fixed
+- Recent-activity widget 404 on the project overview (issue #167).
+- BIM 3D viewer showing "No 3D geometry" for the demo models on a fresh install
+  (issue #168). Geometry is bundled and seeded at startup, the geometry endpoint
+  now reports a precise status (still converting, conversion failed, no converter,
+  or genuinely missing), and the viewer no longer files an automatic bug report
+  for the expected "not ready yet" states.
+- All confirmed high and medium deep-review findings across the modules above.
+- Mixed-currency totals that previously summed across currencies without conversion.
+
+## [5.6.0] - 2026-05-28
+
+**Partner-pack system — pip-installable white-label preset bundles.**
+Adds Shape-A partner-pack architecture: a separate Python package
+(`openconstructionerp-<slug>`) registers via the entry-point group
+`openconstructionerp.partner_packs` and declares a `PartnerPackManifest`
+that the core picks up at boot. The pack supplies branding (logo,
+primary/accent colours, favicon), default locale, additional locale
+JSON overrides, CWICR region preloads, validation rule packs to
+enable, default modules, and a custom onboarding script. Single-tenant
+(one pack per install); active pack chosen by env var
+`OE_PARTNER_PACK` or the first registered entry.
+
+Co-branding contract: every UI surface shows
+`Powered by OpenConstructionERP · In partnership with <Partner>`.
+The badge mounts on the dashboard (top) and in the top nav bar
+(absolute-centered, only at xl+ width). Users can dismiss per
+browser session — the badge reappears on next browser launch
+(sessionStorage, not localStorage).
+
+Five reference packs ship under `packs/`:
+- `batimatech-ca` — Canadian construction conferences (fr-CA primary
+  + en-CA, Toronto + Montréal CWICR, NBC 2020 + CCDC + CSA-A23 rule
+  packs, CAD, ca_gst_pst tax, batimatech red `#BE1B2F`).
+- `doker-formwork` — formwork supplier (de, Berlin CWICR, DIN 18218
+  + concrete + formwork-cycle rule packs, EUR, Doker blue `#003D7A`).
+- `bimhessen-de` — German BIM consultancy (de, Berlin CWICR, DIN
+  276 + GAEB X83/X86 + VOB 2023 + ISO 19650 CDE + BKI rule packs,
+  EUR, Hessen blue `#005CA9`).
+- `uk-jct` — UK general contractor (en-GB, London CWICR, NRM 1+2 +
+  JCT contract clauses + BCIS benchmarks, GBP, Union flag blue
+  `#012169`).
+- `us-rsmeans` — US general contractor (en-US, New York CWICR,
+  MasterFormat 2018 + AIA A201 2017 + RSMeans City Cost Index rule
+  packs, USD, Old Glory blue `#0A3161`).
+
+Install pattern:
+```
+pip install openconstructionerp openconstructionerp-batimatech-ca
+openconstructionerp serve
+# logs: Partner pack active: batimatech-ca (batimatech) v0.1.0
+```
+
+### Added
+- `backend/app/core/partner_pack/` — Pydantic manifest schema,
+  entry-point discovery with env override + LRU cache + graceful
+  failure, REST router exposing `/api/v1/partner-pack/{current,
+  installed, logo, favicon, onboarding-script, locale/{code},
+  by-slug/{slug}}`.
+- `frontend/src/shared/hooks/usePartnerPack.ts` — React Query hook
+  against the current-pack endpoint.
+- `frontend/src/shared/ui/PartnerLogoBadge.tsx` — two render
+  variants (`nav` chip and `dashboard` banner) with per-session
+  dismiss.
+- 13/13 backend unit tests in `tests/test_partner_pack_core.py`
+  cover schema validation, entry-point precedence, broken-pack
+  tolerance, and all router endpoints.
+- Fresh-venv install verification screenshots at
+  `docs/qa/v6-partner-pack-verification/`.
+
+### Fixed
+- `usePartnerPack` originally double-prefixed the path
+  (`/api/api/v1/...`) because `apiGet` already prepends `BASE_URL =
+  '/api'`. Path corrected to `/v1/partner-pack/current` so the
+  badges render on a real install.
+- Nav-bar chip overlapped the right-zone action buttons at 1366×768
+  and 1920×1080. Constrained to `xl:flex` (1280+) and capped at
+  `max-w-[14rem]` so it can never physically reach the action zone.
+
+## [5.5.3] - 2026-05-28
+
+**Build-unblock patch — re-ships v5.5.2 with the PyPI workflow green.**
+The v5.5.2 tag passed `tsc --noEmit` in dev mode but failed
+`tsc -b` in CI on a pre-existing type mismatch in the markups
+aggregator test factory (the factory was not updated when alembic
+v3146 added `assignee_id` to the Markup interface). Adding the
+missing field unblocks the wheel build so v5.5.3 ships the same
+v5.5.2 surface area to PyPI.
+
+### Fixed
+- **`aggregator.test.ts` factory missing `assignee_id`** — failed
+  `tsc -b` in the PyPI publish workflow's wheel-build step; the dev
+  `tsc --noEmit` had ignored the test files. Adds `assignee_id: null`
+  to the factory so the build is green.
+
+## [5.5.2] - 2026-05-28
+
+**Quality wave on v5.5.1.** Closes the FX-popover UX gap from issue #157
+(the v5.5.1 attempt only added a post-save badge — this one fixes the
+write-time flow so users can actually enter the FX rate without losing
+their dropdown selection). Ships the Wave-2 Epic A approval-routes
+engine (generic templates → instances → step states, mounted on
+`/approval-routes` and integrated into `/markups`). Honest
+document-template locales — chips now show native + English names with
+source-coded badges (override / bundled / fallback) and a built-in
+editor for tenant-owned overrides. Three BIM viewer UX fixes (default
+mode shows full geometry on `?sel=` deep-link instead of auto-isolating,
+property search works in federation viewer via per-model picker,
+Begehung moved to the top toolbar and duplicate ruler/section dropped
+from the bottom). `/integrations` 404s gone (orphan "Example webhook
+(disabled)" rows removed from the showcase snapshot, and the test
+endpoint trailing-slash was normalised). AI Quick Estimate i18n keys
+filled, `useLLMRun` shared hook, formatters lifted to `shared/lib/`.
+
+### Fixed
+- **#157 BOQ currency popover — auto-close on foreign currency + no
+  way to enter the FX rate** — `cellRenderers.tsx`: keep the popover
+  open when the picked currency has no FX rate yet, auto-focus the
+  rate input (`PopoverFxRateRow`), and show a "SET RATE" badge with a
+  required-hint paragraph so the next action is obvious. Closes the
+  v5.5.1 attempt that only surfaced a post-save warning at the
+  section level.
+- **`/integrations` "Operation failed / Not Found / Test failed" on
+  Example webhook rows** — removed 6 orphan
+  `Example webhook (disabled)` seed rows from the showcase snapshot
+  (they pointed at no real config so every action 404'd), and changed
+  the test endpoint route from `…/test/` to `…/test` to match the
+  rest of the module's slash style. Real configs unaffected.
+- **`/bim` viewer trio**: (1) `?sel=…` deep-links now render the full
+  geometry by default — the old behaviour auto-isolated the picked
+  element and made the rest of the model invisible; (2) Property
+  search supports the federation viewer through a per-model picker so
+  searching by `Pset_*.Property` finds matches across linked models;
+  (3) Begehung (walk mode) moved to the top toolbar where the rest of
+  the camera tools live, and the duplicate ruler/section dropdowns
+  that were stacked on the bottom toolbar were removed.
+- **`/property-dev/settings/document-templates` Locale picker** — the
+  chip list used to be a flat row of code stubs (`EN` / `DE` / `RU`)
+  with no indication of what was actually translated. Now each chip
+  shows native + English name (`Deutsch (German)` / `日本語 (Japanese)`)
+  with a colour-coded source badge: green = tenant override active,
+  blue = built-in translation, amber = no translation, falls back to
+  English. Clicking any chip (or the new `+ Add / edit translation`
+  button) opens an inline JSON editor that loads English as a
+  starter, lets the tenant edit + save the override, and offers a
+  one-click revert to the bundled copy.
+
+### Added
+- **Approval routes engine (Wave-2 Epic A)** — generic, polymorphic
+  approval workflow. New module `backend/app/modules/approval_routes/`
+  with tables `oe_approval_route` / `_step` / `_instance` /
+  `_step_state` (alembic v3147). REST API exposes route templates,
+  instance lifecycle (start / decide / cancel), and step-state queries
+  filterable by target kind + status. Frontend module
+  `frontend/src/features/approval-routes/` ships an admin page
+  (templates + history tabs), a polymorphic `ApprovalInstanceCard`
+  drop-in, and a `RouteEditor` modal with role-or-user mutex toggle,
+  mode dropdown, SLA hours, and reorderable steps. Already integrated
+  into `/markups`.
+- **AI Quick Estimate refactor + i18n fill** — `useLLMRun` shared
+  hook (commit `0eb16ac3`), formatters lifted from `features/ai/` to
+  `shared/lib/formatters/` (`9c234ca8`), and the missing `ai.*` keys
+  filled in `en.ts` (`d133889e`).
+- **Tenant document-template locale overrides** — backend stores
+  uploaded JSON at `uploads/property_dev/document_locales/{code}.json`,
+  takes precedence over bundled JSON at render time; GET/PUT/DELETE
+  endpoints exposed at `/property-dev/document-templates/locales/{code}`.
+
+### Changed
+- **Showcase snapshot trimmed** — removed the orphan
+  `Example webhook (disabled)` rows (6 from
+  `oe_integrations_config`). Snapshot is still gzipped and lives at
+  `backend/app/scripts/showcase_snapshot.json.gz` with the same
+  filename, so existing seed/SEED_SHOWCASE flows are unaffected.
+- **Markups module** — assignee FK added (alembic v3146,
+  `4763fe64`), prev/next chevron navigation with keyboard shortcuts
+  (`ae1639b4`), back-to-document deep-link with scroll + pulse
+  highlight (`d5cc56f2`), `EditMarkupModal` for title/description/
+  colour (`0f436982`).
+- **Geo Hub** — auto-zoom camera fits overlays + 3D tiles on load
+  (`d0b72773`), 2D / 3D / Columbus scene-mode toggle with persistence
+  (`ec2448b0`), per-overlay visibility + opacity controls
+  (`b7cde60b`), left sidebar listing overlays + tilesets with fly-to
+  (`fc46f5fd`).
+- **i18n coverage push** — `ko` ≥75%, `zh` ≥75%, `cs`/`hr`/`pl`/`ro`
+  ≥70%, `da`/`no`/`sv` ≥70%, `fi` ≥70% on high-traffic surfaces.
+
+### Migration
+- Alembic chain v3144 → v3145 (demo_project_addresses) → v3146
+  (markup_assignee) → v3147 (approval_routes). All forward-only,
+  idempotent on existing installs. No data migration needed.
+
+## [5.5.1] - 2026-05-28
+
+**README CLI-name patch — re-ships the v5.5.0 wheel with the long-description that PyPI renders on the project page.** The v5.5.0 wheel was tagged from a commit that still showed the legacy `openestimate` CLI binary name in the quickstart and the `doctor` invocation hint. Both binaries continue to work (pyproject.toml exposes `openestimate` and `openconstructionerp` as parallel entry points), but the canonical command on the rendered README should match the package name. No code changes. No migration. Same `5.5.0` runtime.
+
+### Fixed
+- **README quickstart and doctor invocation** — `openestimate` → `openconstructionerp` on `README.md:700` and `README.md:713` so the PyPI long-description matches the package name. Filed because users browsing https://pypi.org/project/openconstructionerp/ kept seeing the old name in the highlighted install snippet.
+
+## [5.5.0] - 2026-05-28
+
+**Stability wave — last stable 5.x cut.** Eight user-reported runtime
+bugs found in a single morning of fresh-install testing, plus the
+underlying "session reset on backend restart" issue, plus a deep i18n
+pass that brought Japanese to 98.5% coverage. Includes six merged
+contributor PRs (#140, #141, #151, #158, #163, #164 — team-member
+project access, Mourdi59), the related-articles widget across all
+news article pages, and the 2026-05-28 9/9-PASS browser verification
+sweep with 22 screenshots committed under `docs/qa/`.
+
+### Fixed
+- **`/takeoff` "Failed to load PDF — Setting up fake worker failed"**
+  on cold loads — added `.mjs` to the PWA precache glob so the PDF.js
+  worker is cached with its real Content-Type, and made
+  `request.destination === 'worker'` bypass the CacheFirst runtime
+  rule so future Workers (PDF.js, Cesium, ML pipelines) never get
+  intermediated by the service worker.
+- **`/takeoff` "Failed to fetch PDF (403)"** when downloading an
+  uploaded document — the path-traversal guard whitelisted only the
+  brand-namespace `~/.openestimator` while the CLI defaults to
+  `~/.openestimate`; now both spellings and `OE_DATA_DIR` /
+  `DATA_DIR` env vars are honored.
+- **Session reset on backend restart ("kicked back to desktop")** —
+  dev-mode `JWT_SECRET` was rotated every boot when the bundled
+  default was in use, invalidating every active token. The secret is
+  now persisted to `~/.openestimate/.jwt-secret` (chmod 600 on POSIX)
+  and re-loaded on subsequent boots. Sessions survive `Ctrl+C`+relaunch.
+  Setting `JWT_SECRET` env var still takes precedence.
+- **CAD/BIM Data Explorer "CAD conversion failed for .rvt"** — the
+  `convert_cad_to_excel` path built CLI args as `<exe> <input>
+  <output> standard -no-collada` unconditionally. DDC v18+ rejects
+  those positional tokens with `exit 15`. Routed through the
+  `build_ddc_args` + `detect_converter_capabilities` builder that
+  `ifc_processor` already uses, so v17 keeps its positional shape and
+  v18 gets `-x out.xlsx --no-dae -m standard` automatically.
+- **`/dwg-takeoff` drawings don't load + misleading "upload DXF"
+  error** — wheel-install converter discovery now scans the launch
+  CWD's parent in addition to the source-repo parent (closes the
+  wheel-install gap), and the missing-converter error message points
+  at the one-click install pill + GitHub fallback instead of just
+  "use DXF". DWG conversion now goes through the same v18-aware
+  `build_ddc_args` so future DwgExporter v18 works without further
+  patching.
+- **`/bim/:id` 3D walk mode froze the viewport** — `WalkMode` /
+  `PointerLockControls` mutated the camera every frame but never
+  signalled the on-demand `SceneManager._needsRender` (which was
+  previously only set by the now-disabled `OrbitControls`). Added an
+  optional `onChange` callback fired from `tick()` on any frame the
+  camera moved or pointer-lock was active; wired
+  `BIMViewer.tsx` → `scene.requestRender()`.
+- **BIM Section Box buttons ("По выделению / По всей модели /
+  Сбросить") did nothing** — `applyToScene()` set
+  `material.clippingPlanes` + `localClippingEnabled=true` but no
+  dirty signal reached the on-demand renderer. Same `onChange`
+  pattern as walk-mode now fires from `enable()`, `disable()`, and
+  `setBoundsToBox()`.
+- **`/bim/federations` 3D tab showed "Geometry fetch failed [object
+  Object]"** — the embedded `FederatedViewer` 404'd on every member
+  model that hadn't been re-converted. Replaced the broken viewport
+  with a list of member-model link cards that navigate to
+  `/bim/:modelId` (where the per-model viewer works) and HEAD-probe
+  each model's geometry so 404 rows are greyed out as "Geometry not
+  available" instead of leading the user into a broken page.
+- **`/projects` lost the per-card map** — `ProjectsPage` gated the
+  map render on `mapEnabled && project.address`; demo projects
+  created before the v3.2.0 seed update had `address IS NULL`, so
+  the card silently dropped its map. Removed the gate (ProjectMap
+  itself handles the missing-coords case with a friendly
+  placeholder) and added alembic `v3145_demo_project_addresses` to
+  backfill the five canonical demo addresses on existing installs.
+
+### Added
+- **i18n deep coverage pass across 26 locales** — 26 high-impact
+  commits filling nav phase labels, common verbs, sidebar admin,
+  login brand, tour + WhatsNew chrome. Locale-by-locale gap analysis
+  saved to `docs/i18n/COVERAGE_2026_05_28.md`.
+- **Japanese (JA) locale to 98.5% coverage** — 1,627 keys translated
+  across boq, propdev, costs, match_elements, accommodation, bim,
+  finance, schedule, users and 20+ other namespaces using
+  construction-industry terminology (積算, 単価, 明細, 工事, 物件).
+  111 keys intentionally kept in Latin (brand codes, EVM acronyms,
+  industry-exchange identifiers, file paths).
+- **`/geo` — Photon (Komoot, Apache 2.0) as primary geocoder** with
+  Nominatim (ODbL) as fallback. Photon is faster, has no per-IP
+  rate limit, and matches our open-data + self-hostable
+  philosophy.
+- **`/geo` viewer — collapsible "Open Data" license pill** that lists
+  every upstream source (Cesium Apache 2.0, OpenStreetMap ODbL,
+  Nominatim ODbL, Photon Apache 2.0) with direct links so reviewers
+  can verify the stack is fully open without reading the source.
+- **`/geo` + `/projects` — one-click 2D/3D toggle** wired into both
+  the Geo Hub viewer and every project card's map preview.
+- **News pages: "More from the OpenConstructionERP blog" widget** —
+  inline closing strip on every article + sticky right-rail at
+  `min-width:1500px`, vanilla JS, no dependencies, no tracking. 15
+  article pages covered.
+- **Browser verification harness** — `docs/qa/verification-2026-05-28/`
+  ships the Playwright spec, before/after screenshots for nine
+  fixes, and a Markdown REPORT showing 9 PASS / 0 FAIL against a
+  source-built backend on port 8001.
+
+### Changed
+- **Team-member project access (PR #164, Mourdi59)** — non-owner
+  team members now reach project + BOQ endpoints through
+  `TeamMembership` rows alongside owner checks. New
+  `backend/app/modules/teams/access.py` provides the canonical
+  `is_project_member()` + `member_project_ids_subquery()` helpers,
+  replacing six inline copies. Access denials return 404 (not 403)
+  to avoid leaking UUID existence; malformed UUIDs are wrapped in
+  try/except returning 404 instead of 500. Five integration tests
+  cover the access matrix.
+- **PWA service worker** — `globPatterns: '**/*.{js,mjs,css,html,svg,
+  woff2,ico}'` (`.mjs` added) so future ESM workers are precached
+  with correct headers without needing per-asset Workbox rules.
+
+### Dependencies
+- `chore(deps)`: tmp 0.2.5 → 0.2.6 (#163, dependabot)
+- `chore(deps)`: 8 minor/patch frontend bumps (react-query,
+  date-fns, three, postcss, …) (#158, dependabot)
+- `chore(deps)`: openssl 0.10.79 → 0.10.80 in desktop/src-tauri
+  (#151, dependabot)
+- `chore(deps)`: pandas upper bound `<3` → `<4` (#141, dependabot)
+- `ci`: actions/dependency-review-action 4 → 5 (#140, dependabot)
+
+### Skipped (separate migration wave)
+- react-router-dom 6 → 7 (#145), react-i18next 15 → 17 (#146),
+  eslint 9 → 10 (#144), @vitejs/plugin-react 4 → 6 (#143) — each is
+  a meaningful API change that deserves its own audit + test cycle.
+- PR #161 (rjohny55) — baseline is v4.12; unresolvable conflicts in
+  `ai/router.py` + `catalog/router.py` against our v5.4 state.
+  Useful pieces (Kimi provider, retry session, password strength)
+  worth extracting into a fresh PR after rebase.
+
+## [5.4.3] - 2026-05-28
+
+**/geo navigation + autocomplete UX.** Browser audit found two bugs the
+postage-stamp fix in v5.4.1 didn't catch: clicking the `Project` or
+`Development` mode tab when no context was active navigated to
+`/projects` or `/property-dev` — dumping the user out of /geo into a
+slow-loading list page. Address autocomplete also felt broken because
+the dropdown stayed closed while Nominatim's 1 req/s upstream took
+5–10 s on a cold cache.
+
+### Fixed
+- **GeoModePicker soft-disabled tabs** — clicking a tab without context
+  now opens an in-page picker dialog (project/development list with
+  search) instead of navigating away. Picking a row navigates to the
+  appropriate scoped /geo route. ESC + backdrop click close the dialog.
+  Keyboard nav, ARIA roles, and the dim "?" affordance preserved.
+- **AddressAutocomplete perceived empty** — the dropdown now opens
+  immediately when a fetch begins and renders a `Searching…` row with
+  spinner while suggestions are empty + `isLoading` is true. Users see
+  progress instead of an apparently-broken input during the 5–10 s
+  Nominatim round-trip on cold cache.
+
+## [5.4.2] - 2026-05-28
+
+**Converter UX simplification.** Fresh-install pain reported by Artem on
+a new Windows machine: DWG upload failed with "DWG conversion requires
+DDC DwgExporter" and no path to actually install; BIM "out of date"
+overlay surfaced the raw stderr ("The following argument was not
+expected: …") as the primary message.
+
+### Fixed
+- **/dwg-takeoff conversion error** — when the backend message names
+  "DDC DwgExporter", the error card now renders an inline `Install DWG
+  converter (1 click)` button (with live progress bar — ~150 MB
+  download) before the existing Retry/Delete row. Hits the same
+  `POST /api/v1/takeoff/converters/dwg/install/` endpoint as /settings →
+  Converters. On success, auto-triggers the upload-retry flow. On Linux,
+  surfaces the apt-get commands the backend returns and links to
+  /settings?tab=converters as a fallback.
+- **/bim "Converter is out of date" overlay** — replaced the raw
+  stderr-bearing backend message with a clean human sentence
+  ("The installed RVT converter is older than this build expects. Click
+  'Reinstall converter' below — we'll pull the latest version and retry
+  your upload automatically"). The original message + stderr excerpt
+  are preserved as a collapsible `<details>` "Show technical details"
+  block (useful for support tickets). Dropped the redundant
+  "Reinstall fetches the latest converter from GitHub…" hint that
+  appeared next to the Reinstall button.
+
+## [5.4.1] - 2026-05-28
+
+**Hotfix wave.** Bundles the 20-wave deep audit landings (W1–W20 across
+every business module) plus a critical /geo render fix.
+
+### Fixed — /geo (P0 user-reported)
+- **Cesium canvas collapsed to 300×150** on the global Geo Hub view — the
+  CesiumViewer.tsx wrapper intentionally skips Cesium's `widgets.css`
+  (to suppress unstyled toolbar pills) but the same stylesheet is also
+  the only place `.cesium-viewer`, `.cesium-widget`, and the canvas get
+  `width:100%; height:100%`. Without it the canvas fell back to browser
+  default and the globe rendered into a postage-stamp in the corner of
+  the main area. Fixed by inlining the four minimum rules into the
+  scoped `<style>` block.
+
+### Fixed — 20-wave deep audit (security + correctness across every module)
+
+**Security (HIGH-severity):**
+- **W3 Costs/Vector**: LanceDB filter SQL injection guard
+- **W7 PropDev**: double-reservation race (conditional UPDATE)
+- **W8 CRM**: GDPR `forget_lead` PII scrub extended to source + activity
+- **W9 HSE**: JSA FSM IDOR (foreign-project state transitions)
+- **W11 Auth**: audit-log gap on login/reset/role-change (invisible to
+  forensics); reset-token single-use guard
+- **W12 Reporting**: HTTP header injection via `invoice_number` /
+  Content-Disposition (RFC 6266 quoting)
+- **W16 fieldreports**: approve endpoint had no `verify_project_access`
+- **W17 Geo Hub**: raster-overlay DELETE used `write` perm instead of
+  `delete` (editor could nuke manager-owned overlays)
+- **W19 Punchlist**: photo delete IDOR; verify/close perm was dead code
+
+**Correctness (silent miscalc):**
+- **W10 Schedule**: CPM critical-path used `<0` instead of `<=0` for
+  total-float (missed zero-float activities)
+- **W18 Carbon**: embodied-CO₂ auto-fill double-normalised the unit
+  (silently wrong figures for cross-unit factors)
+- **W20 Procurement**: EUR hardcoded in `PurchaseOrder.currency_code`
+  ORM default (task #217 violation)
+- **W20 Finance**: `budget.actual` was `str` assigned to `MoneyType()`
+  column (PostgreSQL coercion bug)
+- **W20 Finance**: budget Excel export used `float()` → IEEE-754
+  rounding on large values
+- **W6 Validation**: 2 rule classes existed but were never registered
+  (E-VAL-008 + BOQUnitSystem + ClassificationNudge)
+
+**Race conditions / FSM hardening:**
+- **W2 Tendering**: token_hash leak, award-delete FSM revert, concurrent
+  submit race
+- **W9 Submittals**: CAS race on parallel approvals
+- **W15 Variations**: VR→VO conversion race (one VR creating two VOs)
+- **W17 Notifications**: webhook circuit-breaker (skip after 10 fails,
+  auto-deactivate after 50)
+
+**IDOR / RBAC:**
+- **W1 BOQ**: three IDOR/precision gaps
+- **W14 Files/Markups**: scale-list IDOR, scheduler re-registration
+- **W15 ChangeOrders**: missing `RequirePermission` on GET-detail
+
+**UX / perf:**
+- **W4 Takeoff**: inline-dict PDF encryption detection, dark-mode canvas
+- **W5 BIM**: canvas ARIA labels, dark-mode, overriddenMeshes leak
+- **W13 Dashboards**: missing POST /rollup/ handler (5 endpoint tests
+  silently 405-broken); unbounded activity + validation report fetches
+
+## [5.4.0] - 2026-05-27
+
+**Quality wave on the v5.3.0 base.** Six focused commits — no schema
+changes, no new modules. Bundles WCAG-AA round 2, AI-surfaces refactor,
+match-quality fixes from real-BIM iteration, and the dark-mode token
+followups from the v5.3.0 review pass.
+
+### Added
+- **`useLLMRun()` shared hook** (`frontend/src/features/ai/hooks/useLLMRun.ts`)
+  — `useMutation`-backed wrapper for LLM-bound async ops with
+  AbortController and focus-restore ref. Replaces ad-hoc `useState` +
+  `try/catch` blocks in AdvisorPage and QuickEstimatePage (6 call sites).
+- **`shared/lib/formatters.ts` lifted utilities**: `formatNumber`
+  (currency-aware), `formatFileSize`, `getFileExtension` — promoted from
+  feature-local helpers for reuse across AI + reporting surfaces.
+- **Theme-aware `--oe-blue-text` token + `text-oe-blue-text` utility**
+  (light `#005bb5` / dark `#93c5fd`) — splits the blue-on-tint text use
+  case off `--oe-blue-dark` so the same class clears WCAG-AA in both
+  modes. 145 occurrences across 56 files migrated.
+- **`_is_non_billable_envelope()` gate** in match ranker (`IfcSpace`,
+  `IfcZone`, `IfcOpeningElement` w/o material, etc.) prevents
+  metadata-only fallback from surfacing arbitrary "Electrical equipment"
+  rows for non-billable IFC entities.
+
+### Fixed
+- **Match: `ifc_class` filter never fired on IFC-sourced elements** —
+  BIM extractor left every v3 structured field (`ifc_class`,
+  `material_class`, `ifc_predefined_type`, `nominal_size_mm`) at `None`,
+  so the SearchPlan skipped the hard filter even though ~28k catalogue
+  rows are indexed by it. Three layered fixes: 35 `Ifc*` aliases added
+  to `classification_mapper._CATEGORY_ALIASES`, English IFC noun
+  prepended to the dense description in `extractors/bim`, and direct
+  envelope population from BIM properties.
+- **Match: BGE rerank collapsed correct candidates** — the
+  cross-encoder's sigmoid logits land in 0.003–0.05 on templated
+  catalogue passages, and the pre-blend implementation *replaced* the
+  prior (RRF + boosts) score with this collapsed signal. Now 60/40
+  blends prior with BGE; sorts head by raw BGE (preserves rerank
+  authority) but displays blended score with `bge_rerank_delta` in
+  `boosts_applied` for explainability.
+- **WCAG-AA — `--oe-text-secondary` failed on tinted light surfaces**:
+  `#6e6e73` → `#5b5e66`. 2 511 occurrences in ~330 files now clear AA
+  on `bg-oe-blue-subtle` (4.27:1 → 5.75:1+).
+- **Dark-mode `hover:bg-oe-blue-dark` button contrast**: white text on
+  the `#bfdbfe` tint (introduced as a text-token band-aid in `ee2edb9d`)
+  dropped to ~1.3:1. Now that `text-oe-blue-dark` is gone, the token
+  reverts to `#1e40af` for saturated white-on-button contrast.
+
+### Refactor
+- **AI surfaces**: AdvisorPage + QuickEstimatePage migrated to
+  `useLLMRun()`. No behaviour change; tsc clean.
+
+
+**Last stable 5.x cut.** Six audit bundles consolidated on the v5.2.8 base.
+No schema changes — alembic stays at `v3144`. Module count unchanged at 116.
+
+### Added
+- **Brazil Tier-1 invoice support**: `BRL` in finance currency shortlist,
+  500-line `br_invoice_pdf.py` RPS-layout renderer with prestador/tomador
+  blocks and retenções (ISS/PIS/COFINS/CSLL/INSS/IRRF). Two new validation
+  rules `NBR12721ClassificationRequired` + `NBR12721ValidSection` (S1–S11
+  cost groups). BOQ importer recognises `nbr`+`sinapi` codes; São Paulo
+  defaults to SINAPI as regional cost reference. 15 new tests.
+- **/reporting in-page renderer**: View button per report row opens
+  `ReportViewerModal` with sandboxed `<iframe srcDoc>` for HTML reports.
+  Distinct error states for 410 (expired) / 404 / network. Blob URL for
+  new-tab link.
+- **Daily Diary delete**: Trash2 ghost button gated on `!sealed`, wired
+  through `useConfirm()` with danger-styled `ConfirmDialog`. 4 new tests.
+- **Dashboard rollup endpoint**: new `RollupRequest` schema with 10
+  configurable widget IDs and bounds validation (+136 LOC). Project
+  dashboard goes from 13 per-widget requests to 6. 41 new tests covering
+  IDOR isolation and rollup parity.
+- **Geo Hub `sweep_deleted_raster_overlays(older_than_days=30)`** janitor
+  helper for retroactive cleanup of soft-deleted overlay bytes.
+
+### Fixed
+- **`set_user_module_access` metadata payload silently dropped** —
+  SQLAlchemy `DeclarativeBase` reserves the `metadata` attribute name;
+  the column is aliased as `metadata_` but the router wrote
+  `metadata=metadata` instead of `metadata_=metadata`. (Author-attributed
+  community PR #164 by `@Mourdi59`.)
+- **Geo Hub `delete_tileset` storage leak**: deleted the DB row but left
+  tileset bytes orphaned in MinIO. Now calls
+  `storage_backend.delete_prefix(obj.prefix)` before the DB delete.
+- **Geo Hub `accuracy_m` runaway**: schema now caps at `le=10_000` so a
+  stray fat-finger can't blow up the whole map.
+- **`map_config` N+1**: `development_id` filter now pushed into SQL
+  instead of post-fetch Python filter.
+- **`ProjectGeoPage` iOS Safari URL bar collapse**: `100vh` → `100dvh`.
+- **/login dark-mode contrast**: 7 scoped overrides on `LoginPage.tsx` —
+  form column backdrop `dark:bg-[#070912]`, demo buttons
+  `dark:bg-white/[0.06]`, credential cards `dark:bg-white/[0.07]` with
+  `dark:border-white/15`, subtitle promoted from tertiary to secondary
+  ink. Light mode untouched.
+- **WCAG-AA contrast — top axe-core offender**: 51 files / 126 line
+  replacements moving `text-oe-blue` → `text-oe-blue-dark` where
+  `bg-oe-blue-subtle` co-occurs (3.1:1 → 4.5:1+ AA pass). Includes the
+  global project-picker chip in `Header.tsx` and the blue variant of
+  `Badge.tsx`.
+
+### Docs
+- Backfilled three v3 release announcements on the marketing site
+  (`v3-0-0.html`, `v3-6-0.html`, `v3-11-0.html`) using the v5-2-8
+  template with the `.chip.v3` indigo style.
+- Fixed broken `og:image` on `news.html` (was a stale path under
+  `/pro/shared/media/`; now points at `/screenshots/hero-overview.jpg`).
+
 ## [5.0.0] - 2026-05-26
 
 **Second stable major.** First release to land community contributor work
@@ -545,7 +1329,7 @@ Cumulative test count this release: 21 backend unit + 37 coordination_hub + 47 c
   - i18n keys under `bim.federation.*` for EN / DE / RU.
 
 - **Scheduling — CPM Slice 1.** First-class Critical Path Method engine on top of the existing schedule + schedule_advanced modules. Pure-Python forward + backward pass (no scipy / networkx) at `backend/app/modules/schedule_advanced/cpm.py` computes ES / EF / LS / LF, total float, free float, and critical-path marking on a `TaskNetwork`; cycles are detected via DFS and surface the offending node path through `CycleError`; disconnected sub-networks are scheduled per island. Companion `leveling.py` ships a serial-greedy `level_by_resource_max` heuristic (priority = LS asc → total_float asc → id asc) that shifts activities forward (never backward) to honour per-resource ceilings. New `WeeklyCommitment` table (alembic v40_cpm_weekly) backs the lightweight Last-Planner commit flow with auto-computed PPC = actual / planned clamped to [0, 1]. Four additive endpoints under `/api/v1/schedule-advanced/{schedule_id}/…`: `compute-cpm` (persists ES / EF / LS / LF / float / critical onto each Activity row and returns project_duration + critical path), `level-resources`, `commitments`, `ppc?week=`. New `frontend/src/features/schedule/CPMView.tsx` renders an ES / EF / LS / LF / float column grid with a red "CRITICAL" badge on critical rows plus toolbar buttons to recompute CPM or open a resource-leveling modal. EN / DE / RU translations under `schedule.cpm.*`. 8 new tests in `backend/tests/modules/schedule_advanced/test_cpm.py` (textbook 6-activity AOA critical path A → C → F = 11d, forward pass, backward pass, total float, cycle detection, disconnected sub-network, leveling ceiling enforcement, PPC math) — all green; existing 61 schedule_advanced unit tests stay passing. FS-only in Slice 1; SS / FF / SF dependency types and parallel-SGS leveling are wired as TODO comments for Slice 2.
-- **AI Agents framework — Slice 1.** New `backend/app/modules/ai_agents/` module adds a generic ReAct-style agent loop on top of the existing single-call `ai` LLM client. Ships a `Tool` protocol + `ToolRegistry`, a declarative `Agent` dataclass, and an `AgentRunner` that loops "LLM -> tool_call -> observation -> repeat" until a final answer or `max_iterations` (defaults to 8, then `status=failed reason=iter_limit`). LLM is abstracted behind an `LLMBridge` protocol — production `CallAILLM` wraps `ai.ai_client.call_ai` with a deterministic `<tool_call>{json}</tool_call>` text-protocol parser (no provider-specific tool-use APIs); tests use `ScriptedLLM` for offline replay. Per-run history persists to two new strictly-additive tables (`oe_ai_agents_run` + `oe_ai_agents_step`, alembic `v40_ai_agents`) so the UI can render every thought / tool_call / observation / answer as a vertical timeline. Endpoints: `GET /api/v1/ai-agents/agents/`, `GET /tools/`, `POST /runs/`, `GET /runs/`, `GET /runs/{id}`. Sample `boq_drafter` agent declares three tools: `search_costs(q, region)` (proxies `costs.matcher.match_cwicr_items` with a deterministic mock fallback), `suggest_assembly(description)` (mock stub, TODO to wire to `assemblies.repository`), and `create_position(...)` which returns a structured PROPOSAL payload — never writes the BOQ (CLAUDE.md "AI-augmented, human-confirmed"). 9 pytest tests cover scripted-LLM happy path, iter-limit cap, registry dispatch, unknown-tool error step, BOQ-drafter end-to-end, DB persistence, text-protocol parser, and `on_step` callback. New `frontend/src/features/ai-agents/AgentsPage.tsx` renders the agent catalogue + run launcher + live polling timeline; EN/DE/RU `agents.*` keys.
+- **AI Agents framework — Slice 1.** New `backend/app/modules/ai_agents/` module adds a generic ReAct-style agent loop on top of the existing single-call `ai` LLM client. Ships a `Tool` protocol + `ToolRegistry`, a declarative `Agent` dataclass, and an `AgentRunner` that loops "LLM -> tool_call -> observation -> repeat" until a final answer or `max_iterations` (defaults to 8, then `status=failed reason=iter_limit`). LLM is abstracted behind an `LLMBridge` protocol — production `CallAILLM` wraps `ai.ai_client.call_ai` with a deterministic `<tool_call>{json}</tool_call>` text-protocol parser (no provider-specific tool-use APIs); tests use `ScriptedLLM` for offline replay. Per-run history persists to two new strictly-additive tables (`oe_ai_agents_run` + `oe_ai_agents_step`, alembic `v40_ai_agents`) so the UI can render every thought / tool_call / observation / answer as a vertical timeline. Endpoints: `GET /api/v1/ai-agents/agents/`, `GET /tools/`, `POST /runs/`, `GET /runs/`, `GET /runs/{id}`. Sample `boq_drafter` agent declares three tools: `search_costs(q, region)` (proxies `costs.matcher.match_cwicr_items` with a deterministic mock fallback), `suggest_assembly(description)` (mock stub, TODO to wire to `assemblies.repository`), and `create_position(...)` which returns a structured PROPOSAL payload — never writes the BOQ (the architecture guide "AI-augmented, human-confirmed"). 9 pytest tests cover scripted-LLM happy path, iter-limit cap, registry dispatch, unknown-tool error step, BOQ-drafter end-to-end, DB persistence, text-protocol parser, and `on_step` callback. New `frontend/src/features/ai-agents/AgentsPage.tsx` renders the agent catalogue + run launcher + live polling timeline; EN/DE/RU `agents.*` keys.
 - **Mobile PWA — Slice 1.** OpenConstructionERP is now installable as a Progressive Web App on Android / iOS / desktop Chromium browsers.
   - `vite-plugin-pwa` wired into `frontend/vite.config.ts` with workbox `generateSW`: precaches the app shell (`index.html` + JS/CSS/HTML/SVG/WOFF2 bundles), `NavigationRoute` falls back to `/index.html` so offline deep-links still resolve, and three runtime cache lanes — `oce-static-assets` (CacheFirst for fonts/images/hashed asset chunks), `oce-i18n-locales` (StaleWhileRevalidate for `assets/i18n-<code>-*.js`), and `oce-api` (NetworkFirst with 8 s timeout, GET-only, cached only as offline fallback for idempotent reads).
   - Web App Manifest declares name "OpenConstructionERP", short_name "OCERP", `theme_color` sky-600 (`#0284c7`), `background_color` `#f7fbff`, `display: standalone`, scope `/`, start_url `/`, plus 192/256/384/512 SVG icons + a 512 maskable variant under `frontend/public/pwa/` (modern browsers accept SVG icons in a manifest directly; an optional `frontend/scripts/build-pwa-icons.mjs` helper rasterizes to PNG when `sharp` is installed).
@@ -1090,7 +1874,7 @@ tier 5269 passing, frontend type-check clean, zero regressions.
 
 ### Housekeeping
 
-- **All 7 stale Dependabot PRs closed** (#117 minor group, #112 cargo openssl, #125 Mongolian, #118 typescript major, #119 i18next-http-backend major, #120 react-is major, #121 eslint major). All were based on pre-filter-repo main; merging would have resurrected the removed `.claude/qa_parts_*` tree. Equivalent safe patches applied directly to main; majors deferred to a separate validation cycle.
+- **All 7 stale Dependabot PRs closed** (#117 minor group, #112 cargo openssl, #125 Mongolian, #118 typescript major, #119 i18next-http-backend major, #120 react-is major, #121 eslint major). All were based on an older main; merging would have resurrected a removed internal qa-scratch tree. Equivalent safe patches applied directly to main; majors deferred to a separate validation cycle.
 - Pre-existing frontend vitest debt documented: 31 failing tests across 9 files (share-link, visual-regression snapshots, ClassificationPicker, NotFoundPage, BOQGrid, CostCategoryTree, _registry, boqResourceTypes, CostDatabaseSearchModal). None caused by v3.0.4 changes — slated for v3.0.5 cleanup.
 
 ## [3.0.3] — 2026-05-13 · Deep correctness pass + UX & supply-chain hardening
@@ -1878,7 +2662,7 @@ Five-category deep audit (Planning, Communication, Procurement, Finance, Documen
 ## [2.8.5] — 2026-05-04
 
 ### Fixed
-- Fresh-install registration: the seeded `demo@openestimator.io` admin no longer blocks the bootstrap path. First real self-registered user is now correctly promoted to admin and `is_active=True`, regardless of `OE_REGISTRATION_MODE`. Previously, every `pip install openconstructionerp` left new users dormant with no path forward.
+- Fresh-install registration: the seeded `demo@openconstructionerp.com` admin no longer blocks the bootstrap path. First real self-registered user is now correctly promoted to admin and `is_active=True`, regardless of `OE_REGISTRATION_MODE`. Previously, every `pip install openconstructionerp` left new users dormant with no path forward.
 - `/projects/:projectId/boq` only fetches that project's BOQs instead of fanning out to every project, cutting skeleton time on prod (50+ projects) from ~2 s to one round-trip.
 
 ### Tests
@@ -2785,7 +3569,7 @@ Five previously silent modules now emit events for downstream audit / analytics 
 
 ### Documentation
 - **Linux install guide** — `docs/INSTALL_LINUX.md` covers PEP 668 externally-managed-environment trap on Ubuntu 23.04+ (incl. 26), Python 3.12 vs 3.13 wheel-coverage, system-deps for source build, port-collision recovery, optional systemd unit. README adds an Ubuntu/Debian pointer block.
-- **CLAUDE.md** validation-rules-tree fixed to match disk reality (one colocated `rules/__init__.py`, no per-standard files).
+- **the architecture guide** validation-rules-tree fixed to match disk reality (one colocated `rules/__init__.py`, no per-standard files).
 
 ### Test infrastructure
 - **Backend `shared_auth` fixture cascade fix** — three-layer cascade resolved: (1) `conftest.py` redirects `DATABASE_URL` to a per-session temp SQLite *before* `from app...` imports so tests no longer compete with the production DB; (2) `_auth_helpers.promote_to_admin` flips `is_active=True` (BUG-RBAC03); (3) login / API rate limits bumped for whole-suite runs to avoid spurious 429s. The five originally-failing test files (`test_api_smoke`, `test_boq_regression`, `test_boq_import_safety`, `test_boq_cycle_detection`, `test_boq_cost_item_link`) plus three adjacent suites pass cleanly together: 57/57 in 246 s.
@@ -4087,7 +4871,7 @@ biggest test-coverage holes.
 - **BIMPage.tsx hardcoded English strings replaced** with i18n
   keys (deferred from the v1.4.4 frontend audit).  ``UploadPanel``,
   ``NonReadyOverlay``, and the empty-state branch now go through
-  ``useTranslation()`` — the HARD rule from CLAUDE.md
+  ``useTranslation()`` — the HARD rule from the architecture guide
   (*"ALL user-visible strings go through i18next. No exceptions."*)
   is honoured across the BIM module.  New ``bim.upload_*`` and
   ``bim.overlay_*`` keys added to ``i18n-fallbacks.ts``.

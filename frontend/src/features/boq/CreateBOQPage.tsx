@@ -93,6 +93,7 @@ export function CreateBOQModal({ open, onClose, defaultProjectId }: CreateBOQMod
           </div>
           <button
             onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-hover transition-colors"
           >
             <X size={18} />
@@ -129,7 +130,9 @@ export function CreateBOQModal({ open, onClose, defaultProjectId }: CreateBOQMod
             label={t('boq.name_label', { defaultValue: 'BOQ Name' })}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. Main Building — Structural Works"
+            placeholder={t('boq.name_placeholder', {
+              defaultValue: 'e.g. Main Building - Structural Works',
+            })}
             required aria-required="true"
             autoFocus
           />

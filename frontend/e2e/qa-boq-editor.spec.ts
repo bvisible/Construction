@@ -7,7 +7,7 @@
 import { test, expect, type Page } from '@playwright/test';
 
 const SCREENSHOT_DIR = '../screenshots/qa-boq-editor';
-const DEMO_EMAIL = 'demo@openestimator.io';
+const DEMO_EMAIL = 'demo@openconstructionerp.com';
 const DEMO_PASSWORD = 'DemoPass1234!';
 
 /** Dismiss onboarding tour by clicking Skip/X/Next repeatedly */

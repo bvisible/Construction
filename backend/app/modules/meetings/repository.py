@@ -41,13 +41,14 @@ class MeetingRepository:
         if status is not None:
             base = base.where(Meeting.status == status)
 
-        # Free-text search across title, agenda, minutes, and meeting number
+        # Free-text search across title, minutes, and meeting number.
+        # (agenda_items is a JSON list column, not a text column — ilike on it
+        # is not portable across SQLite/Postgres, so it is excluded here.)
         if search and search.strip():
             pattern = f"%{search.strip()}%"
             base = base.where(
                 or_(
                     Meeting.title.ilike(pattern),
-                    Meeting.agenda.ilike(pattern),
                     Meeting.minutes.ilike(pattern),
                     Meeting.meeting_number.ilike(pattern),
                 )
@@ -77,20 +78,17 @@ class MeetingRepository:
         from sqlalchemy import cast
         from sqlalchemy.sql import func as sqlfunc
 
-        stmt = (
-            select(
-                sqlfunc.coalesce(
-                    sqlfunc.max(
-                        cast(
-                            func.substr(Meeting.meeting_number, 5),
-                            SAInteger,
-                        )
-                    ),
-                    0,
-                )
+        stmt = select(
+            sqlfunc.coalesce(
+                sqlfunc.max(
+                    cast(
+                        func.substr(Meeting.meeting_number, 5),
+                        SAInteger,
+                    )
+                ),
+                0,
             )
-            .where(Meeting.project_id == project_id)
-        )
+        ).where(Meeting.project_id == project_id)
         max_num = (await self.session.execute(stmt)).scalar_one()
         return f"MTG-{max_num + 1:03d}"
 
@@ -122,18 +120,12 @@ class MeetingRepository:
         because action_items is a JSON column that requires Python-level parsing.
         """
         # Total
-        total_stmt = (
-            select(func.count())
-            .select_from(Meeting)
-            .where(Meeting.project_id == project_id)
-        )
+        total_stmt = select(func.count()).select_from(Meeting).where(Meeting.project_id == project_id)
         total = (await self.session.execute(total_stmt)).scalar_one()
 
         # By status
         status_stmt = (
-            select(Meeting.status, func.count())
-            .where(Meeting.project_id == project_id)
-            .group_by(Meeting.status)
+            select(Meeting.status, func.count()).where(Meeting.project_id == project_id).group_by(Meeting.status)
         )
         status_rows = (await self.session.execute(status_stmt)).all()
         by_status = {row[0]: row[1] for row in status_rows}

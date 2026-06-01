@@ -443,7 +443,7 @@ function AddContactModal({
                 className={clsx(
                   'flex-1 rounded-lg border px-3 py-2 text-sm font-medium transition-all text-center',
                   form.payment_terms === days
-                    ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue ring-1 ring-oe-blue/30'
+                    ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue-text ring-1 ring-oe-blue/30'
                     : 'border-border text-content-tertiary hover:border-border-light hover:text-content-secondary',
                 )}
               >
@@ -700,7 +700,7 @@ const ContactCard = React.memo(function ContactCard({
           tabIndex={0}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onEdit(contact); }}
         >
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue font-bold text-sm shrink-0">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text font-bold text-sm shrink-0">
             {displayName.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0">
@@ -1128,7 +1128,7 @@ export function ContactsPage() {
               setInfoDismissed(true);
               localStorage.setItem(LS_INFO_DISMISSED, '1');
             }}
-            className="absolute top-2 right-2 flex h-6 w-6 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/40 dark:hover:text-blue-200 transition-colors"
+            className="absolute top-2 right-2 flex h-9 w-9 items-center justify-center rounded text-blue-400 hover:text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/40 dark:hover:text-blue-200 transition-colors"
             aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
           >
             <X size={14} />

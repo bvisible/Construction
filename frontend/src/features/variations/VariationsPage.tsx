@@ -256,7 +256,7 @@ export function VariationsPage() {
     [projects, projectId],
   );
   // Fall back to the user's configured currency — never a hardcoded
-  // literal (CLAUDE.md: NEVER assume EUR).
+  // literal (the architecture guide: NEVER assume EUR).
   const prefsCurrency = usePreferencesStore((s) => s.currency);
   const currency = currentProject?.currency || prefsCurrency;
 

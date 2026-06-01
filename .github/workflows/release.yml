@@ -38,6 +38,14 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "major_minor=$(echo $VERSION | cut -d. -f1-2)" >> $GITHUB_OUTPUT
 
+      # GHCR rejects any tag whose repository path contains uppercase letters
+      # ("repository name must be lowercase"), but ${{ github.repository }}
+      # preserves the original casing (datadrivenconstruction/OpenConstructionERP).
+      # Lowercase it once here and feed the result to every image tag below.
+      - name: Compute lowercase image name
+        id: image
+        run: echo "name=${REGISTRY}/$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -55,9 +63,9 @@ jobs:
           file: deploy/docker/Dockerfile.unified
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.major_minor }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ steps.image.outputs.name }}:${{ steps.version.outputs.version }}
+            ${{ steps.image.outputs.name }}:${{ steps.version.outputs.major_minor }}
+            ${{ steps.image.outputs.name }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
@@ -70,6 +78,9 @@ jobs:
   release:
     name: GitHub Release
     needs: [docker]
+    # Publish the GitHub Release even if the Docker push fails — a flaky
+    # registry push should never block shipping the source release.
+    if: ${{ always() }}
     runs-on: ubuntu-latest
 
     steps:

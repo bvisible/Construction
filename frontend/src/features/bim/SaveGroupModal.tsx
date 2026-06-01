@@ -8,15 +8,16 @@
  * a `BIMElementGroup` row that the parent caches.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Save, Loader2 } from 'lucide-react';
+import { Save, Loader2, SlidersHorizontal } from 'lucide-react';
 import {
   createElementGroup,
   resolveElementUUID,
   type BIMGroupFilterCriteria,
   type BIMElementGroup,
+  type SmartViewGroup,
 } from './api';
 import type { BIMElementData } from '@/shared/ui/BIMViewer';
 import { GROUP_COLORS } from './BIMGroupsPanel';
@@ -27,6 +28,7 @@ import {
   WideModalSection,
   WideModalField,
 } from '@/shared/ui/WideModal';
+import SmartViewBuilder from './SmartViewBuilder';
 
 interface SaveGroupModalProps {
   projectId: string;
@@ -44,6 +46,37 @@ interface SaveGroupModalProps {
   visibleCount: number;
   onClose: () => void;
   onSaved?: (group: BIMElementGroup) => void;
+}
+
+/** Bridge: convert the legacy chip-based filter_criteria into a Smart View
+ *  rule tree so the advanced builder can open with the user's existing
+ *  chips already populated. */
+function legacyToTree(criteria: BIMGroupFilterCriteria): SmartViewGroup {
+  const rules: SmartViewGroup['rules'] = [];
+  const pushIn = (field: string, v: string | string[] | undefined) => {
+    if (!v) return;
+    const arr = Array.isArray(v) ? v : [v];
+    if (arr.length === 0) return;
+    if (arr.length === 1) {
+      rules.push({ field, op: '=', value: arr[0]! });
+    } else {
+      rules.push({ field, op: 'in', value: arr });
+    }
+  };
+  pushIn('element_type', criteria.element_type);
+  pushIn('storey', criteria.storey);
+  pushIn('discipline', criteria.discipline);
+  pushIn('category', criteria.category);
+  if (criteria.name_contains) {
+    rules.push({ field: 'name', op: 'contains', value: criteria.name_contains });
+  }
+  if (criteria.property_filter) {
+    for (const [k, v] of Object.entries(criteria.property_filter)) {
+      if (v == null || v === '') continue;
+      rules.push({ field: `properties.${k}`, op: '=', value: v });
+    }
+  }
+  return { op: 'AND', rules };
 }
 
 export default function SaveGroupModal({
@@ -72,6 +105,18 @@ export default function SaveGroupModal({
   const effectiveDynamic = isDynamic && dynamicAllowed;
   const [color, setColor] = useState('#2979ff');
 
+  // Smart View advanced builder — opens with the user's current chip-based
+  // filter pre-populated as a rule tree.  When the user has tweaked any
+  // rule, ``ruleTree`` becomes the source of truth and the saved group's
+  // filter_criteria carries ``rule_tree`` instead of the legacy keys.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const initialTree = useMemo(() => legacyToTree(filterCriteria), [filterCriteria]);
+  const [ruleTree, setRuleTree] = useState<SmartViewGroup>(initialTree);
+  const treeDirty = useMemo(
+    () => JSON.stringify(ruleTree) !== JSON.stringify(initialTree),
+    [ruleTree, initialTree],
+  );
+
   const createMut = useMutation({
     mutationFn: async () => {
       // Static mode persists explicit element ids.  Resolve every
@@ -94,12 +139,21 @@ export default function SaveGroupModal({
           resolvedIds.push(await resolveElementUUID(modelId, el));
         }
       }
+      // When the advanced rule tree has been edited, send it as the
+      // canonical predicate.  Legacy chip-based filter_criteria are
+      // retained for backward compatibility with older list views.
+      const effectiveCriteria: BIMGroupFilterCriteria & {
+        rule_tree?: SmartViewGroup;
+      } = { ...filterCriteria };
+      if (treeDirty || advancedOpen) {
+        effectiveCriteria.rule_tree = ruleTree;
+      }
       return createElementGroup(projectId, {
         name: name.trim(),
         description: description.trim() || undefined,
         model_id: modelId,
         is_dynamic: effectiveDynamic,
-        filter_criteria: filterCriteria,
+        filter_criteria: effectiveCriteria,
         element_ids: resolvedIds,
         color,
       });
@@ -278,6 +332,46 @@ export default function SaveGroupModal({
               </div>
             </div>
           </label>
+        </div>
+
+        {/* Advanced rule builder — toggled disclosure so the modal stays
+            compact for the common chip-based case but exposes the full
+            canonical-format-aware builder for power users.  When opened
+            and edited, the rule tree becomes the source of truth for the
+            saved group's filter_criteria. */}
+        <div className="rounded-md border border-border-light">
+          <button
+            type="button"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 px-3 py-2"
+          >
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-content-primary">
+              <SlidersHorizontal size={12} className="text-oe-blue" />
+              {t('bim.smartview.advanced_title', {
+                defaultValue: 'Smart View — advanced rules',
+              })}
+              {treeDirty && (
+                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+                  {t('bim.smartview.edited', { defaultValue: 'edited' })}
+                </span>
+              )}
+            </span>
+            <span className="text-[10px] text-content-tertiary">
+              {advancedOpen
+                ? t('common.collapse', { defaultValue: 'Collapse' })
+                : t('common.expand', { defaultValue: 'Expand' })}
+            </span>
+          </button>
+          {advancedOpen && (
+            <div className="px-3 pb-3 border-t border-border-light pt-3">
+              <SmartViewBuilder
+                modelId={modelId}
+                projectId={projectId}
+                value={ruleTree}
+                onChange={setRuleTree}
+              />
+            </div>
+          )}
         </div>
 
         {/* Counts pill — show what will actually be saved */}

@@ -637,7 +637,7 @@ async def main() -> None:
             # admin bootstrap path. See UserService.register.
             user = User(
                 id=uuid.uuid4(),
-                email="demo@openestimator.io",
+                email="demo@openconstructionerp.com",
                 hashed_password="$2b$12$DEMO_HASH_NOT_FOR_PRODUCTION_USE_ONLY",
                 full_name="Demo User",
                 role="viewer",

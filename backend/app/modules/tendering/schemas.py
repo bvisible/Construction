@@ -4,12 +4,19 @@ Defines create, update, and response schemas for tender packages and bids.
 v3 §10 — money fields are Decimal-as-string in JSON.
 """
 
+import re
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+# Pragmatic email regex — RFC 5322 is impractical to validate at the
+# schema layer, so we apply the same shape check the frontend ``type=email``
+# input uses (HTML5 living standard). Empty string stays valid because the
+# field is optional on a bid (Wave 12 audit added validation).
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 # ── v3 §10 money serialisation helper ─────────────────────────────────────
@@ -26,6 +33,7 @@ def _serialise_money(v: Decimal | None) -> str | None:
     if not v.is_finite():
         return "0"
     return format(v, "f")
+
 
 # ── Package schemas ──────────────────────────────────────────────────────────
 
@@ -59,7 +67,14 @@ class PackageUpdate(BaseModel):
 
 
 class PackageResponse(BaseModel):
-    """Tender package returned from the API."""
+    """Tender package returned from the API.
+
+    ``validation_alias='metadata_'`` lets the model read the ORM column
+    named ``metadata_`` while emitting the canonical ``metadata`` key on
+    the wire. FastAPI defaults ``response_model_by_alias=True``, which
+    used to leak ``metadata_`` to the frontend — the frontend reads
+    ``metadata`` and was getting ``undefined`` (Wave 12 audit).
+    """
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
@@ -70,7 +85,7 @@ class PackageResponse(BaseModel):
     description: str
     status: str
     deadline: str | None
-    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
+    metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
     bid_count: int = 0
@@ -120,6 +135,16 @@ class BidCreate(BaseModel):
     line_items: list[BidLineItem] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("contact_email")
+    @classmethod
+    def _check_email(cls, v: str) -> str:
+        # Optional field — empty stays empty. Anything non-empty must look
+        # like an email so we don't accept garbage strings the buyer can
+        # later try to send notifications to (Wave 12 audit).
+        if v and not _EMAIL_RE.match(v):
+            raise ValueError("contact_email must be a valid email address")
+        return v
+
 
 class BidUpdate(BaseModel):
     """Partial update for a bid."""
@@ -135,6 +160,13 @@ class BidUpdate(BaseModel):
     notes: str | None = None
     line_items: list[BidLineItem] | None = None
     metadata: dict[str, Any] | None = None
+
+    @field_validator("contact_email")
+    @classmethod
+    def _check_email(cls, v: str | None) -> str | None:
+        if v and not _EMAIL_RE.match(v):
+            raise ValueError("contact_email must be a valid email address")
+        return v
 
 
 class BidResponse(BaseModel):
@@ -152,7 +184,9 @@ class BidResponse(BaseModel):
     status: str
     notes: str
     line_items: list[dict[str, Any]]
-    metadata: dict[str, Any] = Field(default_factory=dict, alias="metadata_")
+    # See PackageResponse.metadata for why this uses ``validation_alias``
+    # rather than ``alias`` (Wave 12 audit fix).
+    metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime
     updated_at: datetime
 
@@ -243,3 +277,125 @@ class BidAnalysisResponse(BaseModel):
     vendors: list[BidVendorEntry] = Field(default_factory=list)
     outliers: list[BidOutlierEntry] = Field(default_factory=list)
     spread: BidSpread = Field(default_factory=BidSpread)
+
+
+# ── Addenda (mid-tender clarifications) ──────────────────────────────────────
+# Addenda are stored inside the package ``metadata_`` JSON store (under the
+# ``addenda`` key) rather than a dedicated table — they are a lightweight,
+# append-only revision log scoped to one package, and the data model already
+# uses ``metadata_`` as the extensible per-package store (see service
+# ``update_package`` lifecycle stamps). This keeps the feature schema-free
+# (no migration) while remaining fully persisted and FX-irrelevant.
+
+
+class AddendumAckEntry(BaseModel):
+    """One bidder acknowledgement of a published addendum."""
+
+    bidder_id: str
+    acknowledged_at: str
+    user_id: str | None = None
+
+
+class AddendumCreate(BaseModel):
+    """Create a new (draft) addendum on a package."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str = Field(..., min_length=1, max_length=200)
+    body: str | None = Field(default=None, max_length=10000)
+
+
+class AddendumAcknowledgeRequest(BaseModel):
+    """Record a bidder's acknowledgement of an addendum."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    bidder_id: str = Field(..., min_length=1, max_length=100)
+
+
+class AddendumResponse(BaseModel):
+    """An addendum revision returned from the API."""
+
+    id: str
+    package_id: UUID
+    revision_no: int
+    title: str
+    body: str | None = None
+    published_at: str | None = None
+    published_by_user_id: str | None = None
+    acknowledged_by: list[AddendumAckEntry] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+# ── Bid leveling ─────────────────────────────────────────────────────────────
+# Bid leveling normalizes every bid onto the package's reference BOQ lines.
+# It is a pure computation over data that already exists (BOQ positions + each
+# bid's ``line_items``) — no persistence, no migration. Lines a bidder omitted
+# are "imputed" at the bidder's own mean rate so a short quote cannot win on a
+# misleadingly low total.
+
+
+class BidLevelingSummary(BaseModel):
+    """Per-bid leveling rollup (raw vs leveled, line classification counts)."""
+
+    bid_id: str
+    company_name: str
+    raw_amount: float = 0.0
+    leveled_amount: float = 0.0
+    matched_lines: int = 0
+    scaled_lines: int = 0
+    imputed_lines: int = 0
+    currency: str = ""
+
+
+class LevelingMatrixCell(BaseModel):
+    """One (reference line × bid) cell of the leveling matrix."""
+
+    bid_id: str
+    company_name: str
+    raw_total: float = 0.0
+    leveled_total: float = 0.0
+    status: str = ""  # "" | "matched" | "scaled" | "imputed"
+    unit_rate: float = 0.0
+
+
+class LevelingMatrixRow(BaseModel):
+    """One reference BOQ line with a cell per bid."""
+
+    position_id: str | None = None
+    line_code: str = ""
+    description: str = ""
+    unit: str = ""
+    reference_quantity: float = 0.0
+    reference_rate: float = 0.0
+    reference_total: float = 0.0
+    cells: list[LevelingMatrixCell] = Field(default_factory=list)
+
+
+class LevelingMatrixResponse(BaseModel):
+    """Full bid-leveling matrix for a package."""
+
+    package_id: UUID
+    package_name: str
+    # ISO currency the matrix is computed in (the package currency). Leveling
+    # only includes bids quoted in this currency — never blend currencies.
+    currency: str = ""
+    # Count of bids excluded because they were quoted in a different currency.
+    excluded_off_currency: int = 0
+    bid_summaries: list[BidLevelingSummary] = Field(default_factory=list)
+    rows: list[LevelingMatrixRow] = Field(default_factory=list)
+
+
+class LevelBidsResponse(BaseModel):
+    """Result of running leveling across a package's bids."""
+
+    package_id: UUID
+    package_name: str
+    # ISO currency the leveling was computed in (the package currency).
+    currency: str = ""
+    # Count of bids excluded because they were quoted in a different currency.
+    excluded_off_currency: int = 0
+    bid_count: int = 0
+    reference_line_count: int = 0
+    bid_summaries: list[BidLevelingSummary] = Field(default_factory=list)

@@ -23,10 +23,13 @@ import {
   Link2,
   ArrowRight,
   Layers,
+  Pin,
+  PinOff,
 } from 'lucide-react';
 
 import { Button, Card, Badge, Input, Skeleton } from '@/shared/ui';
 import { apiGet, apiPost } from '@/shared/lib/api';
+import { formatFileSize } from '@/shared/lib/formatters';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -102,11 +105,8 @@ const MAX_FILE_SIZE_BYTES = Number.POSITIVE_INFINITY;
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+// `formatFileSize` lives in `@/shared/lib/formatters` — same implementation,
+// shared with the AI and Costs surfaces. Imported above.
 
 function formatTimeAgo(isoDate: string, t: (key: string, fallback: string) => string): string {
   const diff = Date.now() - new Date(isoDate).getTime();
@@ -209,7 +209,9 @@ function DropZone({
       if (disabled) return;
 
       const files = Array.from(e.dataTransfer.files).filter(
-        (f) => (f.type === 'application/pdf' || f.type.startsWith('image/')) && f.size <= MAX_FILE_SIZE_BYTES,
+        (f) =>
+          (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) &&
+          f.size <= MAX_FILE_SIZE_BYTES,
       );
       if (files.length > 0) {
         onFilesSelected(files);
@@ -227,7 +229,9 @@ function DropZone({
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files || []).filter(
-        (f) => (f.type === 'application/pdf' || f.type.startsWith('image/')) && f.size <= MAX_FILE_SIZE_BYTES,
+        (f) =>
+          (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) &&
+          f.size <= MAX_FILE_SIZE_BYTES,
       );
       if (files.length > 0) {
         onFilesSelected(files);
@@ -245,7 +249,7 @@ function DropZone({
       <div
         role="button"
         tabIndex={0}
-        aria-label={t('takeoff.upload_aria', { defaultValue: 'Upload PDF or image takeoff file' })}
+        aria-label={t('takeoff.upload_aria', { defaultValue: 'Upload PDF takeoff file' })}
         onClick={handleClick}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') handleClick();
@@ -274,21 +278,18 @@ function DropZone({
           <FileUp size={26} strokeWidth={1.5} />
         </div>
         <p className="text-sm font-semibold text-content-primary">
-          {t('takeoff.drop_file_here', 'Drop your PDF or image here')}
+          {t('takeoff.drop_file_here', 'Drop your PDF here')}
         </p>
         <p className="text-[11px] text-content-quaternary">
-          {t('takeoff.file_limit', 'PDF, JPG, PNG')}
+          {t('takeoff.file_limit', 'PDF')}
         </p>
         <div className="flex items-center gap-2 mt-1">
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/30">.pdf</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400 border border-blue-200/50 dark:border-blue-800/30">.jpg</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-secondary text-content-quaternary border border-border-light">.png</span>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-surface-secondary text-content-quaternary border border-border-light">.tiff</span>
         </div>
         <input
           ref={fileInputRef}
           type="file"
-          accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.tiff"
+          accept="application/pdf,.pdf"
           multiple
           onChange={handleFileChange}
           className="hidden"
@@ -297,7 +298,7 @@ function DropZone({
       </div>
       <p className="text-[11px] text-content-tertiary mt-3">
         {t('takeoff.formats_detailed', {
-          defaultValue: 'PDF construction drawings \u00B7 JPG / PNG photos \u00B7 TIFF scans. AI will extract walls, slabs, doors, and other elements with quantities.',
+          defaultValue: 'PDF construction drawings \u2014 vector floor plans, sections and scans. AI will extract walls, slabs, doors, and other elements with quantities.',
         })}
       </p>
     </div>
@@ -376,7 +377,7 @@ function DocumentCard({
           hasError
             ? 'bg-semantic-error-bg text-semantic-error'
             : isUploading
-              ? 'bg-oe-blue-subtle text-oe-blue'
+              ? 'bg-oe-blue-subtle text-oe-blue-text'
               : doc.analysis
                 ? 'bg-semantic-success-bg text-semantic-success'
                 : 'bg-surface-secondary text-content-tertiary',
@@ -465,7 +466,18 @@ function DocumentCard({
           size="sm"
           icon={<Eye size={14} />}
           disabled={isUploading || hasError}
-          onClick={() => window.open(`/api/v1/takeoff/documents/${doc.id}/download`, '_blank')}
+          aria-label={t('takeoff.view_aria', {
+            defaultValue: 'View {{name}}',
+            name: doc.filename,
+          })}
+          onClick={() => {
+            // Open in a new tab; fall back to same-tab nav if the browser
+            // blocks `window.open` (popup blocker) so the user still sees
+            // their document instead of a no-op click.
+            const url = `/api/v1/takeoff/documents/${doc.id}/download`;
+            const w = window.open(url, '_blank', 'noopener,noreferrer');
+            if (!w) window.location.href = url;
+          }}
         >
           {t('takeoff.view', 'View')}
         </Button>
@@ -578,7 +590,7 @@ function DocumentCard({
                 <div className="flex flex-wrap gap-2">
                   <a
                     href="/bim"
-                    className="flex items-center gap-1.5 rounded-lg border border-border-light px-3 py-1.5 text-xs text-content-secondary transition-colors hover:bg-oe-blue-subtle hover:text-oe-blue hover:border-oe-blue/30"
+                    className="flex items-center gap-1.5 rounded-lg border border-border-light px-3 py-1.5 text-xs text-content-secondary transition-colors hover:bg-oe-blue-subtle hover:text-oe-blue-text hover:border-oe-blue/30"
                   >
                     <Box size={13} />
                     {t('takeoff.open_in_bim', 'Open in BIM Viewer')}
@@ -586,7 +598,7 @@ function DocumentCard({
                   </a>
                   <a
                     href="/boq"
-                    className="flex items-center gap-1.5 rounded-lg border border-border-light px-3 py-1.5 text-xs text-content-secondary transition-colors hover:bg-oe-blue-subtle hover:text-oe-blue hover:border-oe-blue/30"
+                    className="flex items-center gap-1.5 rounded-lg border border-border-light px-3 py-1.5 text-xs text-content-secondary transition-colors hover:bg-oe-blue-subtle hover:text-oe-blue-text hover:border-oe-blue/30"
                   >
                     <Link2 size={13} />
                     {t('takeoff.link_to_boq', 'Link to BOQ')}
@@ -720,6 +732,29 @@ function QuickMeasurementForm({
 
 /* ── Document Filmstrip ─────────────────────────────────────────────── */
 
+type FilmstripSort = 'recent' | 'name' | 'size';
+
+const PINNED_LS_KEY = 'oe-takeoff-pinned-docs';
+
+function readPinned(): Set<string> {
+  try {
+    const raw = window.localStorage.getItem(PINNED_LS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw) as string[];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writePinned(ids: Set<string>): void {
+  try {
+    window.localStorage.setItem(PINNED_LS_KEY, JSON.stringify(Array.from(ids)));
+  } catch {
+    /* localStorage may be unavailable (private mode); silently ignore. */
+  }
+}
+
 /** Bottom panel showing uploaded takeoff PDFs — light-themed, styled like BIM model filmstrip. */
 function TakeoffDocFilmstrip({
   documents,
@@ -738,6 +773,35 @@ function TakeoffDocFilmstrip({
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(true);
+  const [sortBy, setSortBy] = useState<FilmstripSort>('recent');
+  const [pinned, setPinned] = useState<Set<string>>(() => readPinned());
+
+  const togglePin = useCallback((id: string) => {
+    setPinned((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      writePinned(next);
+      return next;
+    });
+  }, []);
+
+  const sortedDocs = useMemo(() => {
+    const arr = [...documents];
+    arr.sort((a, b) => {
+      // Pinned docs always come first.
+      const aPin = pinned.has(a.id) ? 1 : 0;
+      const bPin = pinned.has(b.id) ? 1 : 0;
+      if (aPin !== bPin) return bPin - aPin;
+      if (sortBy === 'name') return a.filename.localeCompare(b.filename);
+      if (sortBy === 'size') return b.size_bytes - a.size_bytes;
+      // 'recent' — newest uploaded_at first.
+      const at = new Date(a.uploaded_at || 0).getTime();
+      const bt = new Date(b.uploaded_at || 0).getTime();
+      return bt - at;
+    });
+    return arr;
+  }, [documents, sortBy, pinned]);
 
   return (
     <div className="shrink-0 bg-surface-primary border border-border-light rounded-xl mt-3 overflow-hidden">
@@ -769,21 +833,53 @@ function TakeoffDocFilmstrip({
         style={{ maxHeight: expanded ? '120px' : '0px', opacity: expanded ? 1 : 0 }}
       >
         <div className="flex items-center gap-2 px-4 pb-2.5 overflow-x-auto">
+          {/* Sort selector — sticky-left so it stays visible while the
+              filmstrip scrolls horizontally on small viewports. */}
+          {documents.length > 1 && (
+            <label className="shrink-0 flex items-center gap-1 text-[10px] text-content-tertiary">
+              <span className="sr-only">
+                {t('takeoff.sort_by', { defaultValue: 'Sort by' })}
+              </span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as FilmstripSort)}
+                aria-label={t('takeoff.sort_by', { defaultValue: 'Sort by' })}
+                className="h-6 rounded border border-border-light bg-surface-primary px-1 text-[10px] text-content-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40"
+                data-testid="takeoff-filmstrip-sort"
+              >
+                <option value="recent">
+                  {t('takeoff.sort_recent', { defaultValue: 'Recent' })}
+                </option>
+                <option value="name">
+                  {t('takeoff.sort_name', { defaultValue: 'Name' })}
+                </option>
+                <option value="size">
+                  {t('takeoff.sort_size', { defaultValue: 'Size' })}
+                </option>
+              </select>
+            </label>
+          )}
           {isLoading && documents.length === 0 ? (
             <Loader2 size={14} className="animate-spin text-content-tertiary" />
           ) : documents.length > 0 ? (
-            documents.map((doc) => {
+            sortedDocs.map((doc) => {
               const isActive = doc.id === activeDocId;
               const hasError = !!doc.uploadError;
               const isUploading = !!doc.uploading;
+              const isPinned = pinned.has(doc.id);
               return (
                 <button
                   key={doc.id}
                   type="button"
                   onClick={() => onSelectDoc(doc.id)}
                   disabled={isUploading || hasError}
+                  aria-label={t('takeoff.open_doc_aria', {
+                    defaultValue: 'Open {{name}}',
+                    name: doc.filename,
+                  })}
                   className={clsx(
                     'group relative shrink-0 w-44 text-start rounded-lg border transition-all duration-200 overflow-hidden',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
                     hasError
                       ? 'border-semantic-error/40 bg-semantic-error-bg/40'
                       : isActive
@@ -813,6 +909,13 @@ function TakeoffDocFilmstrip({
                       >
                         {doc.filename}
                       </span>
+                      {isPinned && (
+                        <Pin
+                          size={10}
+                          className="shrink-0 text-oe-blue"
+                          aria-label={t('takeoff.pinned', { defaultValue: 'Pinned' })}
+                        />
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 text-[10px] text-content-quaternary">
                       {doc.pages > 0 && (
@@ -832,7 +935,40 @@ function TakeoffDocFilmstrip({
                       )}
                     </div>
                   </div>
-                  {/* Delete button on hover */}
+                  {/* Pin + delete buttons on hover */}
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      togglePin(doc.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        togglePin(doc.id);
+                      }
+                    }}
+                    className={clsx(
+                      'absolute top-1 right-6 p-1 rounded transition-all',
+                      isPinned
+                        ? 'text-oe-blue opacity-100'
+                        : 'text-content-quaternary hover:text-oe-blue-text hover:bg-oe-blue-subtle opacity-0 group-hover:opacity-100',
+                    )}
+                    title={
+                      isPinned
+                        ? t('takeoff.unpin', { defaultValue: 'Unpin' })
+                        : t('takeoff.pin', { defaultValue: 'Pin to top' })
+                    }
+                    aria-label={
+                      isPinned
+                        ? t('takeoff.unpin', { defaultValue: 'Unpin' })
+                        : t('takeoff.pin', { defaultValue: 'Pin to top' })
+                    }
+                  >
+                    {isPinned ? <PinOff size={11} /> : <Pin size={11} />}
+                  </span>
                   <span
                     role="button"
                     tabIndex={0}
@@ -848,6 +984,7 @@ function TakeoffDocFilmstrip({
                     }}
                     className="absolute top-1 right-1 p-1 rounded text-content-quaternary hover:text-semantic-error hover:bg-semantic-error-bg opacity-0 group-hover:opacity-100 transition-all"
                     title={t('common.delete', 'Delete')}
+                    aria-label={t('common.delete', 'Delete')}
                   >
                     <X size={11} />
                   </span>
@@ -915,6 +1052,18 @@ export function TakeoffPage() {
   /** Currently opened document in the Measurements viewer. */
   const [viewerDoc, setViewerDoc] = useState<{ url: string; name: string } | null>(null);
 
+  /** Set when a deep-link references a measurement so the viewer can
+   *  select + scroll-to it after the document and measurement list load. */
+  const [initialMeasurementId, setInitialMeasurementId] = useState<string | null>(
+    () => searchParams.get('measurementId'),
+  );
+
+  /** True when a `?docId=` deep-link couldn't be resolved against either
+   *  the takeoff documents catalogue or the project documents module —
+   *  drives a friendly empty-state with a "back to /markups" link instead
+   *  of a blank viewer. Reset every time the docId param changes. */
+  const [deepLinkNotFound, setDeepLinkNotFound] = useState(false);
+
   /* ── Handle ?doc= / ?name= deep link from Documents / BOQ link icon ─ */
 
   useEffect(() => {
@@ -935,7 +1084,9 @@ export function TakeoffPage() {
           ...prev,
           {
             id: docId,
-            filename: docName ? decodeURIComponent(docName) : 'Document',
+            filename: docName
+              ? decodeURIComponent(docName)
+              : t('takeoff.document_placeholder', { defaultValue: 'Document' }),
             pages: 0,
             size_bytes: 0,
             uploaded_at: new Date().toISOString(),
@@ -1038,7 +1189,11 @@ export function TakeoffPage() {
           `/v1/documents/${encodeURIComponent(docId)}`,
         );
         if (cancelled) return;
-        const displayName = meta.filename || meta.name || searchParams.get('name') || 'Document';
+        const displayName =
+          meta.filename ||
+          meta.name ||
+          searchParams.get('name') ||
+          t('takeoff.document_placeholder', { defaultValue: 'Document' });
         setActiveDocId(docId);
         setViewerDoc({
           url: `/api/v1/documents/${encodeURIComponent(docId)}/download/`,
@@ -1055,6 +1210,68 @@ export function TakeoffPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  /* ── /markups deep-link: ?docId=<filename|uuid>&measurementId=<uuid> ───
+   *
+   * The unified Markups hub builds deep-links from `measurement.document_id`,
+   * which the PDF-takeoff backend stores as the **filename** (see
+   * useMeasurementPersistence — takeoffApi.list is keyed by filename, and
+   * MeasurementCreate.document_id is the same string). So `docId` here is
+   * usually a filename, occasionally a real takeoff_documents UUID. We try
+   * both: exact filename match against the takeoff docs catalogue first,
+   * then UUID id match as a fallback.
+   *
+   * On hit: open the PDF in the Measurements viewer and stash the
+   * measurementId so TakeoffViewerModule can select + scroll-to it once
+   * the persistence hook has loaded the measurement list.
+   *
+   * On miss: surface a "document not found" empty state with a back link
+   * to /markups — far less confusing than the previous silent blank page.
+   */
+  useEffect(() => {
+    const docId = searchParams.get('docId');
+    const measurementId = searchParams.get('measurementId');
+    const tab = searchParams.get('tab');
+    // Track the measurementId param so the viewer can act on it once the
+    // measurement list lands (don't gate on serverDocuments here — viewer
+    // module fetches its own measurement list keyed by filename).
+    setInitialMeasurementId(measurementId);
+
+    if (!docId) {
+      setDeepLinkNotFound(false);
+      return;
+    }
+    if (tab === 'measurements') {
+      setActiveTab('measurements');
+    }
+    if (viewerDoc) return; // already opened from a prior effect
+    if (!serverDocuments) return; // wait for the catalogue to load
+
+    const decodedDocId = decodeURIComponent(docId);
+    const lowered = decodedDocId.toLowerCase();
+    // Try filename match (most common — the hub stores filenames as
+    // document_id), then fall back to id match for legacy UUID deeplinks.
+    const match =
+      serverDocuments.find(
+        (d) =>
+          d.filename.toLowerCase() === lowered ||
+          d.filename.toLowerCase() === lowered.replace(/\.[^.]+$/, ''),
+      ) ?? serverDocuments.find((d) => d.id === decodedDocId);
+
+    if (match) {
+      setDeepLinkNotFound(false);
+      setActiveDocId(match.id);
+      setViewerDoc({
+        url: `/api/v1/takeoff/documents/${match.id}/download/`,
+        name: match.filename,
+      });
+      setActiveTab('measurements');
+    } else if (serverDocuments.length >= 0) {
+      // Catalogue is loaded but no row matches — surface a friendly miss.
+      setDeepLinkNotFound(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, serverDocuments]);
 
   /* ── Mutations ──────────────────────────────────────────────────────── */
 
@@ -1076,7 +1293,22 @@ export function TakeoffPage() {
       });
 
       if (!response.ok) {
-        throw new Error(`Upload failed: ${response.statusText}`);
+        // Surface the server's structured error message (FastAPI returns
+        // {"detail": "..."}) instead of the generic HTTP status text so the
+        // user sees the real reason (e.g. "File does not appear to be a valid
+        // PDF", "This PDF is password-protected", "Too many uploads"). Falls
+        // back to statusText when the response body is not JSON or has no
+        // detail field (D-TKC-UP01).
+        let detail = response.statusText;
+        try {
+          const body = await response.json() as { detail?: string };
+          if (typeof body?.detail === 'string' && body.detail) {
+            detail = body.detail;
+          }
+        } catch {
+          // non-JSON body — keep statusText
+        }
+        throw new Error(detail);
       }
 
       return (await response.json()) as {
@@ -1568,29 +1800,57 @@ export function TakeoffPage() {
 
       {/* Tabs — Measurements primary (first), AI second. Lower radius
           for a sharper, more "tool-like" feel; no ring-halo. */}
-      <div className="mb-3 flex gap-1 rounded-md border border-border-light/80 bg-surface-secondary/40 p-1">
+      <div
+        className="mb-3 flex gap-1 rounded-md border border-border-light/80 bg-surface-secondary/40 p-1"
+        role="tablist"
+        aria-label={t('takeoff.tabs_aria', { defaultValue: 'Takeoff sections' })}
+      >
         <button
+          id="takeoff-tab-measurements"
+          role="tab"
+          aria-selected={activeTab === 'measurements'}
+          aria-controls="takeoff-tabpanel-measurements"
+          tabIndex={activeTab === 'measurements' ? 0 : -1}
           onClick={() => setActiveTab('measurements')}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+              e.preventDefault();
+              setActiveTab('documents');
+            }
+          }}
           className={clsx(
             'flex flex-1 items-center justify-center gap-2 rounded-sm px-4 py-2 text-sm font-semibold transition-colors',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
             activeTab === 'measurements'
               ? 'bg-surface-primary text-oe-blue shadow-sm'
               : 'text-content-tertiary hover:text-content-primary hover:bg-surface-primary/60',
           )}
         >
-          <Ruler size={15} strokeWidth={2.1} />
+          <Ruler size={15} strokeWidth={2.1} aria-hidden />
           {t('takeoff.tab_measurements', 'Measurements')}
         </button>
         <button
+          id="takeoff-tab-documents"
+          role="tab"
+          aria-selected={activeTab === 'documents'}
+          aria-controls="takeoff-tabpanel-documents"
+          tabIndex={activeTab === 'documents' ? 0 : -1}
           onClick={() => setActiveTab('documents')}
+          onKeyDown={(e) => {
+            if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+              e.preventDefault();
+              setActiveTab('measurements');
+            }
+          }}
           className={clsx(
             'flex flex-1 items-center justify-center gap-2 rounded-sm px-4 py-2 text-sm font-semibold transition-colors',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
             activeTab === 'documents'
               ? 'bg-surface-primary text-oe-blue shadow-sm'
               : 'text-content-tertiary hover:text-content-primary hover:bg-surface-primary/60',
           )}
         >
-          <Sparkles size={15} strokeWidth={2.1} />
+          <Sparkles size={15} strokeWidth={2.1} aria-hidden />
           {t('takeoff.tab_documents', 'Documents & AI')}
           {documents.length > 0 && (
             <Badge variant={activeTab === 'documents' ? 'blue' : 'neutral'} size="sm">
@@ -1602,7 +1862,11 @@ export function TakeoffPage() {
 
       {/* Tab content */}
       {activeTab === 'documents' ? (
-        <>
+        <div
+          role="tabpanel"
+          id="takeoff-tabpanel-documents"
+          aria-labelledby="takeoff-tab-documents"
+        >
           {/* Workflow steps */}
           <div className="mb-6 grid grid-cols-1 sm:grid-cols-4 gap-3">
             {[
@@ -1764,7 +2028,7 @@ export function TakeoffPage() {
             )}
           </Card>
 
-        </>
+        </div>
       ) : (
         // Viewport-bounded column so the bottom file panel is always
         // visible without scrolling the page: the viewer takes the
@@ -1779,20 +2043,55 @@ export function TakeoffPage() {
         // viewport (no page-level scrollbar) while giving the viewer the
         // most internal height — 8rem wasted ~1rem that was shrinking the
         // viewer enough to force an internal scrollbar on laptop screens.
-        <div className="flex flex-col h-[calc(100vh-var(--oe-header-height,52px)-7rem)] min-h-0 overflow-x-hidden">
+        <div
+          className="flex flex-col h-[calc(100vh-var(--oe-header-height,52px)-7rem)] min-h-0 overflow-x-hidden"
+          role="tabpanel"
+          id="takeoff-tabpanel-measurements"
+          aria-labelledby="takeoff-tab-measurements"
+        >
           <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-            <Suspense
-              fallback={
-                <div className="flex items-center justify-center py-20">
-                  <Loader2 size={24} className="animate-spin text-oe-blue" />
+            {deepLinkNotFound && !viewerDoc ? (
+              <div
+                className="mx-auto my-8 max-w-md rounded-xl border border-amber-200 dark:border-amber-800/40 bg-amber-50 dark:bg-amber-900/20 px-6 py-8 text-center"
+                data-testid="takeoff-deeplink-not-found"
+              >
+                <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 dark:bg-amber-900/30">
+                  <AlertTriangle size={24} className="text-amber-600" strokeWidth={1.5} />
                 </div>
-              }
-            >
-              <TakeoffViewerModule
-                initialPdfUrl={viewerDoc?.url}
-                initialPdfName={viewerDoc?.name}
-              />
-            </Suspense>
+                <h3 className="text-sm font-semibold text-content-primary mb-1">
+                  {t('takeoff.deeplink_not_found_title', { defaultValue: 'Document not found' })}
+                </h3>
+                <p className="text-xs text-content-tertiary mb-4">
+                  {t('takeoff.deeplink_not_found_desc', {
+                    defaultValue:
+                      "The annotation references a document that isn't in this project's takeoff library. It may have been deleted or belong to a different project.",
+                  })}
+                </p>
+                <a
+                  href="/markups"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-border-light bg-surface-primary px-3 py-1.5 text-xs font-medium text-oe-blue-text hover:bg-oe-blue-subtle transition-colors"
+                >
+                  <ArrowRight size={12} className="rotate-180" />
+                  {t('takeoff.back_to_markups', { defaultValue: 'Back to Markups' })}
+                </a>
+              </div>
+            ) : (
+              <Suspense
+                fallback={
+                  <div className="flex items-center justify-center py-20">
+                    <Loader2 size={24} className="animate-spin text-oe-blue" />
+                  </div>
+                }
+              >
+                <TakeoffViewerModule
+                  initialPdfUrl={viewerDoc?.url}
+                  initialPdfName={viewerDoc?.name}
+                  initialMeasurementId={initialMeasurementId}
+                  recentDocuments={serverDocuments}
+                  onOpenRecentDocument={handleOpenDocInViewer}
+                />
+              </Suspense>
+            )}
           </div>
 
           {/* Bottom filmstrip — list previously uploaded takeoff documents. */}
@@ -1808,13 +2107,13 @@ export function TakeoffPage() {
           <input
             ref={filmstripUploadRef}
             type="file"
-            accept="application/pdf,.pdf,image/*,.jpg,.jpeg,.png,.tiff"
+            accept="application/pdf,.pdf"
             multiple
             className="hidden"
             onChange={(e) => {
               const files = Array.from(e.target.files || []).filter(
                 (f) =>
-                  (f.type === 'application/pdf' || f.type.startsWith('image/')) &&
+                  (f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')) &&
                   f.size <= MAX_FILE_SIZE_BYTES,
               );
               if (files.length > 0) handleFilesSelected(files);

@@ -4,7 +4,7 @@
  * Backed by /api/v1/property-dev/ — see backend/app/modules/property_dev/router.py
  */
 
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/shared/lib/api';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -283,7 +283,14 @@ export interface DevelopmentDashboard {
   total_plots: number;
   plots_by_status: Record<string, number>;
   buyers_by_status: Record<string, number>;
+  /**
+   * Meaningful only when the development has a single contract currency
+   * (0 otherwise). Use {@link DevelopmentDashboard.contracted_value_by_currency}
+   * to render an honest, FX-safe total.
+   */
   contracted_value: number | string;
+  /** Per-currency contracted-value breakdown (ISO code → amount string). */
+  contracted_value_by_currency: Record<string, string>;
   open_snags: number;
   open_warranty_claims: number;
   completed_handovers: number;
@@ -938,6 +945,38 @@ export function closeWarrantyClaim(id: string): Promise<WarrantyClaim> {
 
 export function warrantyClaimPdfUrl(id: string): string {
   return `/api${BASE}/warranty-claims/${id}/pdf`;
+}
+
+/**
+ * Stream-download a warranty-claim PDF as a Blob.
+ *
+ * The endpoint is guarded by HTTPBearer auth, so a plain ``<a href>``
+ * new-tab navigation (which carries no Authorization header) would 401.
+ * This mirrors {@link downloadPropDevDocument}: it issues an authenticated
+ * ``fetch`` and returns a Blob for the ``URL.createObjectURL`` + temp
+ * ``<a download>`` flow.
+ */
+export async function downloadWarrantyClaimPdf(id: string): Promise<Blob> {
+  const url = warrantyClaimPdfUrl(id);
+  const token = (() => {
+    try {
+      // Lazy-load to avoid a circular import; the store is already
+      // initialised by the time any download is triggered.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
+      const { useAuthStore } = require('@/stores/useAuthStore');
+      return useAuthStore.getState().accessToken as string | null;
+    } catch {
+      return null;
+    }
+  })();
+  const headers: Record<string, string> = { Accept: 'application/pdf' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(url, { method: 'GET', headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  return res.blob();
 }
 
 export function createWarrantyClaimFromSnag(
@@ -2760,9 +2799,31 @@ export interface DocumentTemplateUploadConfig {
   max_size_mb: number;
 }
 
+/**
+ * Per-locale translation status surfaced by the settings UI so the user
+ * sees which codes are fully translated (bundled JSON or tenant
+ * override) versus which silently fall back to English at render time.
+ */
+export interface DocumentTemplateLocaleStatus {
+  code: string;
+  native_name: string;
+  english_name: string;
+  rtl: boolean;
+  is_translated: boolean;
+  /** ``override`` = tenant upload; ``bundled`` = ships with the app;
+   *  ``none`` = no JSON, renderer falls back to English. */
+  source: 'override' | 'bundled' | 'none';
+  key_count: number;
+  en_key_count: number;
+}
+
 export interface DocumentTemplateCatalogue {
   templates: DocumentTemplateEntry[];
   locales: string[];
+  /** New (v5.5.2+) — structured locale entries with translation status.
+   *  Older API responses without this field fall back to the bare
+   *  ``locales`` string list in the UI. */
+  locale_status?: DocumentTemplateLocaleStatus[];
   regulators: string[];
   /**
    * Suggested doc_type slugs the upload + editor combobox surfaces as
@@ -2946,6 +3007,46 @@ export function getCustomDocumentTemplateContent(
 ): Promise<CustomTemplateContent> {
   return apiGet<CustomTemplateContent>(
     `${BASE}/document-templates/custom/${encodeURIComponent(templateId)}/content`,
+  );
+}
+
+/* ── Document-templates locale management ─────────────────────────────── */
+
+export interface DocumentTemplateLocalePayload {
+  code: string;
+  source: string;
+  data: Record<string, unknown>;
+}
+
+/** Fetch the merged locale JSON used by PDF rendering. Falls back to
+ *  English when no override / bundled JSON exists. UI uses this both to
+ *  download English as a starter and to preview what's currently active. */
+export function getDocumentTemplateLocale(
+  code: string,
+): Promise<DocumentTemplateLocalePayload> {
+  return apiGet<DocumentTemplateLocalePayload>(
+    `${BASE}/document-templates/locales/${encodeURIComponent(code)}`,
+  );
+}
+
+/** Upload a tenant-owned locale override JSON. Replaces the bundled
+ *  copy at render time until the override is deleted. */
+export function putDocumentTemplateLocale(
+  code: string,
+  data: Record<string, unknown>,
+): Promise<{ code: string; status: string }> {
+  return apiPut<{ code: string; status: string }>(
+    `${BASE}/document-templates/locales/${encodeURIComponent(code)}`,
+    { data },
+  );
+}
+
+/** Remove the tenant override and revert to the bundled translation. */
+export function deleteDocumentTemplateLocaleOverride(
+  code: string,
+): Promise<void> {
+  return apiDelete<void>(
+    `${BASE}/document-templates/locales/${encodeURIComponent(code)}`,
   );
 }
 

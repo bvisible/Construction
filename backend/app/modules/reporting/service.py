@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.events import event_bus
 from app.modules.reporting.cron import CronParseError, next_occurrence
 from app.modules.reporting.models import GeneratedReport, KPISnapshot, ReportTemplate
+from app.modules.reporting.renderer import ReportRenderer
 from app.modules.reporting.repository import (
     GeneratedReportRepository,
     KPISnapshotRepository,
@@ -39,6 +40,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "oe_reportin
         event_bus.publish_detached(name, data, source_module=source_module)
     except Exception:
         _logger_ev.debug("Event publish skipped: %s", name)
+
 
 # ── System report templates (seeded on first startup) ──────────────────────
 
@@ -205,6 +207,11 @@ class ReportingService:
             )
             snapshot = await self.kpi_repo.create(snapshot)
 
+        # The upsert flush expires the instance's attributes; refresh before
+        # the event payload reads them and the router serializes the snapshot,
+        # otherwise asyncpg emits a sync lazy reload outside the greenlet.
+        await self.session.refresh(snapshot)
+
         await _safe_publish(
             "reporting.kpi_snapshot.created",
             {
@@ -322,9 +329,7 @@ class ReportingService:
                 "schedule_cron": template.schedule_cron,
                 "is_scheduled": template.is_scheduled,
                 "next_run_at": template.next_run_at,
-                "project_id_scope": (
-                    str(template.project_id_scope) if template.project_id_scope else None
-                ),
+                "project_id_scope": (str(template.project_id_scope) if template.project_id_scope else None),
             },
         )
 
@@ -435,7 +440,45 @@ class ReportingService:
         data: GenerateReportRequest,
         user_id: str | None = None,
     ) -> GeneratedReport:
-        """Generate a new report."""
+        """Generate a new report.
+
+        After the metadata row is persisted we render the report body via
+        :class:`ReportRenderer` and store the resulting HTML through the
+        global storage backend, recording its key on ``report.storage_key``
+        so the ``/reports/{id}/content`` endpoint can fetch it back. Before
+        this wiring landed (W23 P0 audit, task #252) the row existed but
+        ``storage_key`` was always ``None`` — clicking the report in the
+        history panel showed nothing because there was nothing to show.
+
+        Rendering and storage failures are best-effort: we log them and
+        leave ``storage_key`` as ``None`` rather than rejecting the whole
+        call. This matches the cron-worker contract (a failed render
+        should not lose the audit trail of "we tried to render").
+        """
+        # If the caller did not supply a data snapshot, assemble one
+        # server-side from the project's live module state. Without this
+        # the renderer falls straight through to its "No data available"
+        # notice and every report a user generates is a blank shell — the
+        # only generation path the UI exposes never sends a snapshot
+        # (W2 audit, /reporting). Best-effort: a failure here degrades to
+        # the empty-snapshot notice rather than failing the whole call.
+        effective_snapshot = data.data_snapshot
+        if effective_snapshot is None:
+            try:
+                effective_snapshot = await self._build_default_snapshot(
+                    data.project_id,
+                    data.report_type,
+                )
+            except Exception:
+                logger.warning(
+                    "reporting.generate_report could not assemble a default "
+                    "data_snapshot for project_id=%s; the report will render "
+                    "the empty-snapshot notice.",
+                    data.project_id,
+                    exc_info=True,
+                )
+                effective_snapshot = None
+
         report = GeneratedReport(
             project_id=data.project_id,
             template_id=data.template_id,
@@ -444,10 +487,55 @@ class ReportingService:
             generated_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S"),
             generated_by=uuid.UUID(user_id) if user_id else None,
             format=data.format,
-            data_snapshot=data.data_snapshot,
+            data_snapshot=effective_snapshot,
             metadata_=data.metadata,
         )
         report = await self.report_repo.create(report)
+
+        # Best-effort render-and-store. Wrapped in try/except so a missing
+        # storage backend (e.g. unit tests with a stub service) or a
+        # renderer regression cannot prevent the metadata row from being
+        # returned to the caller.
+        try:
+            template_data: dict | None = None
+            if data.template_id is not None:
+                template = await self.template_repo.get_by_id(data.template_id)
+                if template is not None:
+                    template_data = template.template_data
+
+            project_name = await self._lookup_project_name(data.project_id)
+
+            renderer = ReportRenderer()
+            rendered_html = renderer.render_html(
+                report_type=data.report_type,
+                title=data.title,
+                project_name=project_name,
+                template_data=template_data,
+                data_snapshot=effective_snapshot,
+                generated_at=report.generated_at,
+            )
+
+            storage_key = f"reports/{report.project_id}/{report.id}.html"
+            try:
+                from app.core.storage import get_storage_backend
+
+                backend = get_storage_backend()
+                await backend.put(storage_key, rendered_html.encode("utf-8"))
+                report.storage_key = storage_key
+                await self.report_repo.update(report)
+            except Exception:
+                logger.warning(
+                    "Report storage backend put failed for report_id=%s; "
+                    "the metadata row is preserved but storage_key remains null.",
+                    report.id,
+                    exc_info=True,
+                )
+        except Exception:
+            logger.warning(
+                "Report rendering failed for report_id=%s; the metadata row is preserved but storage_key remains null.",
+                report.id,
+                exc_info=True,
+            )
 
         await _safe_publish(
             "reporting.report.generated",
@@ -458,6 +546,7 @@ class ReportingService:
                 "format": report.format,
                 "template_id": (str(report.template_id) if report.template_id else None),
                 "generated_by": user_id,
+                "storage_key": report.storage_key,
             },
         )
 
@@ -468,6 +557,183 @@ class ReportingService:
             data.project_id,
         )
         return report
+
+    async def get_report_content(self, report_id: uuid.UUID) -> tuple[GeneratedReport, str]:
+        """Fetch a rendered report's HTML body.
+
+        Returns ``(report, html_string)``. Raises 404 if the report is
+        unknown or 410 (Gone) if the metadata row exists but the rendered
+        body is no longer reachable from the storage backend — a clearer
+        signal than blank 200 OK.
+        """
+        report = await self.get_report(report_id)
+        if not report.storage_key:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Report body has not been rendered yet",
+            )
+
+        try:
+            from app.core.storage import get_storage_backend
+
+            backend = get_storage_backend()
+            blob = await backend.get(report.storage_key)
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="Rendered report body was removed from storage",
+            ) from exc
+        return report, blob.decode("utf-8")
+
+    async def _lookup_project_name(self, project_id: uuid.UUID) -> str:
+        """Best-effort lookup of a project's display name for the report header.
+
+        Falls back to the stringified UUID on any failure so a transient
+        DB error doesn't sabotage the whole render pipeline.
+        """
+        try:
+            from app.modules.projects.repository import ProjectRepository
+
+            project = await ProjectRepository(self.session).get_by_id(project_id)
+            if project is not None and getattr(project, "name", None):
+                return str(project.name)
+        except Exception:
+            logger.debug(
+                "Could not resolve project name for report; falling back to UUID",
+                exc_info=True,
+            )
+        return str(project_id)
+
+    async def _build_default_snapshot(
+        self,
+        project_id: uuid.UUID,
+        report_type: str,
+    ) -> dict | None:
+        """Assemble a ``data_snapshot`` from the project's live module state.
+
+        Used when ``generate_report`` is called without an explicit
+        snapshot (the only path the /reporting UI exercises). Returns a
+        dict keyed by the renderer's section IDs (``header``, ``kpi``,
+        ``schedule``, ``risk``, ``issues``, ``summary``, ``cashflow`` …)
+        so the body actually contains numbers instead of the
+        "No data available" notice.
+
+        Every figure is sourced from data the dashboards already compute:
+        the most recent :class:`KPISnapshot` (CPI/SPI/budget/schedule/risk
+        and open-item counts) plus the finance dashboard (payable /
+        receivable / budget / cash-flow with its ISO currency code). Money
+        values always carry their currency code, per the platform money
+        rule.
+
+        Returns ``None`` when neither a KPI snapshot nor finance data is
+        available, so the caller still gets the explicit empty-snapshot
+        notice rather than a misleading half-empty report.
+        """
+        from app.modules.projects.repository import ProjectRepository
+
+        snapshot: dict[str, dict] = {}
+
+        # ── Project header + resolved currency ──
+        project = None
+        currency = ""
+        try:
+            project = await ProjectRepository(self.session).get_by_id(project_id)
+        except Exception:
+            project = None
+        if project is not None:
+            currency = (getattr(project, "currency", "") or "").strip().upper()
+            header: dict[str, object] = {
+                "name": getattr(project, "name", "") or "",
+                "status": getattr(project, "status", "") or "",
+            }
+            if getattr(project, "phase", None):
+                header["phase"] = project.phase
+            if getattr(project, "planned_start_date", None):
+                header["planned_start"] = project.planned_start_date
+            if getattr(project, "planned_end_date", None):
+                header["planned_end"] = project.planned_end_date
+            snapshot["header"] = header
+            snapshot["overview"] = dict(header)
+
+        # ── KPI snapshot → kpi / schedule / risk / issues sections ──
+        kpi = await self.get_latest_kpi(project_id)
+        if kpi is not None:
+            kpi_block: dict[str, object] = {}
+            if kpi.cpi is not None:
+                kpi_block["cpi"] = kpi.cpi
+            if kpi.spi is not None:
+                kpi_block["spi"] = kpi.spi
+            if kpi.budget_consumed_pct is not None:
+                kpi_block["budget_consumed_pct"] = f"{kpi.budget_consumed_pct}%"
+            if kpi.snapshot_date:
+                kpi_block["as_of"] = kpi.snapshot_date
+            if kpi_block:
+                snapshot["kpi"] = kpi_block
+
+            if kpi.schedule_progress_pct is not None:
+                snapshot["schedule"] = {"progress_pct": f"{kpi.schedule_progress_pct}%"}
+                snapshot["overview"] = {
+                    **snapshot.get("overview", {}),
+                    "schedule_progress_pct": f"{kpi.schedule_progress_pct}%",
+                }
+
+            if kpi.risk_score_avg is not None:
+                snapshot["risk"] = {"risk_score_avg": kpi.risk_score_avg}
+
+            issues_block = {
+                "open_rfis": kpi.open_rfis,
+                "open_submittals": kpi.open_submittals,
+                "open_defects": kpi.open_defects,
+                "open_observations": kpi.open_observations,
+            }
+            if any(v for v in issues_block.values()):
+                snapshot["issues"] = issues_block
+
+        # ── Finance dashboard → summary / cashflow sections ──
+        try:
+            from app.modules.finance.service import FinanceService
+
+            dash = await FinanceService(self.session).get_dashboard(project_id=project_id)
+            dash_data = dash.model_dump() if hasattr(dash, "model_dump") else dict(dash)
+            fin_currency = (dash_data.get("currency") or currency or "").strip().upper()
+
+            def _money(value: object) -> str:
+                num = value if value is not None else 0
+                return f"{num} {fin_currency}".strip()
+
+            summary_block: dict[str, object] = {}
+            if dash_data.get("total_budget_revised") is not None:
+                summary_block["budget"] = _money(dash_data.get("total_budget_revised"))
+            if dash_data.get("total_committed") is not None:
+                summary_block["committed"] = _money(dash_data.get("total_committed"))
+            if dash_data.get("total_actual") is not None:
+                summary_block["actual"] = _money(dash_data.get("total_actual"))
+            if dash_data.get("budget_consumed_pct") is not None:
+                summary_block["budget_consumed_pct"] = f"{dash_data.get('budget_consumed_pct')}%"
+            if summary_block:
+                snapshot["summary"] = summary_block
+
+            cashflow_block: dict[str, object] = {}
+            if dash_data.get("total_payable") is not None:
+                cashflow_block["payable"] = _money(dash_data.get("total_payable"))
+            if dash_data.get("total_receivable") is not None:
+                cashflow_block["receivable"] = _money(dash_data.get("total_receivable"))
+            if dash_data.get("cash_flow_net") is not None:
+                cashflow_block["net_cash_flow"] = _money(dash_data.get("cash_flow_net"))
+            if cashflow_block:
+                snapshot["cashflow"] = cashflow_block
+        except Exception:
+            logger.debug(
+                "reporting._build_default_snapshot: finance dashboard unavailable for %s",
+                project_id,
+                exc_info=True,
+            )
+
+        # ``report_type`` is accepted for forward-compatibility (a future
+        # type-specific assembler can branch on it); today every type
+        # draws from the same KPI + finance source set above.
+        _ = report_type
+        return snapshot or None
 
     # ── KPI Auto-Recalculation ───────────────────────────────────────────
 

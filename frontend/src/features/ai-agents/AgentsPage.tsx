@@ -1,7 +1,7 @@
 // AI Agents — list registered agents, run them, watch the ReAct timeline.
-import { useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Bot,
@@ -14,6 +14,7 @@ import {
   Play,
   ChevronRight,
   Settings as SettingsIcon,
+  History,
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -23,6 +24,7 @@ import {
   aiAgentsApi,
   type AgentDescriptor,
   type AgentRun,
+  type AgentRunListItem,
   type AgentStep,
   type AgentStepRole,
 } from './api';
@@ -46,14 +48,38 @@ export function AgentsPage(): JSX.Element {
   const { t } = useTranslation();
   const projectId = useProjectContextStore((s) => s.activeProjectId);
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [selected, setSelected] = useState<AgentDescriptor | null>(null);
   const [userInput, setUserInput] = useState('');
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  // The active run is mirrored into the URL (?run=<id>) so a reload or a
+  // shared link re-attaches to the same run (and its live poll) instead of
+  // orphaning it. The URL is the source of truth.
+  const activeRunId = searchParams.get('run');
+
+  const setActiveRunId = (runId: string | null) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (runId) next.set('run', runId);
+        else next.delete('run');
+        return next;
+      },
+      { replace: true },
+    );
+  };
 
   const agentsQuery = useQuery({
     queryKey: ['ai-agents', 'list'],
     queryFn: () => aiAgentsApi.listAgents(),
+  });
+
+  const runsQuery = useQuery({
+    queryKey: ['ai-agents', 'runs', projectId ?? null],
+    queryFn: () => aiAgentsApi.listRuns(projectId ?? undefined),
+    // Keep the history fresh while a run is in flight so a just-finished
+    // run flips to its terminal status without a manual refresh.
+    refetchInterval: 5000,
   });
 
   const healthQuery = useQuery({
@@ -97,6 +123,16 @@ export function AgentsPage(): JSX.Element {
 
   const agents = agentsQuery.data ?? [];
   const run = runQuery.data;
+  const runs = runsQuery.data ?? [];
+
+  // When a run is loaded from the URL (reload / shared link) and the user
+  // hasn't picked an agent yet, reflect the run's agent in the catalogue so
+  // the timeline isn't hidden behind the "pick an agent" placeholder.
+  useEffect(() => {
+    if (!run || selected) return;
+    const match = agents.find((a) => a.name === run.agent_name);
+    if (match) setSelected(match);
+  }, [run, selected, agents]);
 
   return (
     <div className="space-y-6 p-6">
@@ -140,7 +176,7 @@ export function AgentsPage(): JSX.Element {
               )}
             </p>
             <Link
-              to={healthQuery.data?.settings_url ?? '/settings/ai'}
+              to={healthQuery.data?.settings_url ?? '/settings?tab=ai'}
               className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
             >
               <SettingsIcon className="h-3.5 w-3.5" />
@@ -150,7 +186,7 @@ export function AgentsPage(): JSX.Element {
         </div>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      <div className="grid gap-6 lg:grid-cols-4">
         {/* Agent catalogue */}
         <section className="space-y-3 lg:col-span-1">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
@@ -203,7 +239,7 @@ export function AgentsPage(): JSX.Element {
 
         {/* New run + timeline */}
         <section className="space-y-4 lg:col-span-2">
-          {!selected && (
+          {!selected && !activeRunId && (
             <div className="rounded-lg border border-dashed border-zinc-300 p-10 text-center text-sm text-zinc-500">
               {t('agents.pick_one', 'Select an agent on the left to start a new run.')}
             </div>
@@ -287,14 +323,102 @@ export function AgentsPage(): JSX.Element {
                   </div>
                 )}
               </form>
-
-              {/* Run timeline */}
-              {activeRunId && run && <RunTimeline run={run} />}
             </>
           )}
+
+          {/* Run timeline — rendered whenever a run is active, even if the
+              run's agent is no longer in the catalogue (so a reload of an
+              old run still shows its result). */}
+          {activeRunId && runQuery.isLoading && !run && (
+            <SkeletonCard />
+          )}
+          {activeRunId && runQuery.isError && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
+              {t('agents.run_load_error', 'Could not load this run.')}
+            </div>
+          )}
+          {activeRunId && run && <RunTimeline run={run} />}
+        </section>
+
+        {/* Recent runs — lets the user reattach to an in-flight run after a
+            reload, or revisit a finished run's timeline. */}
+        <section className="space-y-3 lg:col-span-1">
+          <h2 className="flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wide text-zinc-500">
+            <History className="h-4 w-4" />
+            {t('agents.recent_runs', 'Recent runs')}
+          </h2>
+          {runsQuery.isLoading && (
+            <div className="space-y-2">
+              <SkeletonCard />
+              <SkeletonCard />
+            </div>
+          )}
+          {!runsQuery.isLoading && runs.length === 0 && (
+            <div className="rounded-lg border border-dashed border-zinc-300 p-6 text-center text-xs text-zinc-500">
+              {t('agents.no_runs', 'No runs yet.')}
+            </div>
+          )}
+          <ul className="space-y-2">
+            {runs.map((r) => (
+              <li key={r.id}>
+                <RecentRunButton
+                  run={r}
+                  active={r.id === activeRunId}
+                  onSelect={() => setActiveRunId(r.id)}
+                />
+              </li>
+            ))}
+          </ul>
         </section>
       </div>
     </div>
+  );
+}
+
+// ── Recent-run list item ───────────────────────────────────────────────────
+
+function RecentRunButton({
+  run,
+  active,
+  onSelect,
+}: {
+  run: AgentRunListItem;
+  active: boolean;
+  onSelect: () => void;
+}): JSX.Element {
+  const { t } = useTranslation();
+  const when = run.created_at ? new Date(run.created_at).toLocaleString() : '';
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-current={active ? 'true' : undefined}
+      className={clsx(
+        'block w-full rounded-lg border p-3 text-left transition',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400',
+        active
+          ? 'border-violet-400 bg-violet-50 dark:bg-violet-900/20'
+          : 'border-zinc-200 hover:border-zinc-400 dark:border-zinc-700',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate font-medium text-zinc-900 dark:text-zinc-100">
+          {run.agent_name}
+        </span>
+        <span
+          className={clsx(
+            'inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
+            run.status === 'running' && 'bg-amber-100 text-amber-800',
+            run.status === 'completed' && 'bg-emerald-100 text-emerald-800',
+            run.status === 'failed' && 'bg-rose-100 text-rose-800',
+          )}
+        >
+          {run.status === 'running' && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+          {t(`agents.status.${run.status}`, run.status)}
+        </span>
+      </div>
+      {when && <div className="mt-1 text-[11px] text-zinc-500">{when}</div>}
+    </button>
   );
 }
 
@@ -321,13 +445,48 @@ function RunTimeline({ run }: { run: AgentRun }): JSX.Element {
         return t('agents.failure.unknown_agent', 'Unknown agent registered.');
       case 'exception':
         return t('agents.failure.exception', 'Agent crashed during execution.');
+      case 'iter_limit':
+        return t(
+          'agents.failure.iter_limit',
+          'Agent reached its step limit without finishing.',
+        );
+      case 'token_limit':
+        return t(
+          'agents.failure.token_limit',
+          'Agent reached its token budget before finishing.',
+        );
+      case 'wall_timeout':
+        return t(
+          'agents.failure.wall_timeout',
+          'Agent ran out of time before finishing.',
+        );
+      case 'llm_timeout':
+        return t(
+          'agents.failure.llm_timeout',
+          'The AI provider did not respond in time.',
+        );
+      case 'llm_error':
+        return t('agents.failure.llm_error', 'The AI provider returned an error.');
+      case 'bad_llm_item':
+        return t(
+          'agents.failure.bad_llm_item',
+          'The AI returned an unexpected response the agent could not use.',
+        );
+      case 'unknown_tool':
+        return t(
+          'agents.failure.unknown_tool',
+          'The agent tried to use a tool that is not available.',
+        );
       default: {
+        // Prefer a user-friendly message the backend may have attached to
+        // the last error step (e.g. an invalid-key sentence) before falling
+        // back to a generic label — never surface the raw internal enum.
         const lastError = [...steps].reverse().find((s) => s.role === 'error');
         const msg =
           lastError && typeof lastError.content === 'object' && lastError.content
             ? (lastError.content as { message?: string }).message
             : undefined;
-        return msg ?? run.failure_reason;
+        return msg ?? t('agents.failure.unknown', 'The agent run failed.');
       }
     }
   })();
@@ -359,7 +518,7 @@ function RunTimeline({ run }: { run: AgentRun }): JSX.Element {
 
       {run.failure_reason === 'no_llm' && (
         <Link
-          to="/settings/ai"
+          to="/settings?tab=ai"
           className="inline-flex items-center gap-1.5 self-start rounded-md bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700"
         >
           <SettingsIcon className="h-3.5 w-3.5" />

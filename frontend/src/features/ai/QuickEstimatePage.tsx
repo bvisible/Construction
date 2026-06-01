@@ -47,9 +47,15 @@ import clsx from 'clsx';
 import { Card, CardContent, Button, Badge, AIDisclaimerBanner } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
-import { aiApi, type QuickEstimateRequest, type EstimateJobResponse, type EstimateItem, type CadExtractResponse, type EnrichResult, type EnrichedItem, type CadColumnsResponse, type CadGroupResponse, type CadDynamicGroup, type CadGroupElementsResponse } from './api';
+import { aiApi, type QuickEstimateRequest, type EstimateJobResponse, type EstimateItem, type CadExtractResponse, type EnrichResult, type EnrichedItem, type CostMatch, type CadColumnsResponse, type CadGroupResponse, type CadDynamicGroup, type CadGroupElementsResponse } from './api';
 import { apiGet, apiPost } from '@/shared/lib/api';
-import { getIntlLocale } from '@/shared/lib/formatters';
+import {
+  formatFileSize,
+  formatNumber,
+  getFileExtension,
+  getIntlLocale,
+} from '@/shared/lib/formatters';
+import { useLLMRun } from './hooks/useLLMRun';
 
 // ── Tab types ────────────────────────────────────────────────────────────────
 
@@ -145,30 +151,9 @@ const FORMAT_LABELS: { [K in FileTab]: string } = {
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatNumber(n: number, currency?: string): string {
-  try {
-    return new Intl.NumberFormat(getIntlLocale(), {
-      style: currency ? 'currency' : 'decimal',
-      currency: currency || undefined,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    }).format(n);
-  } catch {
-    return n.toLocaleString();
-  }
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function getFileExtension(name: string): string {
-  const dot = name.lastIndexOf('.');
-  return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
-}
+// formatNumber / formatFileSize / getFileExtension live in
+// `@/shared/lib/formatters` — they were lifted out of this file once it
+// became clear they were not AI-specific.
 
 // ── Shimmer loading rows ─────────────────────────────────────────────────────
 
@@ -460,7 +445,13 @@ function SaveToBOQDialog({ open, onClose, onSave, saving }: SaveDialogProps) {
 
 function ResultsTable({ result, selectedCurrency, enrichResult }: { result: EstimateJobResponse; selectedCurrency?: string; enrichResult?: EnrichResult | null }) {
   const { t } = useTranslation();
-  const currency = selectedCurrency || result.currency || 'EUR';
+  // Resolved estimate currency — explicit selection wins, else the currency
+  // the AI actually priced in. Never fall back to a hard-coded 'EUR': when it
+  // is unknown we render plain numbers (no misleading ISO symbol).
+  const currency = (selectedCurrency || result.currency || '').trim();
+  // formatNumber renders a currency symbol only when a code is passed; an
+  // empty code yields a plain decimal.
+  const currencyArg = currency || undefined;
 
   // Build a lookup map from enrichment results by index
   const enrichMap = new Map<number, EnrichedItem>();
@@ -469,6 +460,19 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
       enrichMap.set(ei.index, ei);
     }
   }
+
+  // A matched cost-DB rate may be priced in a different currency than the
+  // estimate. We must never blend currencies into one scalar total, so a
+  // match only contributes its rate to the recomputed total (and the struck-
+  // through "applied rate" view) when its currency matches the estimate
+  // currency (or the match carries no currency — treated as same-currency
+  // legacy data). Otherwise we keep the AI's own rate for the total and show
+  // the matched rate separately with its own ISO code.
+  const matchAppliesToTotal = (m: CostMatch | null | undefined): boolean => {
+    if (!m) return false;
+    const mc = (m.currency || '').trim();
+    return mc === '' || mc === currency;
+  };
 
   let currentCategory = '';
 
@@ -543,31 +547,47 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
                     {bestMatch ? (
                       <div className="flex flex-col items-end gap-0.5">
                         <span className="line-through text-content-quaternary text-xs">
-                          {formatNumber(item.unit_rate)}
+                          {formatNumber(item.unit_rate, currencyArg)}
                         </span>
                         <span className="text-emerald-600 font-semibold" title={`CWICR: ${bestMatch.code} (${Math.round(bestMatch.score * 100)}% match)`}>
-                          {formatNumber(bestMatch.rate)}
+                          {/* Show the matched rate in ITS OWN currency so we never
+                              imply a foreign rate is in the estimate currency. */}
+                          {formatNumber(bestMatch.rate, (bestMatch.currency || currency) || undefined)}
                         </span>
                         <span className="text-[10px] text-emerald-600/70 font-normal">
                           {bestMatch.code}
                         </span>
+                        {!matchAppliesToTotal(bestMatch) && (
+                          <span
+                            className="text-[10px] text-amber-600 font-medium"
+                            title={t('ai.match_currency_mismatch_hint', {
+                              defaultValue:
+                                'Matched rate is in a different currency and is not folded into the total.',
+                            })}
+                          >
+                            {t('ai.match_currency_label', {
+                              defaultValue: '{{code}} (not in total)',
+                              code: (bestMatch.currency || '').trim() || '—',
+                            })}
+                          </span>
+                        )}
                       </div>
                     ) : (
-                      formatNumber(item.unit_rate)
+                      formatNumber(item.unit_rate, currencyArg)
                     )}
                   </td>
                   <td className="px-4 py-3 text-right font-mono font-medium text-content-primary">
-                    {bestMatch ? (
+                    {bestMatch && matchAppliesToTotal(bestMatch) ? (
                       <div className="flex flex-col items-end gap-0.5">
                         <span className="line-through text-content-quaternary text-xs">
-                          {formatNumber(item.total)}
+                          {formatNumber(item.total, currencyArg)}
                         </span>
                         <span className="text-emerald-600 font-semibold">
-                          {formatNumber(item.quantity * bestMatch.rate)}
+                          {formatNumber(item.quantity * bestMatch.rate, currencyArg)}
                         </span>
                       </div>
                     ) : (
-                      formatNumber(item.total)
+                      formatNumber(item.total, currencyArg)
                     )}
                   </td>
                 </tr>
@@ -587,20 +607,25 @@ function ResultsTable({ result, selectedCurrency, enrichResult }: { result: Esti
               {enrichMap.size > 0 ? (
                 <div className="flex flex-col items-end gap-0.5">
                   <span className="line-through text-content-quaternary text-sm font-normal">
-                    {formatNumber(result.grand_total, currency)}
+                    {formatNumber(result.grand_total, currencyArg)}
                   </span>
                   <span className="text-emerald-600">
+                    {/* Only fold a matched rate into the total when it shares
+                        the estimate currency — never blend currencies. Lines
+                        whose match is in a foreign currency keep the AI's own
+                        rate in the total and are flagged per-line above. */}
                     {formatNumber(
                       result.items.reduce((sum, item, idx) => {
-                        const ei = enrichMap.get(idx);
-                        return sum + item.quantity * (ei?.best_match?.rate ?? item.unit_rate);
+                        const match = enrichMap.get(idx)?.best_match;
+                        const rate = matchAppliesToTotal(match) ? match!.rate : item.unit_rate;
+                        return sum + item.quantity * rate;
                       }, 0),
-                      currency,
+                      currencyArg,
                     )}
                   </span>
                 </div>
               ) : (
-                formatNumber(result.grand_total, currency)
+                formatNumber(result.grand_total, currencyArg)
               )}
             </td>
           </tr>
@@ -1101,7 +1126,11 @@ function CadConverterSection({
                 </p>
               </div>
               {(installResult || installError) && (
-                <button onClick={onDismissProgress} className="text-content-quaternary hover:text-content-secondary">
+                <button
+                  onClick={onDismissProgress}
+                  aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
+                  className="text-content-quaternary hover:text-content-secondary"
+                >
                   <X size={16} />
                 </button>
               )}
@@ -1439,11 +1468,15 @@ export function QuickEstimatePage() {
     [selectedFile, handleRemoveFile],
   );
 
-  // ── Text estimate mutation ────────────────────────────────────────────
+  // ── AI runs — all five operations now share `useLLMRun` so they get
+  //    AbortController cancellation, post-run focus-restore (a11y P1
+  //    finding #4), and a consistent error-normalisation contract.
+  //    The toast call sites are identical to the pre-refactor versions;
+  //    only the plumbing changed.
 
-  const textEstimateMutation = useMutation({
-    mutationFn: (data: Parameters<typeof aiApi.quickEstimate>[0]) =>
-      aiApi.quickEstimate(data),
+  const textEstimateRun = useLLMRun<QuickEstimateRequest, EstimateJobResponse>({
+    mutationFn: (data, { signal }) => aiApi.quickEstimate(data, { signal }),
+    focusRestoreRef: resultRegionRef,
     onSuccess: (data) => {
       setResult(data);
       addToast({
@@ -1456,7 +1489,7 @@ export function QuickEstimatePage() {
         }),
       });
     },
-    onError: (err: Error) => {
+    onError: (err) => {
       addToast({
         type: 'error',
         title: t('ai.estimate_failed', { defaultValue: 'Estimation failed' }),
@@ -1465,10 +1498,9 @@ export function QuickEstimatePage() {
     },
   });
 
-  // ── Photo estimate mutation ───────────────────────────────────────────
-
-  const photoEstimateMutation = useMutation({
-    mutationFn: aiApi.photoEstimate,
+  const photoEstimateRun = useLLMRun<Parameters<typeof aiApi.photoEstimate>[0], EstimateJobResponse>({
+    mutationFn: (params, { signal }) => aiApi.photoEstimate({ ...params, signal }),
+    focusRestoreRef: resultRegionRef,
     onSuccess: (data) => {
       setResult(data);
       addToast({
@@ -1481,7 +1513,7 @@ export function QuickEstimatePage() {
         }),
       });
     },
-    onError: (err: Error) => {
+    onError: (err) => {
       addToast({
         type: 'error',
         title: t('ai.estimate_failed', { defaultValue: 'Estimation failed' }),
@@ -1490,10 +1522,9 @@ export function QuickEstimatePage() {
     },
   });
 
-  // ── File estimate mutation (PDF, Excel, CSV, CAD) ───────────────────
-
-  const fileEstimateMutation = useMutation({
-    mutationFn: aiApi.fileEstimate,
+  const fileEstimateRun = useLLMRun<Parameters<typeof aiApi.fileEstimate>[0], EstimateJobResponse>({
+    mutationFn: (params, { signal }) => aiApi.fileEstimate({ ...params, signal }),
+    focusRestoreRef: resultRegionRef,
     onSuccess: (data) => {
       setResult(data);
       addToast({
@@ -1506,7 +1537,7 @@ export function QuickEstimatePage() {
         }),
       });
     },
-    onError: (err: Error) => {
+    onError: (err) => {
       addToast({
         type: 'error',
         title: t('ai.estimate_failed', { defaultValue: 'Estimation failed' }),
@@ -1515,10 +1546,11 @@ export function QuickEstimatePage() {
     },
   });
 
-  // ── CAD extract mutation (no AI, deterministic grouping) ────────────
-
-  const cadExtractMutation = useMutation({
-    mutationFn: aiApi.cadExtract,
+  const cadExtractRun = useLLMRun<File, CadExtractResponse>({
+    // `cadExtract` is a no-AI deterministic path; we still funnel it
+    // through useLLMRun for the shared cancel/focus contract.
+    mutationFn: (file) => aiApi.cadExtract(file),
+    focusRestoreRef: resultRegionRef,
     onSuccess: (data) => {
       setCadResult(data);
       addToast({
@@ -1531,7 +1563,7 @@ export function QuickEstimatePage() {
         }),
       });
     },
-    onError: (err: Error) => {
+    onError: (err) => {
       addToast({
         type: 'error',
         title: t('ai.cad_extract_failed', { defaultValue: 'CAD extraction failed' }),
@@ -1540,10 +1572,8 @@ export function QuickEstimatePage() {
     },
   });
 
-  // ── CAD columns mutation (interactive grouping step 1) ──────────────
-
-  const cadColumnsMutation = useMutation({
-    mutationFn: aiApi.cadColumns,
+  const cadColumnsRun = useLLMRun<File, CadColumnsResponse>({
+    mutationFn: (file) => aiApi.cadColumns(file),
     onSuccess: (data) => {
       setCadColumnsData(data);
       // Auto-select the "standard" preset if available, else fall back to suggested
@@ -1566,7 +1596,7 @@ export function QuickEstimatePage() {
         }),
       });
     },
-    onError: (err: Error) => {
+    onError: (err) => {
       addToast({
         type: 'error',
         title: t('ai.cad_columns_failed', { defaultValue: 'Column detection failed' }),
@@ -1610,7 +1640,9 @@ export function QuickEstimatePage() {
     if (!result?.id) return;
     setEnriching(true);
     try {
-      const data = await aiApi.enrichEstimate(result.id, enrichRegion, currency || 'EUR');
+      // Pass the resolved estimate currency (selection → AI-priced currency),
+      // never a fabricated 'EUR' default.
+      const data = await aiApi.enrichEstimate(result.id, enrichRegion, currency || result.currency || '');
       setEnrichResult(data);
       addToast({
         type: 'success',
@@ -1648,19 +1680,19 @@ export function QuickEstimatePage() {
   // ── Determine if any mutation is pending ──────────────────────────────
 
   const isPending =
-    textEstimateMutation.isPending || photoEstimateMutation.isPending || fileEstimateMutation.isPending || cadExtractMutation.isPending || cadColumnsMutation.isPending || cadGrouping;
+    textEstimateRun.isPending || photoEstimateRun.isPending || fileEstimateRun.isPending || cadExtractRun.isPending || cadColumnsRun.isPending || cadGrouping;
   const isError =
-    (textEstimateMutation.isError && !textEstimateMutation.isPending) ||
-    (photoEstimateMutation.isError && !photoEstimateMutation.isPending) ||
-    (fileEstimateMutation.isError && !fileEstimateMutation.isPending) ||
-    (cadExtractMutation.isError && !cadExtractMutation.isPending) ||
-    (cadColumnsMutation.isError && !cadColumnsMutation.isPending);
+    (textEstimateRun.isError && !textEstimateRun.isPending) ||
+    (photoEstimateRun.isError && !photoEstimateRun.isPending) ||
+    (fileEstimateRun.isError && !fileEstimateRun.isPending) ||
+    (cadExtractRun.isError && !cadExtractRun.isPending) ||
+    (cadColumnsRun.isError && !cadColumnsRun.isPending);
   const mutationError =
-    (textEstimateMutation.error as Error | null) ||
-    (photoEstimateMutation.error as Error | null) ||
-    (fileEstimateMutation.error as Error | null) ||
-    (cadExtractMutation.error as Error | null) ||
-    (cadColumnsMutation.error as Error | null);
+    textEstimateRun.error ||
+    photoEstimateRun.error ||
+    fileEstimateRun.error ||
+    cadExtractRun.error ||
+    cadColumnsRun.error;
 
   // ── Submit handlers per tab ───────────────────────────────────────────
 
@@ -1679,32 +1711,32 @@ export function QuickEstimatePage() {
       if (areaM2 && Number(areaM2) > 0) request.area_m2 = Number(areaM2);
 
       setResult(null);
-      textEstimateMutation.mutate(request);
+      textEstimateRun.run(request);
     },
-    [description, location, currency, standard, buildingType, areaM2, textEstimateMutation],
+    [description, location, currency, standard, buildingType, areaM2, textEstimateRun],
   );
 
   const handlePhotoSubmit = useCallback(() => {
     if (!selectedFile) return;
     setResult(null);
-    photoEstimateMutation.mutate({
+    photoEstimateRun.run({
       file: selectedFile,
       location: location.trim() || undefined,
       currency: currency || undefined,
       standard: standard || undefined,
     });
-  }, [selectedFile, location, currency, standard, photoEstimateMutation]);
+  }, [selectedFile, location, currency, standard, photoEstimateRun]);
 
   const handleFileSubmit = useCallback(() => {
     if (!selectedFile) return;
     setResult(null);
-    fileEstimateMutation.mutate({
+    fileEstimateRun.run({
       file: selectedFile,
       location: location.trim() || undefined,
       currency: currency || undefined,
       standard: standard || undefined,
     });
-  }, [selectedFile, location, currency, standard, fileEstimateMutation]);
+  }, [selectedFile, location, currency, standard, fileEstimateRun]);
 
   const handleCadSubmit = useCallback(() => {
     if (!selectedFile) return;
@@ -1713,11 +1745,11 @@ export function QuickEstimatePage() {
     setCadColumnsData(null);
     setCadGroupResult(null);
     if (isCadRoute) {
-      cadColumnsMutation.mutate(selectedFile);
+      cadColumnsRun.run(selectedFile);
     } else {
-      cadExtractMutation.mutate(selectedFile);
+      cadExtractRun.run(selectedFile);
     }
-  }, [selectedFile, cadExtractMutation, cadColumnsMutation, isCadRoute]);
+  }, [selectedFile, cadExtractRun, cadColumnsRun, isCadRoute]);
 
   const handleApplyGrouping = useCallback(async () => {
     if (!cadColumnsData || selectedGroupBy.length === 0) return;
@@ -1792,8 +1824,8 @@ export function QuickEstimatePage() {
     if (standard) request.standard = standard;
 
     setResult(null);
-    textEstimateMutation.mutate(request);
-  }, [pasteText, location, currency, standard, textEstimateMutation]);
+    textEstimateRun.run(request);
+  }, [pasteText, location, currency, standard, textEstimateRun]);
 
   // ── Unified submit ────────────────────────────────────────────────────
 
@@ -1886,20 +1918,20 @@ export function QuickEstimatePage() {
     setAreaM2('');
     setPasteText('');
     handleRemoveFile();
-    textEstimateMutation.reset();
-    photoEstimateMutation.reset();
-    fileEstimateMutation.reset();
-    cadExtractMutation.reset();
-    cadColumnsMutation.reset();
-  }, [handleRemoveFile, textEstimateMutation, photoEstimateMutation, fileEstimateMutation, cadExtractMutation, cadColumnsMutation]);
+    textEstimateRun.reset();
+    photoEstimateRun.reset();
+    fileEstimateRun.reset();
+    cadExtractRun.reset();
+    cadColumnsRun.reset();
+  }, [handleRemoveFile, textEstimateRun, photoEstimateRun, fileEstimateRun, cadExtractRun, cadColumnsRun]);
 
   const resetMutationErrors = useCallback(() => {
-    textEstimateMutation.reset();
-    photoEstimateMutation.reset();
-    fileEstimateMutation.reset();
-    cadExtractMutation.reset();
-    cadColumnsMutation.reset();
-  }, [textEstimateMutation, photoEstimateMutation, fileEstimateMutation, cadExtractMutation, cadColumnsMutation]);
+    textEstimateRun.reset();
+    photoEstimateRun.reset();
+    fileEstimateRun.reset();
+    cadExtractRun.reset();
+    cadColumnsRun.reset();
+  }, [textEstimateRun, photoEstimateRun, fileEstimateRun, cadExtractRun, cadColumnsRun]);
 
   // ── Filtered groups for CAD QTO ──────────────────────────────────────
   const filteredGroups = useMemo(() => {

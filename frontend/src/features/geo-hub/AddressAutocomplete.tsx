@@ -138,6 +138,10 @@ export function AddressAutocomplete({
       lastQueryRef.current = trimmed;
       setIsLoading(true);
       setErrorKind('none');
+      // Open the dropdown immediately so the user sees a "Searching…"
+      // row while Nominatim's 1 req/s upstream cooks (cold cache can
+      // take 5–10 s). Otherwise the input looks broken.
+      setIsOpen(true);
       try {
         const res = await geocodeSuggest(trimmed, {
           limit: maxResults,
@@ -252,6 +256,14 @@ export function AddressAutocomplete({
       setHighlighted((idx) =>
         idx <= 0 ? suggestions.length - 1 : idx - 1,
       );
+    } else if (event.key === 'Home' && suggestions.length > 0) {
+      // WAI-ARIA combobox: Home jumps to the first option. Without it,
+      // long suggestion lists trap keyboard users at the bottom.
+      event.preventDefault();
+      setHighlighted(0);
+    } else if (event.key === 'End' && suggestions.length > 0) {
+      event.preventDefault();
+      setHighlighted(suggestions.length - 1);
     } else if (event.key === 'Enter') {
       if (highlighted >= 0 && highlighted < suggestions.length) {
         const picked = suggestions[highlighted];
@@ -280,7 +292,7 @@ export function AddressAutocomplete({
     isOpen &&
     (suggestions.length > 0 ||
       errorKind !== 'none' ||
-      (value.trim().length >= 3 && !isLoading));
+      value.trim().length >= 3);
 
   const renderErrorRow = () => {
     if (errorKind === 'disabled') {
@@ -399,6 +411,7 @@ export function AddressAutocomplete({
           aria-label={t('geo_hub.autocomplete.list_aria', {
             defaultValue: 'Address suggestions',
           })}
+          aria-busy={isLoading || undefined}
           className={[
             'absolute z-30 mt-1 w-full max-h-72 overflow-y-auto rounded-lg',
             'border border-border bg-surface-primary shadow-lg ring-1 ring-black/5',
@@ -406,6 +419,22 @@ export function AddressAutocomplete({
           data-testid="geo-address-autocomplete-list"
         >
           {renderErrorRow()}
+          {suggestions.length === 0 &&
+            errorKind === 'none' &&
+            value.trim().length >= 3 &&
+            isLoading && (
+              <li
+                className="flex items-center gap-2 px-3 py-2 text-xs text-content-tertiary"
+                data-testid="geo-address-autocomplete-loading"
+              >
+                <Loader2 size={13} className="animate-spin" aria-hidden />
+                <span>
+                  {t('geo_hub.autocomplete.searching', {
+                    defaultValue: 'Searching…',
+                  })}
+                </span>
+              </li>
+            )}
           {suggestions.length === 0 &&
             errorKind === 'none' &&
             value.trim().length >= 3 &&

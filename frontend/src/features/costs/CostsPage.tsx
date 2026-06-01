@@ -39,7 +39,7 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useCostDatabaseStore, REGION_MAP } from '@/stores/useCostDatabaseStore';
 import { useAuthStore } from '@/stores/useAuthStore';
-import type { CostItemMetadata } from './api';
+import type { CostItemMetadata, CertaintyBadge as CertaintyBadgeData } from './api';
 import { CertaintyBadge } from './CertaintyBadge';
 import { EscalationCalculator } from './EscalationCalculator';
 import { RegionalAdjustPanel } from './RegionalAdjustPanel';
@@ -68,6 +68,12 @@ interface CostItem {
   description: string;
   unit: string;
   rate: number;
+  /** ISO 4217 code the `rate` is denominated in. CWICR catalogues mix
+   *  EUR / AED / SAR / USD / … — the backend resolves this from the
+   *  region when the source row carried an empty currency. Always render
+   *  the code next to the figure and propagate it onto the BOQ position
+   *  so the FX rollup converts instead of treating it as the base. */
+  currency: string;
   region: string | null;
   classification: Record<string, string>;
   components: CostComponent[];
@@ -393,7 +399,7 @@ function RegionTabBar({
         {/* Add database button */}
         <button
           onClick={() => navigate('/costs/import')}
-          className="flex items-center gap-1.5 shrink-0 rounded-t-lg px-3 py-2.5 border-b-2 border-transparent text-content-tertiary hover:text-oe-blue hover:bg-oe-blue-subtle/10 transition-all duration-fast ease-oe"
+          className="flex items-center gap-1.5 shrink-0 rounded-t-lg px-3 py-2.5 border-b-2 border-transparent text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle/10 transition-all duration-fast ease-oe"
           title={t('costs.import_database', { defaultValue: 'Import database' })}
         >
           <Plus size={14} />
@@ -586,18 +592,28 @@ export function CostsPage() {
           const results = await apiGet<Array<Record<string, unknown>>>(`/v1/costs/vector/search/?${params}`);
           // Wrap in CostSearchResponse format
           return {
-            items: results.map((r) => ({
-              id: String(r.id ?? ''),
-              code: String(r.code ?? ''),
-              description: String(r.description ?? ''),
-              unit: String(r.unit ?? ''),
-              rate: Number(r.rate ?? 0),
-              region: String(r.region ?? ''),
-              classification: (r.classification ?? {}) as Record<string, string>,
-              components: [],
-              metadata_: {},
-              source: 'cwicr',
-            })),
+            items: results.map((r) => {
+              const itemRegion = String(r.region ?? '');
+              return {
+                id: String(r.id ?? ''),
+                code: String(r.code ?? ''),
+                description: String(r.description ?? ''),
+                unit: String(r.unit ?? ''),
+                rate: Number(r.rate ?? 0),
+                // Vector hits may omit an explicit currency — fall back to
+                // the region's currency so the figure is never rendered
+                // unlabelled.
+                currency:
+                  (r.currency ? String(r.currency) : '') ||
+                  REGION_MAP[itemRegion]?.currency ||
+                  '',
+                region: itemRegion,
+                classification: (r.classification ?? {}) as Record<string, string>,
+                components: [],
+                metadata_: {},
+                source: 'cwicr',
+              };
+            }),
             total: results.length,
             limit: PAGE_SIZE,
             offset: 0,
@@ -674,6 +690,26 @@ export function CostsPage() {
     }
   }, [sortField]);
 
+  // Batch-fetch certainty bands for every visible row in one request.
+  // Previously each row's <CertaintyBadge> fired its own GET (an N+1 on
+  // every page); now we POST the whole page's ids once and pass the
+  // resolved band down as a prop. Stable key (sorted ids) so a re-render
+  // that doesn't change the visible set is a cache hit.
+  const visibleIds = useMemo(() => sortedItems.map((i) => i.id), [sortedItems]);
+  const certaintyKey = useMemo(() => [...visibleIds].sort().join(','), [visibleIds]);
+  const { data: certaintyList } = useQuery<CertaintyBadgeData[]>({
+    queryKey: ['costs', 'certainty', 'batch', certaintyKey],
+    queryFn: () => apiPost<CertaintyBadgeData[], { ids: string[] }>('/v1/costs/certainty/batch/', { ids: visibleIds }),
+    enabled: visibleIds.length > 0,
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const certaintyById = useMemo(() => {
+    const m = new Map<string, CertaintyBadgeData>();
+    for (const c of certaintyList ?? []) m.set(c.cost_item_id, c);
+    return m;
+  }, [certaintyList]);
+
   // Active filter count & clear all
   const activeFilterCount = [query, unit, source, category].filter(Boolean).length + (region ? 1 : 0) + (specialTab ? 1 : 0);
 
@@ -705,6 +741,11 @@ export function CostsPage() {
   const handleCategoryChange = useCallback((value: string) => {
     setCategory(value);
     setOffset(0);
+    // The legacy category dropdown and the classification-tree sidebar
+    // both filter on collection — running them together double-filters.
+    // Selecting a category clears any active tree path so the two stay
+    // mutually exclusive (the tree's onSelect already clears `category`).
+    if (value) setClassificationPath('');
   }, []);
 
   const handleRegionChange = useCallback(
@@ -770,6 +811,44 @@ export function CostsPage() {
 
   // Current region info for subtitle
   const regionInfo = region ? REGION_MAP[region] : null;
+  // Fallback currency for rows whose own `currency` is empty — derived
+  // from the active region's catalogue. Empty when "All regions" + no
+  // per-row currency, in which case the bare formatted number is shown.
+  const regionCurrency = regionInfo?.currency ?? '';
+
+  // Currency-aware money formatter. Catalogues mix EUR / AED / SAR / USD,
+  // so a bare number is ambiguous — always render the ISO code. Falls
+  // back to the plain number formatter only when no currency is known at
+  // all (so we never crash on an unknown / empty code).
+  const fmtMoney = (n: number, currency?: string | null) => {
+    const code = (currency || regionCurrency || '').trim().toUpperCase();
+    if (!code) return fmt(n);
+    try {
+      return new Intl.NumberFormat(getIntlLocale(), {
+        style: 'currency',
+        currency: code,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(n);
+    } catch {
+      // Non-ISO / unsupported code — keep the figure legible and still
+      // show the raw code rather than dropping it silently.
+      return `${fmt(n)} ${code}`;
+    }
+  };
+
+  // Localized label for a category dropdown entry. CWICR ships the
+  // `collection` token as frozen-German all-caps (e.g. "BAUARBEITEN").
+  // A per-token i18n key (`costs.category_label.<TOKEN>`) lets translators
+  // override it, with a title-cased humanized fallback so the raw token is
+  // never shown uppercase. Unknown/custom tokens humanize gracefully.
+  const categoryLabel = (cat: string): string => {
+    const humanized = cat
+      .toLowerCase()
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    return t(`costs.category_label.${cat}`, { defaultValue: humanized });
+  };
 
   return (
     <div className="w-full animate-fade-in">
@@ -838,7 +917,7 @@ export function CostsPage() {
             size="sm"
             icon={<Layers size={14} />}
             onClick={() => setShowRegionalAdjust((p) => !p)}
-            className={showRegionalAdjust ? 'border-oe-blue/40 text-oe-blue bg-oe-blue-subtle/20' : ''}
+            className={showRegionalAdjust ? 'border-oe-blue/40 text-oe-blue-text bg-oe-blue-subtle/20' : ''}
           >
             {t('costs.regional_adjust.toggle', { defaultValue: 'Regional Adjust' })}
           </Button>
@@ -994,7 +1073,11 @@ export function CostsPage() {
               }`}
             >
               <Sparkles size={14} />
-              <span className="hidden sm:inline">{semanticSearch ? 'AI' : 'AI'}</span>
+              <span className="hidden sm:inline">
+                {semanticSearch
+                  ? t('costs.ai_search_on', { defaultValue: 'AI: on' })
+                  : t('costs.ai_search_off', { defaultValue: 'AI search' })}
+              </span>
             </button>
           </div>
 
@@ -1049,7 +1132,7 @@ export function CostsPage() {
                 </option>
                 {categories.map((cat) => (
                   <option key={cat} value={cat}>
-                    {cat}
+                    {categoryLabel(cat)}
                   </option>
                 ))}
               </select>
@@ -1166,12 +1249,15 @@ export function CostsPage() {
                         copiedId={copiedId}
                         isSelected={selectedIds.has(item.id)}
                         isFavourite={favourites.has(item.id)}
+                        band={certaintyById.get(item.id) ?? null}
+                        regionCurrency={regionCurrency}
                         onSelect={() => toggleSelect(item.id)}
                         onToggle={() => setExpandedId(isExpanded ? null : item.id)}
                         onCopy={() => handleCopyRate(item)}
                         onToggleFavourite={() => toggleFavourite(item.id)}
                         onDelete={(id) => deleteMutation.mutate(id)}
                         fmt={fmt}
+                        fmtMoney={fmtMoney}
                         t={t}
                       />
                     );
@@ -1441,16 +1527,29 @@ function AddToBOQModal({
         const pos = String(((nextOrdinal - 1) % 999) + 1).padStart(3, '0');
         const ordinal = `${section}.${pos}`;
 
-        // Build rich metadata with cost breakdown + components
+        // Resolve the item's currency: its own ISO code wins, then the
+        // region's catalogue currency. Stamped on the position AND on each
+        // resource row so the BOQ FX rollup converts foreign amounts to the
+        // project base via fx_rates instead of treating them as base.
+        const itemCurrency =
+          (item.currency || REGION_MAP[item.region ?? '']?.currency || '').trim().toUpperCase();
+
+        // Build rich metadata with cost breakdown + components.
+        // ``metadata.currency`` is the AUTHORITATIVE key the BOQ FX rollup
+        // reads (see ``_position_currency`` in boq/service.py) — set it so a
+        // foreign-currency catalogue rate converts to the project base via
+        // fx_rates instead of being summed as base. ``cost_item_currency``
+        // is kept as the provenance mirror the apply path also stamps.
         const meta: Record<string, unknown> = {
           cost_item_id: item.id,
           cost_item_code: item.code,
           cost_item_region: item.region,
+          ...(itemCurrency ? { currency: itemCurrency, cost_item_currency: itemCurrency } : {}),
           ...item.metadata_,
         };
 
         // Include resource breakdown for BOQ Grid display
-        // BOQ Grid reads from metadata.resources: Array<{name, code, type, unit, quantity, unit_rate, total}>
+        // BOQ Grid reads from metadata.resources: Array<{name, code, type, unit, quantity, unit_rate, total, currency}>
         if (item.components && item.components.length > 0) {
           // Full component data available — use it directly
           meta.resources = item.components.map((c) => ({
@@ -1461,20 +1560,21 @@ function AddToBOQModal({
             quantity: c.quantity,
             unit_rate: c.unit_rate,
             total: c.cost,
+            currency: itemCurrency,
           }));
           meta.resource_count = item.components.length;
         } else if (item.metadata_) {
           // No components stored — synthesize from metadata cost summary
-          const synth: Array<{ name: string; code: string; type: string; unit: string; quantity: number; unit_rate: number; total: number }> = [];
+          const synth: Array<{ name: string; code: string; type: string; unit: string; quantity: number; unit_rate: number; total: number; currency: string }> = [];
           const m = item.metadata_;
           if (m.labor_cost && m.labor_cost > 0) {
-            synth.push({ name: t('costs.component_labor', { defaultValue: 'Labor' }), code: '', type: 'labor', unit: item.unit, quantity: 1, unit_rate: m.labor_cost, total: m.labor_cost });
+            synth.push({ name: t('costs.component_labor', { defaultValue: 'Labor' }), code: '', type: 'labor', unit: item.unit, quantity: 1, unit_rate: m.labor_cost, total: m.labor_cost, currency: itemCurrency });
           }
           if (m.material_cost && m.material_cost > 0) {
-            synth.push({ name: t('costs.component_material', { defaultValue: 'Material' }), code: '', type: 'material', unit: item.unit, quantity: 1, unit_rate: m.material_cost, total: m.material_cost });
+            synth.push({ name: t('costs.component_material', { defaultValue: 'Material' }), code: '', type: 'material', unit: item.unit, quantity: 1, unit_rate: m.material_cost, total: m.material_cost, currency: itemCurrency });
           }
           if (m.equipment_cost && m.equipment_cost > 0) {
-            synth.push({ name: t('costs.component_equipment', { defaultValue: 'Equipment' }), code: '', type: 'equipment', unit: item.unit, quantity: 1, unit_rate: m.equipment_cost, total: m.equipment_cost });
+            synth.push({ name: t('costs.component_equipment', { defaultValue: 'Equipment' }), code: '', type: 'equipment', unit: item.unit, quantity: 1, unit_rate: m.equipment_cost, total: m.equipment_cost, currency: itemCurrency });
           }
           if (synth.length > 0) {
             meta.resources = synth;
@@ -1491,6 +1591,10 @@ function AddToBOQModal({
           meta.cost_breakdown = byType;
         }
 
+        // The catalogue currency rides on ``metadata.currency`` (set above) —
+        // that's the key the BOQ FX rollup reads, so a foreign-currency rate
+        // converts to the project base via fx_rates instead of being summed
+        // as base. PositionCreate has no top-level currency field.
         await apiPost(`/v1/boq/boqs/${boqId}/positions/`, {
           boq_id: boqId,
           ordinal,
@@ -1526,6 +1630,25 @@ function AddToBOQModal({
   const fmt = (n: number) =>
     new Intl.NumberFormat(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
+  // Currency-aware money formatter for the preview — selected items can
+  // span EUR / AED / SAR / USD, so always render the ISO code.
+  const fmtMoney = (n: number, currency: string) => {
+    const code = (currency || '').trim().toUpperCase();
+    if (!code) return fmt(n);
+    try {
+      return new Intl.NumberFormat(getIntlLocale(), {
+        style: 'currency',
+        currency: code,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(n);
+    } catch {
+      return `${fmt(n)} ${code}`;
+    }
+  };
+  const itemCurrencyOf = (it: CostItem) =>
+    (it.currency || REGION_MAP[it.region ?? '']?.currency || '').trim().toUpperCase();
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 animate-fade-in" onClick={onClose}>
       <div
@@ -1538,7 +1661,7 @@ function AddToBOQModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-light">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
               <Table2 size={18} />
             </div>
             <div>
@@ -1548,7 +1671,11 @@ function AddToBOQModal({
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+          >
             <X size={16} />
           </button>
         </div>
@@ -1646,7 +1773,7 @@ function AddToBOQModal({
                     <tr key={item.id}>
                       <td className="px-3 py-1.5 text-content-primary truncate max-w-[250px]">{item.description}</td>
                       <td className="px-3 py-1.5 text-center text-content-tertiary">{item.unit}</td>
-                      <td className="px-3 py-1.5 text-right tabular-nums font-medium text-content-primary">{fmt(item.rate)}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums font-medium text-content-primary">{fmtMoney(item.rate, itemCurrencyOf(item))}</td>
                     </tr>
                   ))}
                   {items.length > 10 && (
@@ -1711,7 +1838,7 @@ function CreateAssemblyFromCostsModal({
   const [isCreating, setIsCreating] = useState(false);
 
   // Resolve project currency from the active-project context. No hardcoded
-  // fallback (CLAUDE.md "no hardcoded currency fallbacks") — when neither
+  // fallback (the architecture guide "no hardcoded currency fallbacks") — when neither
   // the project nor any item carries a currency, ship an empty string so
   // the user is forced into an explicit choice at the next surface.
   const { data: projects } = useQuery({
@@ -1734,10 +1861,47 @@ function CreateAssemblyFromCostsModal({
   const fmt = (n: number) =>
     new Intl.NumberFormat(getIntlLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 
-  const totalRate = items.reduce((s, i) => s + (i.rate || 0), 0);
+  // MONEY BUG FIX: the old `items.reduce((s,i)=>s+(i.rate||0),0)` blended rates
+  // across distinct ISO currencies (e.g. AED + EUR) into one figure and stored
+  // it under a single assembly currency. Per the "never sum across currencies"
+  // money rule, an assembly must be single-currency. Compute the set of distinct
+  // currencies of the selected items; only when they all agree may we sum and
+  // stamp the assembly with THAT currency (never a hardcoded EUR fallback).
+  // Rates may arrive as Decimal-serialized strings, so coerce with Number().
+  const distinctCurrencies = useMemo(
+    () => Array.from(new Set(items.map((i) => (i.currency || '').trim()).filter(Boolean))),
+    [items],
+  );
+  const hasMixedCurrencies = distinctCurrencies.length > 1;
+  // The single shared item currency (when unambiguous) — preferred over the
+  // project currency so the assembly is stamped with the currency its rates are
+  // actually denominated in. Falls back to projectCurrency only when items carry
+  // no currency at all (still never a hardcoded code).
+  const itemsCurrency = distinctCurrencies.length === 1 ? distinctCurrencies[0] : '';
+  const assemblyCurrency = itemsCurrency || projectCurrency;
+  // Sum only within a single currency. Number() guards against Decimal strings.
+  const totalRate = hasMixedCurrencies
+    ? 0
+    : items.reduce((s, i) => s + (Number(i.rate) || 0), 0);
 
   const handleCreate = useCallback(async () => {
     if (!name.trim()) return;
+    // Guard: refuse to create a blended multi-currency assembly. The button is
+    // also disabled below, but enforce here too so a programmatic call can't
+    // bypass the single-currency invariant.
+    if (hasMixedCurrencies) {
+      addToast({
+        type: 'error',
+        title: t('costs.assembly_mixed_currency_title', { defaultValue: 'Mixed currencies' }),
+        message: t('costs.assembly_mixed_currency_msg', {
+          defaultValue:
+            'Assemblies must be single-currency. The selected cost items span {{count}} currencies ({{list}}). Select items that share one currency.',
+          count: distinctCurrencies.length,
+          list: distinctCurrencies.join(', '),
+        }),
+      });
+      return;
+    }
     setIsCreating(true);
     try {
       const code = `ASM-${Date.now().toString(36).toUpperCase()}`;
@@ -1746,16 +1910,22 @@ function CreateAssemblyFromCostsModal({
         name: name.trim(),
         unit,
         category: 'General',
-        currency: projectCurrency,
+        // MONEY BUG FIX: stamp the assembly with the currency the component
+        // rates are actually denominated in (the items' shared currency), not a
+        // hardcoded EUR — and not blindly projectCurrency, which could differ
+        // from the rates being stored.
+        currency: assemblyCurrency,
       });
 
-      // Add each cost item as a component
+      // Add each cost item as a component. All items share one currency here
+      // (guarded above), so unit_cost is consistent with the assembly currency.
+      // Coerce rate with Number() in case it arrives as a Decimal string.
       for (const item of items) {
         await apiPost(`/v1/assemblies/${assembly.id}/components/`, {
           cost_item_id: item.id,
           description: item.description,
           unit: item.unit,
-          unit_cost: item.rate,
+          unit_cost: Number(item.rate) || 0,
           quantity: 1,
           factor: 1.0,
         });
@@ -1777,7 +1947,7 @@ function CreateAssemblyFromCostsModal({
     } finally {
       setIsCreating(false);
     }
-  }, [name, unit, items, projectCurrency, addToast, t, onSuccess, navigate]);
+  }, [name, unit, items, assemblyCurrency, hasMixedCurrencies, distinctCurrencies, addToast, t, onSuccess, navigate]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 animate-fade-in" onClick={onClose}>
@@ -1800,7 +1970,11 @@ function CreateAssemblyFromCostsModal({
               </p>
             </div>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary hover:text-content-primary transition-colors"
+          >
             <X size={16} />
           </button>
         </div>
@@ -1837,14 +2011,37 @@ function CreateAssemblyFromCostsModal({
               {items.map((item) => (
                 <div key={item.id} className="flex items-center justify-between px-3 py-2 text-xs border-b border-border-light/50 last:border-0">
                   <span className="text-content-primary truncate flex-1 mr-2">{item.description || item.code}</span>
-                  <span className="text-content-secondary shrink-0 tabular-nums">{fmt(item.rate)} / {item.unit}</span>
+                  {/* MONEY BUG FIX: render each rate with its OWN currency code
+                      and coerce the (possibly Decimal-string) rate via Number()
+                      so mixed-currency selections are obvious instead of being
+                      silently presented under one label. */}
+                  <span className="text-content-secondary shrink-0 tabular-nums">
+                    {fmt(Number(item.rate) || 0)}{item.currency ? ` ${item.currency}` : ''} / {item.unit}
+                  </span>
                 </div>
               ))}
             </div>
-            <div className="flex items-center justify-between mt-2 text-xs">
-              <span className="text-content-tertiary">{t('assemblies.total_rate_sum', { defaultValue: 'Total rate (sum of components)' })}</span>
-              <span className="font-semibold text-content-primary tabular-nums">{projectCurrency ? `${fmt(totalRate)} ${projectCurrency}` : fmt(totalRate)}</span>
-            </div>
+            {/* MONEY BUG FIX: when the selection spans more than one currency we
+                cannot show a meaningful blended sum — surface an inline warning
+                and suppress the total instead of mislabeling it. */}
+            {hasMixedCurrencies ? (
+              <div className="mt-2 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/40 dark:bg-amber-900/20 dark:text-amber-200">
+                {t('costs.assembly_mixed_currency_warning', {
+                  defaultValue:
+                    'Assemblies must be single-currency. The selected items span {{count}} currencies ({{list}}) — pick items that share one currency to continue.',
+                  count: distinctCurrencies.length,
+                  list: distinctCurrencies.join(', '),
+                })}
+              </div>
+            ) : (
+              <div className="flex items-center justify-between mt-2 text-xs">
+                <span className="text-content-tertiary">{t('assemblies.total_rate_sum', { defaultValue: 'Total rate (sum of components)' })}</span>
+                {/* MONEY BUG FIX: label the sum with the currency the rates are
+                    actually in (assemblyCurrency), not a possibly-mismatched
+                    projectCurrency. */}
+                <span className="font-semibold text-content-primary tabular-nums">{assemblyCurrency ? `${fmt(totalRate)} ${assemblyCurrency}` : fmt(totalRate)}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1855,7 +2052,10 @@ function CreateAssemblyFromCostsModal({
             size="sm"
             onClick={handleCreate}
             loading={isCreating}
-            disabled={!name.trim() || isCreating}
+            // MONEY BUG FIX: block creation while the selection spans multiple
+            // currencies — an assembly cannot be stored under one currency when
+            // its component rates are denominated in several.
+            disabled={!name.trim() || isCreating || hasMixedCurrencies}
           >
             {t('assemblies.create_assembly', { defaultValue: 'Create Assembly' })}
           </Button>
@@ -1867,7 +2067,7 @@ function CreateAssemblyFromCostsModal({
 
 
 // Currency is derived from the active project at form-open time (see
-// `CreateCostItemModal` below) — never hardcoded here. See CLAUDE.md
+// `CreateCostItemModal` below) — never hardcoded here. See the architecture guide
 // "no hardcoded currency fallbacks".
 const INITIAL_COST_ITEM_FORM = {
   code: '',
@@ -1964,7 +2164,11 @@ function CreateCostItemModal({
               {t('costs.create_item_desc', { defaultValue: 'Create your own cost item for this project' })}
             </p>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary"
+          >
             <X size={16} />
           </button>
         </div>
@@ -2129,7 +2333,7 @@ function CostVariantDetail({
         <Layers size={13} className="text-oe-blue shrink-0" />
         <span className="text-xs font-semibold text-content-primary">
           {t('costs.variant_count', { defaultValue: 'Variants' })}
-          <span className="ml-1.5 rounded bg-oe-blue-subtle/40 px-1.5 py-0.5 text-2xs font-normal text-oe-blue">
+          <span className="ml-1.5 rounded bg-oe-blue-subtle/40 px-1.5 py-0.5 text-2xs font-normal text-oe-blue-text">
             {stats.count}
           </span>
         </span>
@@ -2231,7 +2435,7 @@ function CostVariantDetail({
           <button
             type="button"
             onClick={() => setExpanded((e) => !e)}
-            className="rounded px-2 py-0.5 text-2xs font-medium text-oe-blue hover:bg-oe-blue-subtle/30 transition-colors"
+            className="rounded px-2 py-0.5 text-2xs font-medium text-oe-blue-text hover:bg-oe-blue-subtle/30 transition-colors"
           >
             {expanded
               ? t('costs.variant_show_less', { defaultValue: 'Show less' })
@@ -2255,12 +2459,15 @@ function CostItemRow({
   copiedId,
   isSelected,
   isFavourite,
+  band,
+  regionCurrency,
   onSelect,
   onToggle,
   onCopy,
   onToggleFavourite,
   onDelete,
   fmt,
+  fmtMoney,
   t,
 }: {
   item: CostItem;
@@ -2269,12 +2476,18 @@ function CostItemRow({
   copiedId: string | null;
   isSelected: boolean;
   isFavourite: boolean;
+  /** Pre-resolved certainty band from the page-level batch fetch. */
+  band: CertaintyBadgeData | null;
+  /** Active region's currency — fallback when the row's own is empty. */
+  regionCurrency: string;
   onSelect: () => void;
   onToggle: () => void;
   onCopy: () => void;
   onToggleFavourite: () => void;
   onDelete?: (id: string) => void;
   fmt: (n: number) => string;
+  /** Currency-aware money formatter — renders the ISO code with the figure. */
+  fmtMoney: (n: number, currency?: string | null) => string;
   t: ReturnType<typeof import('react-i18next').useTranslation>['t'];
 }) {
   const { confirm, ...confirmProps } = useConfirm();
@@ -2321,6 +2534,12 @@ function CostItemRow({
   const breadcrumb = [localizedCategory, cls.collection, cls.department, cls.section, cls.subsection]
     .filter(Boolean)
     .join(' > ');
+
+  // Resolve this row's currency once: the row's own ISO code wins, then
+  // the active region's catalogue currency. `money()` always renders the
+  // code so EUR / AED / SAR / USD rows are never confused.
+  const rowCurrency = (item.currency || regionCurrency || '').trim().toUpperCase();
+  const money = (n: number) => fmtMoney(n, rowCurrency);
 
   return (
     <>
@@ -2382,8 +2601,8 @@ function CostItemRow({
         </td>
         <td className="px-4 py-3 text-right font-semibold text-content-primary tabular-nums">
           <div className="inline-flex items-center gap-1.5">
-            <CertaintyBadge costItemId={item.id} />
-            <span>{fmt(item.rate)}</span>
+            <CertaintyBadge costItemId={item.id} band={band} />
+            <span title={rowCurrency || undefined}>{money(item.rate)}</span>
             {hasVariants && variantStats && (
               <Badge
                 variant="blue"
@@ -2392,7 +2611,7 @@ function CostItemRow({
                 // Tooltip shows the price range so the user sees the spread
                 // without having to expand the row.
               >
-                <span title={`${fmt(variantStats.min)} – ${fmt(variantStats.max)}`}>
+                <span title={`${money(variantStats.min)} – ${money(variantStats.max)}`}>
                   {t('costs.variants_count', { count: variantCount, defaultValue: '{{count}} variants' })}
                 </span>
               </Badge>
@@ -2416,7 +2635,7 @@ function CostItemRow({
               className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-all ${
                 isSelected
                   ? 'bg-oe-blue text-white'
-                  : 'text-content-tertiary hover:bg-oe-blue-subtle hover:text-oe-blue'
+                  : 'text-content-tertiary hover:bg-oe-blue-subtle hover:text-oe-blue-text'
               }`}
             >
               <Plus size={14} />
@@ -2476,7 +2695,7 @@ function CostItemRow({
                 <CostVariantDetail
                   variants={variants}
                   stats={variantStats}
-                  fmt={fmt}
+                  fmt={money}
                   t={t}
                 />
               )}
@@ -2488,48 +2707,66 @@ function CostItemRow({
                 <div className="rounded-lg bg-surface-primary border border-border-light p-3">
                   <div className="flex items-center gap-1.5 mb-1">
                     <HardHat size={12} className="text-amber-500" />
-                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">Labor</span>
+                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">
+                      {t('costs.component_labor', { defaultValue: 'Labor' })}
+                    </span>
                   </div>
                   <div className="text-sm font-bold tabular-nums text-content-primary">
-                    {laborCost > 0 ? fmt(laborCost) : '—'}
+                    {laborCost > 0 ? money(laborCost) : '—'}
                   </div>
                   {laborHours > 0 && (
-                    <div className="text-2xs text-content-tertiary mt-0.5">{laborHours.toFixed(1)} hrs</div>
+                    <div className="text-2xs text-content-tertiary mt-0.5">
+                      {t('costs.labor_hours_short', { defaultValue: '{{hours}} hrs', hours: laborHours.toFixed(1) })}
+                    </div>
                   )}
                   {workers > 0 && (
-                    <div className="text-2xs text-content-tertiary">{workers} workers/unit</div>
+                    <div className="text-2xs text-content-tertiary">
+                      {t('costs.workers_per_unit', { defaultValue: '{{count}} workers/unit', count: workers })}
+                    </div>
                   )}
                 </div>
                 <div className="rounded-lg bg-surface-primary border border-border-light p-3">
                   <div className="flex items-center gap-1.5 mb-1">
                     <Hammer size={12} className="text-blue-500" />
-                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">Equipment</span>
+                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">
+                      {t('costs.component_equipment', { defaultValue: 'Equipment' })}
+                    </span>
                   </div>
                   <div className="text-sm font-bold tabular-nums text-content-primary">
-                    {equipmentCost > 0 ? fmt(equipmentCost) : '—'}
+                    {equipmentCost > 0 ? money(equipmentCost) : '—'}
                   </div>
                   {machines.length > 0 && (
-                    <div className="text-2xs text-content-tertiary mt-0.5">{machines.length} items</div>
+                    <div className="text-2xs text-content-tertiary mt-0.5">
+                      {t('costs.n_items', { defaultValue: '{{count}} items', count: machines.length })}
+                    </div>
                   )}
                 </div>
                 <div className="rounded-lg bg-surface-primary border border-border-light p-3">
                   <div className="flex items-center gap-1.5 mb-1">
                     <Package size={12} className="text-green-600" />
-                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">Materials</span>
+                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">
+                      {t('costs.component_material', { defaultValue: 'Materials' })}
+                    </span>
                   </div>
                   <div className="text-sm font-bold tabular-nums text-content-primary">
-                    {materialCost > 0 ? fmt(materialCost) : '—'}
+                    {materialCost > 0 ? money(materialCost) : '—'}
                   </div>
                   {materials.length > 0 && (
-                    <div className="text-2xs text-content-tertiary mt-0.5">{materials.length} items</div>
+                    <div className="text-2xs text-content-tertiary mt-0.5">
+                      {t('costs.n_items', { defaultValue: '{{count}} items', count: materials.length })}
+                    </div>
                   )}
                 </div>
                 <div className="rounded-lg bg-surface-primary border border-border-light p-3">
                   <div className="flex items-center gap-1.5 mb-1">
-                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">Total</span>
+                    <span className="text-2xs font-medium text-content-secondary uppercase tracking-wider">
+                      {t('costs.total', { defaultValue: 'Total' })}
+                    </span>
                   </div>
-                  <div className="text-sm font-bold tabular-nums text-content-primary">{fmt(item.rate)}</div>
-                  <div className="text-2xs text-content-tertiary mt-0.5">per {item.unit}</div>
+                  <div className="text-sm font-bold tabular-nums text-content-primary">{money(item.rate)}</div>
+                  <div className="text-2xs text-content-tertiary mt-0.5">
+                    {t('costs.per_unit', { defaultValue: 'per {{unit}}', unit: item.unit })}
+                  </div>
                 </div>
               </div>
 
@@ -2541,21 +2778,21 @@ function CostItemRow({
                       <div
                         className="h-full bg-amber-400"
                         style={{ width: `${(laborCost / item.rate) * 100}%` }}
-                        title={`Labor: ${fmt(laborCost)}`}
+                        title={`${t('costs.component_labor', { defaultValue: 'Labor' })}: ${money(laborCost)}`}
                       />
                     )}
                     {equipmentCost > 0 && (
                       <div
                         className="h-full bg-blue-400"
                         style={{ width: `${(equipmentCost / item.rate) * 100}%` }}
-                        title={`Equipment: ${fmt(equipmentCost)}`}
+                        title={`${t('costs.component_equipment', { defaultValue: 'Equipment' })}: ${money(equipmentCost)}`}
                       />
                     )}
                     {materialCost > 0 && (
                       <div
                         className="h-full bg-green-400"
                         style={{ width: `${(materialCost / item.rate) * 100}%` }}
-                        title={`Materials: ${fmt(materialCost)}`}
+                        title={`${t('costs.component_material', { defaultValue: 'Materials' })}: ${money(materialCost)}`}
                       />
                     )}
                   </div>
@@ -2563,19 +2800,19 @@ function CostItemRow({
                     {laborCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-amber-400" />
-                        Labor {((laborCost / item.rate) * 100).toFixed(0)}%
+                        {t('costs.component_labor', { defaultValue: 'Labor' })} {((laborCost / item.rate) * 100).toFixed(0)}%
                       </span>
                     )}
                     {equipmentCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-blue-400" />
-                        Equipment {((equipmentCost / item.rate) * 100).toFixed(0)}%
+                        {t('costs.component_equipment', { defaultValue: 'Equipment' })} {((equipmentCost / item.rate) * 100).toFixed(0)}%
                       </span>
                     )}
                     {materialCost > 0 && (
                       <span className="flex items-center gap-1">
                         <span className="h-2 w-2 rounded-full bg-green-400" />
-                        Materials {((materialCost / item.rate) * 100).toFixed(0)}%
+                        {t('costs.component_material', { defaultValue: 'Materials' })} {((materialCost / item.rate) * 100).toFixed(0)}%
                       </span>
                     )}
                   </div>
@@ -2587,12 +2824,24 @@ function CostItemRow({
                 <table className="w-full text-xs table-fixed">
                   <thead>
                     <tr className="bg-surface-tertiary">
-                      <th className="px-3 py-2 text-left font-medium text-content-secondary truncate">Resource</th>
-                      <th className="px-3 py-2 text-left font-medium text-content-secondary w-16">Type</th>
-                      <th className="px-3 py-2 text-left font-medium text-content-secondary w-16">Unit</th>
-                      <th className="px-3 py-2 text-right font-medium text-content-secondary w-20">Qty</th>
-                      <th className="px-3 py-2 text-right font-medium text-content-secondary w-24">Unit Rate</th>
-                      <th className="px-3 py-2 text-right font-medium text-content-secondary w-24">Cost</th>
+                      <th className="px-3 py-2 text-left font-medium text-content-secondary truncate">
+                        {t('costs.resource', { defaultValue: 'Resource' })}
+                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-content-secondary w-16">
+                        {t('costs.type', { defaultValue: 'Type' })}
+                      </th>
+                      <th className="px-3 py-2 text-left font-medium text-content-secondary w-16">
+                        {t('boq.unit', { defaultValue: 'Unit' })}
+                      </th>
+                      <th className="px-3 py-2 text-right font-medium text-content-secondary w-20">
+                        {t('costs.qty', { defaultValue: 'Qty' })}
+                      </th>
+                      <th className="px-3 py-2 text-right font-medium text-content-secondary w-24">
+                        {t('costs.unit_rate', { defaultValue: 'Unit Rate' })}
+                      </th>
+                      <th className="px-3 py-2 text-right font-medium text-content-secondary w-24">
+                        {t('costs.cost', { defaultValue: 'Cost' })}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border-light">
@@ -2622,10 +2871,10 @@ function CostItemRow({
                             {comp.quantity > 0 ? comp.quantity.toFixed(2) : '—'}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums text-content-secondary">
-                            {comp.unit_rate > 0 ? fmt(comp.unit_rate) : '—'}
+                            {comp.unit_rate > 0 ? money(comp.unit_rate) : '—'}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums font-medium text-content-primary">
-                            {comp.cost > 0 ? fmt(comp.cost) : '—'}
+                            {comp.cost > 0 ? money(comp.cost) : '—'}
                           </td>
                         </tr>
                       );
@@ -2639,15 +2888,19 @@ function CostItemRow({
               {/* All Properties */}
               <details className="mt-4">
                 <summary className="text-2xs font-medium text-content-tertiary cursor-pointer hover:text-content-secondary transition-colors select-none">
-                  All properties ({Object.keys(cls).length + Object.keys(meta).length + 5} fields)
+                  {t('costs.all_properties_n_fields', {
+                    defaultValue: 'All properties ({{count}} fields)',
+                    count: Object.keys(cls).length + Object.keys(meta).length + 5,
+                  })}
                 </summary>
                 <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-1.5 text-2xs">
                   {/* Basic fields */}
-                  <div className="flex justify-between"><span className="text-content-quaternary">Code</span><span className="text-content-secondary font-mono">{item.code}</span></div>
-                  <div className="flex justify-between"><span className="text-content-quaternary">Unit</span><span className="text-content-secondary">{item.unit}</span></div>
-                  <div className="flex justify-between"><span className="text-content-quaternary">Rate</span><span className="text-content-secondary font-semibold">{fmt(item.rate)}</span></div>
-                  <div className="flex justify-between"><span className="text-content-quaternary">Region</span><span className="text-content-secondary">{item.region || '—'}</span></div>
-                  <div className="flex justify-between"><span className="text-content-quaternary">Source</span><span className="text-content-secondary">{item.source}</span></div>
+                  <div className="flex justify-between"><span className="text-content-quaternary">{t('costs.code', { defaultValue: 'Code' })}</span><span className="text-content-secondary font-mono">{item.code}</span></div>
+                  <div className="flex justify-between"><span className="text-content-quaternary">{t('boq.unit', { defaultValue: 'Unit' })}</span><span className="text-content-secondary">{item.unit}</span></div>
+                  <div className="flex justify-between"><span className="text-content-quaternary">{t('costs.rate', { defaultValue: 'Rate' })}</span><span className="text-content-secondary font-semibold">{money(item.rate)}</span></div>
+                  <div className="flex justify-between"><span className="text-content-quaternary">{t('costs.currency', { defaultValue: 'Currency' })}</span><span className="text-content-secondary">{rowCurrency || '—'}</span></div>
+                  <div className="flex justify-between"><span className="text-content-quaternary">{t('costs.region_label', { defaultValue: 'Region' })}</span><span className="text-content-secondary">{item.region || '—'}</span></div>
+                  <div className="flex justify-between"><span className="text-content-quaternary">{t('costs.source_label', { defaultValue: 'Source' })}</span><span className="text-content-secondary">{item.source}</span></div>
 
                   {/* Classification */}
                   {Object.entries(cls).map(([k, v]) => (
@@ -2667,7 +2920,7 @@ function CostItemRow({
                     </div>
                   ))}
 
-                  <div className="flex justify-between"><span className="text-content-quaternary">Components</span><span className="text-content-secondary">{(item.components_count ?? detail.components?.length ?? 0)} resources</span></div>
+                  <div className="flex justify-between"><span className="text-content-quaternary">{t('costs.components_label', { defaultValue: 'Components' })}</span><span className="text-content-secondary">{t('costs.n_resources', { defaultValue: '{{count}} resources', count: (item.components_count ?? detail.components?.length ?? 0) })}</span></div>
                 </div>
               </details>
             </div>

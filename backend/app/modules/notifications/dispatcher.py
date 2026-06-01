@@ -40,7 +40,6 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 import httpx
 from sqlalchemy import select
@@ -62,6 +61,18 @@ _HTTP_CLIENT: httpx.AsyncClient | None = None
 # Default per-request timeout.  Webhooks should be fast; we don't want
 # a stuck endpoint to back up the notification loop for everyone.
 _WEBHOOK_TIMEOUT_SEC = 5.0
+
+# Circuit-breaker thresholds.  A target with consecutive failures at or
+# above ``_CIRCUIT_OPEN_THRESHOLD`` is skipped entirely so a dead
+# external endpoint cannot slow down the fan-out batch for every
+# notification.  Once the operator fixes the endpoint and manually
+# resets ``failure_count`` (or re-saves the target), deliveries resume.
+# ``_CIRCUIT_DEACTIVATE_THRESHOLD`` is a higher watermark: if a target
+# has been silently failing this long it is auto-deactivated with a
+# warning so it appears in the Admin UI as "needs attention" rather than
+# piling up a growing failure counter that nobody sees.
+_CIRCUIT_OPEN_THRESHOLD = 10
+_CIRCUIT_DEACTIVATE_THRESHOLD = 50
 
 
 def _get_http_client() -> httpx.AsyncClient:
@@ -138,10 +149,7 @@ async def _on_dispatch_email(event: Event) -> None:
         for entry in payload.get("events", []):
             etype = entry.get("event_type", "")
             ectx = (entry.get("payload") or {}).get("body_context", {}) or {}
-            etitle_key = (
-                (entry.get("payload") or {}).get("title_key")
-                or f"notifications.{etype}.title"
-            )
+            etitle_key = (entry.get("payload") or {}).get("title_key") or f"notifications.{etype}.title"
             etitle = render_template(etitle_key, ectx) or etype
             lines.append(f"  • {etitle}")
         body_text = (body_text + "\n" + "\n".join(lines)).strip()
@@ -169,8 +177,7 @@ async def _on_dispatch_email(event: Event) -> None:
                 result.reason,
             )
     except Exception:  # noqa: BLE001
-        logger.exception("dispatcher: email send crashed user=%s event=%s",
-                         user_id, event_type)
+        logger.exception("dispatcher: email send crashed user=%s event=%s", user_id, event_type)
 
 
 def _render_email_html(
@@ -194,7 +201,7 @@ def _render_email_html(
             f'<p style="margin:24px 0"><a href="{safe_url}" '
             f'style="background:#2563eb;color:#fff;padding:10px 18px;'
             f'text-decoration:none;border-radius:6px;display:inline-block">'
-            f'Open in OpenEstimate</a></p>'
+            f"Open in OpenEstimate</a></p>"
         )
     return (
         f'<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;'
@@ -202,12 +209,12 @@ def _render_email_html(
         f'<p style="margin:0 0 12px 0">{greeting}</p>'
         f'<h2 style="margin:0 0 8px 0;font-size:18px">{safe_subject}</h2>'
         f'<p style="margin:0;color:#374151;line-height:1.5">{safe_body}</p>'
-        f'{button}'
+        f"{button}"
         f'<hr style="margin:24px 0;border:none;border-top:1px solid #e5e7eb">'
         f'<p style="margin:0;font-size:12px;color:#6b7280">'
-        f'You are receiving this because of your notification preferences. '
-        f'Manage them in your profile settings.</p>'
-        f'</div>'
+        f"You are receiving this because of your notification preferences. "
+        f"Manage them in your profile settings.</p>"
+        f"</div>"
     )
 
 
@@ -268,15 +275,38 @@ async def _on_dispatch_webhook(event: Event) -> None:
             for target in targets:
                 if not _event_filter_matches(target.event_filter, event_type):
                     continue
+
+                # Circuit-breaker: skip targets that have been failing
+                # consecutively for too long so a dead endpoint doesn't
+                # slow down every notification batch.
+                current_failures = target.failure_count or 0
+                if current_failures >= _CIRCUIT_DEACTIVATE_THRESHOLD:
+                    # Auto-deactivate so the Admin UI surfaces it.
+                    target.active = False
+                    logger.warning(
+                        "dispatcher: webhook target %s (%s) auto-deactivated "
+                        "after %d consecutive failures — re-activate once fixed",
+                        target.id,
+                        target.url[:60],
+                        current_failures,
+                    )
+                    continue
+                if current_failures >= _CIRCUIT_OPEN_THRESHOLD:
+                    logger.debug(
+                        "dispatcher: circuit open for webhook target %s "
+                        "(%d failures) — skipping delivery",
+                        target.id,
+                        current_failures,
+                    )
+                    continue
+
                 headers = {
                     "Content-Type": "application/json",
                     "X-OE-Event-Type": event_type,
                     "X-OE-Idempotency-Key": envelope["id"],
                 }
                 if target.secret:
-                    headers["X-OE-Signature"] = (
-                        f"sha256={_sign_payload(target.secret, body)}"
-                    )
+                    headers["X-OE-Signature"] = f"sha256={_sign_payload(target.secret, body)}"
                 status_code: int | None = None
                 ok = False
                 try:
@@ -321,11 +351,14 @@ async def _on_notification_created(event: Event) -> None:
     user_id = data.get("user_id")
     if not user_id:
         return
-    await notifications_ws_hub.push_to_user(user_id, {
-        "event": "notification.created",
-        "data": data,
-        "ts": datetime.now(UTC).isoformat(),
-    })
+    await notifications_ws_hub.push_to_user(
+        user_id,
+        {
+            "event": "notification.created",
+            "data": data,
+            "ts": datetime.now(UTC).isoformat(),
+        },
+    )
 
 
 # ── Registration ───────────────────────────────────────────────────────────

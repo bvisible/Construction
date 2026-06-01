@@ -98,6 +98,15 @@ def _default_session_factory() -> async_sessionmaker[AsyncSession]:
 # ── Celery dispatch shim ─────────────────────────────────────────────────
 
 
+class BrokerUnavailableError(RuntimeError):
+    """Raised when the Celery broker (Redis) cannot be reached.
+
+    Distinguishes a transport-level "no broker" condition from a genuine
+    dispatch bug so ``submit_job`` can fall back to an in-process run
+    instead of marking the JobRun failed.
+    """
+
+
 def _dispatch_to_celery(job_run_id: uuid.UUID) -> str:
     """Hand the JobRun to a Celery worker and return Celery's task id.
 
@@ -105,11 +114,56 @@ def _dispatch_to_celery(job_run_id: uuid.UUID) -> str:
     starting a real Celery app. The patch target is the symbol exported
     here, not the underlying Celery method, which keeps the test
     contract stable across Celery version bumps.
+
+    Raises :class:`BrokerUnavailableError` when the broker (Redis) is not
+    reachable, so the caller can fall back gracefully rather than block the
+    event loop on kombu's connection-retry loop (the no-Docker dev env has
+    no Redis). A cheap pre-flight ping (short timeout, zero retries) detects
+    the missing broker fast; ``apply_async`` itself would otherwise also
+    stall on the result backend's much longer retry policy.
     """
+    from kombu.exceptions import OperationalError
+
+    from app.core.jobs import get_celery_app
     from app.core.jobs_tasks import dispatch_job
 
-    async_result = dispatch_job.apply_async(args=[str(job_run_id)])
+    # Pre-flight: confirm the broker is reachable with a bounded, no-retry
+    # probe. This avoids ever entering apply_async's slow broker/result
+    # retry loops when Redis simply isn't running. Skipped in eager mode,
+    # which runs the task inline and never touches the broker.
+    app = get_celery_app()
+    if not app.conf.task_always_eager:
+        try:
+            with app.connection_for_write() as conn:
+                conn.ensure_connection(max_retries=0, timeout=2.0)
+        except (OperationalError, ConnectionError, OSError, TimeoutError) as exc:
+            raise BrokerUnavailableError(str(exc)) from exc
+
+    try:
+        async_result = dispatch_job.apply_async(args=[str(job_run_id)])
+    except (OperationalError, ConnectionError, OSError) as exc:
+        # Broker / backend unreachable — surface as a typed error so
+        # submit_job can fall back to an in-process run.
+        raise BrokerUnavailableError(str(exc)) from exc
     return str(async_result.id)
+
+
+async def _run_in_process(
+    job_run_id: uuid.UUID,
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Run a JobRun through its lifecycle in-process (no broker).
+
+    Fallback path for the no-Docker dev env where no Celery worker /
+    Redis broker exists. Drives the same async lifecycle the worker would
+    (``_dispatch_job_sync``) but inside the running event loop, so it must
+    be scheduled as a background task — never awaited inline — to keep the
+    request handler responsive.
+    """
+    try:
+        await _dispatch_job_sync(job_run_id, session_factory=factory)
+    except Exception:  # noqa: BLE001 — background task; never propagate.
+        logger.exception("In-process job dispatch failed for job_run_id=%s", job_run_id)
 
 
 # ── Public API: submit_job ────────────────────────────────────────────────
@@ -181,12 +235,26 @@ async def submit_job(
         session.expunge(row)
 
     # ── 3. Dispatch to Celery and record the task id on the row.
+    # Run the (synchronous, network-touching) dispatch off the event loop
+    # so even the bounded broker pre-flight probe never blocks the request.
     try:
-        celery_task_id = _dispatch_to_celery(row.id)
+        celery_task_id = await asyncio.to_thread(_dispatch_to_celery, row.id)
+    except BrokerUnavailableError as exc:
+        # No broker (e.g. the no-Docker dev env has no Redis). Don't block
+        # the event loop and don't fail the run: drive the same lifecycle
+        # in-process as a fire-and-forget background task and return the
+        # pending row promptly so the request stays responsive.
+        logger.warning(
+            "Celery broker unavailable (%s) — running job_run_id=%s in-process",
+            exc,
+            row.id,
+        )
+        asyncio.create_task(_run_in_process(row.id, factory))  # noqa: RUF006
+        return row
     except Exception as exc:  # noqa: BLE001
-        # Dispatch failed — mark the row failed so the UI doesn't spin
-        # waiting for a worker that will never run. Keep the original
-        # exception for the caller; this is a real error path.
+        # Dispatch failed for a non-transport reason — mark the row failed
+        # so the UI doesn't spin waiting for a worker that will never run.
+        # Keep the original exception for the caller; this is a real error.
         logger.exception("Celery dispatch failed for job_run_id=%s", row.id)
         await _mark_dispatch_failed(row.id, exc, factory)
         raise

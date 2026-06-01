@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
+from app.core.sql_numeric import numeric_value
 from app.modules.boq.models import (
     BOQ,
     BOQActivityLog,
@@ -95,7 +96,7 @@ class BOQRepository:
         pos_stmt = (
             select(
                 Position.boq_id,
-                func.sum(cast(Position.total, Float)).label("direct_cost"),
+                func.sum(numeric_value(Position.total)).label("direct_cost"),
             )
             .where(Position.boq_id.in_(boq_ids))
             .group_by(Position.boq_id)
@@ -232,11 +233,7 @@ class PositionRepository:
         dropping positions 1001+ from every total. Aggregation callers use
         this method so the count limit can never under-state a tender.
         """
-        stmt = (
-            select(Position)
-            .where(Position.boq_id == boq_id)
-            .order_by(Position.sort_order, Position.ordinal)
-        )
+        stmt = select(Position).where(Position.boq_id == boq_id).order_by(Position.sort_order, Position.ordinal)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -268,14 +265,23 @@ class PositionRepository:
         stmt = delete(Position).where(Position.id == position_id)
         await self.session.execute(stmt)
 
-    async def reorder(self, position_ids: list[uuid.UUID]) -> None:
+    async def reorder(self, position_ids: list[uuid.UUID], boq_id: uuid.UUID) -> None:
         """Reorder positions by assigning sort_order based on list index.
+
+        Only touches positions that belong to ``boq_id`` — foreign IDs are
+        silently skipped (UPDATE rows=0) rather than mutating positions in
+        another user's BOQ (cross-tenant sort_order pollution).
 
         Args:
             position_ids: Ordered list of position UUIDs. Index becomes sort_order.
+            boq_id: Owning BOQ — positions not in this BOQ are not affected.
         """
         for index, pid in enumerate(position_ids):
-            stmt = update(Position).where(Position.id == pid).values(sort_order=index)
+            stmt = (
+                update(Position)
+                .where(Position.id == pid, Position.boq_id == boq_id)
+                .values(sort_order=index)
+            )
             await self.session.execute(stmt)
 
     async def get_max_sort_order(self, boq_id: uuid.UUID) -> int:
@@ -353,9 +359,7 @@ class PositionRepository:
             .where(BOQ.project_id == project_id, Position.reference_code == rc)
         )
         # 1. explicit master wins
-        master_stmt = base.where(Position.link_role == "master").order_by(
-            Position.created_at
-        )
+        master_stmt = base.where(Position.link_role == "master").order_by(Position.created_at)
         master = (await self.session.execute(master_stmt)).scalars().first()
         if master is not None:
             return master
@@ -544,11 +548,7 @@ class QuantityLinkRepository:
 
     async def list_for_position(self, position_id: uuid.UUID) -> list[QuantityLink]:
         """List every quantity link bound to a single position, oldest first."""
-        stmt = (
-            select(QuantityLink)
-            .where(QuantityLink.position_id == position_id)
-            .order_by(QuantityLink.created_at)
-        )
+        stmt = select(QuantityLink).where(QuantityLink.position_id == position_id).order_by(QuantityLink.created_at)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 

@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import { X, Layers } from 'lucide-react';
 import { Button, Input } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
+import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import { assembliesApi, type CreateAssemblyData } from './api';
 
 /* -- Constants ------------------------------------------------------------ */
@@ -72,6 +73,12 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
+  // Default the assembly currency to the user's preferred currency
+  // (Regional Settings) instead of a hardcoded 'EUR' — a user working in
+  // USD/GBP/BRL who doesn't open the dropdown would otherwise silently stamp
+  // their assemblies as EUR. The field stays editable below.
+  const rawPreferredCurrency = usePreferencesStore((s) => s.currency);
+  const preferredCurrency = /^[A-Z]{3}$/.test(rawPreferredCurrency) ? rawPreferredCurrency : 'EUR';
 
   const [form, setForm] = useState({
     code: '',
@@ -80,7 +87,7 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
     category: 'general',
     classificationStandard: '',
     classificationCode: '',
-    currency: 'EUR',
+    currency: preferredCurrency,
     bid_factor: '1.00',
   });
 
@@ -89,10 +96,17 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
       setForm({
         code: '', name: '', unit: 'm2', category: 'general',
         classificationStandard: '', classificationCode: '',
-        currency: 'EUR', bid_factor: '1.00',
+        currency: preferredCurrency, bid_factor: '1.00',
       });
     }
-  }, [open]);
+  }, [open, preferredCurrency]);
+
+  // Ensure the preferred currency is always an available option, even when it
+  // isn't one of the common presets (e.g. KES/THB), so the dropdown reflects
+  // the actual default rather than showing a different first entry.
+  const currencyOptions = CURRENCIES.some((c) => c.value === preferredCurrency)
+    ? CURRENCIES
+    : [{ value: preferredCurrency, label: preferredCurrency }, ...CURRENCIES];
 
   const mutation = useMutation({
     mutationFn: (data: CreateAssemblyData) => assembliesApi.create(data),
@@ -159,6 +173,7 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
           </div>
           <button
             onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-hover transition-colors"
           >
             <X size={18} />
@@ -236,7 +251,7 @@ export function CreateAssemblyModal({ open, onClose }: CreateAssemblyModalProps)
               <div className="flex flex-col gap-1.5">
                 <label className="text-sm font-medium text-content-primary">{t('assemblies.currency', { defaultValue: 'Currency' })}</label>
                 <select value={form.currency} onChange={(e) => set('currency', e.target.value)} className={selectClass}>
-                  {CURRENCIES.map((c) => (
+                  {currencyOptions.map((c) => (
                     <option key={c.value} value={c.value}>{c.label}</option>
                   ))}
                 </select>

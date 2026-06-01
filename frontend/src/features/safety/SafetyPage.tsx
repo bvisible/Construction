@@ -34,7 +34,7 @@ import {
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { SectionIntro } from '@/features/validation';
-import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
+import { apiGet, apiPost, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useToastStore } from '@/stores/useToastStore';
@@ -118,17 +118,17 @@ function normaliseObservation(o: ObservationWire): Observation {
 const SAFETY_TAB_IDS = ['incidents', 'observations'] as const;
 type SafetyTab = (typeof SAFETY_TAB_IDS)[number];
 
+// Keyed on the backend incident_type enum
+// (injury|near_miss|property_damage|environmental|fire).
 const INCIDENT_TYPE_COLORS: Record<
   string,
   'neutral' | 'blue' | 'success' | 'warning' | 'error'
 > = {
+  injury: 'error',
   near_miss: 'warning',
-  first_aid: 'blue',
-  medical: 'error',
-  lost_time: 'error',
-  fatality: 'error',
   property_damage: 'warning',
   environmental: 'blue',
+  fire: 'error',
 };
 
 const INCIDENT_SEVERITY_COLORS: Record<
@@ -141,14 +141,16 @@ const INCIDENT_SEVERITY_COLORS: Record<
   critical: 'error',
 };
 
+// Keyed on the backend incident status enum
+// (reported|investigating|corrective_action|closed).
 const INCIDENT_STATUS_COLORS: Record<
   string,
   'neutral' | 'blue' | 'success' | 'warning' | 'error'
 > = {
   reported: 'blue',
   investigating: 'warning',
-  resolved: 'success',
-  closed: 'neutral',
+  corrective_action: 'warning',
+  closed: 'success',
 };
 
 const OBS_TYPE_COLORS: Record<
@@ -162,14 +164,14 @@ const OBS_TYPE_COLORS: Record<
   housekeeping: 'neutral',
 };
 
+// Keyed on the backend observation status enum (open|in_progress|closed).
 const OBS_STATUS_COLORS: Record<
   string,
   'neutral' | 'blue' | 'success' | 'warning' | 'error'
 > = {
   open: 'warning',
   in_progress: 'blue',
-  resolved: 'success',
-  closed: 'neutral',
+  closed: 'success',
 };
 
 /* ── Card Config for Create Modals ────────────────────────────────────── */
@@ -310,7 +312,7 @@ async function downloadExcelExport(url: string, fallbackFilename: string): Promi
     let detail = fallbackFilename;
     try {
       const body = await response.json();
-      detail = body.detail || 'export_failed';
+      detail = extractErrorMessageFromBody(body) ?? 'export_failed';
     } catch {
       detail = 'export_failed';
     }

@@ -40,7 +40,6 @@ from fastapi import (
 from sqlalchemy import select
 
 from app.config import get_settings
-from app.database import async_session_factory
 from app.dependencies import (
     CurrentUserId,
     CurrentUserPayload,
@@ -65,7 +64,7 @@ from app.modules.notifications.service import (
 )
 from app.modules.notifications.ws_hub import notifications_ws_hub
 
-router = APIRouter()
+router = APIRouter(tags=["notifications"])
 logger = logging.getLogger(__name__)
 
 
@@ -106,9 +105,7 @@ async def list_notifications(
     offset: int = Query(default=0, ge=0),
 ) -> NotificationListResponse:
     """‌⁠‍List current user's notifications (paginated)."""
-    items, total = await service.list_for_user(
-        user_id, is_read=is_read, limit=limit, offset=offset
-    )
+    items, total = await service.list_for_user(user_id, is_read=is_read, limit=limit, offset=offset)
     unread = await service.count_unread(user_id)
     return NotificationListResponse(
         items=[_to_response(i) for i in items],
@@ -444,6 +441,10 @@ async def update_webhook_target(
         target.active = body.active
     await session.flush()
     await session.commit()
+    # ``expire_on_commit`` cleared every attribute above; reload eagerly so the
+    # response build below does not trigger a sync lazy load outside the
+    # async greenlet (MissingGreenlet on asyncpg).
+    await session.refresh(target)
     return _webhook_to_response(target)
 
 

@@ -20,15 +20,25 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 
-from app.core.i18n import get_locale
-from app.core.validation.messages import translate
-from app.dependencies import CurrentUserId, CurrentUserPayload, SessionDep, verify_project_access
+from app.core.http_headers import content_disposition_attachment
+from app.dependencies import (
+    CurrentUserId,
+    CurrentUserPayload,
+    RequirePermission,
+    SessionDep,
+    verify_project_access,
+)
 from app.modules.tendering.schemas import (
+    AddendumAcknowledgeRequest,
+    AddendumCreate,
+    AddendumResponse,
     BidAnalysisResponse,
     BidComparisonResponse,
     BidCreate,
     BidResponse,
     BidUpdate,
+    LevelBidsResponse,
+    LevelingMatrixResponse,
     PackageCreate,
     PackageResponse,
     PackageUpdate,
@@ -36,7 +46,7 @@ from app.modules.tendering.schemas import (
 )
 from app.modules.tendering.service import TenderingService
 
-router = APIRouter()
+router = APIRouter(tags=["tendering"])
 logger = logging.getLogger(__name__)
 
 
@@ -48,19 +58,19 @@ async def _verify_tender_project_owner(
     session: SessionDep,
     project_id: uuid.UUID,
     user_id: str,
-    payload: dict | None = None,
+    payload: dict | None = None,  # noqa: ARG001 — kept for call-site symmetry
 ) -> None:
-    """‌⁠‍Verify the current user owns the project. Admins bypass."""
-    if payload and payload.get("role") == "admin":
-        return
-    from app.modules.projects.repository import ProjectRepository
+    """Verify the caller may access the project.
 
-    project_repo = ProjectRepository(session)
-    project = await project_repo.get_by_id(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=translate("errors.project_not_found", locale=get_locale()))
-    if str(project.owner_id) != user_id:
-        raise HTTPException(status_code=403, detail="You do not have access to this project")
+    Routes through the shared ``verify_project_access`` helper so the
+    tendering surface grants the SAME population (owner + admins + project
+    team members) as every other module — previously this was owner-only,
+    which silently locked team members out of the package/bid endpoints
+    even though they could already reach ``GET /bid-analysis/`` (which uses
+    ``verify_project_access``). ``verify_project_access`` raises 404 on both
+    "missing" and "denied" (IDOR defence).
+    """
+    await verify_project_access(project_id, user_id, session)
 
 
 async def _verify_package_owner(
@@ -68,21 +78,50 @@ async def _verify_package_owner(
     session: SessionDep,
     package_id: uuid.UUID,
     user_id: str,
-    payload: dict | None = None,
+    payload: dict | None = None,  # noqa: ARG001 — kept for call-site symmetry
 ) -> object:
-    """‌⁠‍Load a package, then verify the user owns its project. Admins bypass."""
+    """Load a package, then verify project access (owner + admin + team)."""
     package = await service.get_package(package_id)
-    if payload and payload.get("role") == "admin":
-        return package
-    from app.modules.projects.repository import ProjectRepository
-
-    project_repo = ProjectRepository(session)
-    project = await project_repo.get_by_id(package.project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail=translate("errors.project_not_found", locale=get_locale()))
-    if str(project.owner_id) != user_id:
-        raise HTTPException(status_code=403, detail="You do not have access to this tender package")
+    await verify_project_access(package.project_id, user_id, session)
     return package
+
+
+async def _caller_scope_project_ids(
+    session: SessionDep,
+    user_id: str,
+) -> list[uuid.UUID] | None:
+    """Project IDs the caller may reach, for scoping addendum lookups.
+
+    Returns ``None`` for admins (no filter — cross-tenant by design) and the
+    union of owned + team-member project IDs for everyone else. This is *only*
+    used to keep ``find_addendum_package`` from scanning every package in the
+    database; the authoritative access check stays ``verify_project_access`` on
+    the resolved package's project (owner + admin + team), so this scope can
+    never grant more than that check allows.
+    """
+    from sqlalchemy import select
+
+    from app.modules.projects.models import Project
+    from app.modules.teams.access import member_project_ids_subquery
+    from app.modules.users.repository import UserRepository
+
+    try:
+        uid = uuid.UUID(str(user_id))
+    except (ValueError, TypeError):
+        return []
+
+    try:
+        user = await UserRepository(session).get_by_id(uid)
+        if user is not None and getattr(user, "role", "") == "admin":
+            return None
+    except Exception:
+        logger.exception("Admin-role lookup failed during addendum scope resolution")
+
+    stmt = select(Project.id).where(
+        (Project.owner_id == uid) | (Project.id.in_(member_project_ids_subquery(uid)))
+    )
+    rows = await session.execute(stmt)
+    return list(rows.scalars().all())
 
 
 async def _verify_bid_access(
@@ -181,6 +220,7 @@ async def list_tenders_root(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.read")),
     project_id: uuid.UUID | None = Query(
         default=None,
         description="Optional project filter. When omitted returns an empty list "
@@ -200,9 +240,7 @@ async def list_tenders_root(
     if project_id is None:
         return []
     await _verify_tender_project_owner(session, project_id, user_id, payload)
-    packages, _ = await service.list_packages(
-        project_id=project_id, offset=offset, limit=limit
-    )
+    packages, _ = await service.list_packages(project_id=project_id, offset=offset, limit=limit)
     return [_package_to_response(p) for p in packages]
 
 
@@ -216,6 +254,7 @@ async def create_package(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.create")),
 ) -> PackageResponse:
     """Create a new tender package from a BOQ."""
     await _verify_tender_project_owner(session, data.project_id, user_id, payload)
@@ -238,6 +277,7 @@ async def list_packages(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.read")),
     project_id: uuid.UUID = Query(
         ...,
         description="Required: project ID to scope the listing (prevents cross-tenant enumeration)",
@@ -263,6 +303,7 @@ async def get_package(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.read")),
 ) -> PackageWithBidsResponse:
     """Get a tender package with all bids."""
     package = await _verify_package_owner(service, session, package_id, user_id, payload)
@@ -277,6 +318,7 @@ async def update_package(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.update")),
 ) -> PackageResponse:
     """Update a tender package status or fields."""
     await _verify_package_owner(service, session, package_id, user_id, payload)
@@ -295,6 +337,7 @@ async def create_bid(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.bid.create")),
 ) -> BidResponse:
     """Add a bid to a tender package."""
     await _verify_package_owner(service, session, package_id, user_id, payload)
@@ -318,6 +361,7 @@ async def list_bids(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.read")),
 ) -> list[BidResponse]:
     """List all bids for a tender package."""
     await _verify_package_owner(service, session, package_id, user_id, payload)
@@ -333,6 +377,7 @@ async def update_bid(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.bid.update")),
 ) -> BidResponse:
     """Update a bid.
 
@@ -367,6 +412,7 @@ async def compare_bids(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.comparison.read")),
 ) -> BidComparisonResponse:
     """Compare all bids for a package side-by-side."""
     await _verify_package_owner(service, session, package_id, user_id, payload)
@@ -381,6 +427,7 @@ async def apply_tender_winner(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.award")),
 ) -> dict:
     """Award the package to *bid_id* and copy its unit rates into the BOQ.
 
@@ -390,6 +437,112 @@ async def apply_tender_winner(
     """
     await _verify_package_owner(service, session, package_id, user_id, payload)
     return await service.apply_winner(package_id, bid_id, awarded_by=user_id)
+
+
+# ── Addenda Endpoints ────────────────────────────────────────────────────────
+
+
+@router.get("/packages/{package_id}/addenda/", response_model=list[AddendumResponse])
+async def list_package_addenda(
+    package_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.addendum.read")),
+) -> list[AddendumResponse]:
+    """List a package's addenda (mid-tender clarifications), oldest first."""
+    await _verify_package_owner(service, session, package_id, user_id, payload)
+    return await service.list_addenda(package_id)
+
+
+@router.post(
+    "/packages/{package_id}/addenda/",
+    response_model=AddendumResponse,
+    status_code=201,
+)
+async def create_package_addendum(
+    package_id: uuid.UUID,
+    data: AddendumCreate,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.addendum.create")),
+) -> AddendumResponse:
+    """Create a new draft addendum on a package."""
+    await _verify_package_owner(service, session, package_id, user_id, payload)
+    return await service.create_addendum(package_id, data)
+
+
+@router.post("/addenda/{addendum_id}/publish/", response_model=AddendumResponse)
+async def publish_package_addendum(
+    addendum_id: str,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.addendum.publish")),
+) -> AddendumResponse:
+    """Publish a draft addendum so bidders can acknowledge it."""
+    scope = await _caller_scope_project_ids(session, user_id)
+    package, _entry, _idx = await service.find_addendum_package(addendum_id, scope)
+    await verify_project_access(package.project_id, user_id, session)
+    return await service.publish_addendum(package, addendum_id, user_id)
+
+
+@router.post("/addenda/{addendum_id}/acknowledge/", response_model=AddendumResponse)
+async def acknowledge_package_addendum(
+    addendum_id: str,
+    data: AddendumAcknowledgeRequest,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.addendum.acknowledge")),
+) -> AddendumResponse:
+    """Record a bidder's acknowledgement of a published addendum."""
+    scope = await _caller_scope_project_ids(session, user_id)
+    package, _entry, _idx = await service.find_addendum_package(addendum_id, scope)
+    await verify_project_access(package.project_id, user_id, session)
+    return await service.acknowledge_addendum(package, addendum_id, data.bidder_id, user_id)
+
+
+# ── Bid Leveling Endpoints ─────────────────────────────────────────────────────
+
+
+@router.get(
+    "/packages/{package_id}/leveling-matrix/",
+    response_model=LevelingMatrixResponse,
+)
+async def get_leveling_matrix(
+    package_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.leveling.read")),
+) -> LevelingMatrixResponse:
+    """Return the bid-leveling matrix (reference BOQ lines × bids)."""
+    await _verify_package_owner(service, session, package_id, user_id, payload)
+    return await service.get_leveling_matrix(package_id)
+
+
+@router.post(
+    "/packages/{package_id}/level-bids/",
+    response_model=LevelBidsResponse,
+)
+async def level_package_bids(
+    package_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
+    service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.leveling.run")),
+) -> LevelBidsResponse:
+    """Run bid leveling across a package's bids and return the rollup."""
+    await _verify_package_owner(service, session, package_id, user_id, payload)
+    return await service.level_bids(package_id)
 
 
 # ── Export Endpoints ──────────────────────────────────────────────────────────
@@ -402,6 +555,7 @@ async def export_tender_pdf(
     payload: CurrentUserPayload,
     session: SessionDep,
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.read")),
 ) -> StreamingResponse:
     """Export tender package with bid comparison as a PDF report.
 
@@ -523,7 +677,9 @@ async def export_tender_pdf(
     return StreamingResponse(
         buf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        # RFC 6266 — a package name with non-Latin-1 chars would otherwise 500
+        # while the ASGI server encodes this header.
+        headers={"Content-Disposition": content_disposition_attachment(filename)},
     )
 
 
@@ -540,6 +696,7 @@ async def get_bid_analysis(
     user_id: CurrentUserId,
     project_id: uuid.UUID = Query(..., description="Project scope"),
     service: TenderingService = Depends(_get_service),
+    _perm: None = Depends(RequirePermission("tendering.read")),
 ) -> BidAnalysisResponse:
     """Cross-package bid analysis for the Estimation Dashboard."""
     await verify_project_access(project_id, user_id, session)

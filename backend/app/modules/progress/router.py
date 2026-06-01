@@ -32,7 +32,7 @@ from app.modules.progress.schemas import (
 )
 from app.modules.progress.service import ProgressService
 
-router = APIRouter()
+router = APIRouter(tags=["progress"])
 logger = logging.getLogger(__name__)
 
 

@@ -2,12 +2,12 @@
 
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import { ExternalLink, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag } from 'lucide-react';
+import { ExternalLink, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag, Star } from 'lucide-react';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { AuthImage } from '@/shared/ui';
 import { primaryModule } from '../kindModule';
 import { CDEBadge } from './CDEBadge';
-import type { FileRow, FileKind } from '../types';
+import { favoriteKey, type FileRow, type FileKind } from '../types';
 
 const KIND_ICON: Record<FileKind, typeof FileText> = {
   document: FileText,
@@ -37,6 +37,10 @@ interface FileGridProps {
   onSelect: (id: string, additive: boolean, shift?: boolean) => void;
   onOpen: (row: FileRow) => void;
   isLoading?: boolean;
+  /** ``favoriteKey(kind, id)`` membership set for the current user. */
+  favoriteKeys?: Set<string>;
+  /** Toggle a tile's favourite state. Omit to hide the star control. */
+  onToggleFavorite?: (row: FileRow, isFavorite: boolean) => void;
 }
 
 function fmtBytes(bytes: number): string {
@@ -47,7 +51,15 @@ function fmtBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-export function FileGrid({ items, selectedIds, onSelect, onOpen, isLoading }: FileGridProps) {
+export function FileGrid({
+  items,
+  selectedIds,
+  onSelect,
+  onOpen,
+  isLoading,
+  favoriteKeys,
+  onToggleFavorite,
+}: FileGridProps) {
   const { t } = useTranslation();
 
   if (isLoading && items.length === 0) {
@@ -80,6 +92,7 @@ export function FileGrid({ items, selectedIds, onSelect, onOpen, isLoading }: Fi
         const isSelected = selectedIds.has(row.id);
         const target = primaryModule(row.kind, row.extension);
         const moduleLabel = t(target.i18nKey, { defaultValue: target.label });
+        const isFavorite = favoriteKeys?.has(favoriteKey(row.kind, row.id)) ?? false;
         return (
           <div
             key={row.id}
@@ -179,6 +192,35 @@ export function FileGrid({ items, selectedIds, onSelect, onOpen, isLoading }: Fi
               </span>
               <ExternalLink size={9} className="shrink-0 opacity-70" />
             </button>
+
+            {/* Favourite star — top-left. Always visible once favourited
+                (so the user can find their starred files at a glance);
+                fades in on hover otherwise. */}
+            {onToggleFavorite && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleFavorite(row, isFavorite);
+                }}
+                aria-pressed={isFavorite}
+                className={clsx(
+                  'absolute top-1.5 left-1.5 inline-flex items-center justify-center h-6 w-6 rounded-md',
+                  'bg-surface-elevated/95 backdrop-blur-sm shadow-sm border border-border-light',
+                  'transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
+                  isFavorite
+                    ? 'opacity-100 text-amber-500 hover:text-amber-600'
+                    : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100 text-content-tertiary hover:text-amber-500',
+                )}
+                title={
+                  isFavorite
+                    ? t('files.favorites.remove', { defaultValue: 'Remove from favourites' })
+                    : t('files.favorites.add', { defaultValue: 'Add to favourites' })
+                }
+              >
+                <Star size={13} strokeWidth={2} fill={isFavorite ? 'currentColor' : 'none'} />
+              </button>
+            )}
           </div>
         );
       })}

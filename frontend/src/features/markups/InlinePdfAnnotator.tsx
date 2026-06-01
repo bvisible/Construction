@@ -79,6 +79,21 @@ interface Props {
   onMarkupCreated: () => void;
   stamps?: StampDef[];
   activeStamp?: string;
+  /**
+   * Deep-link target: when set, the annotator jumps to the matching markup
+   * on mount — switches to its page, scrolls it into view, and pulses a
+   * glow ring around it for ~2s. Used by "Open in document" from the
+   * markup detail row so reviewers land on the exact annotation rather
+   * than the first page.
+   */
+  highlightMarkupId?: string;
+  /**
+   * Initial page to open. When `highlightMarkupId` resolves to a real
+   * annotation, the page from the annotation wins; this prop is the
+   * fallback used when the markup hasn't loaded yet (or to display the
+   * correct page on legacy markups without geometry).
+   */
+  initialPage?: number;
 }
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
@@ -125,6 +140,8 @@ export function InlinePdfAnnotator({
   onMarkupCreated,
   stamps: externalStamps,
   activeStamp: initialStamp,
+  highlightMarkupId,
+  initialPage,
 }: Props) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
@@ -150,6 +167,19 @@ export function InlinePdfAnnotator({
   const [saving, setSaving] = useState(false);
   const [selectedStamp, setSelectedStamp] = useState(initialStamp || 'approved');
   const availableStamps = externalStamps?.length ? externalStamps : DEFAULT_STAMPS;
+  // ID of the annotation currently rendered with the deep-link pulse-glow
+  // ring. Cleared by a timer 2s after it's set so the highlight is a
+  // momentary "look here" cue, not a permanent state.
+  const [highlightedAnnotationId, setHighlightedAnnotationId] = useState<string | null>(
+    highlightMarkupId ?? null,
+  );
+  // Highlight rectangle in overlay-canvas pixel space; recomputed every
+  // render so it stays correct as the user zooms / pages around. NULL
+  // when there's nothing to highlight (or the markup is on another page).
+  const [highlightRect, setHighlightRect] = useState<{
+    left: number; top: number; width: number; height: number;
+  } | null>(null);
+  const scrolledToHighlightRef = useRef(false);
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -233,16 +263,58 @@ export function InlinePdfAnnotator({
             stampName: (m.geometry?.stamp_name as string) || (m.type === 'stamp' ? (m.label || undefined) : undefined),
           };
         });
-        if (!cancelled) setAnnotations((prev) => [...prev, ...loaded]);
+        if (!cancelled) {
+          setAnnotations((prev) => [...prev, ...loaded]);
+          // Deep-link target — jump to the requested markup's page so the
+          // user lands on the right sheet (the pulse-glow ring is drawn
+          // separately by the render loop below, and the scroll-into-view
+          // effect runs after the page renders).
+          if (highlightMarkupId) {
+            const target = loaded.find((a) => a.id === highlightMarkupId);
+            if (target && target.page > 0) {
+              setCurrentPage(target.page);
+            } else if (initialPage && initialPage > 0) {
+              // No match (legacy markup or geometry gone) — at least open
+              // the page hint that came in with the deep link.
+              setCurrentPage(initialPage);
+            }
+          } else if (initialPage && initialPage > 0) {
+            setCurrentPage(initialPage);
+          }
+        }
       } catch {
         // non-critical — just won't show existing markups
       }
     };
     loadExisting();
     return () => { cancelled = true; };
-  }, [projectId, documentId]);
+  }, [projectId, documentId, highlightMarkupId, initialPage]);
+
+  // Clear the highlight after 2s so the pulse ring fades back to the
+  // normal annotation rendering. Resets the timer if a new markup is
+  // deep-linked while the previous one is still glowing.
+  useEffect(() => {
+    if (!highlightedAnnotationId) return;
+    const tid = window.setTimeout(() => setHighlightedAnnotationId(null), 2000);
+    return () => window.clearTimeout(tid);
+  }, [highlightedAnnotationId]);
+
+  // When the prop changes (e.g. user clicks "Open in document" again on
+  // another markup while the annotator is already open), restart the
+  // highlight cycle.
+  useEffect(() => {
+    if (highlightMarkupId) {
+      setHighlightedAnnotationId(highlightMarkupId);
+    }
+  }, [highlightMarkupId]);
 
   /* ── Render page ──────────────────────────────────────────────────── */
+
+  // Forward declaration via ref: `drawAnnotations` is declared after this
+  // effect (its body needs callback definitions that live below). Calling
+  // through a ref keeps both callers reading the freshest closure without
+  // a TDZ reference cycle.
+  const drawAnnotationsRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     if (!pdfDoc || !canvasRef.current) return;
@@ -282,11 +354,11 @@ export function InlinePdfAnnotator({
         }
         // Even on cancellation, repaint the overlay so stale strokes from
         // the previous page can't linger if the redraw effect races us.
-        if (!cancelled) drawAnnotations();
+        if (!cancelled) drawAnnotationsRef.current();
         return;
       }
       if (!cancelled) {
-        drawAnnotations();
+        drawAnnotationsRef.current();
       }
     };
     renderPage();
@@ -297,7 +369,7 @@ export function InlinePdfAnnotator({
       // bitmap data.
       activeTask?.cancel?.();
     };
-  }, [pdfDoc, currentPage, zoom]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pdfDoc, currentPage, zoom]);
 
   /* ── Draw annotations on overlay ──────────────────────────────────── */
 
@@ -331,6 +403,11 @@ export function InlinePdfAnnotator({
     };
 
     const pageAnnotations = annotations.filter((a) => a.page === currentPage);
+
+    // Track the bounding box of the highlighted annotation as we walk the
+    // list so the post-render scroll effect can centre it. Reset every
+    // render so a switch to another page clears the previous rect.
+    let highlightBBox: { left: number; top: number; width: number; height: number } | null = null;
 
     for (const rawAnn of pageAnnotations) {
       // Materialise the annotation with points already mapped into
@@ -435,7 +512,47 @@ export function InlinePdfAnnotator({
       }
 
       ctx.restore();
+
+      // If this annotation is the deep-link target, compute its bounding
+      // box (in overlay-canvas pixel space) so the post-render effect
+      // below can render the pulse-glow ring and scroll it into view.
+      if (highlightedAnnotationId && rawAnn.id === highlightedAnnotationId) {
+        const xs = ann.points.map((p) => p.x);
+        const ys = ann.points.map((p) => p.y);
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        const maxX = Math.max(...xs);
+        const maxY = Math.max(...ys);
+        // Pad by ~24px so single-point markups (stamps, text) get a
+        // visible ring rather than a zero-area rectangle, and clouds /
+        // arrows show breathing room around their stroke.
+        const pad = 24;
+        highlightBBox = {
+          left: minX - pad,
+          top: minY - pad,
+          width: Math.max(48, maxX - minX + pad * 2),
+          height: Math.max(48, maxY - minY + pad * 2),
+        };
+      }
     }
+
+    // Publish the bbox once per render so React redraws the CSS pulse
+    // overlay. We compare against the previous value to avoid an infinite
+    // setState→redraw loop when nothing changed.
+    setHighlightRect((prev) => {
+      if (!highlightBBox && !prev) return prev;
+      if (
+        highlightBBox &&
+        prev &&
+        prev.left === highlightBBox.left &&
+        prev.top === highlightBBox.top &&
+        prev.width === highlightBBox.width &&
+        prev.height === highlightBBox.height
+      ) {
+        return prev;
+      }
+      return highlightBBox;
+    });
 
     // Draw current shape being drawn
     if (isDrawing && drawStart && drawEnd && activeTool !== 'select' && activeTool !== 'text') {
@@ -475,12 +592,54 @@ export function InlinePdfAnnotator({
 
       ctx.restore();
     }
-  }, [annotations, currentPage, isDrawing, drawStart, drawEnd, activeTool, activeColor]);
+  }, [annotations, currentPage, isDrawing, drawStart, drawEnd, activeTool, activeColor, highlightedAnnotationId]);
+
+  // Keep the forward-ref pointing at the latest drawAnnotations closure
+  // so the render-effect (which can't depend on drawAnnotations directly
+  // — see the TDZ comment above) always invokes the freshest version.
+  useEffect(() => {
+    drawAnnotationsRef.current = drawAnnotations;
+  }, [drawAnnotations]);
 
   // Redraw overlay whenever annotations or drawing state changes
   useEffect(() => {
     drawAnnotations();
   }, [drawAnnotations]);
+
+  // Scroll the scrollable container so the highlighted annotation is
+  // centred in the viewport. Fires once per highlight session (guarded
+  // by ``scrolledToHighlightRef``) so subsequent zoom/redraws don't keep
+  // yanking the scroll back if the user has moved on.
+  useEffect(() => {
+    if (!highlightedAnnotationId) {
+      scrolledToHighlightRef.current = false;
+      return;
+    }
+    if (scrolledToHighlightRef.current) return;
+    if (!highlightRect) return;
+    const container = containerRef.current;
+    const overlay = overlayRef.current;
+    if (!container || !overlay) return;
+    // Convert overlay-canvas pixel coords to displayed CSS pixels.
+    const overlayRect = overlay.getBoundingClientRect();
+    const scaleX = overlayRect.width / overlay.width;
+    const scaleY = overlayRect.height / overlay.height;
+    const cssLeft = highlightRect.left * scaleX;
+    const cssTop = highlightRect.top * scaleY;
+    const cssWidth = highlightRect.width * scaleX;
+    const cssHeight = highlightRect.height * scaleY;
+    // Centre target inside the scroll viewport.
+    const targetScrollLeft =
+      cssLeft + cssWidth / 2 - container.clientWidth / 2;
+    const targetScrollTop =
+      cssTop + cssHeight / 2 - container.clientHeight / 2;
+    container.scrollTo({
+      left: Math.max(0, targetScrollLeft),
+      top: Math.max(0, targetScrollTop),
+      behavior: 'smooth',
+    });
+    scrolledToHighlightRef.current = true;
+  }, [highlightedAnnotationId, highlightRect]);
 
   // On page change, drop any in-flight drag so a half-drawn stroke from
   // page N can't bleed onto page N+1 (the drag state is shared across pages).
@@ -893,6 +1052,38 @@ export function InlinePdfAnnotator({
             onMouseLeave={handleMouseUp}
           />
 
+          {/* Deep-link pulse-glow ring — sits above the overlay canvas so
+              it inherits the same coordinate space (overlay-canvas pixels
+              translated to displayed CSS pixels). The ring is purely
+              decorative: ``pointer-events: none`` keeps annotation tools
+              fully interactive underneath. Removed after 2s by the timer
+              in the highlight effect above. */}
+          {highlightedAnnotationId && highlightRect && overlayRef.current && (
+            (() => {
+              const overlay = overlayRef.current;
+              const overlayCss = overlay.getBoundingClientRect();
+              const scaleX = overlayCss.width / overlay.width;
+              const scaleY = overlayCss.height / overlay.height;
+              return (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute rounded-lg animate-pulse-glow"
+                  style={{
+                    left: highlightRect.left * scaleX,
+                    top: highlightRect.top * scaleY,
+                    width: highlightRect.width * scaleX,
+                    height: highlightRect.height * scaleY,
+                    boxShadow:
+                      '0 0 0 3px rgba(59,130,246,0.9), 0 0 24px 8px rgba(59,130,246,0.5)',
+                    background: 'rgba(59,130,246,0.08)',
+                    transition: 'all 250ms ease-out',
+                  }}
+                  data-testid="markup-highlight-ring"
+                />
+              );
+            })()
+          )}
+
           {/* Text input overlay */}
           {showTextInput && textPosition && (
             <div
@@ -913,6 +1104,7 @@ export function InlinePdfAnnotator({
                 />
                 <button
                   onClick={handleTextSubmit}
+                  aria-label={t('common.save', { defaultValue: 'Save' })}
                   className="p-1 rounded text-oe-blue hover:bg-surface-secondary"
                 >
                   <Save size={12} />

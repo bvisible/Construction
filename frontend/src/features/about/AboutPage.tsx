@@ -30,7 +30,7 @@ export function AboutPage() {
             href="https://openconstructionerp.com?utm_source=app&utm_medium=about"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-xs font-semibold text-oe-blue hover:text-oe-blue-dark transition-colors mb-4"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-oe-blue hover:text-oe-blue-text transition-colors mb-4"
           >
             <Globe size={13} />
             openconstructionerp.com
@@ -884,19 +884,21 @@ export function AboutPage() {
               ))}
             </ul>
 
-            {/* ── Popular topics — direct deep-links so users jump straight into
-                the doc page they need, instead of landing on the index. ── */}
+            {/* ── Popular topics — deep-links into the repo's docs/ tree on
+                GitHub (the marketing-site docs.html 404s). Topics with a
+                dedicated doc file link straight to it; the rest fall back to
+                the browsable docs/ tree root. ── */}
             <p className="mb-2 text-2xs font-semibold uppercase tracking-wider text-content-tertiary">
               {t('about.docs_popular_label', { defaultValue: 'Popular topics' })}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {[
-                { href: 'https://openconstructionerp.com/docs.html#quickstart', label: t('about.docs_pop_quickstart', { defaultValue: 'Quick start — Docker compose' }) },
-                { href: 'https://openconstructionerp.com/docs.html#bim-import', label: t('about.docs_pop_bim', { defaultValue: 'Import BIM (RVT/IFC) → BOQ' }) },
-                { href: 'https://openconstructionerp.com/docs.html#gaeb', label: t('about.docs_pop_gaeb', { defaultValue: 'GAEB X83/X84 import & export' }) },
-                { href: 'https://openconstructionerp.com/docs.html#takeoff', label: t('about.docs_pop_takeoff', { defaultValue: 'PDF takeoff with annotations' }) },
-                { href: 'https://openconstructionerp.com/docs.html#module-sdk', label: t('about.docs_pop_sdk', { defaultValue: 'Module SDK · write a plugin' }) },
-                { href: 'https://openconstructionerp.com/docs.html#deploy', label: t('about.docs_pop_deploy', { defaultValue: 'VPS deployment guide' }) },
+                { href: 'https://github.com/datadrivenconstruction/OpenConstructionERP/tree/main/docs', label: t('about.docs_pop_quickstart', { defaultValue: 'Quick start — Docker compose' }) },
+                { href: 'https://github.com/datadrivenconstruction/OpenConstructionERP/blob/main/docs/BIM-STORAGE-ARCHITECTURE.md', label: t('about.docs_pop_bim', { defaultValue: 'Import BIM (RVT/IFC) → BOQ' }) },
+                { href: 'https://github.com/datadrivenconstruction/OpenConstructionERP/tree/main/docs', label: t('about.docs_pop_gaeb', { defaultValue: 'GAEB X83/X84 import & export' }) },
+                { href: 'https://github.com/datadrivenconstruction/OpenConstructionERP/tree/main/docs', label: t('about.docs_pop_takeoff', { defaultValue: 'PDF takeoff with annotations' }) },
+                { href: 'https://github.com/datadrivenconstruction/OpenConstructionERP/tree/main/docs/module-development', label: t('about.docs_pop_sdk', { defaultValue: 'Module SDK · write a plugin' }) },
+                { href: 'https://github.com/datadrivenconstruction/OpenConstructionERP/blob/main/docs/INSTALL_LINUX.md', label: t('about.docs_pop_deploy', { defaultValue: 'VPS deployment guide' }) },
               ].map(topic => (
                 <a
                   key={topic.href}
@@ -914,7 +916,7 @@ export function AboutPage() {
             </div>
 
             <div className="mt-auto pt-4">
-              <a href="https://openconstructionerp.com/docs.html" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/tree/main/docs" target="_blank" rel="noopener noreferrer">
                 <Button variant="primary" size="md" icon={<BookOpen size={15} />}>
                   {t('about.docs_open', { defaultValue: 'Open Docs' })}
                 </Button>

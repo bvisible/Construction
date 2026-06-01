@@ -32,7 +32,7 @@ function getInitialSubscribed(): boolean {
   }
 }
 
-export function SubscribeButton() {
+export function SubscribeButton({ condensed = false }: { condensed?: boolean } = {}) {
   const { t } = useTranslation();
   const [subscribed, setSubscribed] = useState<boolean>(getInitialSubscribed);
 
@@ -88,7 +88,10 @@ export function SubscribeButton() {
           defaultValue: 'Get release notes by email (opens openconstructionerp.com)',
         })}
         className={clsx(
-          'hidden md:inline-flex h-8 items-center gap-1.5 rounded-lg border px-3',
+          // Partner mode condenses to the icon-only form so the co-brand
+          // chip gets a clean central slot; otherwise full pill from md up.
+          condensed ? 'hidden' : 'hidden md:inline-flex',
+          'h-8 items-center gap-1.5 rounded-lg border px-3',
           'text-xs font-medium transition-colors',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400/40',
           subscribed
@@ -122,7 +125,8 @@ export function SubscribeButton() {
         aria-label={t('header.subscribe.button_short', { defaultValue: 'Subscribe' })}
         title={buttonLabel}
         className={clsx(
-          'md:hidden inline-flex h-8 w-8 items-center justify-center rounded-lg',
+          condensed ? 'inline-flex' : 'md:hidden inline-flex',
+          'h-8 w-8 items-center justify-center rounded-lg',
           'transition-colors',
           subscribed
             ? 'text-emerald-600 hover:bg-surface-secondary'

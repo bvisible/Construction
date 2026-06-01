@@ -247,7 +247,12 @@ export interface GeoPinBundle {
 export interface AnchoredProject {
   project_id: string;
   project_name: string;
-  anchor_id: string;
+  /**
+   * ``null`` when the project is pinned purely from its address
+   * coordinates (``address.lat``/``lng``) and has no ``GeoAnchor`` row
+   * yet. Present projects keep their anchor id.
+   */
+  anchor_id: string | null;
   lat: string;
   lon: string;
   alt: string;

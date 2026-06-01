@@ -125,6 +125,19 @@ export async function createRequirementSet(
   return apiPost<RequirementSet>('/v1/requirements/', data);
 }
 
+export interface UpdateRequirementSetPayload {
+  name?: string;
+  description?: string;
+  status?: string;
+}
+
+export async function updateRequirementSet(
+  setId: string,
+  data: UpdateRequirementSetPayload,
+): Promise<RequirementSet> {
+  return apiPatch<RequirementSet>(`/v1/requirements/${setId}`, data);
+}
+
 export async function deleteRequirementSet(setId: string): Promise<void> {
   return apiDelete(`/v1/requirements/${setId}`);
 }

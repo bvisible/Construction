@@ -9,6 +9,7 @@ Scope:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -26,9 +27,24 @@ from app.modules.finance.service import FinanceService
 # ── Helpers / stubs ───────────────────────────────────────────────────────
 
 
+class _StubSession:
+    """Minimal AsyncSession stand-in.
+
+    The EVM zero-input branch resolves the project base currency via
+    ``ProjectRepository(self.session).get_by_id(...)`` which calls
+    ``session.get(Project, project_id)``. Returning ``None`` means "project
+    not found" — the service then treats the base currency as "" with no FX
+    table, which is exactly what these unit tests want (no currency blending,
+    derived baselines stay zero).
+    """
+
+    async def get(self, *args: Any, **kwargs: Any) -> Any:
+        return None
+
+
 def _make_service() -> FinanceService:
     service = FinanceService.__new__(FinanceService)
-    service.session = SimpleNamespace()
+    service.session = _StubSession()
     service.invoices = _StubInvoiceRepo()
     service.line_items = _StubLineItemRepo()
     service.payments_repo = _StubPaymentRepo()
@@ -71,9 +87,7 @@ class _StubInvoiceRepo:
             rows = [r for r in rows if r.status == status]
         return rows, len(rows)
 
-    async def next_invoice_number(
-        self, project_id: uuid.UUID, direction: str
-    ) -> str:
+    async def next_invoice_number(self, project_id: uuid.UUID, direction: str) -> str:
         self._counter += 1
         prefix = "INV-P" if direction == "payable" else "INV-R"
         return f"{prefix}-{self._counter:03d}"
@@ -109,6 +123,7 @@ class _StubPaymentRepo:
         self,
         *,
         invoice_id: uuid.UUID | None = None,
+        project_id: uuid.UUID | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[list[Any], int]:
@@ -116,6 +131,16 @@ class _StubPaymentRepo:
         if invoice_id is not None:
             rows = [p for p in rows if p.invoice_id == invoice_id]
         return rows, len(rows)
+
+    async def aggregate_by_currency(
+        self,
+        *,
+        project_id: uuid.UUID | None = None,
+    ) -> dict[str, float]:
+        # Mirrors PaymentRepository.aggregate_by_currency: {currency_code: amount},
+        # blank code under "". Default empty so the dashboard math stays zero
+        # unless a test wires in a richer stub.
+        return {}
 
 
 class _StubBudgetRepo:
@@ -144,18 +169,19 @@ class _StubBudgetRepo:
             rows = [r for r in rows if r.category == category]
         return rows, len(rows)
 
-    async def aggregate_for_dashboard(
-        self, *, project_id: uuid.UUID | None = None
-    ) -> dict[str, Any]:
+    async def aggregate_for_dashboard(self, *, project_id: uuid.UUID | None = None) -> dict[str, Any]:
         # EVM zero-input fallback path (service.create_evm_snapshot) calls
-        # this when any of BAC/PV/EV/AC is "0". For unit tests we return
-        # an empty aggregate so derived values stay zero and the test
-        # asserts the divide-by-zero guard, not the fallback math.
+        # this when any of BAC/PV/EV/AC is "0". Mirror the production repo's
+        # per-currency dict shape (original/revised/committed/actual_by_currency
+        # + currency) so the service's _convert_to_base() path works. Empty
+        # dicts keep derived values at zero, so these tests assert the
+        # divide-by-zero / clamp guards, not the fallback math.
         return {
-            "total_budget_original": 0.0,
-            "total_budget_revised": 0.0,
-            "total_committed": 0.0,
-            "total_actual": 0.0,
+            "original_by_currency": {},
+            "revised_by_currency": {},
+            "committed_by_currency": {},
+            "actual_by_currency": {},
+            "currency": "",
         }
 
 
@@ -169,8 +195,9 @@ class _StubEVMRepo:
         # SQLAlchemy server-side defaults don't fire without a real INSERT,
         # so emulate them here so EVMSnapshotResponse.model_validate(...)
         # doesn't choke on None timestamps.
-        from datetime import datetime, timezone
-        now = datetime.now(timezone.utc)
+        from datetime import datetime
+
+        now = datetime.now(UTC)
         if getattr(snapshot, "created_at", None) is None:
             snapshot.created_at = now
         if getattr(snapshot, "updated_at", None) is None:
@@ -407,10 +434,13 @@ async def test_get_dashboard_returns_invoices_and_budgets() -> None:
     service = _make_service()
 
     async def _inv_agg(*, project_id: uuid.UUID | None = None) -> dict[str, Any]:
+        # Per-currency shape mirrors InvoiceRepository.aggregate_for_dashboard.
+        # Single currency (EUR) keeps the dashboard FX conversion a no-op so
+        # the totals below match the raw figures.
         return {
-            "total_payable": 10_000.0,
-            "total_receivable": 25_000.0,
-            "total_overdue": 2_000.0,
+            "payable_by_currency": {"EUR": 10_000.0},
+            "receivable_by_currency": {"EUR": 25_000.0},
+            "overdue_by_currency": {"EUR": 2_000.0},
             "overdue_count": 1,
             "status_counts": {
                 "draft": 1,
@@ -418,22 +448,24 @@ async def test_get_dashboard_returns_invoices_and_budgets() -> None:
                 "approved": 2,
                 "paid": 3,
             },
+            "currency": "EUR",
         }
 
     async def _budget_agg(*, project_id: uuid.UUID | None = None) -> dict[str, Any]:
         return {
-            "total_budget_original": 100_000.0,
-            "total_budget_revised": 110_000.0,
-            "total_committed": 40_000.0,
-            "total_actual": 30_000.0,
+            "original_by_currency": {"EUR": 100_000.0},
+            "revised_by_currency": {"EUR": 110_000.0},
+            "committed_by_currency": {"EUR": 40_000.0},
+            "actual_by_currency": {"EUR": 30_000.0},
+            "currency": "EUR",
         }
 
-    async def _payments_total() -> float:
-        return 15_000.0
+    async def _payments_by_currency(*, project_id: uuid.UUID | None = None) -> dict[str, float]:
+        return {"EUR": 15_000.0}
 
     service.invoices.aggregate_for_dashboard = _inv_agg  # type: ignore[attr-defined]
     service.budgets.aggregate_for_dashboard = _budget_agg  # type: ignore[attr-defined]
-    service.payments_repo.aggregate_total = _payments_total  # type: ignore[attr-defined]
+    service.payments_repo.aggregate_by_currency = _payments_by_currency  # type: ignore[attr-defined]
 
     dashboard = await service.get_dashboard(project_id=uuid.uuid4())
 
@@ -483,17 +515,13 @@ class _ExecuteStubSession:
         return _Result(self.budgets)
 
 
-def _make_service_with_session(
-    paid_invoices: list[Any], budgets: list[Any]
-) -> FinanceService:
+def _make_service_with_session(paid_invoices: list[Any], budgets: list[Any]) -> FinanceService:
     service = _make_service()
     service.session = _ExecuteStubSession(paid_invoices, budgets)  # type: ignore[assignment]
     return service
 
 
-def _make_line_item(
-    *, amount: str, wbs_id: str | None = None, cost_category: str | None = None
-) -> SimpleNamespace:
+def _make_line_item(*, amount: str, wbs_id: str | None = None, cost_category: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
         amount=amount,
@@ -502,9 +530,7 @@ def _make_line_item(
     )
 
 
-def _make_paid_invoice(
-    *, project_id: uuid.UUID, amount_total: str, items: list[Any] | None = None
-) -> SimpleNamespace:
+def _make_paid_invoice(*, project_id: uuid.UUID, amount_total: str, items: list[Any] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         id=uuid.uuid4(),
         project_id=project_id,
@@ -559,8 +585,10 @@ async def test_pay_invoice_distributes_actuals_by_category() -> None:
 
     await service.pay_invoice(approved_invoice.id)
 
-    assert budget_material.actual == "700"
-    assert budget_labor.actual == "300"
+    # Production assigns ``actual`` as a Decimal (MoneyType column expects a
+    # Decimal on the ORM side — BUG-FINANCE-ACT01), so compare numerically.
+    assert Decimal(budget_material.actual) == Decimal("700")
+    assert Decimal(budget_labor.actual) == Decimal("300")
 
 
 @pytest.mark.asyncio
@@ -593,8 +621,9 @@ async def test_pay_invoice_unmatched_category_lands_in_catch_all() -> None:
     await service.pay_invoice(approved_invoice.id)
 
     # 500 went to the 'material' bucket that has no matching budget; the
-    # catch-all budget (category=None) stays at 0.
-    assert uncategorized_budget.actual == "0"
+    # catch-all budget (category=None) stays at 0. Production resets every
+    # budget row to ``Decimal("0")`` before assignment, so compare numerically.
+    assert Decimal(uncategorized_budget.actual) == Decimal("0")
 
 
 @pytest.mark.asyncio
@@ -622,7 +651,8 @@ async def test_pay_invoice_no_line_items_falls_to_catch_all() -> None:
     service.invoices.rows[approved_invoice.id] = approved_invoice  # type: ignore[attr-defined]
 
     await service.pay_invoice(approved_invoice.id)
-    assert catch_all_budget.actual == "2500"
+    # Production assigns ``actual`` as a Decimal — compare numerically.
+    assert Decimal(catch_all_budget.actual) == Decimal("2500")
 
 
 @pytest.mark.asyncio
@@ -653,8 +683,9 @@ async def test_pay_invoice_does_not_write_total_to_every_budget_row() -> None:
 
     await service.pay_invoice(approved_invoice.id)
 
-    assert budget_material.actual == "1000"
-    assert budget_labor.actual == "0"  # stays zero — the bug would have written 1000 here
+    # Production assigns ``actual`` as a Decimal — compare numerically.
+    assert Decimal(budget_material.actual) == Decimal("1000")
+    assert Decimal(budget_labor.actual) == Decimal("0")  # stays zero — the bug would have written 1000 here
 
 
 # ── ETC clamp regression (2026-05-21 audit fix #4) ────────────────────────
@@ -680,8 +711,8 @@ async def test_create_evm_snapshot_etc_clamped_to_zero_when_over_budget() -> Non
             snapshot_date="2026-04-01",
             bac="10000",
             pv="5000",
-            ev="0",        # forces cpi=0 branch -> eac = ac + (bac - ev) = ac + bac
-            ac="50000",    # ac > bac, so eac = 50000 + 10000 = 60000 still > ac
+            ev="0",  # forces cpi=0 branch -> eac = ac + (bac - ev) = ac + bac
+            ac="50000",  # ac > bac, so eac = 50000 + 10000 = 60000 still > ac
         )
     )
     # Above scenario: eac = 60000, ac = 50000, etc raw = 10000 > 0 — safe.
@@ -695,8 +726,8 @@ async def test_create_evm_snapshot_etc_clamped_to_zero_when_over_budget() -> Non
             snapshot_date="2026-04-02",
             bac="10000",
             pv="10000",
-            ev="12000",    # over-performing — EV > BAC drives (BAC-EV) negative
-            ac="11000",    # CPI = 12000/11000 = 1.0909
+            ev="12000",  # over-performing — EV > BAC drives (BAC-EV) negative
+            ac="11000",  # CPI = 12000/11000 = 1.0909
         )
     )
     # EAC = 11000 + (10000 - 12000) / 1.0909 = 11000 - 1833.33 = 9166.67
@@ -747,9 +778,9 @@ async def test_approve_invoice_audit_failure_emits_warning(
         assert updated.status == "sent"
         # The warning fired and carries the operational metadata:
         warning_records = [
-            r for r in caplog.records
-            if r.levelno == _logging.WARNING
-            and "FSM audit log FAILED for invoice approve" in r.getMessage()
+            r
+            for r in caplog.records
+            if r.levelno == _logging.WARNING and "FSM audit log FAILED for invoice approve" in r.getMessage()
         ]
         assert warning_records, "Expected an audit-failure WARNING but none was emitted"
         msg = warning_records[0].getMessage()
@@ -767,7 +798,7 @@ async def test_update_invoice_line_items_replace_logs_audit_row(
     single audit row carrying the count + total delta — no per-item diff.
     We capture the helper call instead of running it for real to keep this
     fully stubbed."""
-    from app.modules.finance.schemas import InvoiceUpdate, InvoiceLineItemCreate
+    from app.modules.finance.schemas import InvoiceLineItemCreate, InvoiceUpdate
 
     service = _make_service()
     # Build a synthetic invoice row directly — the SQLAlchemy ORM-typed

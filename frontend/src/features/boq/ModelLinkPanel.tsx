@@ -6,7 +6,7 @@
  * elements → quantity"), see existing links, and delete them. Creating
  * a link NEVER mutates the quantity — that requires the explicit
  * BOQ-wide refresh + per-row Apply in {@link ModelLinkReviewPanel}
- * (CLAUDE.md §7 — propose, human confirms).
+ * (the architecture guide §7 — propose, human confirms).
  *
  * Every string goes through i18n `t()`; no hardcoded UI text.
  */

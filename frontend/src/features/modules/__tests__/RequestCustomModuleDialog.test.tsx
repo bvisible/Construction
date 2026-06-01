@@ -82,7 +82,7 @@ describe('RequestCustomModuleDialog', () => {
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
     // Pinned at openconstructionerp.com — the canonical product
     // marketing site. The pin catches accidental regressions back to
-    // the placeholder openestimator.io / openestimate.io properties
+    // the placeholder openconstructionerp.com / openestimate.io properties
     // (parked / 405 as of 2026-05-13).
     expect(link.getAttribute('href')).toMatch(
       /openconstructionerp\.com\/contact\?topic=module_proposal_public/,

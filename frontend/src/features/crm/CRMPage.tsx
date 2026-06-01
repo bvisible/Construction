@@ -90,6 +90,8 @@ import {
   moveOpportunityStage,
   winOpportunity,
   loseOpportunity,
+  listWinLossReasons,
+  type WinLossReason,
   type Account,
   type Lead,
   type Opportunity,
@@ -1069,6 +1071,17 @@ function DealDrawer({
     queryFn: () => listActivities({ opportunity_id: opportunityId, limit: 50 }),
   });
 
+  // Loss-reason codes come from the win-loss-reasons catalogue — the backend
+  // rejects any code that is not a registered loss reason, so the picker must
+  // offer exactly those (a free-text box silently 4xx'd on submit).
+  const lossReasonsQ = useQuery({
+    queryKey: ['crm', 'win-loss-reasons'],
+    queryFn: () => listWinLossReasons(),
+  });
+  const lossReasons = (lossReasonsQ.data ?? []).filter(
+    (r: WinLossReason) => r.is_loss_reason,
+  );
+
   // Resolve the linked Contact through the Contacts module (no local copy).
   const contactQ = useQuery({
     queryKey: ['contacts', 'one', opp?.primary_contact_id],
@@ -1419,17 +1432,23 @@ function DealDrawer({
                   {t('crm.win', { defaultValue: 'Win' })}
                 </Button>
                 <div className="flex flex-1 gap-1 max-w-md">
-                  <input
+                  <select
                     value={loseReason}
                     onChange={(e) => setLoseReason(e.target.value)}
                     aria-label={t('crm.lose_reason', {
                       defaultValue: 'Loss reason code',
                     })}
-                    placeholder={t('crm.lose_reason', {
-                      defaultValue: 'Loss reason code',
-                    })}
                     className={inputCls}
-                  />
+                  >
+                    <option value="">
+                      {t('crm.lose_reason', { defaultValue: 'Loss reason code' })}
+                    </option>
+                    {lossReasons.map((r: WinLossReason) => (
+                      <option key={r.id} value={r.code}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
                   <Button
                     variant="ghost"
                     icon={<Frown size={14} />}

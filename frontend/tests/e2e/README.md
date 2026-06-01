@@ -142,7 +142,7 @@ and snapshot — usually faster than re-running with `--headed`.
 | `OE_TEST_BASE_URL`      | `http://localhost:5173`          | Frontend |
 | `OE_TEST_API_URL`       | `http://localhost:8000`          | Backend |
 | `OE_TEST_LOCALE`        | `en`                             | en/de/ru/ar/es/fr/pt/it/pl/ja/ko/zh |
-| `OE_TEST_DEMO_EMAIL`    | `demo@openestimator.io`          | Demo user (note the "r") |
+| `OE_TEST_DEMO_EMAIL`    | `demo@openconstructionerp.com`          | Demo user (note the "r") |
 | `OE_TEST_DEMO_PASSWORD` | `OpenEstimate2024!`              |       |
 | `OE_TEST_WORKERS`       | min(4, cores/2)                  | Cap is 4 — backend rate-limits login |
 | `CI`                    | unset                            | When set: retries=2, forbidOnly=true |

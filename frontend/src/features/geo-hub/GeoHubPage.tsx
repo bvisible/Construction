@@ -23,10 +23,10 @@
  * map config to load.
  */
 
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import {
   Globe2,
   MapPin,
@@ -43,7 +43,7 @@ import {
 } from 'lucide-react';
 
 import { ApiError } from '@/shared/lib/api';
-import { ModuleHelpButton } from '@/shared/ui';
+import { BetaBanner, ModuleHelpButton } from '@/shared/ui';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useToastStore } from '@/stores/useToastStore';
 
@@ -52,13 +52,32 @@ import { bulkAutoAnchorFromAddress, fetchAnchoredProjects } from './api';
 import type {
   GeoCameraState,
   GeoCursorCoords,
+  GeoSceneMode,
   GeoSearchPin,
 } from './CesiumViewer';
 import { GeoModePicker } from './GeoModePicker';
 import { GeoOverlayHud } from './GeoOverlayHud';
+import { GeoSceneModePicker } from './GeoSceneModePicker';
 import { OverlayLayer } from './OverlayLayer';
 import { OverlayPanel, type OverlayEditMode } from './OverlayPanel';
+import { OverlaySidebar } from './OverlaySidebar';
 import type { AnchoredProject, GeoPinBundle } from './types';
+
+// Persisted scene-mode preference — restored synchronously at mount so
+// the initial Cesium paint already matches the user's choice (no
+// flash-of-3D when they previously selected 2D).
+const SCENE_MODE_LS_KEY = 'geoHub.sceneMode';
+
+function readSceneMode(): GeoSceneMode {
+  if (typeof window === 'undefined') return '3d';
+  try {
+    const v = window.localStorage.getItem(SCENE_MODE_LS_KEY);
+    if (v === '2d' || v === '3d' || v === 'columbus') return v;
+  } catch {
+    /* localStorage disabled / quota — fall through to default */
+  }
+  return '3d';
+}
 
 const CesiumViewer = lazy(() =>
   import('./CesiumViewer').then((m) => ({ default: m.CesiumViewer })),
@@ -218,6 +237,22 @@ function GlobalNoProjectsEmpty({
             >
               {t('geo_hub.empty.global_no_projects_manual_cta', {
                 defaultValue: 'Anchor a project manually',
+              })}
+              <ArrowUpRight size={13} strokeWidth={2.25} />
+            </Link>
+            {/* Secondary path for users who live in PropDev — anchoring
+                a development surfaces it here too via the same map config. */}
+            <Link
+              to="/property-dev"
+              className={[
+                'inline-flex items-center gap-1.5 rounded-md',
+                'border border-white/10 px-3 py-1.5 text-xs font-medium text-slate-200',
+                'transition hover:bg-white/5',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/60',
+              ].join(' ')}
+            >
+              {t('geo_hub.empty.global_no_projects_propdev_cta', {
+                defaultValue: 'Anchor from Property Developments',
               })}
               <ArrowUpRight size={13} strokeWidth={2.25} />
             </Link>
@@ -468,9 +503,11 @@ function AnchoredProjectsOverlay({
                         className={[
                           'inline-flex shrink-0 items-center gap-0.5 rounded',
                           'px-1.5 py-0.5 text-2xs font-medium text-oe-blue',
-                          'opacity-0 transition group-hover:opacity-100',
+                          // Reveal on hover OR focus so keyboard users
+                          // can reach the deep-link without a mouse.
+                          'opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100',
                           'hover:bg-oe-blue/10',
-                          'focus:outline-none focus:opacity-100 focus-visible:ring-2 focus-visible:ring-oe-blue',
+                          'focus:outline-none focus:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-oe-blue',
                         ].join(' ')}
                         title={t('geo_hub.rail.open_hint', {
                           defaultValue: 'Open project map',
@@ -522,6 +559,22 @@ function GeoSearchOverlay({
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState<string>('');
+
+  // Escape clears both the typed query and the active pin even when the
+  // input doesn't have focus — Esc-from-anywhere is the WAI-ARIA combobox
+  // expectation and lets keyboard users dismiss the marker without
+  // tabbing back to the X button.
+  useEffect(() => {
+    if (!pin) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setQuery('');
+        onClear();
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [pin, onClear]);
 
   return (
     <div
@@ -616,6 +669,7 @@ function GeoSearchOverlay({
 
 export function GeoHubPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const [cursorCoords, setCursorCoords] = useState<GeoCursorCoords | null>(
     null,
@@ -646,6 +700,20 @@ export function GeoHubPage() {
   // Transient address-search pin. Replaced wholesale on each search and
   // cleared via the inline dismiss button in the overlay.
   const [searchPin, setSearchPin] = useState<GeoSearchPin | null>(null);
+  // Scene-mode (2D / 3D / Columbus) — read lazily so SSR + tests don't
+  // blow up on ``window``. Persisted under ``geoHub.sceneMode`` so the
+  // user's projection choice survives reloads.
+  const [sceneMode, setSceneMode] = useState<GeoSceneMode>(readSceneMode);
+  // OverlaySidebar fly-to handle. ``focusedLayerId`` highlights the row
+  // the user last clicked; ``flyToTarget`` carries the nonce + centroid
+  // that CesiumViewer's flyToTarget effect reads. Nonced via a click
+  // counter so re-clicking the same row re-flies (vs. dedup-by-id).
+  const [focusedLayerId, setFocusedLayerId] = useState<string | null>(null);
+  const [flyToTarget, setFlyToTarget] = useState<{
+    key: string;
+    lat: number;
+    lon: number;
+  } | null>(null);
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
@@ -657,6 +725,14 @@ export function GeoHubPage() {
       /* localStorage disabled / quota full — UX still works in-memory */
     }
   }, [panelCollapsed]);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(SCENE_MODE_LS_KEY, sceneMode);
+    } catch {
+      /* localStorage disabled / quota full — UX still works in-memory */
+    }
+  }, [sceneMode]);
 
   // One pin per anchored project the user can access — degrades to an
   // empty list on backend failure so the globe still renders. The
@@ -679,6 +755,46 @@ export function GeoHubPage() {
     [projects],
   );
 
+  // Pin clicks: a single project pin deep-links into its project map; a
+  // cluster bubble flies the camera to the cluster centroid (closer
+  // altitude) so it visually expands into its members. Cross-module /
+  // search pins are a no-op on the global view (no source records here).
+  const handlePinSelect = useCallback(
+    (sel: { tag: string; clusterProjectIds?: string[] }) => {
+      const { tag, clusterProjectIds } = sel;
+      if (tag.startsWith('project:')) {
+        const projectId = tag.slice('project:'.length);
+        if (projectId) navigate(`/projects/${projectId}/geo`);
+        return;
+      }
+      if (tag.startsWith('cluster:')) {
+        // Compute the centroid of the cluster members and fly closer so
+        // the bubble breaks apart into individual pins.
+        const memberIds = new Set(clusterProjectIds ?? []);
+        const members = projects.filter((p) => memberIds.has(p.project_id));
+        if (members.length === 0) return;
+        let sumLat = 0;
+        let sumLon = 0;
+        let n = 0;
+        for (const m of members) {
+          const lat = Number(m.lat);
+          const lon = Number(m.lon);
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+          sumLat += lat;
+          sumLon += lon;
+          n += 1;
+        }
+        if (n === 0) return;
+        setFlyToTarget({
+          key: `cluster:${tag}:${Date.now()}`,
+          lat: sumLat / n,
+          lon: sumLon / n,
+        });
+      }
+    },
+    [navigate, projects],
+  );
+
   // 404 from /api/v1/geo-hub/projects means the running backend is older
   // than this frontend bundle (or the module didn't load). Surface a
   // separate, dev-friendly hint instead of the generic fetch-failed
@@ -692,6 +808,7 @@ export function GeoHubPage() {
     // so the globe fills the viewport, then claim exactly viewport-minus-header
     // height so the Cesium canvas never spills past the visible browser area.
     <div className="-mx-4 -mt-6 -mb-4 flex h-[calc(100dvh-var(--oe-header-height,52px))] w-[calc(100%+2rem)] flex-col sm:-mx-7 sm:w-[calc(100%+3.5rem)]">
+      <BetaBanner moduleKey="geo-hub" className="mt-3" />
       <header
         className={[
           'flex items-center gap-4 border-b border-border bg-surface-primary',
@@ -727,6 +844,7 @@ export function GeoHubPage() {
           })}
         </p>
         <div className="ml-auto flex items-center gap-2">
+          <GeoSceneModePicker current={sceneMode} onChange={setSceneMode} />
           <GeoModePicker current="global" projectId={activeProjectId} />
           {/* Per-module Tour CTA — launches the Geo Hub-specific tour. */}
           <ModuleHelpButton tourId="geo" />
@@ -833,12 +951,15 @@ export function GeoHubPage() {
           <CesiumViewer
             mode="global"
             pins={pins}
+            sceneMode={sceneMode}
             focusedProject={
               focusedProjectId
                 ? projects.find((p) => p.project_id === focusedProjectId) ?? null
                 : null
             }
+            flyToTarget={flyToTarget}
             searchPin={searchPin}
+            onPinSelect={handlePinSelect}
             onMouseMove={setCursorCoords}
             onCameraChange={setCameraState}
             onViewerReady={setCesiumRuntime}
@@ -889,6 +1010,23 @@ export function GeoHubPage() {
                       editMode={overlayEditMode}
                       onSelectOverlay={setActiveOverlayId}
                       onChangeEditMode={setOverlayEditMode}
+                    />
+                    {/* Discoverable list — bottom-left, complements the
+                        top-left anchored-projects rail. Read-only here;
+                        OverlayPanel (top-right) still owns mutations. */}
+                    <OverlaySidebar
+                      projectId={focusedProjectId ?? activeProjectId ?? ''}
+                      focusedId={focusedLayerId}
+                      onFly={(target) => {
+                        setFocusedLayerId(target.id);
+                        // Nonce on every click so re-clicking the same row
+                        // bumps the effect dep + re-flies the camera.
+                        setFlyToTarget({
+                          key: `${target.kind}:${target.id}:${Date.now()}`,
+                          lat: target.lat,
+                          lon: target.lon,
+                        });
+                      }}
                     />
                   </>
                 )}

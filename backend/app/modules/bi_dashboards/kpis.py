@@ -118,6 +118,188 @@ def _safe_div(numerator: Decimal, denominator: Decimal) -> Decimal:
     return numerator / denominator
 
 
+# ── Currency / FX helpers ──────────────────────────────────────────────
+# Money KPIs must never blend mixed currencies. Within a single project we
+# convert each row's amount into the project's BASE currency using the
+# project's ``fx_rates`` table (mirrors ``boq.service._project_fx_map`` /
+# ``_position_total_in_base``). The ``rate`` is BASE units per 1 unit of
+# foreign, so a foreign amount contributes ``amount * rate``. Across the
+# whole portfolio (``project_id is None``) we deliberately do NOT collapse
+# everything into one scalar — the breakdown carries a per-currency map so
+# the UI can group by ISO code instead of presenting a meaningless sum.
+
+
+def _fx_map(project: Any) -> dict[str, str]:
+    """Project ``Project.fx_rates`` JSON list into ``{CODE: rate}``.
+
+    Defensive against missing attribute / malformed rows — returns an
+    empty dict on any error so callers can pass it through unguarded.
+    """
+    if project is None:
+        return {}
+    raw = getattr(project, "fx_rates", None)
+    if not isinstance(raw, list):
+        return {}
+    out: dict[str, str] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        code = str(entry.get("code") or "").strip().upper()
+        rate = str(entry.get("rate") or "").strip()
+        if code and rate:
+            out[code] = rate
+    return out
+
+
+def _amount_in_base(
+    amount: Decimal,
+    currency_code: str | None,
+    fx_map: dict[str, str] | None,
+    base_currency: str,
+) -> Decimal:
+    """Convert one amount into the project BASE currency.
+
+    Missing / matching currency → treated as base. A foreign currency with
+    no FX rate is summed in its own units anyway (never zeroed) so a
+    forgotten rate degrades visibly rather than silently dropping money —
+    the caller surfaces the unconverted codes via :func:`_missing_fx_codes`.
+    """
+    base = (base_currency or "").strip().upper()
+    code = (currency_code or "").strip().upper()
+    if code and code != base and fx_map:
+        fx = fx_map.get(code)
+        if fx:
+            converted = _to_decimal(fx)
+            if converted > 0:
+                return amount * converted
+    return amount
+
+
+async def _project_currency_and_fx(
+    session: AsyncSession,
+    project_id: uuid.UUID | None,
+) -> tuple[str, dict[str, str]]:
+    """Resolve a project's base currency + FX map.
+
+    For a portfolio call (``project_id is None``) there is no single base
+    currency, so an empty base ("") is returned and callers fall back to
+    per-currency grouping.
+    """
+    if project_id is None:
+        return "", {}
+    try:
+        from app.modules.projects.models import Project  # type: ignore
+
+        proj = await session.get(Project, project_id)
+        if proj is None:
+            return "", {}
+        base = str(getattr(proj, "currency", "") or "").strip().upper()
+        return base, _fx_map(proj)
+    except ImportError:
+        return "", {}
+    except Exception:
+        logger.debug("project currency/fx probe failed", exc_info=True)
+        return "", {}
+
+
+def _add_currency_bucket(
+    buckets: dict[str, Decimal],
+    amount: Decimal,
+    currency_code: str | None,
+    fallback: str,
+) -> None:
+    """Accumulate ``amount`` into the per-ISO-code bucket map (portfolio mode)."""
+    code = (currency_code or "").strip().upper() or (fallback or "").strip().upper()
+    buckets[code] = buckets.get(code, Decimal("0")) + amount
+
+
+def _missing_fx_codes(
+    codes_seen: set[str],
+    fx_map: dict[str, str],
+    base_currency: str,
+) -> list[str]:
+    """Foreign currency codes encountered that have no FX rate to base."""
+    base = (base_currency or "").strip().upper()
+    have = {k.upper() for k in fx_map}
+    return sorted(c for c in codes_seen if c and c != base and c not in have)
+
+
+def _portfolio_money_breakdown(
+    by_currency: dict[str, Decimal],
+) -> tuple[Decimal, dict[str, Any]]:
+    """Reduce a per-currency bucket map into a headline value + breakdown.
+
+    Portfolio (``project_id is None``) money KPIs must never collapse mixed
+    currencies into one blended scalar — there is no single base currency
+    to convert into. Mirrors the cross-project rollup in
+    ``projects.router.analytics_overview``:
+
+        * the headline ``value`` is the DOMINANT currency's subtotal (the
+          bucket with the largest absolute amount) so the tile still shows
+          a real, attributable figure rather than an em-dash or a
+          meaningless sum;
+        * ``breakdown.currency`` carries that dominant bucket's ISO code so
+          the UI renders e.g. ``"EUR 1.2M"`` not a bare number;
+        * ``breakdown.by_currency`` is the full ``{CODE: amount-string}``
+          map so the UI can render every per-currency subtotal;
+        * ``breakdown.multi_currency`` is true when more than one currency
+          is present, signalling the UI to show the "+ N other" /
+          "multi-currency" hint and NOT treat the headline as a portfolio
+          total.
+
+    Empty input → ``(Decimal("0"), {"currency": ""})``. Amounts whose
+    currency could not be resolved are kept under an explicit ``"UNKNOWN"``
+    bucket (mirrors ``analytics_overview``) rather than silently dropped, so
+    money never vanishes from the rollup.
+    """
+    buckets: dict[str, Decimal] = {}
+    for code, amount in by_currency.items():
+        key = code if code else "UNKNOWN"
+        buckets[key] = buckets.get(key, Decimal("0")) + amount
+    if not buckets:
+        return Decimal("0"), {"currency": ""}
+    # Dominant = largest by absolute magnitude; ties broken alphabetically
+    # so the headline is deterministic across calls.
+    dominant_code = max(
+        sorted(buckets),
+        key=lambda c: abs(buckets[c]),
+    )
+    breakdown: dict[str, Any] = {
+        "currency": dominant_code,
+        "by_currency": {code: str(amount) for code, amount in sorted(buckets.items())},
+        "multi_currency": len(buckets) > 1,
+    }
+    return buckets[dominant_code], breakdown
+
+
+def _parse_date(value: Any) -> _date | None:
+    """Parse a stored date into a ``date``.
+
+    Finance/procurement store dates as ``String(20)`` (ISO ``YYYY-MM-DD`` or
+    full ISO timestamps), so a plain ``isinstance(value, date)`` guard treats
+    every real row as "no date". Accept ``date`` / ``datetime`` instances and
+    ISO strings; return ``None`` on anything unparseable.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, _date):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    # Trim a time component / timezone if present, keep the date portion.
+    candidate = text.replace("Z", "").split("T", 1)[0].split(" ", 1)[0]
+    try:
+        return _date.fromisoformat(candidate)
+    except ValueError:
+        try:
+            return datetime.fromisoformat(text).date()
+        except ValueError:
+            return None
+
+
 # ── Financial KPIs ─────────────────────────────────────────────────────
 
 
@@ -130,37 +312,59 @@ class EVMSnapshot:
 
     All Decimal values default to 0 so consumer KPIs can derive without
     re-querying. Returned by :func:`_evm_snapshot`.
+
+    Portfolio mode (``project_id is None``): the scalar primitives still
+    carry the cross-project sums for ratio KPIs (CPI/SPI/TCPI are
+    currency-neutral so an aggregate ratio is meaningful), but the
+    ``*_by_currency`` maps carry the per-currency subtotals so the
+    currency-denominated KPIs (CV/SV/EAC/ETC/VAC) can group by ISO code
+    instead of blending. In single-project mode the maps are empty and
+    consumers use the (base-currency-converted) scalars directly.
     """
 
     bac: Decimal = Decimal("0")  # Budget at completion
-    pv: Decimal = Decimal("0")   # Planned value (BCWS)
-    ev: Decimal = Decimal("0")   # Earned value (BCWP)
-    ac: Decimal = Decimal("0")   # Actual cost (ACWP)
+    pv: Decimal = Decimal("0")  # Planned value (BCWS)
+    ev: Decimal = Decimal("0")  # Earned value (BCWP)
+    ac: Decimal = Decimal("0")  # Actual cost (ACWP)
     record_count: int = 0
+    currency: str = ""  # Project base currency for the money primitives
     breakdown: dict[str, Any] = field(default_factory=dict)
+    # Portfolio-mode only: each money primitive grouped by the owning
+    # project's ISO currency. Empty in single-project mode.
+    bac_by_currency: dict[str, Decimal] = field(default_factory=dict)
+    pv_by_currency: dict[str, Decimal] = field(default_factory=dict)
+    ev_by_currency: dict[str, Decimal] = field(default_factory=dict)
+    ac_by_currency: dict[str, Decimal] = field(default_factory=dict)
+    is_portfolio: bool = False
 
 
-async def _evm_snapshot(
+async def _evm_snapshot_for_project(
     session: AsyncSession,
-    project_id: uuid.UUID | None,
+    project_id: uuid.UUID,
 ) -> EVMSnapshot:
-    """Build the five EVM primitives by probing tasks + finance modules.
+    """Build the five EVM primitives for ONE project.
 
     Strategy:
         * BAC: project.budget OR Σ Task.planned_value (whichever is larger)
         * PV:  Σ Task.planned_value
         * EV:  Σ Task.earned_value (calculated upstream as % complete × BAC)
-        * AC:  Σ Expense.amount (finance.Expense) + Σ PurchaseOrder.total_amount
-                (procurement.PurchaseOrder)
+        * AC:  Σ finance.Payment.amount + Σ procurement.PurchaseOrder.amount_total
+               (every foreign-currency row converted into the project's base
+               currency via ``Project.fx_rates`` before summing — no mixed-
+               currency blending).
+
+    Note: there is no ``finance.Expense`` model on this platform; actual
+    cost is sourced from settled payments plus committed purchase orders.
     """
     snap = EVMSnapshot()
+    base_currency, fx_map = await _project_currency_and_fx(session, project_id)
+    snap.currency = base_currency
+    seen_codes: set[str] = set()
     # Tasks → PV + EV + count
     try:
         from app.modules.tasks.models import Task  # type: ignore
 
-        stmt = select(Task)
-        if project_id is not None:
-            stmt = stmt.where(Task.project_id == project_id)
+        stmt = select(Task).where(Task.project_id == project_id)
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
             pv = _to_decimal(getattr(row, "planned_value", 0))
@@ -177,13 +381,12 @@ async def _evm_snapshot(
     try:
         from app.modules.projects.models import Project  # type: ignore
 
-        if project_id is not None:
-            proj = await session.get(Project, project_id)
-            if proj is not None:
-                snap.bac = max(
-                    _to_decimal(getattr(proj, "budget", None)),
-                    _to_decimal(getattr(proj, "contract_value", None)),
-                )
+        proj = await session.get(Project, project_id)
+        if proj is not None:
+            snap.bac = max(
+                _to_decimal(getattr(proj, "budget", None)),
+                _to_decimal(getattr(proj, "contract_value", None)),
+            )
     except ImportError:
         pass
     except Exception:
@@ -191,29 +394,181 @@ async def _evm_snapshot(
     if snap.bac == 0:
         snap.bac = snap.pv  # Fall back to Σ planned_value
 
-    # Finance.Expense → AC (subset)
+    # finance.Payment → AC (settled actual cost)
     try:
-        from app.modules.finance.models import Expense  # type: ignore
+        from app.modules.finance.models import Invoice, Payment  # type: ignore
 
-        stmt = select(Expense)
-        if project_id is not None:
-            stmt = stmt.where(Expense.project_id == project_id)
+        # Payment has no project_id — it hangs off the Invoice, so scope
+        # via the parent invoice's project_id.
+        stmt = (
+            select(Payment)
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .where(
+                Invoice.project_id == project_id,
+            )
+        )
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
-            snap.ac += _to_decimal(getattr(row, "amount", 0))
+            amt = _to_decimal(getattr(row, "amount", 0))
+            code = str(getattr(row, "currency_code", "") or "")
+            if code:
+                seen_codes.add(code.upper())
+            snap.ac += _amount_in_base(amt, code, fx_map, base_currency)
             snap.record_count += 1
     except ImportError:
         pass
     except Exception:
-        logger.debug("evm: finance probe failed", exc_info=True)
+        logger.debug("evm: finance payment probe failed", exc_info=True)
+
+    # procurement.PurchaseOrder → AC (committed cost)
+    try:
+        from app.modules.procurement.models import PurchaseOrder  # type: ignore
+
+        stmt = select(PurchaseOrder).where(PurchaseOrder.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            amt = _to_decimal(getattr(row, "amount_total", 0))
+            code = str(getattr(row, "currency_code", "") or "")
+            if code:
+                seen_codes.add(code.upper())
+            snap.ac += _amount_in_base(amt, code, fx_map, base_currency)
+            snap.record_count += 1
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("evm: procurement probe failed", exc_info=True)
 
     snap.breakdown = {
         "bac": str(snap.bac),
         "pv": str(snap.pv),
         "ev": str(snap.ev),
         "ac": str(snap.ac),
+        "currency": base_currency,
     }
+    missing = _missing_fx_codes(seen_codes, fx_map, base_currency)
+    if missing:
+        snap.breakdown["missing_fx_codes"] = missing
     return snap
+
+
+async def _evm_snapshot_portfolio(session: AsyncSession) -> EVMSnapshot:
+    """Aggregate per-project EVM snapshots into a portfolio snapshot.
+
+    Each project's money primitives are computed in its OWN base currency
+    (so within-project FX conversion still applies via
+    ``_evm_snapshot_for_project``), then bucketed by that project's ISO
+    currency — mixed currencies are NEVER summed into one scalar.
+
+    The scalar primitives (``bac/pv/ev/ac``) still carry the raw
+    cross-project sums so the currency-neutral ratio KPIs (CPI = EV/AC,
+    SPI = EV/PV, TCPI) stay meaningful — a ratio of two same-shaped sums
+    is dimensionless even across currencies (it is a blended performance
+    index, the standard portfolio EVM reading). The currency-denominated
+    KPIs (CV/SV/EAC/ETC/VAC) instead read the ``*_by_currency`` maps and
+    group by ISO code.
+    """
+    snap = EVMSnapshot(is_portfolio=True)
+    try:
+        from app.modules.projects.models import Project  # type: ignore
+
+        # Select only the PK column — a full ``select(Project)`` would
+        # eager-load ``Project``'s ``lazy="selectin"`` relationships (WBS,
+        # team, …), which is both wasteful here and brittle under partial
+        # test schemas. We only need each project's id to fan out.
+        project_ids = (await session.execute(select(Project.id))).scalars().all()
+    except ImportError:
+        return snap
+    except Exception:
+        logger.debug("evm portfolio: project list failed", exc_info=True)
+        return snap
+
+    missing_codes: set[str] = set()
+    for pid in project_ids:
+        per = await _evm_snapshot_for_project(session, pid)
+        if per.record_count == 0 and per.bac == 0:
+            continue
+        code = (per.currency or "").strip().upper() or "UNKNOWN"
+        snap.bac += per.bac
+        snap.pv += per.pv
+        snap.ev += per.ev
+        snap.ac += per.ac
+        snap.record_count += per.record_count
+        snap.bac_by_currency[code] = snap.bac_by_currency.get(code, Decimal("0")) + per.bac
+        snap.pv_by_currency[code] = snap.pv_by_currency.get(code, Decimal("0")) + per.pv
+        snap.ev_by_currency[code] = snap.ev_by_currency.get(code, Decimal("0")) + per.ev
+        snap.ac_by_currency[code] = snap.ac_by_currency.get(code, Decimal("0")) + per.ac
+        for mc in per.breakdown.get("missing_fx_codes", []) or []:
+            missing_codes.add(mc)
+
+    snap.breakdown = {
+        "bac": str(snap.bac),
+        "pv": str(snap.pv),
+        "ev": str(snap.ev),
+        "ac": str(snap.ac),
+        "currency": "",
+        "multi_currency": len({c for c in snap.ac_by_currency if c} | {c for c in snap.pv_by_currency if c}) > 1,
+        "ac_by_currency": {c: str(v) for c, v in sorted(snap.ac_by_currency.items())},
+        "pv_by_currency": {c: str(v) for c, v in sorted(snap.pv_by_currency.items())},
+        "ev_by_currency": {c: str(v) for c, v in sorted(snap.ev_by_currency.items())},
+        "bac_by_currency": {c: str(v) for c, v in sorted(snap.bac_by_currency.items())},
+    }
+    if missing_codes:
+        snap.breakdown["missing_fx_codes"] = sorted(missing_codes)
+    return snap
+
+
+async def _evm_snapshot(
+    session: AsyncSession,
+    project_id: uuid.UUID | None,
+) -> EVMSnapshot:
+    """Build EVM primitives for one project, or aggregate the portfolio.
+
+    Single-project (``project_id`` set): every money row is converted into
+    that project's base currency via its ``fx_rates`` table — see
+    :func:`_evm_snapshot_for_project`.
+
+    Portfolio (``project_id is None``): per-project snapshots are bucketed
+    by each project's own ISO currency, never blended — see
+    :func:`_evm_snapshot_portfolio`.
+    """
+    if project_id is None:
+        return await _evm_snapshot_portfolio(session)
+    return await _evm_snapshot_for_project(session, project_id)
+
+
+def _evm_currency_result(
+    snap: EVMSnapshot,
+    *,
+    scalar_value: Decimal,
+    per_currency: dict[str, Decimal],
+    extra_breakdown: dict[str, Any] | None = None,
+) -> KPIComputation:
+    """Build a currency-unit :class:`KPIComputation` from an EVM snapshot.
+
+    Single-project mode → headline value is ``scalar_value`` (already in
+    the project base currency) and ``breakdown.currency`` is that base.
+
+    Portfolio mode → headline value is the dominant currency's subtotal and
+    ``breakdown`` carries the ``by_currency`` map + ``multi_currency`` flag,
+    so the UI groups by ISO code instead of presenting the blended scalar.
+    """
+    extra = dict(extra_breakdown or {})
+    if not snap.is_portfolio:
+        breakdown = {**snap.breakdown, **extra}
+        return KPIComputation(
+            value=scalar_value,
+            unit="currency",
+            source_record_count=snap.record_count,
+            breakdown=breakdown,
+        )
+    value, money_breakdown = _portfolio_money_breakdown(per_currency)
+    breakdown = {**snap.breakdown, **money_breakdown, **extra}
+    return KPIComputation(
+        value=value,
+        unit="currency",
+        source_record_count=snap.record_count,
+        breakdown=breakdown,
+    )
 
 
 @register_kpi(
@@ -284,11 +639,14 @@ async def cv_kpi(
     **_: Any,
 ) -> KPIComputation:
     snap = await _evm_snapshot(session, project_id)
-    return KPIComputation(
-        value=snap.ev - snap.ac,
-        unit="currency",
-        source_record_count=snap.record_count,
-        breakdown=snap.breakdown,
+    per_currency = {
+        code: snap.ev_by_currency.get(code, Decimal("0")) - snap.ac_by_currency.get(code, Decimal("0"))
+        for code in set(snap.ev_by_currency) | set(snap.ac_by_currency)
+    }
+    return _evm_currency_result(
+        snap,
+        scalar_value=snap.ev - snap.ac,
+        per_currency=per_currency,
     )
 
 
@@ -307,11 +665,14 @@ async def sv_kpi(
     **_: Any,
 ) -> KPIComputation:
     snap = await _evm_snapshot(session, project_id)
-    return KPIComputation(
-        value=snap.ev - snap.pv,
-        unit="currency",
-        source_record_count=snap.record_count,
-        breakdown=snap.breakdown,
+    per_currency = {
+        code: snap.ev_by_currency.get(code, Decimal("0")) - snap.pv_by_currency.get(code, Decimal("0"))
+        for code in set(snap.ev_by_currency) | set(snap.pv_by_currency)
+    }
+    return _evm_currency_result(
+        snap,
+        scalar_value=snap.ev - snap.pv,
+        per_currency=per_currency,
     )
 
 
@@ -321,36 +682,48 @@ async def sv_kpi(
     unit="currency",
     category="financial",
     source_modules=["finance", "tasks", "projects"],
-    description=(
-        "AC + (BAC - EV) / (CPI * SPI) — assumes both perf indices persist "
-        "(common in construction)."
-    ),
+    description=("AC + (BAC - EV) / (CPI * SPI) — assumes both perf indices persist (common in construction)."),
 )
+def _eac_from_primitives(bac: Decimal, pv: Decimal, ev: Decimal, ac: Decimal) -> Decimal:
+    """EAC = AC + (BAC - EV) / (CPI * SPI). Falls back to BAC when a
+    performance index is undefined (no actuals / no progress yet)."""
+    if ac == 0 or ev == 0 or pv == 0:
+        return bac
+    cpi = _safe_div(ev, ac)
+    spi = _safe_div(ev, pv)
+    denom = cpi * spi
+    if denom == 0:
+        return ac
+    return ac + _safe_div(bac - ev, denom)
+
+
 async def eac_kpi(
     session: AsyncSession,
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
     snap = await _evm_snapshot(session, project_id)
-    if snap.ac == 0 or snap.ev == 0 or snap.pv == 0:
-        return KPIComputation(
-            value=snap.bac,
-            unit="currency",
-            source_record_count=snap.record_count,
-            breakdown=snap.breakdown,
+    scalar_eac = _eac_from_primitives(snap.bac, snap.pv, snap.ev, snap.ac)
+    cpi = _safe_div(snap.ev, snap.ac) if snap.ac > 0 else Decimal("0")
+    spi = _safe_div(snap.ev, snap.pv) if snap.pv > 0 else Decimal("0")
+    # Portfolio: EAC is non-linear, so compute it per-currency from each
+    # bucket's own primitives rather than from the blended scalars.
+    per_currency = {
+        code: _eac_from_primitives(
+            snap.bac_by_currency.get(code, Decimal("0")),
+            snap.pv_by_currency.get(code, Decimal("0")),
+            snap.ev_by_currency.get(code, Decimal("0")),
+            snap.ac_by_currency.get(code, Decimal("0")),
         )
-    cpi = _safe_div(snap.ev, snap.ac)
-    spi = _safe_div(snap.ev, snap.pv)
-    denom = cpi * spi
-    if denom == 0:
-        eac = snap.ac
-    else:
-        eac = snap.ac + _safe_div(snap.bac - snap.ev, denom)
-    return KPIComputation(
-        value=eac,
-        unit="currency",
-        source_record_count=snap.record_count,
-        breakdown={**snap.breakdown, "cpi": str(cpi), "spi": str(spi)},
+        for code in (
+            set(snap.bac_by_currency) | set(snap.pv_by_currency) | set(snap.ev_by_currency) | set(snap.ac_by_currency)
+        )
+    }
+    return _evm_currency_result(
+        snap,
+        scalar_value=scalar_eac,
+        per_currency=per_currency,
+        extra_breakdown={"cpi": str(cpi), "spi": str(spi)},
     )
 
 
@@ -367,13 +740,26 @@ async def etc_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
-    eac_result = await eac_kpi(session, project_id=project_id)
     snap = await _evm_snapshot(session, project_id)
-    return KPIComputation(
-        value=eac_result.value - snap.ac,
-        unit="currency",
-        source_record_count=snap.record_count,
-        breakdown={**snap.breakdown, "eac": str(eac_result.value)},
+    scalar_eac = _eac_from_primitives(snap.bac, snap.pv, snap.ev, snap.ac)
+    # ETC = EAC - AC, per currency in portfolio mode.
+    per_currency = {
+        code: _eac_from_primitives(
+            snap.bac_by_currency.get(code, Decimal("0")),
+            snap.pv_by_currency.get(code, Decimal("0")),
+            snap.ev_by_currency.get(code, Decimal("0")),
+            snap.ac_by_currency.get(code, Decimal("0")),
+        )
+        - snap.ac_by_currency.get(code, Decimal("0"))
+        for code in (
+            set(snap.bac_by_currency) | set(snap.pv_by_currency) | set(snap.ev_by_currency) | set(snap.ac_by_currency)
+        )
+    }
+    return _evm_currency_result(
+        snap,
+        scalar_value=scalar_eac - snap.ac,
+        per_currency=per_currency,
+        extra_breakdown={"eac": str(scalar_eac)},
     )
 
 
@@ -390,13 +776,26 @@ async def vac_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
-    eac_result = await eac_kpi(session, project_id=project_id)
     snap = await _evm_snapshot(session, project_id)
-    return KPIComputation(
-        value=snap.bac - eac_result.value,
-        unit="currency",
-        source_record_count=snap.record_count,
-        breakdown={**snap.breakdown, "eac": str(eac_result.value)},
+    scalar_eac = _eac_from_primitives(snap.bac, snap.pv, snap.ev, snap.ac)
+    # VAC = BAC - EAC, per currency in portfolio mode.
+    per_currency = {
+        code: snap.bac_by_currency.get(code, Decimal("0"))
+        - _eac_from_primitives(
+            snap.bac_by_currency.get(code, Decimal("0")),
+            snap.pv_by_currency.get(code, Decimal("0")),
+            snap.ev_by_currency.get(code, Decimal("0")),
+            snap.ac_by_currency.get(code, Decimal("0")),
+        )
+        for code in (
+            set(snap.bac_by_currency) | set(snap.pv_by_currency) | set(snap.ev_by_currency) | set(snap.ac_by_currency)
+        )
+    }
+    return _evm_currency_result(
+        snap,
+        scalar_value=snap.bac - scalar_eac,
+        per_currency=per_currency,
+        extra_breakdown={"eac": str(scalar_eac)},
     )
 
 
@@ -444,10 +843,51 @@ async def procurement_savings_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
-    """Procurement savings = (budgeted - actual) / budgeted."""
+    """Procurement savings = (budgeted - actual) / budgeted.
+
+    Actual is the committed PO value (``PurchaseOrder.amount_total``).
+    Budgeted is the pre-order estimate carried on the linked material
+    requisition lines (``MaterialRequisitionItem.extended_cost``) — the
+    requisition is the baseline a PO is raised against. All amounts are
+    converted into the project base currency via ``Project.fx_rates``
+    before the savings ratio is taken so mixed-currency POs never blend.
+    """
     budgeted = Decimal("0")
     actual = Decimal("0")
     count = 0
+    base_currency, fx_map = await _project_currency_and_fx(session, project_id)
+    seen_codes: set[str] = set()
+    # Map requisition.po_id → Σ requisition item extended_cost (the budget
+    # baseline the PO was raised against), converted to base currency.
+    budget_by_po: dict[Any, Decimal] = {}
+    try:
+        from app.modules.procurement.models import (  # type: ignore
+            MaterialRequisition,
+            MaterialRequisitionItem,
+        )
+
+        req_stmt = select(MaterialRequisition).where(MaterialRequisition.po_id.is_not(None))
+        if project_id is not None:
+            req_stmt = req_stmt.where(MaterialRequisition.project_id == project_id)
+        reqs = (await session.execute(req_stmt)).scalars().all()
+        for req in reqs:
+            item_stmt = select(MaterialRequisitionItem).where(
+                MaterialRequisitionItem.requisition_id == req.id,
+            )
+            items = (await session.execute(item_stmt)).scalars().all()
+            req_budget = Decimal("0")
+            for item in items:
+                amt = _to_decimal(getattr(item, "extended_cost", 0))
+                code = str(getattr(item, "currency_code", "") or "")
+                if code:
+                    seen_codes.add(code.upper())
+                req_budget += _amount_in_base(amt, code, fx_map, base_currency)
+            budget_by_po[req.po_id] = budget_by_po.get(req.po_id, Decimal("0")) + req_budget
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("procurement_savings: requisition probe failed", exc_info=True)
+
     try:
         from app.modules.procurement.models import PurchaseOrder  # type: ignore
 
@@ -456,11 +896,16 @@ async def procurement_savings_kpi(
             stmt = stmt.where(PurchaseOrder.project_id == project_id)
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
-            budgeted += _to_decimal(
-                getattr(row, "budgeted_amount", None)
-                or getattr(row, "budget", 0),
-            )
-            actual += _to_decimal(getattr(row, "total_amount", 0))
+            po_budget = budget_by_po.get(row.id)
+            if po_budget is None or po_budget <= 0:
+                # No requisition baseline → cannot compute savings for this PO.
+                continue
+            amt = _to_decimal(getattr(row, "amount_total", 0))
+            code = str(getattr(row, "currency_code", "") or "")
+            if code:
+                seen_codes.add(code.upper())
+            actual += _amount_in_base(amt, code, fx_map, base_currency)
+            budgeted += po_budget
             count += 1
     except ImportError:
         pass
@@ -469,14 +914,24 @@ async def procurement_savings_kpi(
 
     if budgeted <= 0:
         return KPIComputation(
-            value=Decimal("0"), unit="percent", source_record_count=count,
+            value=Decimal("0"),
+            unit="percent",
+            source_record_count=count,
         )
     pct = (budgeted - actual) / budgeted * Decimal("100")
+    breakdown: dict[str, Any] = {
+        "budgeted": str(budgeted),
+        "actual": str(actual),
+        "currency": base_currency,
+    }
+    missing = _missing_fx_codes(seen_codes, fx_map, base_currency)
+    if missing:
+        breakdown["missing_fx_codes"] = missing
     return KPIComputation(
         value=pct,
         unit="percent",
         source_record_count=count,
-        breakdown={"budgeted": str(budgeted), "actual": str(actual)},
+        breakdown=breakdown,
     )
 
 
@@ -495,6 +950,8 @@ async def change_order_ratio_kpi(
 ) -> KPIComputation:
     co_value = Decimal("0")
     count = 0
+    base_currency, fx_map = await _project_currency_and_fx(session, project_id)
+    seen_codes: set[str] = set()
     try:
         from app.modules.changeorders.models import ChangeOrder  # type: ignore
 
@@ -503,9 +960,17 @@ async def change_order_ratio_kpi(
             stmt = stmt.where(ChangeOrder.project_id == project_id)
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
-            co_value += _to_decimal(
-                getattr(row, "amount", None) or getattr(row, "total", 0),
+            # The approved figure is authoritative once a CO is signed off;
+            # before that, ``cost_impact`` carries the proposed delta.
+            amt = _to_decimal(
+                getattr(row, "approved_amount", None)
+                if getattr(row, "approved_amount", None) is not None
+                else getattr(row, "cost_impact", 0),
             )
+            code = str(getattr(row, "currency", "") or "")
+            if code:
+                seen_codes.add(code.upper())
+            co_value += _amount_in_base(amt, code, fx_map, base_currency)
             count += 1
     except ImportError:
         pass
@@ -520,8 +985,7 @@ async def change_order_ratio_kpi(
             proj = await session.get(Project, project_id)
             if proj is not None:
                 contract_value = _to_decimal(
-                    getattr(proj, "contract_value", None)
-                    or getattr(proj, "budget", 0),
+                    getattr(proj, "contract_value", None) or getattr(proj, "budget", 0),
                 )
     except ImportError:
         pass
@@ -530,17 +994,24 @@ async def change_order_ratio_kpi(
 
     if contract_value <= 0:
         return KPIComputation(
-            value=Decimal("0"), unit="percent", source_record_count=count,
+            value=Decimal("0"),
+            unit="percent",
+            source_record_count=count,
         )
     pct = co_value / contract_value * Decimal("100")
+    breakdown: dict[str, Any] = {
+        "change_order_total": str(co_value),
+        "contract_value": str(contract_value),
+        "currency": base_currency,
+    }
+    missing = _missing_fx_codes(seen_codes, fx_map, base_currency)
+    if missing:
+        breakdown["missing_fx_codes"] = missing
     return KPIComputation(
         value=pct,
         unit="percent",
         source_record_count=count,
-        breakdown={
-            "change_order_total": str(co_value),
-            "contract_value": str(contract_value),
-        },
+        breakdown=breakdown,
     )
 
 
@@ -557,29 +1028,74 @@ async def cash_in_30d_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
+    """Projected receivable cash due within the next 30 days.
+
+    Outstanding = ``Invoice.amount_total`` minus the sum of settled
+    ``Payment.amount`` for that invoice. Only ``receivable`` invoices count
+    as inflow.
+
+    Single-project mode: foreign-currency invoices are converted into the
+    project base currency via ``Project.fx_rates`` before summing.
+
+    Portfolio mode (``project_id is None``): there is no single base
+    currency, so amounts are grouped by each invoice's own ``currency_code``
+    and the headline ``value`` is the dominant currency's subtotal — never a
+    blended cross-currency scalar. The full per-currency map and the
+    ``multi_currency`` flag are returned in ``breakdown``.
+    """
     total = Decimal("0")
     count = 0
-    horizon = datetime.now(UTC).date() + timedelta(days=30)
+    today = datetime.now(UTC).date()
+    horizon = today + timedelta(days=30)
+    base_currency, fx_map = await _project_currency_and_fx(session, project_id)
+    is_portfolio = project_id is None
+    by_currency: dict[str, Decimal] = {}
+    seen_codes: set[str] = set()
     try:
         from app.modules.finance.models import Invoice  # type: ignore
 
-        stmt = select(Invoice)
+        stmt = select(Invoice).where(Invoice.invoice_direction == "receivable")
         if project_id is not None:
             stmt = stmt.where(Invoice.project_id == project_id)
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
-            due = getattr(row, "due_date", None)
-            if due is None or (isinstance(due, _date) and due <= horizon):
-                amt = _to_decimal(getattr(row, "amount", 0))
-                paid = _to_decimal(getattr(row, "paid_amount", 0))
-                total += max(Decimal("0"), amt - paid)
-                count += 1
+            due = _parse_date(getattr(row, "due_date", None))
+            # No due date → due immediately (count it); else only within horizon.
+            if due is not None and due > horizon:
+                continue
+            gross = _to_decimal(getattr(row, "amount_total", 0))
+            paid = sum(
+                (_to_decimal(getattr(p, "amount", 0)) for p in getattr(row, "payments", []) or []),
+                Decimal("0"),
+            )
+            outstanding = gross - paid
+            if outstanding <= 0:
+                continue
+            code = str(getattr(row, "currency_code", "") or "")
+            if code:
+                seen_codes.add(code.upper())
+            if is_portfolio:
+                _add_currency_bucket(by_currency, outstanding, code, "")
+            else:
+                total += _amount_in_base(outstanding, code, fx_map, base_currency)
+            count += 1
     except ImportError:
         pass
     except Exception:
         logger.debug("cash_in_30d: probe failed", exc_info=True)
+    if is_portfolio:
+        value, breakdown = _portfolio_money_breakdown(by_currency)
+    else:
+        value = total
+        breakdown = {"currency": base_currency}
+    missing = _missing_fx_codes(seen_codes, fx_map, base_currency)
+    if missing:
+        breakdown["missing_fx_codes"] = missing
     return KPIComputation(
-        value=total, unit="currency", source_record_count=count,
+        value=value,
+        unit="currency",
+        source_record_count=count,
+        breakdown=breakdown,
     )
 
 
@@ -596,27 +1112,110 @@ async def cash_out_30d_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
+    """Projected cash outflow within the next 30 days.
+
+    There is no ``finance.Expense`` model on this platform, so outflow is
+    sourced from outstanding ``payable`` invoices (amount_total minus
+    settled payments) plus committed purchase orders falling due within the
+    horizon.
+
+    Single-project mode: all amounts are converted into the project base
+    currency via ``Project.fx_rates`` before summing.
+
+    Portfolio mode (``project_id is None``): amounts are grouped by each
+    row's own ``currency_code`` and the headline ``value`` is the dominant
+    currency's subtotal — never a blended cross-currency scalar. The full
+    per-currency map and the ``multi_currency`` flag are returned in
+    ``breakdown``.
+    """
     total = Decimal("0")
     count = 0
-    horizon = datetime.now(UTC).date() + timedelta(days=30)
-    try:
-        from app.modules.finance.models import Expense  # type: ignore
+    today = datetime.now(UTC).date()
+    horizon = today + timedelta(days=30)
+    base_currency, fx_map = await _project_currency_and_fx(session, project_id)
+    is_portfolio = project_id is None
+    by_currency: dict[str, Decimal] = {}
+    seen_codes: set[str] = set()
 
-        stmt = select(Expense)
+    # Outstanding payable invoices.
+    try:
+        from app.modules.finance.models import Invoice  # type: ignore
+
+        stmt = select(Invoice).where(Invoice.invoice_direction == "payable")
         if project_id is not None:
-            stmt = stmt.where(Expense.project_id == project_id)
+            stmt = stmt.where(Invoice.project_id == project_id)
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
-            due = getattr(row, "due_date", None)
-            if due is None or (isinstance(due, _date) and due <= horizon):
-                total += _to_decimal(getattr(row, "amount", 0))
-                count += 1
+            due = _parse_date(getattr(row, "due_date", None))
+            if due is not None and due > horizon:
+                continue
+            gross = _to_decimal(getattr(row, "amount_total", 0))
+            paid = sum(
+                (_to_decimal(getattr(p, "amount", 0)) for p in getattr(row, "payments", []) or []),
+                Decimal("0"),
+            )
+            outstanding = gross - paid
+            if outstanding <= 0:
+                continue
+            code = str(getattr(row, "currency_code", "") or "")
+            if code:
+                seen_codes.add(code.upper())
+            if is_portfolio:
+                _add_currency_bucket(by_currency, outstanding, code, "")
+            else:
+                total += _amount_in_base(outstanding, code, fx_map, base_currency)
+            count += 1
     except ImportError:
         pass
     except Exception:
-        logger.debug("cash_out_30d: probe failed", exc_info=True)
+        logger.debug("cash_out_30d: invoice probe failed", exc_info=True)
+
+    # Committed purchase orders due within the horizon (not yet completed).
+    try:
+        from app.modules.procurement.models import PurchaseOrder  # type: ignore
+
+        stmt = select(PurchaseOrder)
+        if project_id is not None:
+            stmt = stmt.where(PurchaseOrder.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            status_val = (getattr(row, "status", "") or "").lower()
+            if status_val in ("completed", "cancelled", "closed", "received"):
+                continue
+            due = _parse_date(getattr(row, "delivery_date", None)) or _parse_date(
+                getattr(row, "issue_date", None),
+            )
+            if due is not None and due > horizon:
+                continue
+            amt = _to_decimal(getattr(row, "amount_total", 0))
+            if amt <= 0:
+                continue
+            code = str(getattr(row, "currency_code", "") or "")
+            if code:
+                seen_codes.add(code.upper())
+            if is_portfolio:
+                _add_currency_bucket(by_currency, amt, code, "")
+            else:
+                total += _amount_in_base(amt, code, fx_map, base_currency)
+            count += 1
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("cash_out_30d: procurement probe failed", exc_info=True)
+
+    if is_portfolio:
+        value, breakdown = _portfolio_money_breakdown(by_currency)
+    else:
+        value = total
+        breakdown = {"currency": base_currency}
+    missing = _missing_fx_codes(seen_codes, fx_map, base_currency)
+    if missing:
+        breakdown["missing_fx_codes"] = missing
     return KPIComputation(
-        value=total, unit="currency", source_record_count=count,
+        value=value,
+        unit="currency",
+        source_record_count=count,
+        breakdown=breakdown,
     )
 
 
@@ -633,34 +1232,37 @@ async def dso_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
+    """Average days from a receivable invoice date to its last payment.
+
+    The Invoice model has no ``issue_date``/``paid_at`` columns — issue is
+    ``invoice_date`` and settlement dates live on the ``Payment`` relation.
+    Only ``receivable`` invoices that have at least one payment contribute.
+    """
     total_days = Decimal("0")
     count = 0
     try:
         from app.modules.finance.models import Invoice  # type: ignore
 
-        stmt = select(Invoice)
+        stmt = select(Invoice).where(Invoice.invoice_direction == "receivable")
         if project_id is not None:
             stmt = stmt.where(Invoice.project_id == project_id)
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
-            issued = getattr(row, "issue_date", None) or getattr(
-                row, "issued_at", None,
-            )
-            paid_at = getattr(row, "paid_at", None) or getattr(
-                row, "paid_date", None,
-            )
-            if issued is None or paid_at is None:
+            issued = _parse_date(getattr(row, "invoice_date", None))
+            if issued is None:
                 continue
-            try:
-                if isinstance(issued, datetime):
-                    issued = issued.date()
-                if isinstance(paid_at, datetime):
-                    paid_at = paid_at.date()
-                delta = (paid_at - issued).days
-                total_days += Decimal(delta)
-                count += 1
-            except Exception:
+            payment_dates = [
+                pd
+                for p in getattr(row, "payments", []) or []
+                if (pd := _parse_date(getattr(p, "payment_date", None))) is not None
+            ]
+            if not payment_dates:
                 continue
+            # Settlement = the most recent payment against the invoice.
+            settled = max(payment_dates)
+            delta = (settled - issued).days
+            total_days += Decimal(delta)
+            count += 1
     except ImportError:
         pass
     except Exception:
@@ -668,7 +1270,9 @@ async def dso_kpi(
 
     avg = _safe_div(total_days, Decimal(count)) if count > 0 else Decimal("0")
     return KPIComputation(
-        value=avg, unit="days", source_record_count=count,
+        value=avg,
+        unit="days",
+        source_record_count=count,
     )
 
 
@@ -710,7 +1314,9 @@ async def first_pass_yield_kpi(
 
     if total == 0:
         return KPIComputation(
-            value=Decimal("0"), unit="percent", source_record_count=0,
+            value=Decimal("0"),
+            unit="percent",
+            source_record_count=0,
         )
     pct = Decimal(passed) / Decimal(total) * Decimal("100")
     return KPIComputation(
@@ -734,27 +1340,67 @@ async def copq_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
-    total = Decimal("0")
+    """Sum of NCR cost impact, currency-honest in both modes.
+
+    ``NCR.cost_impact`` is recorded in the owning project's currency (the
+    model has no per-row currency column).
+
+    Single-project mode: the sum is wholly in that project's base currency,
+    so the headline ``value`` is that sum and ``breakdown.currency`` is its
+    ISO code.
+
+    Portfolio mode (``project_id is None``): NCRs from projects in different
+    currencies must NOT be blended into one scalar. We group ``cost_impact``
+    by each project's own base currency; the headline ``value`` is the
+    dominant currency's subtotal and ``breakdown`` carries the full
+    ``by_currency`` map plus a ``multi_currency`` flag so the UI groups by
+    ISO code instead of presenting a meaningless sum.
+    """
     count = 0
+    base_currency, _fx_unused = await _project_currency_and_fx(session, project_id)
+    is_portfolio = project_id is None
+    single_total = Decimal("0")
+    # Portfolio mode: group by each project's own currency.
+    by_currency: dict[str, Decimal] = {}
+    project_currency_cache: dict[uuid.UUID, str] = {}
     try:
         from app.modules.ncr.models import NCR  # type: ignore
+        from app.modules.projects.models import Project  # type: ignore
 
         stmt = select(NCR)
         if project_id is not None:
             stmt = stmt.where(NCR.project_id == project_id)
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
-            total += _to_decimal(
-                getattr(row, "cost_impact", None)
-                or getattr(row, "cost", 0),
-            )
+            amt = _to_decimal(getattr(row, "cost_impact", None))
             count += 1
+            if is_portfolio:
+                pid = getattr(row, "project_id", None)
+                code = ""
+                if pid is not None:
+                    code = project_currency_cache.get(pid, "")
+                    if not code:
+                        proj = await session.get(Project, pid)
+                        code = str(getattr(proj, "currency", "") or "").strip().upper() if proj else ""
+                        project_currency_cache[pid] = code
+                _add_currency_bucket(by_currency, amt, code, "")
+            else:
+                single_total += amt
     except ImportError:
         pass
     except Exception:
         logger.debug("copq: probe failed", exc_info=True)
+
+    if is_portfolio:
+        value, breakdown = _portfolio_money_breakdown(by_currency)
+    else:
+        value = single_total
+        breakdown = {"currency": base_currency}
     return KPIComputation(
-        value=total, unit="currency", source_record_count=count,
+        value=value,
+        unit="currency",
+        source_record_count=count,
+        breakdown=breakdown,
     )
 
 
@@ -792,7 +1438,9 @@ async def punch_close_rate_kpi(
 
     if total == 0:
         return KPIComputation(
-            value=Decimal("0"), unit="percent", source_record_count=0,
+            value=Decimal("0"),
+            unit="percent",
+            source_record_count=0,
         )
     pct = Decimal(closed) / Decimal(total) * Decimal("100")
     return KPIComputation(
@@ -827,10 +1475,14 @@ async def rfi_close_avg_days_kpi(
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
             opened = getattr(row, "created_at", None) or getattr(
-                row, "opened_at", None,
+                row,
+                "opened_at",
+                None,
             )
             closed = getattr(row, "closed_at", None) or getattr(
-                row, "responded_at", None,
+                row,
+                "responded_at",
+                None,
             )
             if opened is None or closed is None:
                 continue
@@ -887,8 +1539,12 @@ async def safety_trir_kpi(
             # Recordable = not "first_aid_only"
             severity = (getattr(row, "severity", "") or "").lower()
             if severity in (
-                "minor", "major", "fatal", "lost_time",
-                "recordable", "medical_treatment",
+                "minor",
+                "major",
+                "fatal",
+                "lost_time",
+                "recordable",
+                "medical_treatment",
             ):
                 incidents += 1
         # Try to find actual hours-worked records — gracefully fall back
@@ -912,10 +1568,7 @@ async def safety_trir_kpi(
     except Exception:
         logger.debug("safety_trir: probe failed", exc_info=True)
 
-    trir = (
-        Decimal(incidents) * Decimal("200000") / hours_worked
-        if hours_worked > 0 else Decimal("0")
-    )
+    trir = Decimal(incidents) * Decimal("200000") / hours_worked if hours_worked > 0 else Decimal("0")
     return KPIComputation(
         value=trir,
         unit="ratio",
@@ -957,8 +1610,7 @@ async def embodied_carbon_per_m2_kpi(
         rows = (await session.execute(stmt)).scalars().all()
         for row in rows:
             total_emissions += _to_decimal(
-                getattr(row, "scope3_kgco2e", None)
-                or getattr(row, "kgco2e", 0),
+                getattr(row, "scope3_kgco2e", None) or getattr(row, "kgco2e", 0),
             )
             count += 1
     except ImportError:
@@ -973,8 +1625,7 @@ async def embodied_carbon_per_m2_kpi(
             proj = await session.get(Project, project_id)
             if proj is not None:
                 project_area = _to_decimal(
-                    getattr(proj, "gross_floor_area_m2", None)
-                    or getattr(proj, "area_m2", 0),
+                    getattr(proj, "gross_floor_area_m2", None) or getattr(proj, "area_m2", 0),
                 )
     except ImportError:
         pass
@@ -1022,8 +1673,7 @@ async def equipment_utilization_kpi(
         for row in rows:
             used += _to_decimal(getattr(row, "hours_used", 0))
             available += _to_decimal(
-                getattr(row, "hours_available", None)
-                or getattr(row, "total_hours", 0),
+                getattr(row, "hours_available", None) or getattr(row, "total_hours", 0),
             )
             count += 1
     except ImportError:
@@ -1033,7 +1683,9 @@ async def equipment_utilization_kpi(
 
     if available <= 0:
         return KPIComputation(
-            value=Decimal("0"), unit="percent", source_record_count=count,
+            value=Decimal("0"),
+            unit="percent",
+            source_record_count=count,
         )
     pct = used / available * Decimal("100")
     return KPIComputation(
@@ -1093,38 +1745,76 @@ async def bid_win_rate_kpi(
     project_id: uuid.UUID | None = None,
     **_: Any,
 ) -> KPIComputation:
+    """Won bids / submitted bids.
+
+    Sourced from ``tendering.TenderBid`` (its ``status`` distinguishes
+    won/awarded/accepted from pending/rejected). TenderBid has no direct
+    ``project_id`` — it hangs off ``TenderPackage`` — so a project scope is
+    applied by joining the package. When the tendering module is absent we
+    fall back to ``bid_management``: a win is a ``BidAward`` (one per
+    package) and total is the number of ``BidSubmission`` envelopes.
+    """
     won = 0
     total = 0
-    # Try bid_management first, then tendering as fallback
-    for module_path, model_name in (
-        ("app.modules.bid_management.models", "Bid"),
-        ("app.modules.tendering.models", "Bid"),
-    ):
+    won_status = ("won", "awarded", "accepted")
+
+    # Primary source: tendering.TenderBid
+    try:
+        from app.modules.tendering.models import TenderBid, TenderPackage  # type: ignore
+
+        stmt = select(TenderBid)
+        if project_id is not None:
+            stmt = stmt.join(
+                TenderPackage,
+                TenderBid.package_id == TenderPackage.id,
+            ).where(TenderPackage.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            total += 1
+            status_val = (getattr(row, "status", "") or "").lower()
+            if status_val in won_status:
+                won += 1
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("bid_win_rate: tendering probe failed", exc_info=True)
+
+    # Fallback: bid_management (awards vs submissions) when no tender bids.
+    if total == 0:
         try:
-            module = __import__(module_path, fromlist=[model_name])
-            Bid = getattr(module, model_name)  # noqa: N806
-            stmt = select(Bid)
-            if project_id is not None:
-                stmt = stmt.where(Bid.project_id == project_id)
-            rows = (await session.execute(stmt)).scalars().all()
-            for row in rows:
-                total += 1
-                status_val = (getattr(row, "status", "") or "").lower()
-                if status_val in ("won", "awarded", "accepted"):
-                    won += 1
-            if total > 0:
-                break
-        except ImportError:
-            continue
-        except Exception:
-            logger.debug(
-                "bid_win_rate: %s probe failed", module_path, exc_info=True,
+            from app.modules.bid_management.models import (  # type: ignore
+                BidAward,
+                Bidder,
+                BidPackage,
+                BidSubmission,
             )
-            continue
+
+            # Total submissions for the scope.
+            sub_stmt = select(BidSubmission)
+            award_stmt = select(BidAward)
+            if project_id is not None:
+                # BidSubmission → Bidder → BidPackage(project_id)
+                sub_stmt = (
+                    sub_stmt.join(Bidder, BidSubmission.bidder_id == Bidder.id)
+                    .join(BidPackage, Bidder.package_id == BidPackage.id)
+                    .where(BidPackage.project_id == project_id)
+                )
+                award_stmt = award_stmt.join(
+                    BidPackage,
+                    BidAward.package_id == BidPackage.id,
+                ).where(BidPackage.project_id == project_id)
+            total = len((await session.execute(sub_stmt)).scalars().all())
+            won = len((await session.execute(award_stmt)).scalars().all())
+        except ImportError:
+            pass
+        except Exception:
+            logger.debug("bid_win_rate: bid_management probe failed", exc_info=True)
 
     if total == 0:
         return KPIComputation(
-            value=Decimal("0"), unit="percent", source_record_count=0,
+            value=Decimal("0"),
+            unit="percent",
+            source_record_count=0,
         )
     pct = Decimal(won) / Decimal(total) * Decimal("100")
     return KPIComputation(
@@ -1163,7 +1853,9 @@ async def project_count_active_kpi(
         logger.debug("project_count_active: probe failed", exc_info=True)
 
     return KPIComputation(
-        value=Decimal(count), unit="count", source_record_count=count,
+        value=Decimal(count),
+        unit="count",
+        source_record_count=count,
     )
 
 
@@ -1177,9 +1869,10 @@ def list_system_kpis() -> list[dict[str, Any]]:
 
 # ── Drill-down record providers ─────────────────────────────────────────
 # A KPI's "drill-down" returns the underlying rows that fed the aggregate —
-# e.g. for ``cpi`` we return the (project_id, finance.Expense.amount,
-# task.earned_value) rows. Each provider is registered against a KPI code
-# and returns a list of dicts, capped at ``limit``.
+# e.g. for ``cpi`` we return task earned-value rows plus the finance
+# payments / purchase orders that make up actual cost. Each provider is
+# registered against a KPI code and returns a list of dicts, capped at
+# ``limit``.
 
 KPIRecordProvider = Callable[..., Awaitable[list[dict[str, Any]]]]
 KPI_RECORD_PROVIDERS: dict[str, KPIRecordProvider] = {}
@@ -1229,28 +1922,52 @@ async def _evm_drilldown_records(
         pass
     except Exception:
         logger.debug("evm drilldown: tasks probe failed", exc_info=True)
+    # Actual cost rows: settled payments (joined to the invoice for project
+    # scope) — there is no finance.Expense model on this platform.
     try:
-        from app.modules.finance.models import Expense  # type: ignore
+        from app.modules.finance.models import Invoice, Payment  # type: ignore
 
-        stmt = select(Expense).limit(limit)
+        stmt = select(Payment, Invoice).join(Invoice, Payment.invoice_id == Invoice.id).limit(limit)
         if project_id is not None:
-            stmt = stmt.where(Expense.project_id == project_id)
-        rows = (await session.execute(stmt)).scalars().all()
-        for row in rows:
+            stmt = stmt.where(Invoice.project_id == project_id)
+        for payment, invoice in (await session.execute(stmt)).all():
             records.append(
                 {
-                    "kind": "expense",
-                    "id": str(row.id),
-                    "amount": str(_to_decimal(getattr(row, "amount", 0))),
-                    "project_id": str(getattr(row, "project_id", "")),
-                    "vendor_id": str(getattr(row, "vendor_id", "") or ""),
-                    "category": getattr(row, "category", "") or "",
+                    "kind": "payment",
+                    "id": str(payment.id),
+                    "amount": str(_to_decimal(getattr(payment, "amount", 0))),
+                    "currency": str(getattr(payment, "currency_code", "") or ""),
+                    "project_id": str(getattr(invoice, "project_id", "") or ""),
+                    "invoice_id": str(getattr(payment, "invoice_id", "") or ""),
                 },
             )
     except ImportError:
         pass
     except Exception:
         logger.debug("evm drilldown: finance probe failed", exc_info=True)
+    # Committed cost rows: purchase orders.
+    try:
+        from app.modules.procurement.models import PurchaseOrder  # type: ignore
+
+        stmt = select(PurchaseOrder).limit(limit)
+        if project_id is not None:
+            stmt = stmt.where(PurchaseOrder.project_id == project_id)
+        rows = (await session.execute(stmt)).scalars().all()
+        for row in rows:
+            records.append(
+                {
+                    "kind": "purchase_order",
+                    "id": str(row.id),
+                    "po_number": getattr(row, "po_number", "") or "",
+                    "amount": str(_to_decimal(getattr(row, "amount_total", 0))),
+                    "currency": str(getattr(row, "currency_code", "") or ""),
+                    "project_id": str(getattr(row, "project_id", "") or ""),
+                },
+            )
+    except ImportError:
+        pass
+    except Exception:
+        logger.debug("evm drilldown: procurement probe failed", exc_info=True)
     return records
 
 
@@ -1384,8 +2101,7 @@ async def benchmark(
     project_values.sort()
     n = len(project_values)
     median = (
-        (project_values[n // 2 - 1] + project_values[n // 2]) / Decimal("2")
-        if n % 2 == 0 else project_values[n // 2]
+        (project_values[n // 2 - 1] + project_values[n // 2]) / Decimal("2") if n % 2 == 0 else project_values[n // 2]
     )
     rank = sum(1 for v in project_values if v <= target_value)
     percentile = Decimal(rank) * Decimal("100") / Decimal(n)

@@ -130,7 +130,9 @@ export function RulePackPreviewModal({
     queryKey: ['rule-pack-preview-models', projectId],
     queryFn: () =>
       projectId
-        ? apiGet<BIMModelsResponse>(`/v1/bim/models/?project_id=${projectId}`)
+        ? apiGet<BIMModelsResponse>(
+            `/v1/bim_hub/?project_id=${encodeURIComponent(projectId)}`,
+          )
         : Promise.resolve({ items: [] }),
     enabled: !!projectId && open,
     staleTime: 60_000,
@@ -187,7 +189,7 @@ export function RulePackPreviewModal({
         title: t('rulePacks.install_success', { defaultValue: 'Rule pack installed' }),
         message: t('rulePacks.installed_count', {
           defaultValue: '{{count}} rules added to this project.',
-          count: res.installed_rule_count,
+          count: res.rules_installed,
         }),
       });
       setConfirmOpen(false);
@@ -208,10 +210,17 @@ export function RulePackPreviewModal({
     [preview],
   );
 
+  // The backend dry-run report is a FLAT list of per-(rule, element) rows
+  // ({ rule_id, element_id, passed, ... }). Aggregate them here into a
+  // per-rule { pass, fail } tally — one row per element, so each rule_id
+  // appears once per evaluated element.
   const dryRunByRule = useMemo(() => {
     const map = new Map<string, { pass: number; fail: number }>();
     for (const r of preview?.dry_run?.results ?? []) {
-      map.set(r.rule_id, { pass: r.pass_count, fail: r.fail_count });
+      const acc = map.get(r.rule_id) ?? { pass: 0, fail: 0 };
+      if (r.passed) acc.pass += 1;
+      else acc.fail += 1;
+      map.set(r.rule_id, acc);
     }
     return map;
   }, [preview]);

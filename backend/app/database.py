@@ -9,9 +9,10 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncGenerator
-from datetime import datetime
+from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, MetaData, String, TypeDecorator, event as sa_event, func
+from sqlalchemy import DateTime, MetaData, String, TypeDecorator, func
+from sqlalchemy import event as sa_event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -72,6 +73,7 @@ def _log_slow_query(
         },
     )
 
+
 _NS = uuid.UUID("d4d4c300-1909-4ddc-b01c-0a44e3b01c00")
 
 # Stable schema-engine identifier reused by the migration safety
@@ -110,9 +112,7 @@ class GUID(TypeDecorator):
             return str(value)
         return value
 
-    def process_result_value(
-        self, value: str | None, dialect: object
-    ) -> uuid.UUID | str | None:
+    def process_result_value(self, value: str | None, dialect: object) -> uuid.UUID | str | None:
         if value is None:
             return None
         if isinstance(value, uuid.UUID):
@@ -131,6 +131,11 @@ class GUID(TypeDecorator):
             return value
 
 
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now — Python-side default/onupdate for timestamps."""
+    return datetime.now(UTC)
+
+
 class Base(DeclarativeBase):
     """‌⁠‍Base class for all ORM models.
 
@@ -145,15 +150,27 @@ class Base(DeclarativeBase):
         primary_key=True,
         default=uuid.uuid4,
     )
+    # created_at / updated_at use **Python-side** ``default``/``onupdate`` so the
+    # value is populated on the in-memory instance during flush. The previous
+    # SQL-only ``server_default``/``onupdate=func.now()`` left the attribute
+    # *expired* after every INSERT/UPDATE (the DB computed it), so the next
+    # access — typically synchronous Pydantic ``model_validate`` in a router —
+    # emitted a lazy reload SELECT outside the async greenlet and raised
+    # ``MissingGreenlet`` on asyncpg (SQLite silently tolerated it). With a
+    # Python callable the ORM sets the value itself and never re-fetches, fixing
+    # that entire class of bug across every model at once. ``server_default`` is
+    # kept so raw-SQL inserts and migrations still get a DB-side timestamp.
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        default=_utcnow,
         server_default=func.now(),
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
+        default=_utcnow,
+        onupdate=_utcnow,
         server_default=func.now(),
-        onupdate=func.now(),
         nullable=False,
     )
 
@@ -197,6 +214,14 @@ def create_engine_from_settings():
         # slow-query listeners share the same symbols.
         @sa_event.listens_for(Engine, "connect")
         def _set_sqlite_pragma(dbapi_conn: object, _: object) -> None:
+            # This listener is bound to the ``Engine`` base class, so it fires
+            # for EVERY engine created in this process — including a PostgreSQL
+            # engine if one is ever created after this SQLite engine (e.g. the
+            # embedded-PG test lane, or a mixed-dialect tool run). Sending
+            # ``PRAGMA`` to PostgreSQL is a syntax error, so gate on the actual
+            # DBAPI module of the connection rather than the registering URL.
+            if "sqlite" not in (type(dbapi_conn).__module__ or ""):
+                return
             cursor = dbapi_conn.cursor()  # type: ignore[union-attr]
             cursor.execute("PRAGMA journal_mode=WAL")
             cursor.execute("PRAGMA busy_timeout=30000")
@@ -214,7 +239,34 @@ def create_engine_from_settings():
     kwargs["pool_size"] = settings.database_pool_size
     kwargs["max_overflow"] = settings.database_max_overflow
 
+    if not _is_sqlite(url):
+        # PostgreSQL: validate each pooled connection with a lightweight
+        # round-trip before handing it to a request, and recycle connections
+        # periodically. Without this, a server-side idle timeout, a Postgres
+        # restart, or a failover leaves dead sockets in the pool that surface
+        # as ``OperationalError: server closed the connection unexpectedly`` on
+        # the next query. pool_pre_ping costs one cheap round-trip on checkout;
+        # pool_recycle caps connection age below typical infra idle timeouts.
+        kwargs["pool_pre_ping"] = True
+        kwargs["pool_recycle"] = settings.database_pool_recycle
+
     return create_async_engine(url, **kwargs)
+
+
+# Register PostgreSQL optimizations (JSON->JSONB DDL + performance-index event)
+# before any engine use. This is a side-effect import placed after Base is defined
+# so the module's ``from app.database import Base`` resolves against the
+# partially-initialised module. Guarded so it can never break engine creation.
+try:
+    from app.core import pg_optimizations as _pg_opt
+
+    _pg_opt.register(Base)
+except Exception as _pg_opt_exc:  # noqa: BLE001
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning(
+        "pg_optimizations not registered: %r", _pg_opt_exc
+    )
 
 
 engine = create_engine_from_settings()

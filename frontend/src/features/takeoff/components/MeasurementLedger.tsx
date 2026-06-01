@@ -6,7 +6,7 @@
  * math so the component itself stays purely presentational.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import {
@@ -42,19 +42,21 @@ export interface MeasurementLedgerProps {
   selectedMeasurementId?: string | null;
 }
 
-/** Column definitions — label, sort key, right-alignment. */
+/** Column definitions — i18n key, sort key, right-alignment.  Labels
+ *  are resolved at render time so the table follows the active locale. */
 const COLUMNS: {
   key: LedgerSortColumn;
-  label: string;
+  i18nKey: string;
+  fallback: string;
   align: 'left' | 'right';
 }[] = [
-  { key: 'ordinal', label: '#', align: 'right' },
-  { key: 'type', label: 'Type', align: 'left' },
-  { key: 'annotation', label: 'Annotation', align: 'left' },
-  { key: 'group', label: 'Group', align: 'left' },
-  { key: 'value', label: 'Value', align: 'right' },
-  { key: 'unit', label: 'Unit', align: 'left' },
-  { key: 'page', label: 'Page', align: 'right' },
+  { key: 'ordinal', i18nKey: 'takeoff_viewer.col_ordinal', fallback: '#', align: 'right' },
+  { key: 'type', i18nKey: 'takeoff_viewer.col_type', fallback: 'Type', align: 'left' },
+  { key: 'annotation', i18nKey: 'takeoff_viewer.col_annotation', fallback: 'Annotation', align: 'left' },
+  { key: 'group', i18nKey: 'takeoff_viewer.col_group', fallback: 'Group', align: 'left' },
+  { key: 'value', i18nKey: 'takeoff_viewer.col_value', fallback: 'Value', align: 'right' },
+  { key: 'unit', i18nKey: 'takeoff_viewer.col_unit', fallback: 'Unit', align: 'left' },
+  { key: 'page', i18nKey: 'takeoff_viewer.col_page', fallback: 'Page', align: 'right' },
 ];
 
 export function MeasurementLedger({
@@ -101,6 +103,28 @@ export function MeasurementLedger({
     for (const s of subtotals) map.set(s.group, s);
     return map;
   }, [subtotals]);
+
+  /* ── Scroll the selected row into view + brief flash ──────────────────
+   * Triggered when ``selectedMeasurementId`` changes from outside (e.g.
+   * the /markups deep-link or programmatic selection from the viewer
+   * canvas). The flash class is removed after the CSS animation has had
+   * time to play so a subsequent re-select on the same row re-runs it. */
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!selectedMeasurementId) return;
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const row = container.querySelector<HTMLTableRowElement>(
+      `tr[data-measurement-id="${CSS.escape(selectedMeasurementId)}"]`,
+    );
+    if (!row) return;
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    row.classList.add('ledger-row-flash');
+    const timer = window.setTimeout(() => {
+      row.classList.remove('ledger-row-flash');
+    }, 1600);
+    return () => window.clearTimeout(timer);
+  }, [selectedMeasurementId, rows]);
 
   const toggleSort = (col: LedgerSortColumn) => {
     if (sortCol === col) {
@@ -240,7 +264,7 @@ export function MeasurementLedger({
           })}
         </p>
       ) : (
-        <div className="max-h-[500px] overflow-auto">
+        <div ref={scrollContainerRef} className="max-h-[500px] overflow-auto">
           <table
             className="w-full text-[11px] tabular-nums"
             data-testid="ledger-table"
@@ -255,21 +279,40 @@ export function MeasurementLedger({
                       : isActive && sortDir === 'desc'
                         ? ArrowDown
                         : ArrowUpDown;
+                  const label = t(col.i18nKey, { defaultValue: col.fallback });
                   return (
                     <th
                       key={col.key}
                       onClick={() => toggleSort(col.key)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          toggleSort(col.key);
+                        }
+                      }}
+                      tabIndex={0}
+                      role="columnheader"
+                      scope="col"
+                      aria-sort={
+                        isActive
+                          ? sortDir === 'asc'
+                            ? 'ascending'
+                            : 'descending'
+                          : 'none'
+                      }
                       className={clsx(
                         'px-1.5 py-1 font-semibold text-content-secondary cursor-pointer select-none hover:bg-surface-secondary transition-colors',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40 focus-visible:ring-inset',
                         col.align === 'right' ? 'text-right' : 'text-left',
                       )}
                       data-testid={`ledger-header-${col.key}`}
                       data-sort={isActive ? sortDir : undefined}
                     >
                       <span className="inline-flex items-center gap-0.5">
-                        {col.label}
+                        {label}
                         <Arrow
                           size={9}
+                          aria-hidden
                           className={clsx(
                             'shrink-0',
                             isActive ? 'text-oe-blue' : 'text-content-quaternary',
@@ -321,7 +364,10 @@ export function MeasurementLedger({
                   >
                     <td className="px-1.5 py-1 text-right text-content-tertiary" />
                     <td className="px-1.5 py-1 font-semibold text-content-primary capitalize">
-                      Total {gt.type}
+                      {t('takeoff_viewer.total_of_type', {
+                        defaultValue: 'Total {{type}}',
+                        type: gt.type,
+                      })}
                     </td>
                     <td className="px-1.5 py-1 text-content-tertiary">
                       {gt.count} {t('takeoff_viewer.items', { defaultValue: 'items' })}
@@ -359,6 +405,7 @@ function GroupRows({
   selectedId: string | null;
   onRowClick?: (m: Measurement) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <>
       {groupRows.map(({ ordinal, measurement }) => {
@@ -367,8 +414,18 @@ function GroupRows({
           <tr
             key={measurement.id}
             onClick={() => onRowClick?.(measurement)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onRowClick?.(measurement);
+              }
+            }}
+            tabIndex={0}
+            role="row"
+            aria-selected={selected}
             className={clsx(
               'border-b border-border-light cursor-pointer transition-colors',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40 focus-visible:ring-inset',
               selected ? 'bg-oe-blue/10' : 'hover:bg-surface-secondary/60',
             )}
             data-testid="ledger-row"
@@ -413,7 +470,9 @@ function GroupRows({
               data-unit={unit}
             >
               <td />
-              <td className="px-1.5 py-1 text-content-tertiary">subtotal</td>
+              <td className="px-1.5 py-1 text-content-tertiary">
+                {t('takeoff_viewer.subtotal', { defaultValue: 'subtotal' })}
+              </td>
               <td className="px-1.5 py-1 text-content-secondary">
                 {group} · {subtotal.count}
               </td>

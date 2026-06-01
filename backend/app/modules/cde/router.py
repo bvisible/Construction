@@ -42,7 +42,7 @@ from app.modules.cde.schemas import (
 from app.modules.cde.service import CDEService
 from app.modules.cde.suitability import SUITABILITY_CODES
 
-router = APIRouter()
+router = APIRouter(tags=["cde"])
 logger = logging.getLogger(__name__)
 
 
@@ -296,7 +296,7 @@ async def update_container(
 @router.post(
     "/containers/{container_id}/transition/",
     response_model=ContainerResponse,
-    dependencies=[Depends(RequirePermission("cde.update"))],
+    dependencies=[Depends(RequirePermission("cde.transition"))],
 )
 async def transition_state(
     container_id: uuid.UUID,
@@ -316,7 +316,10 @@ async def transition_state(
     existing = await service.get_container(container_id)
     await verify_project_access(existing.project_id, user_id, session)
     container = await service.transition_state(
-        container_id, data, user_role=user_role, user_id=user_id,
+        container_id,
+        data,
+        user_role=user_role,
+        user_id=user_id,
     )
     return _container_to_response(container)
 

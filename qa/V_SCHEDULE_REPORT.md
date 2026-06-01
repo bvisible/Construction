@@ -85,7 +85,7 @@ The Playwright spec auto-detects the backend port via `QA_BASE_URL` /
 `page.context()._options.baseURL`; expected harness defaults:
 - backend: `http://127.0.0.1:8028`
 - vite: `http://127.0.0.1:5198` (`VITE_API_TARGET=http://127.0.0.1:8028`)
-- demo-login: `demo@openestimator.io`
+- demo-login: `demo@openconstructionerp.com`
 
 Run:
 ```

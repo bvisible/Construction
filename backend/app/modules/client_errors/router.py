@@ -24,7 +24,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from app.core.rate_limiter import RateLimiter, client_identifier
 from app.modules.client_errors.schemas import ClientErrorReport
 
-router = APIRouter()
+router = APIRouter(tags=["client_errors"])
 logger = logging.getLogger(__name__)
 
 # Per-IP cap. 30 req/min handles a tab that throws inside a tight render

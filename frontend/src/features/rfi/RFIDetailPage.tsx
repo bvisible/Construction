@@ -22,7 +22,6 @@ import {
   CalendarClock,
   CheckCircle2,
   Clock,
-  DollarSign,
   ExternalLink,
   FileText,
   Loader2,
@@ -231,6 +230,17 @@ export function RFIDetailPage() {
     queryFn: () => apiGet<UserResult[]>('/v1/users/?limit=100&is_active=true'),
     staleTime: 60_000,
   });
+
+  // Resolve the owning project's currency so the cost-exposure figure
+  // carries its ISO code (the amount lives in the project's currency,
+  // which may be EUR/BRL/GBP/… — never assume USD).
+  const { data: project } = useQuery({
+    queryKey: ['project', rfi?.project_id ?? null],
+    queryFn: () => apiGet<{ id: string; currency: string }>(`/v1/projects/${rfi?.project_id}`),
+    enabled: !!rfi?.project_id,
+    staleTime: 5 * 60_000,
+  });
+  const projectCurrency = (project?.currency || '').trim().toUpperCase();
 
   // Resolve linked_drawing_ids to filenames. One GET per attached id is
   // acceptable today — RFIs typically reference a handful of drawings.
@@ -813,8 +823,10 @@ export function RFIDetailPage() {
                     })}
                   >
                     <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400 font-medium">
-                      <DollarSign size={12} />
-                      {rfi.cost_impact_value ?? '—'}
+                      <AlertTriangle size={12} />
+                      {rfi.cost_impact_value
+                        ? `${rfi.cost_impact_value}${projectCurrency ? ` ${projectCurrency}` : ''}`
+                        : '—'}
                     </span>
                   </Row>
                 )}

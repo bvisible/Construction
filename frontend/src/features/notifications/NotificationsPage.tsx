@@ -77,7 +77,7 @@ const ICON_MAP: Record<IconCategory, { icon: typeof CheckCircle2; color: string;
   },
   error: { icon: XCircle, color: 'text-semantic-error', bg: 'bg-rose-50 dark:bg-rose-900/30' },
   warning: { icon: AlertTriangle, color: 'text-amber-500', bg: 'bg-amber-50 dark:bg-amber-900/30' },
-  info: { icon: Info, color: 'text-oe-blue', bg: 'bg-oe-blue-subtle' },
+  info: { icon: Info, color: 'text-oe-blue-text', bg: 'bg-oe-blue-subtle' },
   import: { icon: Upload, color: 'text-indigo-500', bg: 'bg-indigo-50 dark:bg-indigo-900/30' },
   validation: { icon: Shield, color: 'text-purple-500', bg: 'bg-purple-50 dark:bg-purple-900/30' },
   system: { icon: Settings, color: 'text-content-tertiary', bg: 'bg-surface-secondary' },
@@ -115,7 +115,7 @@ function humanizeKey(key: string): string {
 
 const PAGE_SIZE = 50;
 
-type Filter = 'all' | 'unread' | 'read';
+type NotificationFilter = 'all' | 'unread' | 'read';
 
 export function NotificationsPage() {
   const { t } = useTranslation();
@@ -123,7 +123,7 @@ export function NotificationsPage() {
   const queryClient = useQueryClient();
 
   const [activeTab, setActiveTab] = useState<Tab>('inbox');
-  const [filter, setFilter] = useState<Filter>('all');
+  const [filter, setFilter] = useState<NotificationFilter>('all');
   const [page, setPage] = useState(0);
 
   /* The backend's `is_read` query param is tri-state: `undefined` =
@@ -248,7 +248,7 @@ export function NotificationsPage() {
             </span>
           )}
           {unreadCount > 0 && (
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold bg-oe-blue-subtle text-oe-blue tabular-nums">
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold bg-oe-blue-subtle text-oe-blue-text tabular-nums">
               {unreadCount} {t('notifications.unread', { defaultValue: 'unread' })}
             </span>
           )}
@@ -262,7 +262,7 @@ export function NotificationsPage() {
             <select
               value={filter}
               onChange={(e) => {
-                setFilter(e.target.value as Filter);
+                setFilter(e.target.value as NotificationFilter);
                 setPage(0);
               }}
               className="h-9 ps-8 pe-3 text-xs rounded-lg border border-border bg-surface-primary text-content-primary focus:outline-none focus:ring-2 focus:ring-oe-blue/40"

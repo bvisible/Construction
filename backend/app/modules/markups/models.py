@@ -55,6 +55,17 @@ class Markup(Base):
     line_width: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     opacity: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
     author_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    # M3: optional assignee for follow-up. Nullable because most markups
+    # are anonymous review notes — only the ones that need owner-style
+    # tracking get an assignee. ON DELETE SET NULL so deleting a user
+    # does not destroy their pending markup queue.
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(
+        GUID(),
+        ForeignKey("oe_users_user.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+        default=None,
+    )
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     measurement_value: Mapped[Decimal | None] = mapped_column(_MEASUREMENT, nullable=True)

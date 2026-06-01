@@ -55,7 +55,7 @@ interface Props {
 //
 // 2026-05-13: pointed at openconstructionerp.com/contact (the canonical
 // product marketing site, confirmed 200 with a real Contact page).
-// The earlier-tried openestimator.io / openestimate.io hosts are
+// The earlier-tried openconstructionerp.com / openestimate.io hosts are
 // parked / 405 and dead-ended the buttons.
 const URL_COMMUNITY =
   'https://openconstructionerp.com/contact?topic=module_proposal_public&utm_source=oe_app&utm_medium=sidebar_cta&utm_campaign=request_module';

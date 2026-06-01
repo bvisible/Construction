@@ -2,14 +2,14 @@
 
 **Status:** accepted
 **Date:** 2026-04-25
-**Supersedes:** confirms the existing ban in `.claude/CLAUDE.md` §"Важные ограничения" #1
+**Supersedes:** confirms the existing ban in the architecture guide §"Важные ограничения" #1
 **Related:** RFC 34 (OCE global spec integration)
 
 ## Context
 
 `OCE_TECH_SPEC_GLOBAL.md` recommends **`ifcopenshell`** as the core IFC parser for Modules 2 (BIM Diff), 3 (Validation EAC), 4 (Classification ML), and 5 (QTO). Every code example in the spec assumes direct IFC parsing.
 
-OpenConstructionERP has explicitly banned IfcOpenShell since project inception (`CLAUDE.md` line: «НЕ используем IfcOpenShell — весь BIM/CAD через DDC cad2data pipeline»). The reasoning:
+OpenConstructionERP has explicitly banned IfcOpenShell since project inception (`the architecture guide` line: «НЕ используем IfcOpenShell — весь BIM/CAD через DDC cad2data pipeline»). The reasoning:
 
 - DDC `cad2data` already converts DWG, DGN, RVT, **and IFC** into one canonical format (Parquet + JSON).
 - A single canonical schema means downstream code (diff, validation, QTO) handles all formats identically — DWG-only projects work the same as IFC-only projects.

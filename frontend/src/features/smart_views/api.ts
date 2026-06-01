@@ -127,6 +127,24 @@ export function buildSmartViewShareUrl(token: string): string {
   return `${base}/smart-views/shared/${token}`;
 }
 
+/** ``GET /v1/smart-views/shared/{token}`` — resolve a share token to a view.
+ *
+ *  dead_button fix: the Share-by-link workflow copied a URL
+ *  (``/smart-views/shared/<token>``) that matched no frontend route AND no
+ *  page ever called the working *unauthenticated* backend resolver. This is
+ *  that missing call — the share-landing page reads ``:token`` from the route
+ *  and resolves it here. The path has NO trailing slash so it matches the
+ *  backend route exactly under ``redirect_slashes=False`` (router.py:231).
+ *  No JWT is required: the signed token IS the auth, so this works for an
+ *  anonymous recipient (the whole point of "anyone with the link can view"). */
+export async function resolveSmartViewShare(
+  token: string,
+): Promise<SmartViewResponse> {
+  return apiGet<SmartViewResponse>(
+    `${BASE}/shared/${encodeURIComponent(token)}`,
+  );
+}
+
 /** Clone an existing view as a new draft. Mirrors the view's name, rules
  *  and default action; scope_type/scope_id are taken from caller params
  *  so a "Duplicate to project" UX is one call. */

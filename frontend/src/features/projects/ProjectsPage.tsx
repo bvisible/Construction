@@ -46,11 +46,11 @@ const REGION_AVATAR_PALETTE = [
 ];
 
 function getRegionAvatarClass(region?: string): string {
-  if (!region) return 'bg-oe-blue-subtle text-oe-blue';
+  if (!region) return 'bg-oe-blue-subtle text-oe-blue-text';
   // Stable hash → palette index so the same region always renders the same colour.
   let h = 0;
   for (let i = 0; i < region.length; i++) h = (h * 31 + region.charCodeAt(i)) >>> 0;
-  return REGION_AVATAR_PALETTE[h % REGION_AVATAR_PALETTE.length] ?? 'bg-oe-blue-subtle text-oe-blue';
+  return REGION_AVATAR_PALETTE[h % REGION_AVATAR_PALETTE.length] ?? 'bg-oe-blue-subtle text-oe-blue-text';
 }
 
 const currencyFmt = new Intl.NumberFormat(getIntlLocale(), {
@@ -163,6 +163,15 @@ export function ProjectsPage() {
 
   const pinnedIds = useProjectContextStore((s) => s.pinnedProjectIds);
 
+  // Whether the user's projects span more than one currency. Used to guard
+  // the "Value" sort (cross-currency ordering is apples-to-oranges, since
+  // there is no cross-project rate table) and to label the stat cards.
+  const hasMultipleCurrencies = useMemo(() => {
+    if (!projects) return false;
+    const set = new Set(projects.map((p) => p.currency || '').filter(Boolean));
+    return set.size > 1;
+  }, [projects]);
+
   const filtered = useMemo(() => {
     if (!projects) return [];
     let list = [...projects];
@@ -212,6 +221,16 @@ export function ProjectsPage() {
         case 'oldest':
           return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
         case 'value': {
+          // Sorting by value across currencies is apples-to-oranges (no
+          // cross-project rate table). When the list spans multiple
+          // currencies, group by currency first so each currency's
+          // projects are ordered by value among themselves rather than
+          // pretending a raw 1_000 JPY outranks 900 EUR.
+          if (hasMultipleCurrencies) {
+            const aCur = a.currency || '';
+            const bCur = b.currency || '';
+            if (aCur !== bCur) return aCur.localeCompare(bCur);
+          }
           const aVal = boqStatsMap.get(a.id)?.totalValue ?? 0;
           const bVal = boqStatsMap.get(b.id)?.totalValue ?? 0;
           return bVal - aVal;
@@ -222,7 +241,7 @@ export function ProjectsPage() {
     });
 
     return list;
-  }, [projects, searchQuery, statusFilter, regionFilter, sortOption, boqStatsMap, pinnedIds]);
+  }, [projects, searchQuery, statusFilter, regionFilter, sortOption, boqStatsMap, pinnedIds, hasMultipleCurrencies]);
 
   // Reset page when filters change
   useEffect(() => {
@@ -244,13 +263,56 @@ export function ProjectsPage() {
     const activeProjects = projects.filter((p) => p.status === 'active').length;
     const archivedProjects = projects.filter((p) => p.status === 'archived').length;
     const totalBoqs = boqStats ? boqStats.reduce((s, b) => s + b.boqCount, 0) : 0;
-    const totalValue = boqStats ? boqStats.reduce((s, b) => s + b.totalValue, 0) : 0;
-    const avgValue =
-      boqStats && activeProjects > 0 ? totalValue / activeProjects : 0;
-    const largestValue = boqStats
-      ? boqStats.reduce((m, b) => (b.totalValue > m ? b.totalValue : m), 0)
-      : 0;
     const avgBoqsPerProject = totalProjects > 0 ? totalBoqs / totalProjects : 0;
+
+    // Money rule (b): BOQ values live in each project's own base currency
+    // and there is NO cross-project rate table, so we never blend them into
+    // a single scalar. Group totals BY currency; the UI shows per-currency
+    // chips when more than one currency is present, or one currency-labelled
+    // figure when they all share a currency. Avg is computed per currency
+    // over that currency's active projects.
+    const currencyOf = new Map(projects.map((p) => [p.id, p.currency || '']));
+    interface CurrencyRollup {
+      currency: string;
+      total: number;
+      largest: number;
+      activeCount: number;
+    }
+    const byCurrency = new Map<string, CurrencyRollup>();
+    if (boqStats) {
+      // Seed active-project counts per currency so the average divides by
+      // active projects of THAT currency (matching the legacy semantics).
+      for (const p of projects) {
+        if (p.status !== 'active') continue;
+        const cur = p.currency || '';
+        const r =
+          byCurrency.get(cur) ??
+          ({ currency: cur, total: 0, largest: 0, activeCount: 0 } as CurrencyRollup);
+        r.activeCount += 1;
+        byCurrency.set(cur, r);
+      }
+      for (const b of boqStats) {
+        if (b.totalValue <= 0) continue;
+        const cur = currencyOf.get(b.projectId) || '';
+        const r =
+          byCurrency.get(cur) ??
+          ({ currency: cur, total: 0, largest: 0, activeCount: 0 } as CurrencyRollup);
+        r.total += b.totalValue;
+        if (b.totalValue > r.largest) r.largest = b.totalValue;
+        byCurrency.set(cur, r);
+      }
+    }
+    // Only currencies that actually carry value drive the per-currency UI.
+    const valueByCurrency = Array.from(byCurrency.values())
+      .filter((r) => r.total > 0)
+      .map((r) => ({
+        currency: r.currency,
+        total: r.total,
+        avg: r.activeCount > 0 ? r.total / r.activeCount : 0,
+        largest: r.largest,
+      }))
+      .sort((a, b) => b.total - a.total);
+    const multiCurrency = valueByCurrency.length > 1;
 
     const regions = new Set(projects.map((p) => p.region).filter(Boolean));
     const currencies = new Set(projects.map((p) => p.currency).filter(Boolean));
@@ -269,10 +331,9 @@ export function ProjectsPage() {
       activeProjects,
       archivedProjects,
       totalBoqs,
-      totalValue,
-      avgValue,
-      largestValue,
       avgBoqsPerProject,
+      valueByCurrency,
+      multiCurrency,
       regionCount: regions.size,
       currencyCount: currencies.size,
       primaryCurrency: currencies.size === 1 ? [...currencies][0] : '',
@@ -287,6 +348,10 @@ export function ProjectsPage() {
         ? `${(v / 1_000).toFixed(0)}K`
         : currencyFmt.format(v);
 
+  // Render a money figure with its ISO currency code, never a bare number.
+  const formatMoney = (v: number, currency: string) =>
+    `${formatBigValue(v)}${currency ? ` ${currency}` : ''}`;
+
   // Available region filter values — only regions actually present in the
   // user's project list (no globally hard-coded country/region inventory).
   const availableRegions = useMemo(() => {
@@ -298,11 +363,21 @@ export function ProjectsPage() {
 
   /* ── Sort labels ──────────────────────────────────────────────────── */
 
-  const sortOptions: { value: SortOption; label: string }[] = [
+  const sortOptions: { value: SortOption; label: string; title?: string }[] = [
     { value: 'name_asc', label: t('projects.sort_name', { defaultValue: 'Name A-Z' }) },
     { value: 'newest', label: t('projects.sort_newest', { defaultValue: 'Newest' }) },
     { value: 'oldest', label: t('projects.sort_oldest', { defaultValue: 'Oldest' }) },
-    { value: 'value', label: t('projects.sort_value', { defaultValue: 'Value' }) },
+    {
+      value: 'value',
+      label: t('projects.sort_value', { defaultValue: 'Value' }),
+      // Value ordering is only meaningful within one currency — there is no
+      // cross-project rate table. Flag that when the list spans currencies.
+      title: hasMultipleCurrencies
+        ? t('projects.sort_value_mixed_hint', {
+            defaultValue: 'Sorts by value within each currency (projects span multiple currencies)',
+          })
+        : t('projects.sort_value', { defaultValue: 'Value' }),
+    },
   ];
 
   return (
@@ -381,46 +456,114 @@ export function ProjectsPage() {
               </div>
             </div>
 
-            {/* 3. Total Value */}
+            {/* 3. Total Value — never blend currencies into one scalar.
+                Single currency → one labelled total. Multiple → "Mixed
+                currencies" headline + a per-currency subtotal line. */}
             <div className="rounded-xl bg-surface-elevated border border-border-light p-3">
               <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wider">
                 {t('projects.stats_value', { defaultValue: 'Total Value' })}
               </div>
-              <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
-                {boqStats ? formatBigValue(stats.totalValue) : (
+              {!boqStats ? (
+                <div className="mt-1 leading-none">
                   <Skeleton width={64} height={20} className="inline-block align-middle" />
-                )}
-              </div>
-              <div className="mt-2 text-2xs text-content-tertiary">
-                {stats.currencyCount === 1 && stats.primaryCurrency
-                  ? stats.primaryCurrency
-                  : stats.currencyCount > 1
-                    ? t('projects.stats_currencies', {
-                        defaultValue: '{{count}} currencies',
-                        count: stats.currencyCount,
-                      })
-                    : ''}
-              </div>
+                </div>
+              ) : stats.valueByCurrency.length === 0 ? (
+                <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
+                  {currencyFmt.format(0)}
+                </div>
+              ) : stats.multiCurrency ? (
+                <>
+                  <div className="mt-1 text-sm font-bold text-content-primary leading-none">
+                    {t('projects.stats_value_mixed', { defaultValue: 'Mixed currencies' })}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {stats.valueByCurrency.map((c) => (
+                      <span
+                        key={c.currency || 'unknown'}
+                        className="inline-flex items-center gap-1 rounded-md bg-surface-secondary px-1.5 py-0.5 text-2xs font-semibold tabular-nums text-content-secondary"
+                      >
+                        {formatBigValue(c.total)}
+                        <span className="font-medium text-content-tertiary">
+                          {c.currency || t('common.unknown', { defaultValue: 'Unknown' })}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="mt-1 flex items-baseline gap-1.5 leading-none">
+                    <span className="text-xl font-bold text-content-primary tabular-nums">
+                      {formatBigValue(stats.valueByCurrency[0]!.total)}
+                    </span>
+                    <span className="text-2xs font-semibold uppercase tracking-wider text-content-tertiary">
+                      {stats.valueByCurrency[0]!.currency}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-2xs text-content-tertiary">
+                    {stats.valueByCurrency[0]!.currency}
+                  </div>
+                </>
+              )}
             </div>
 
-            {/* 4. Avg Project Size */}
+            {/* 4. Avg Project Size — per-currency average; never a blended
+                scalar. Single currency → one labelled figure; multiple →
+                "Mixed currencies" + per-currency average chips. */}
             <div className="rounded-xl bg-surface-elevated border border-border-light p-3">
               <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wider">
                 {t('projects.stats_avg', { defaultValue: 'Avg Project Size' })}
               </div>
-              <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
-                {boqStats ? formatBigValue(stats.avgValue) : (
+              {!boqStats ? (
+                <div className="mt-1 leading-none">
                   <Skeleton width={64} height={20} className="inline-block align-middle" />
-                )}
-              </div>
-              <div className="mt-2 text-2xs text-content-tertiary">
-                {boqStats && stats.largestValue > 0
-                  ? t('projects.stats_largest', {
-                      defaultValue: 'Largest {{value}}',
-                      value: formatBigValue(stats.largestValue),
-                    })
-                  : ''}
-              </div>
+                </div>
+              ) : stats.valueByCurrency.length === 0 ? (
+                <div className="mt-1 text-xl font-bold text-content-primary tabular-nums leading-none">
+                  {currencyFmt.format(0)}
+                </div>
+              ) : stats.multiCurrency ? (
+                <>
+                  <div className="mt-1 text-sm font-bold text-content-primary leading-none">
+                    {t('projects.stats_value_mixed', { defaultValue: 'Mixed currencies' })}
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    {stats.valueByCurrency.map((c) => (
+                      <span
+                        key={c.currency || 'unknown'}
+                        className="inline-flex items-center gap-1 rounded-md bg-surface-secondary px-1.5 py-0.5 text-2xs font-semibold tabular-nums text-content-secondary"
+                      >
+                        {formatBigValue(c.avg)}
+                        <span className="font-medium text-content-tertiary">
+                          {c.currency || t('common.unknown', { defaultValue: 'Unknown' })}
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="mt-1 flex items-baseline gap-1.5 leading-none">
+                    <span className="text-xl font-bold text-content-primary tabular-nums">
+                      {formatBigValue(stats.valueByCurrency[0]!.avg)}
+                    </span>
+                    <span className="text-2xs font-semibold uppercase tracking-wider text-content-tertiary">
+                      {stats.valueByCurrency[0]!.currency}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-2xs text-content-tertiary">
+                    {stats.valueByCurrency[0]!.largest > 0
+                      ? t('projects.stats_largest', {
+                          defaultValue: 'Largest {{value}}',
+                          value: formatMoney(
+                            stats.valueByCurrency[0]!.largest,
+                            stats.valueByCurrency[0]!.currency,
+                          ),
+                        })
+                      : ''}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
@@ -502,9 +645,10 @@ export function ProjectsPage() {
                 <button
                   key={opt.value}
                   onClick={() => setSortOption(opt.value)}
+                  title={opt.title}
                   className={`flex items-center gap-1 rounded-md px-2 py-1.5 text-2xs font-medium transition-colors ${
                     sortOption === opt.value
-                      ? 'bg-oe-blue-subtle text-oe-blue'
+                      ? 'bg-oe-blue-subtle text-oe-blue-text'
                       : 'text-content-tertiary hover:text-content-secondary hover:bg-surface-secondary'
                   }`}
                 >
@@ -616,6 +760,7 @@ export function ProjectsPage() {
                   disabled={page === 1}
                   className="rounded-lg border border-border-light px-3 py-2 text-sm font-medium text-content-secondary hover:bg-surface-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   title={t('common.first_page', { defaultValue: 'First page' })}
+                  aria-label={t('common.first_page', { defaultValue: 'First page' })}
                 >
                   &laquo;
                 </button>
@@ -665,6 +810,7 @@ export function ProjectsPage() {
                   disabled={page === totalPages}
                   className="rounded-lg border border-border-light px-3 py-2 text-sm font-medium text-content-secondary hover:bg-surface-secondary disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                   title={t('common.last_page', { defaultValue: 'Last page' })}
+                  aria-label={t('common.last_page', { defaultValue: 'Last page' })}
                 >
                   &raquo;
                 </button>
@@ -770,17 +916,6 @@ function ProjectCard({
     },
   });
 
-  const archiveMutation = useMutation({
-    mutationFn: () => apiPatch(`/v1/projects/${project.id}`, { status: 'archived' }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['projects'] });
-      addToast({ type: 'success', title: t('toasts.project_archived', { defaultValue: 'Project archived successfully' }) });
-    },
-    onError: (error: Error) => {
-      addToast({ type: 'error', title: t('toasts.archive_failed', { defaultValue: 'Failed to archive project' }), message: error.message });
-    },
-  });
-
   const restoreMutation = useMutation({
     mutationFn: () => projectsApi.restore(project.id),
     onSuccess: () => {
@@ -796,6 +931,26 @@ function ProjectCard({
         title: t('toasts.restore_failed', { defaultValue: 'Failed to restore project' }),
         message: error.message,
       });
+    },
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: () => apiPatch(`/v1/projects/${project.id}`, { status: 'archived' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      // Offer an immediate Undo — re-activates the project (the canonical
+      // un-archive path) so an accidental archive is one click to reverse.
+      addToast({
+        type: 'success',
+        title: t('toasts.project_archived', { defaultValue: 'Project archived successfully' }),
+        action: {
+          label: t('common.undo', { defaultValue: 'Undo' }),
+          onClick: () => restoreMutation.mutate(),
+        },
+      });
+    },
+    onError: (error: Error) => {
+      addToast({ type: 'error', title: t('toasts.archive_failed', { defaultValue: 'Failed to archive project' }), message: error.message });
     },
   });
 
@@ -854,7 +1009,7 @@ function ProjectCard({
       style={style}
       onClick={() => navigate(`/projects/${project.id}`)}
     >
-      {mapEnabled && project.address && (
+      {mapEnabled && (
         <div className="relative" onClick={(e) => e.stopPropagation()}>
           <ProjectMap
             variant="card"
@@ -1028,7 +1183,7 @@ function ProjectCard({
           </p>
         )}
         <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
-          <span className="inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue">
+          <span className="inline-flex items-center gap-1 rounded-full border border-oe-blue/20 bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue-text">
             <Building2 size={11} strokeWidth={2.25} />
             {standardLabels[project.classification_standard] ?? project.classification_standard}
           </span>
@@ -1036,10 +1191,12 @@ function ProjectCard({
             <CurrencyIcon size={11} strokeWidth={2.25} />
             {project.currency}
           </span>
-          <span className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-secondary px-2 py-0.5 text-2xs font-medium text-content-secondary">
-            <Globe2 size={11} strokeWidth={2.25} />
-            {project.region}
-          </span>
+          {project.region && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-secondary px-2 py-0.5 text-2xs font-medium text-content-secondary">
+              <Globe2 size={11} strokeWidth={2.25} />
+              {project.region}
+            </span>
+          )}
           {project.address?.city && (
             <span className="inline-flex items-center gap-1 rounded-full border border-border-light bg-surface-secondary px-2 py-0.5 text-2xs font-medium text-content-secondary">
               <MapPin size={11} strokeWidth={2.25} />
@@ -1053,7 +1210,7 @@ function ProjectCard({
             <Link
               to={`/projects/${project.id}/geo`}
               onClick={(e) => e.stopPropagation()}
-              className="inline-flex items-center gap-1 rounded-full border border-oe-blue/30 bg-oe-blue-subtle px-2 py-0.5 text-2xs font-semibold text-oe-blue transition-all hover:bg-oe-blue hover:text-white hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/60"
+              className="inline-flex items-center gap-1 rounded-full border border-oe-blue/30 bg-oe-blue-subtle px-2 py-0.5 text-2xs font-semibold text-oe-blue-text transition-all hover:bg-oe-blue hover:text-white hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/60"
               title={t('projects.card.fly_to_on_map', {
                 defaultValue: 'Fly camera to {{name}} on the globe',
                 name: project.name,
@@ -1162,7 +1319,7 @@ function WidgetToggles() {
   const btn = (active: boolean) =>
     `flex items-center gap-1 rounded-md px-2 py-1.5 text-2xs font-medium transition-colors ${
       active
-        ? 'bg-oe-blue-subtle text-oe-blue'
+        ? 'bg-oe-blue-subtle text-oe-blue-text'
         : 'text-content-tertiary hover:text-content-secondary hover:bg-surface-secondary'
     }`;
 

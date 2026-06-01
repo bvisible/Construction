@@ -6,7 +6,7 @@ import { chromium } from 'playwright';
 
 const FRONTEND = 'http://localhost:5180';
 const BACKEND  = 'http://localhost:8000';
-const EMAIL    = 'demo@openestimator.io';
+const EMAIL    = 'demo@openconstructionerp.com';
 const PASSWORD = 'DemoPass1234!';
 
 const ROUTES = [
@@ -74,7 +74,7 @@ const ctx = await browser.newContext();
 await ctx.addInitScript((tok) => {
   window.localStorage.setItem('oe_remember', '1');
   window.localStorage.setItem('oe_access_token', tok);
-  window.localStorage.setItem('oe_user_email', 'demo@openestimator.io');
+  window.localStorage.setItem('oe_user_email', 'demo@openconstructionerp.com');
   window.localStorage.setItem('oe_tour_completed', 'true');
   window.localStorage.setItem('oe_onboarding_completed', 'true');
   window.localStorage.setItem('oe_skip_tour', '1');

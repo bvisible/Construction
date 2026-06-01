@@ -143,6 +143,12 @@ export interface ProductTourStep {
   bodyKey: string;
   /** Preferred position relative to target.  Falls back if it would clip. */
   preferredPosition?: 'top' | 'right' | 'bottom' | 'left';
+  /** When the target lives inside a collapsible sidebar group that is
+   *  collapsed by default, the row is unmounted from the DOM and cannot be
+   *  measured.  Set this to the sidebar group id so the tour can dispatch
+   *  `oe:tour-reveal` to expand the group (and switch to advanced view if the
+   *  group is hidden in simple mode) before re-attempting measurement. */
+  revealGroupId?: string;
 }
 
 interface SpotlightRect {
@@ -189,12 +195,16 @@ export const DEFAULT_PRODUCT_TOUR_STEPS: ProductTourStep[] = [
     titleKey: 'tour.step.5.title',
     bodyKey: 'tour.step.5.body',
     preferredPosition: 'right',
+    // Row lives in the collapsed-by-default "property" group (hideInSimple).
+    revealGroupId: 'property',
   },
   {
     selector: '[data-testid="sidebar-nav-geo-hub"]',
     titleKey: 'tour.step.6.title',
     bodyKey: 'tour.step.6.body',
     preferredPosition: 'right',
+    // Row lives in the collapsed-by-default "cad_bim_analytics" group.
+    revealGroupId: 'cad_bim_analytics',
   },
   {
     selector: '[data-testid="header-help-menu"]',
@@ -281,10 +291,10 @@ export const BOQ_TOUR_STEPS: ProductTourStep[] = [
  * Walks a new operator through the Accommodation detail page + the
  * list-page CTAs that surround it:
  *   1. Header — name, kind badge, BIM link, Geo CTA.
- *   2. Tabs strip — Rooms / Bookings / Charges / Settings.
+ *   2. Tabs strip — Inventory / Occupancy / Billing / Settings blocks.
  *   3. Rooms grid — colour-coded by status (green/amber/grey/red).
  *   4. Bulk-add — Add rooms generator (prefix + start + count).
- *   5. Bookings — state machine (reserved → checked_in → checked_out).
+ *   5. Occupancy — bookings state machine (reserved → checked_in → checked_out).
  *   6. PropDev bootstrap — clone rooms from a PropDev block in Settings.
  *   7. HR autobook — wrap-up: list-page CTA suggests rooms to new hires.
  */
@@ -296,7 +306,12 @@ export const ACCOMMODATION_TOUR_STEPS: ProductTourStep[] = [
     preferredPosition: 'bottom',
   },
   {
-    selector: '[data-testid="accommodation-detail-tabs"]',
+    // The detail page renders its block strip via <TabBar idPrefix/
+    // testIdPrefix="accommodation-detail">, which emits a per-tab
+    // `accommodation-detail-tab-<id>` testid but no container testid.
+    // Anchor on the first (always-rendered) tab so the spotlight lands
+    // on the strip instead of degrading to a centred modal.
+    selector: '[data-testid="accommodation-detail-tab-inventory"]',
     titleKey: 'tour.accommodation.step.2.title',
     bodyKey: 'tour.accommodation.step.2.body',
     preferredPosition: 'bottom',
@@ -314,7 +329,10 @@ export const ACCOMMODATION_TOUR_STEPS: ProductTourStep[] = [
     preferredPosition: 'bottom',
   },
   {
-    selector: '[data-testid="accommodation-detail-tab-bookings"]',
+    // Bookings live under the Occupancy block (no standalone "bookings"
+    // block tab exists). Anchor on the Occupancy tab trigger, which is
+    // the entry point to the booking state machine.
+    selector: '[data-testid="accommodation-detail-tab-occupancy"]',
     titleKey: 'tour.accommodation.step.5.title',
     bodyKey: 'tour.accommodation.step.5.body',
     preferredPosition: 'bottom',
@@ -838,9 +856,34 @@ export function ProductTour({ steps, defaultTourId = 'global' }: ProductTourProp
   const [spotlight, setSpotlight] = useState<SpotlightRect | null>(null);
   const [tooltipCoords, setTooltipCoords] = useState<TooltipCoords>(() => centerOfViewport());
   const [confirmExitOpen, setConfirmExitOpen] = useState(false);
+  // Track current theme so we can swap inline colour values (box-shadow,
+  // accent-ring rgba) — Tailwind's `dark:` prefix only handles className
+  // styles, not the dynamic inline boxShadow we use for the cutout.
+  const [isDark, setIsDark] = useState<boolean>(() =>
+    typeof document !== 'undefined'
+      ? document.documentElement.classList.contains('dark')
+      : false,
+  );
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    const sync = () => setIsDark(root.classList.contains('dark'));
+    sync();
+    const mo = new MutationObserver(sync);
+    mo.observe(root, { attributes: true, attributeFilter: ['class'] });
+    return () => mo.disconnect();
+  }, []);
   // Track which missing-target warnings we've already emitted so we don't
   // spam the console on resize/recompute.
   const warnedRef = useRef<Set<string>>(new Set());
+  // Pending reveal-retry timers (steps whose target lives in a collapsed
+  // sidebar group). Cleared on step change / unmount so a stale retry never
+  // re-positions onto a newer step's target.
+  const revealTimersRef = useRef<number[]>([]);
+  const clearRevealTimers = useCallback(() => {
+    for (const id of revealTimersRef.current) window.clearTimeout(id);
+    revealTimersRef.current = [];
+  }, []);
 
   const step = resolvedSteps[currentStep];
   const isFirst = currentStep === 0;
@@ -885,41 +928,84 @@ export function ProductTour({ steps, defaultTourId = 'global' }: ProductTourProp
       const s = resolvedSteps[idx];
       if (!s) return;
 
+      // Cancel any reveal-retry timers from a previous step so they can't
+      // re-position onto this step's spotlight after the fact.
+      clearRevealTimers();
+
       // Wrap-up step (no selector) → centred modal, no spotlight.
       if (s.selector == null) {
         setSpotlight(null);
         setTooltipCoords(centerOfViewport());
         return;
       }
+      const selector = s.selector;
 
-      const el = document.querySelector(s.selector);
+      const el = document.querySelector(selector);
       if (el) {
         try {
           (el as Element).scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
         } catch {
           /* older browsers — ignore */
         }
-      } else if (!warnedRef.current.has(s.selector)) {
-        warnedRef.current.add(s.selector);
+      } else if (s.revealGroupId) {
+        // Target's sidebar group is collapsed (and possibly hidden in simple
+        // view), so the row is unmounted. Ask the Sidebar to expand it; the
+        // bounded retry below re-queries once the row mounts.
+        window.dispatchEvent(
+          new CustomEvent('oe:tour-reveal', { detail: { groupId: s.revealGroupId } }),
+        );
+      } else if (!warnedRef.current.has(selector)) {
+        warnedRef.current.add(selector);
         // eslint-disable-next-line no-console
-        console.warn(`[ProductTour] target not found, skipping step: ${s.selector}`);
+        console.warn(`[ProductTour] target not found, skipping step: ${selector}`);
       }
 
-      // Defer measurement so the smooth scroll has a chance to settle.
-      window.setTimeout(() => {
-        const rect = measureSpotlight(s.selector!);
+      // Latch onto the target once it settles. The first attempt is deferred
+      // so the smooth scroll has a chance to finish; if the row needs to be
+      // revealed first we retry a few times at ~80ms intervals before
+      // degrading to a centred modal.
+      const apply = (rect: SpotlightRect) => {
+        setSpotlight(rect);
+        setTooltipCoords(placeTooltip(rect, s.preferredPosition));
+      };
+      const degrade = () => {
+        // Target missing — degrade gracefully to a centred modal so the tour
+        // never stalls on a broken selector.
+        setSpotlight(null);
+        setTooltipCoords(centerOfViewport());
+      };
+      const MAX_ATTEMPTS = 5;
+      const attempt = (n: number) => {
+        const rect = measureSpotlight(selector);
         if (rect) {
-          setSpotlight(rect);
-          setTooltipCoords(placeTooltip(rect, s.preferredPosition));
-        } else {
-          // Target missing — degrade gracefully to a centred modal so the
-          // tour never stalls on a broken selector.
-          setSpotlight(null);
-          setTooltipCoords(centerOfViewport());
+          // The row may have just mounted/scrolled — ensure it's in view.
+          if (n > 0) {
+            const just = document.querySelector(selector);
+            try {
+              (just as Element | null)?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+                inline: 'nearest',
+              });
+            } catch {
+              /* older browsers — ignore */
+            }
+          }
+          apply(rect);
+          return;
         }
-      }, 180);
+        if (n + 1 >= MAX_ATTEMPTS) {
+          degrade();
+          return;
+        }
+        const id = window.setTimeout(() => attempt(n + 1), 80);
+        revealTimersRef.current.push(id);
+      };
+      // First measurement deferred to let the initial smooth scroll settle.
+      const firstId = window.setTimeout(() => attempt(0), 180);
+      revealTimersRef.current.push(firstId);
     },
-    [resolvedSteps],
+    [resolvedSteps, clearRevealTimers],
   );
 
   /* ── (Re)compute on currentStep change + resize/scroll/observer ──────── */
@@ -955,8 +1041,10 @@ export function ProductTour({ steps, defaultTourId = 'global' }: ProductTourProp
       window.removeEventListener('resize', recompute);
       window.removeEventListener('scroll', recompute, true);
       if (ro) ro.disconnect();
+      // Stop any pending reveal-retry timers when the step changes / unmounts.
+      clearRevealTimers();
     };
-  }, [active, currentStep, positionForStep, resolvedSteps]);
+  }, [active, currentStep, positionForStep, resolvedSteps, clearRevealTimers]);
 
   /* ── Esc key — soft-confirm dismiss ──────────────────────────────────── */
   useEffect(() => {
@@ -1108,6 +1196,12 @@ export function ProductTour({ steps, defaultTourId = 'global' }: ProductTourProp
   if (!active || !step || !resolved) return null;
 
   const SHADOW_SPREAD = 9999; // px — large enough to dim the entire viewport.
+  // Dark-mode darker scrim + bright cyan accent ring around the cutout so
+  // the highlighted area is visually obvious against the dimmed background.
+  // Light mode keeps the historical slate tint that has worked for a year.
+  const scrimColor = isDark
+    ? 'rgba(2, 6, 23, 0.78)' /* slate-950 @ 78% — near-black, high contrast */
+    : 'rgba(15, 23, 42, 0.42)'; /* slate-900 @ 42% — historical light value  */
 
   return (
     <>
@@ -1119,26 +1213,60 @@ export function ProductTour({ steps, defaultTourId = 'global' }: ProductTourProp
         data-product-tour="overlay"
         className={clsx(
           'fixed inset-0 z-[9000]',
-          spotlight ? 'pointer-events-none' : 'pointer-events-auto bg-black/35',
+          spotlight
+            ? 'pointer-events-none'
+            : 'pointer-events-auto bg-black/35 dark:bg-black/75',
         )}
         aria-hidden="true"
       >
         {spotlight && (
-          <div
-            data-testid="product-tour-spotlight"
-            style={{
-              position: 'fixed',
-              top: spotlight.top,
-              left: spotlight.left,
-              width: spotlight.width,
-              height: spotlight.height,
-              boxShadow: `0 0 0 ${SHADOW_SPREAD}px rgba(15, 23, 42, 0.42)`,
-              borderRadius: 10,
-              zIndex: 9001,
-              pointerEvents: 'none',
-              transition: 'top 180ms ease, left 180ms ease, width 180ms ease, height 180ms ease',
-            }}
-          />
+          <>
+            {/* The dimming layer — uses an enormous box-shadow spread to
+                paint the entire viewport while leaving a rectangular cutout
+                over the spotlight element itself. */}
+            <div
+              data-testid="product-tour-spotlight"
+              style={{
+                position: 'fixed',
+                top: spotlight.top,
+                left: spotlight.left,
+                width: spotlight.width,
+                height: spotlight.height,
+                boxShadow: `0 0 0 ${SHADOW_SPREAD}px ${scrimColor}`,
+                borderRadius: 10,
+                zIndex: 9001,
+                pointerEvents: 'none',
+                transition: 'top 180ms ease, left 180ms ease, width 180ms ease, height 180ms ease',
+              }}
+            />
+            {/* Bright accent ring + glow around the highlighted area.
+                Sits on top of the dimming layer (z 9002) so it draws a
+                clear, unmistakable boundary between dimmed-background and
+                spotlit-content. Stronger in dark mode where the dimming
+                alone is hard to see against already-dark surfaces. */}
+            <div
+              aria-hidden="true"
+              data-testid="product-tour-spotlight-ring"
+              style={{
+                position: 'fixed',
+                top: spotlight.top,
+                left: spotlight.left,
+                width: spotlight.width,
+                height: spotlight.height,
+                borderRadius: 10,
+                zIndex: 9002,
+                pointerEvents: 'none',
+                border: isDark
+                  ? '2px solid rgba(125, 211, 252, 0.95)' /* sky-300, near-opaque */
+                  : '2px solid rgba(14, 165, 233, 0.85)', /* sky-500, vivid blue */
+                boxShadow: isDark
+                  ? '0 0 0 4px rgba(125, 211, 252, 0.25), 0 0 32px 6px rgba(56, 189, 248, 0.55)'
+                  : '0 0 0 4px rgba(14, 165, 233, 0.20), 0 0 18px 2px rgba(14, 165, 233, 0.35)',
+                transition:
+                  'top 180ms ease, left 180ms ease, width 180ms ease, height 180ms ease',
+              }}
+            />
+          </>
         )}
       </div>
 
@@ -1157,8 +1285,12 @@ export function ProductTour({ steps, defaultTourId = 'global' }: ProductTourProp
           zIndex: 9100,
         }}
         className={clsx(
-          'rounded-2xl border border-border-light',
+          'rounded-2xl border',
+          // Light: subtle hairline. Dark: bright sky tint + outer glow
+          // ring so the card stands away from the near-black scrim.
+          'border-border-light dark:border-sky-400/60',
           'bg-surface-elevated shadow-xl',
+          'dark:shadow-[0_8px_32px_rgba(2,6,23,0.6),0_0_0_1px_rgba(125,211,252,0.25)]',
           'p-5 pointer-events-auto animate-scale-in',
         )}
       >

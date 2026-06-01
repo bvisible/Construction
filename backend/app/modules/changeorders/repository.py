@@ -32,6 +32,31 @@ def _to_decimal(value: object) -> Decimal:
         return Decimal("0")
 
 
+def _project_fx_map(project: object | None) -> dict[str, Decimal]:
+    """Project ``Project.fx_rates`` into ``{CODE: rate}`` as exact Decimals.
+
+    Mirrors ``boq/service.py::_project_fx_map`` (shape
+    ``[{"code": "USD", "rate": "1.08", "label": "US Dollar"}]`` where
+    ``rate`` is BASE units per 1 unit of the foreign currency). Defensive
+    against missing attribute / malformed entries — a bad row is skipped
+    rather than blowing up the summary endpoint.
+    """
+    if project is None:
+        return {}
+    raw = getattr(project, "fx_rates", None)
+    if not isinstance(raw, list):
+        return {}
+    out: dict[str, Decimal] = {}
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        code = str(entry.get("code") or "").strip().upper()
+        rate = _to_decimal(entry.get("rate"))
+        if code and rate > 0:
+            out[code] = rate
+    return out
+
+
 class ChangeOrderRepository:
     """‌⁠‍Data access for ChangeOrder and ChangeOrderItem models."""
 
@@ -82,17 +107,29 @@ class ChangeOrderRepository:
         limit: int = 50,
         status: str | None = None,
     ) -> tuple[list[ChangeOrder], int]:
-        """List change orders across every project owned by the given user.
+        """List change orders across every project the user can access.
 
         Used when the API caller omits ``project_id``: we scope to the
-        caller's own projects rather than 422-ing.
+        caller's own projects rather than 422-ing. "Accessible" means the
+        user OWNS the project OR is a TeamMembership member — matching
+        ``verify_project_access`` (the per-project list path), so the two
+        list routes agree instead of silently returning zero rows to a
+        non-owner team member.
         """
+        from sqlalchemy import or_
+
         from app.modules.projects.models import Project
+        from app.modules.teams.access import member_project_ids_subquery
 
         base = (
             select(ChangeOrder)
             .join(Project, Project.id == ChangeOrder.project_id)
-            .where(Project.owner_id == owner_id)
+            .where(
+                or_(
+                    Project.owner_id == owner_id,
+                    Project.id.in_(member_project_ids_subquery(owner_id)),
+                )
+            )
         )
         if status is not None:
             base = base.where(ChangeOrder.status == status)
@@ -157,12 +194,21 @@ class ChangeOrderRepository:
         total_time_impact_days = 0
         by_status: dict[str, int] = {}
         by_type: dict[str, int] = {}
-        # Default to the project's own currency; later overridden if any
-        # CO carries an explicit currency.
-        project = (
-            await self.session.execute(select(Project).where(Project.id == project_id))
-        ).scalar_one_or_none()
-        currency = (project.currency if project is not None else "") or ""
+        # The summary total is always expressed in the project's BASE
+        # currency. Foreign-currency change orders are converted via the
+        # project's ``fx_rates`` table before being summed — NEVER blended
+        # raw (money rule). A CO whose currency is foreign AND has no FX
+        # rate is excluded from the scalar total and surfaced separately
+        # under ``unconverted_by_currency`` so the figure is honest rather
+        # than silently mis-stamped with whichever currency was seen last.
+        project = (await self.session.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
+        base_currency = (getattr(project, "currency", "") if project is not None else "") or ""
+        base_code = base_currency.strip().upper()
+        fx_map = _project_fx_map(project)
+        # Approved foreign amounts with no FX rate, grouped by their own
+        # currency so the UI can show "+ 5,000.00 USD (no rate)" alongside
+        # the base-currency total.
+        unconverted: dict[str, Decimal] = {}
 
         for order in orders:
             # by_status aggregation
@@ -184,9 +230,24 @@ class ChangeOrderRepository:
                 # budget and downstream reporting; a binary-float drift
                 # (e.g. 0.1 + 0.2 → 0.30000000000000004) here becomes a
                 # KPI/UI mismatch a project manager can't reconcile.
-                delta = _to_decimal(order.cost_impact)
-                total_cost_impact += delta
-                total_approved_amount += delta
+                raw_delta = _to_decimal(order.cost_impact)
+                co_code = (order.currency or "").strip().upper()
+                if not co_code or co_code == base_code:
+                    # Already in the project base currency.
+                    total_cost_impact += raw_delta
+                    total_approved_amount += raw_delta
+                else:
+                    fx = fx_map.get(co_code)
+                    if fx is not None:
+                        converted = raw_delta * fx
+                        total_cost_impact += converted
+                        total_approved_amount += converted
+                    else:
+                        # Foreign currency with no FX rate — never fold it
+                        # into the base total. Keep it visible per-currency
+                        # so the user knows to add the rate in Project
+                        # Settings rather than seeing a silently wrong sum.
+                        unconverted[co_code] = unconverted.get(co_code, Decimal("0")) + raw_delta
                 total_schedule_impact_days += order.schedule_impact_days or 0
                 # ``time_impact_days`` is the dedicated variation column;
                 # it was previously (incorrectly) summing
@@ -201,8 +262,9 @@ class ChangeOrderRepository:
             elif order.status == "rejected":
                 rejected_count += 1
 
-            if order.currency:
-                currency = order.currency
+        # The summary currency is the project BASE currency — not the last
+        # CO seen. This is the only currency the scalar total is expressed in.
+        currency = base_currency
 
         # Money values stay as exact Decimals — the schema layer formats
         # them as canonical decimal strings ("100.35"). Quantising to 2dp
@@ -211,6 +273,13 @@ class ChangeOrderRepository:
         from decimal import ROUND_HALF_UP
 
         _CENTS = Decimal("0.01")
+        # Foreign approved amounts that couldn't be converted (no FX rate),
+        # quantised + grouped by their own ISO code so the UI can show them
+        # alongside — never inside — the base-currency total.
+        unconverted_by_currency = {
+            code: format(amount.quantize(_CENTS, rounding=ROUND_HALF_UP), "f")
+            for code, amount in sorted(unconverted.items())
+        }
         return {
             "total": len(orders),
             "total_orders": len(orders),
@@ -220,15 +289,12 @@ class ChangeOrderRepository:
             "submitted_count": submitted_count,
             "approved_count": approved_count,
             "rejected_count": rejected_count,
-            "total_approved_amount": total_approved_amount.quantize(
-                _CENTS, rounding=ROUND_HALF_UP
-            ),
-            "total_cost_impact": total_cost_impact.quantize(
-                _CENTS, rounding=ROUND_HALF_UP
-            ),
+            "total_approved_amount": total_approved_amount.quantize(_CENTS, rounding=ROUND_HALF_UP),
+            "total_cost_impact": total_cost_impact.quantize(_CENTS, rounding=ROUND_HALF_UP),
             "total_time_impact_days": total_time_impact_days,
             "total_schedule_impact_days": total_schedule_impact_days,
             "currency": currency,
+            "unconverted_by_currency": unconverted_by_currency,
         }
 
     # ── ChangeOrderItem ──────────────────────────────────────────────────

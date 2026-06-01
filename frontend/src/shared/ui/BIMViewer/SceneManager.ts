@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CameraTween, type CameraState } from './CameraTween';
+import type { BIMQualityMode } from '@/stores/useBIMViewerStore';
 
 export interface Viewpoint {
   position: { x: number; y: number; z: number };
@@ -38,6 +39,14 @@ export class SceneManager {
   private resizeObserver: ResizeObserver | null = null;
   private container: HTMLElement;
   private gridHelper: THREE.GridHelper | null = null;
+  /** Refs to lights created in setupLighting() so applyQualityMode()
+   *  can re-tune intensities without rebuilding the scene graph. */
+  private _ambientLight: THREE.AmbientLight | null = null;
+  private _hemiLight: THREE.HemisphereLight | null = null;
+  private _directionalLight: THREE.DirectionalLight | null = null;
+  private _fillLight: THREE.DirectionalLight | null = null;
+  /** Currently applied quality mode. */
+  private _qualityMode: BIMQualityMode = 'default';
   /** On-demand rendering flag — drops idle CPU from 60 FPS to ~0%. */
   private _needsRender = true;
   /** Active camera tween (W6.6) — null when the camera is at rest. */
@@ -66,6 +75,17 @@ export class SceneManager {
   private _onPointerDown: ((e: PointerEvent) => void) | null = null;
   private _canvasEl: HTMLCanvasElement | null = null;
   private _activeRestoreListeners = new Set<() => void>();
+  /** True between a `webglcontextlost` event and its `webglcontextrestored`
+   *  partner. While set, the animation loop skips rendering — the GL context
+   *  is gone and any draw call would throw. */
+  private _contextLost = false;
+  /** Bound WebGL context-loss handlers, kept so dispose() can detach them. */
+  private _onContextLost: ((e: Event) => void) | null = null;
+  private _onContextRestored: (() => void) | null = null;
+  /** Optional host callback fired with `true` on context loss and `false`
+   *  on restore. The BIM viewer wires this to a non-fatal recovery banner so
+   *  a transient GPU reset no longer reads as a hard crash (pdf11). */
+  private _onContextStateChange: ((lost: boolean) => void) | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const parent = canvas.parentElement;
@@ -98,6 +118,29 @@ export class SceneManager {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
     this.updateSize();
+
+    // WebGL context-loss handling. On large models the GPU can drop the
+    // context (driver reset / VRAM pressure / tab backgrounded); without
+    // handling this the next render() throws and the viewer looks crashed
+    // (pdf11). Calling preventDefault() on the loss event lets the browser
+    // restore the context; we pause the render loop until it does, then
+    // resume. The renderer rebuilds its own GL resources on restore, so we
+    // only need to flag, notify the host, and re-request a frame.
+    this._canvasEl = canvas;
+    this._onContextLost = (e: Event) => {
+      e.preventDefault();
+      this._contextLost = true;
+      this._onContextStateChange?.(true);
+    };
+    this._onContextRestored = () => {
+      this._contextLost = false;
+      // Three.js re-initialises its internal GL state on the next render
+      // against the restored context. Force a redraw so the scene reappears.
+      this._needsRender = true;
+      this._onContextStateChange?.(false);
+    };
+    canvas.addEventListener('webglcontextlost', this._onContextLost as EventListener, false);
+    canvas.addEventListener('webglcontextrestored', this._onContextRestored, false);
 
     // Scene
     this.scene = new THREE.Scene();
@@ -206,11 +249,13 @@ export class SceneManager {
     // Ambient light for overall brightness
     const ambient = new THREE.AmbientLight(0xffffff, 0.6);
     this.scene.add(ambient);
+    this._ambientLight = ambient;
 
     // Hemisphere light for sky/ground color blending
     const hemi = new THREE.HemisphereLight(0xddeeff, 0xffeedd, 0.3);
     hemi.position.set(0, 50, 0);
     this.scene.add(hemi);
+    this._hemiLight = hemi;
 
     // Main directional light. Shadow casting is DISABLED — rendering
     // shadows for thousands of BIM meshes per frame drops the viewer
@@ -221,11 +266,81 @@ export class SceneManager {
     directional.position.set(30, 50, 30);
     directional.castShadow = false;
     this.scene.add(directional);
+    this._directionalLight = directional;
 
     // Fill light from opposite direction
     const fill = new THREE.DirectionalLight(0xffffff, 0.3);
     fill.position.set(-20, 30, -20);
     this.scene.add(fill);
+    this._fillLight = fill;
+  }
+
+  /**
+   * Apply a render-quality preset. Idempotent — safe to call on every
+   * store change. Touches only renderer/lighting settings; material-side
+   * adjustments live in ElementManager.applyQualityMode (called separately
+   * from BIMViewer when the store value changes).
+   */
+  applyQualityMode(mode: BIMQualityMode): void {
+    if (this._qualityMode === mode) return;
+    this._qualityMode = mode;
+
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    switch (mode) {
+      case 'fast':
+        // Half-resolution rendering (visible jaggies on edges) +
+        // single-light flat illumination → unmistakeable "performance"
+        // look. Combined with ElementManager's flatShading + opaque
+        // glass this mode reads visually as a draft preview.
+        this.renderer.setPixelRatio(0.5);
+        this.renderer.toneMapping = THREE.NoToneMapping;
+        this.renderer.toneMappingExposure = 1.0;
+        if (this._ambientLight) this._ambientLight.intensity = 1.1;
+        if (this._hemiLight) this._hemiLight.intensity = 0;
+        if (this._directionalLight) this._directionalLight.intensity = 0.35;
+        if (this._fillLight) this._fillLight.intensity = 0;
+        break;
+      case 'visual':
+        // Retina-grade pixelRatio + boosted exposure + warm sky/ground
+        // hemisphere bounce. Combined with ElementManager's edge
+        // overlay this reads as a presentation-quality CAD render.
+        this.renderer.setPixelRatio(Math.min(2, dpr));
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.25;
+        if (this._ambientLight) this._ambientLight.intensity = 0.4;
+        if (this._hemiLight) this._hemiLight.intensity = 0.55;
+        if (this._directionalLight) this._directionalLight.intensity = 1.15;
+        if (this._fillLight) this._fillLight.intensity = 0.5;
+        break;
+      case 'walk':
+        // Most aggressive cut — first-person navigation on phones / low-
+        // spec laptops. PixelRatio 0.5 = quarter the fragment cost of
+        // default; flat ambient avoids harsh directional highlights
+        // crawling across walls as the camera moves.
+        this.renderer.setPixelRatio(0.5);
+        this.renderer.toneMapping = THREE.NoToneMapping;
+        this.renderer.toneMappingExposure = 1.0;
+        if (this._ambientLight) this._ambientLight.intensity = 1.25;
+        if (this._hemiLight) this._hemiLight.intensity = 0;
+        if (this._directionalLight) this._directionalLight.intensity = 0.25;
+        if (this._fillLight) this._fillLight.intensity = 0;
+        break;
+      case 'default':
+      default:
+        // Restore constructor defaults (do NOT touch shadowMap or other
+        // permanent flags — those are not part of the preset surface).
+        this.renderer.setPixelRatio(1);
+        this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        this.renderer.toneMappingExposure = 1.0;
+        if (this._ambientLight) this._ambientLight.intensity = 0.6;
+        if (this._hemiLight) this._hemiLight.intensity = 0.3;
+        if (this._directionalLight) this._directionalLight.intensity = 0.8;
+        if (this._fillLight) this._fillLight.intensity = 0.3;
+        break;
+    }
+    // PixelRatio change resets internal viewport — reapply size + render.
+    this.updateSize();
+    this._needsRender = true;
   }
 
   private updateSize(): void {
@@ -241,6 +356,11 @@ export class SceneManager {
 
   private animate = (): void => {
     this.animationId = requestAnimationFrame(this.animate);
+    // While the GL context is lost, render() would throw — pause drawing
+    // until `webglcontextrestored` clears the flag. Damping/controls update
+    // is cheap and harmless, but skip it too so a queued damping-dirty flag
+    // doesn't try to draw against the dead context.
+    if (this._contextLost) return;
     // Damping requires controls.update() every frame to animate the
     // deceleration, but we only pay the GPU render cost when something
     // actually changed.
@@ -256,6 +376,20 @@ export class SceneManager {
    *  Call this after selection changes, colour mutations, or visibility toggles. */
   requestRender(): void {
     this._needsRender = true;
+  }
+
+  /** Register a callback notified when the WebGL context is lost (`true`)
+   *  or restored (`false`). The host wires this to a non-fatal recovery
+   *  banner. Pass `null` to clear. Fires immediately with the current state
+   *  so a listener attached after a loss still sees it. */
+  onContextStateChange(cb: ((lost: boolean) => void) | null): void {
+    this._onContextStateChange = cb;
+    if (cb) cb(this._contextLost);
+  }
+
+  /** True while the WebGL context is lost (between contextlost / restored). */
+  isContextLost(): boolean {
+    return this._contextLost;
   }
 
   /** Fit all objects (or a specific bounding box) into the camera view. */
@@ -917,6 +1051,16 @@ export class SceneManager {
       this._canvasEl.removeEventListener('pointerdown', this._onPointerDown, { capture: true } as EventListenerOptions);
     }
     this._onPointerDown = null;
+    // Detach the WebGL context-loss listeners before releasing the canvas ref.
+    if (this._canvasEl && this._onContextLost) {
+      this._canvasEl.removeEventListener('webglcontextlost', this._onContextLost as EventListener, false);
+    }
+    if (this._canvasEl && this._onContextRestored) {
+      this._canvasEl.removeEventListener('webglcontextrestored', this._onContextRestored, false);
+    }
+    this._onContextLost = null;
+    this._onContextRestored = null;
+    this._onContextStateChange = null;
     this._canvasEl = null;
     for (const restore of this._activeRestoreListeners) {
       window.removeEventListener('pointerup', restore);

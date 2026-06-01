@@ -9,6 +9,7 @@ import {
   LayoutGrid, Activity,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, InfoHint, RecoveryCard, SkeletonTable, SkeletonCard } from '@/shared/ui';
+import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import SimilarItemsPanel from '@/shared/ui/SimilarItemsPanel';
@@ -40,18 +41,31 @@ interface RiskItem {
 interface RiskSummary {
   total_risks: number; by_status: Record<string, number>; by_category: Record<string, number>;
   high_critical_count: number; total_exposure: number; mitigated_count: number; currency: string;
+  // Per-currency exposure breakdown. The backend deliberately returns
+  // total_exposure = 0 when risks span more than one currency (it refuses
+  // to sum unconverted amounts) and puts the real figures here. The UI
+  // must read this instead of rendering a misleading "0".
+  exposure_by_currency?: Record<string, number>;
 }
 
 interface MatrixCell { probability_level: string; impact_level: string; count: number; risk_ids: string[] }
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
+// Must mirror the backend STATUS_VALUES vocabulary (schemas.py) exactly —
+// seed/demo data uses 'open', 'monitoring' and 'mitigated', which were
+// previously missing here, so seeded risks couldn't be filtered, their
+// status badges fell back to neutral, and the edit <select> dropped the
+// current value (silently changing it on save).
 const STATUS_COLORS: Record<string, 'neutral' | 'blue' | 'success' | 'warning' | 'error'> = {
-  identified: 'blue', assessed: 'warning', mitigating: 'success', closed: 'neutral', occurred: 'error',
+  identified: 'blue', assessed: 'warning', mitigating: 'success', monitoring: 'warning',
+  mitigated: 'success', open: 'blue', closed: 'neutral', occurred: 'error',
 };
-const CATEGORIES = ['technical', 'financial', 'schedule', 'regulatory', 'environmental', 'safety'];
+// Mirror the backend category set used by seed data (which includes
+// 'procurement') so seeded risks remain filterable.
+const CATEGORIES = ['technical', 'financial', 'schedule', 'regulatory', 'environmental', 'safety', 'procurement'];
 const SEVERITIES = ['low', 'medium', 'high', 'critical'];
-const STATUSES = ['identified', 'assessed', 'mitigating', 'closed', 'occurred'];
+const STATUSES = ['identified', 'assessed', 'mitigating', 'monitoring', 'mitigated', 'open', 'closed', 'occurred'];
 const PROB_LEVELS = ['0.9', '0.7', '0.5', '0.3', '0.1'];
 function getProbLabels(t: (key: string, opts?: Record<string, unknown>) => string): Record<string, string> {
   return {
@@ -365,7 +379,7 @@ function DetailView({ riskId, onBack }: { riskId: string; onBack: () => void }) 
           <div>
             <div className="flex items-center gap-3">
               <h2 className="text-xl font-semibold text-content-primary">{risk.code}</h2>
-              <Badge variant={STATUS_COLORS[risk.status] || 'neutral'}>{risk.status}</Badge>
+              <Badge variant={STATUS_COLORS[risk.status] || 'neutral'}>{t(`risk.status_${risk.status}`, { defaultValue: risk.status })}</Badge>
               <Badge variant="neutral">{t(`risk.cat_${risk.category}`, { defaultValue: risk.category })}</Badge>
             </div>
             <h3 className="mt-1 text-lg text-content-secondary">{risk.title}</h3>
@@ -558,6 +572,28 @@ export function RiskRegisterPage() {
   const currency = project?.currency || summary?.currency || 'EUR';
   const hasRisks = (summary?.total_risks ?? 0) > 0;
 
+  // Total Exposure must never render a misleading "0". The backend returns
+  // total_exposure = 0 when risks span more than one currency (it refuses
+  // to sum unconverted amounts) and puts the real numbers in
+  // exposure_by_currency. When the breakdown holds more than one non-empty
+  // currency we show an honest per-currency total via <MultiCurrencyTotal>;
+  // otherwise the single-currency total_exposure is correct as-is.
+  const exposureNode = useMemo(() => {
+    const byCurrency = summary?.exposure_by_currency ?? {};
+    const named = Object.entries(byCurrency).filter(([c, v]) => c && v > 0);
+    if (named.length > 1) {
+      return (
+        <MultiCurrencyTotal
+          variant="kpi"
+          primaryCurrency={currency}
+          items={named.map(([c, v]) => ({ amount: v, currency: c }))}
+          className="text-lg font-semibold text-semantic-error"
+        />
+      );
+    }
+    return fmtCur(summary?.total_exposure ?? 0, currency);
+  }, [summary, currency]);
+
   return (
     <div className="w-full animate-fade-in">
       <Breadcrumb items={[{ label: t('nav.dashboard', { defaultValue: 'Dashboard' }), to: '/' }, { label: t('nav.risk_register', { defaultValue: 'Risk Register' }) }]} />
@@ -610,7 +646,7 @@ export function RiskRegisterPage() {
           {[
             { icon: ShieldAlert, label: t('risk.total', { defaultValue: 'Total Risks' }), value: summary.total_risks, cls: 'text-content-primary', bg: 'bg-surface-secondary' },
             { icon: AlertTriangle, label: t('risk.high_critical', { defaultValue: 'High / Critical' }), value: summary.high_critical_count, cls: 'text-semantic-error', bg: 'bg-red-50 dark:bg-red-950/30' },
-            { icon: DollarSign, label: t('risk.exposure', { defaultValue: 'Total Exposure' }), value: fmtCur(summary.total_exposure, currency), cls: 'text-semantic-error', bg: 'bg-surface-secondary' },
+            { icon: DollarSign, label: t('risk.exposure', { defaultValue: 'Total Exposure' }), value: exposureNode, cls: 'text-semantic-error', bg: 'bg-surface-secondary' },
             { icon: Shield, label: t('risk.mitigated', { defaultValue: 'Mitigated' }), value: summary.mitigated_count, cls: 'text-semantic-success', bg: 'bg-green-50 dark:bg-green-950/30' },
           ].map(({ icon: Icon, label, value, cls, bg }) => (
             <Card key={label} className="p-4">

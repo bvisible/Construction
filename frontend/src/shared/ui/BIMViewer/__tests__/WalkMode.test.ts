@@ -91,7 +91,12 @@ describe('WalkMode', () => {
     camera.lookAt(0, 0, 0);
     renderer = { domElement: document.createElement('canvas') } as unknown as THREE.WebGLRenderer;
     dom = document.createElement('div');
-    wm = new WalkMode({ camera, renderer, domElement: dom });
+    // These tests exercise the FPS / pointer-lock path (they mock
+    // PointerLockControls and assert lock/unlock/moveForward). The viewer's
+    // DEFAULT is now drag-to-look (lockCursor:false, cursor stays visible);
+    // opt into pointer-lock here so the FPS-specific assertions stay valid.
+    // Drag-to-look has its own dedicated describe block below.
+    wm = new WalkMode({ camera, renderer, domElement: dom, lockCursor: true });
   });
 
   afterEach(() => {
@@ -185,6 +190,30 @@ describe('WalkMode', () => {
     releaseKey('PageDown');
   });
 
+  it('onExitRequest fires when pointer-lock is lost unexpectedly while still enabled', () => {
+    const onExitRequest = vi.fn();
+    const wm2 = new WalkMode({ camera, renderer, domElement: dom, onExitRequest, lockCursor: true });
+    wm2.enable(); // enable() -> controls.lock() -> 'lock' event => _locked = true
+    expect(wm2.isLocked()).toBe(true);
+    // Simulate the browser dropping the lock (alt-tab) WITHOUT calling
+    // disable(): dispatch the controls' own 'unlock' event.
+    const controls = (wm2 as unknown as { controls: { unlock: () => void } })
+      .controls;
+    controls.unlock();
+    expect(onExitRequest).toHaveBeenCalledTimes(1);
+    expect(wm2.isLocked()).toBe(false);
+    wm2.dispose();
+  });
+
+  it('does NOT fire onExitRequest during an intentional disable()', () => {
+    const onExitRequest = vi.fn();
+    const wm2 = new WalkMode({ camera, renderer, domElement: dom, onExitRequest, lockCursor: true });
+    wm2.enable();
+    wm2.disable(); // intentional teardown — must not trigger the auto-exit
+    expect(onExitRequest).not.toHaveBeenCalled();
+    wm2.dispose();
+  });
+
   it('Shift acts as a sprint modifier (3× speed) instead of moving down', () => {
     wm.enable();
     wm.setFlightSpeed(2);
@@ -199,5 +228,97 @@ describe('WalkMode', () => {
     // Without sprint: 2 * 0.5 = 1 m
     expect(moveForwardSpy).toHaveBeenLastCalledWith(1);
     releaseKey('KeyW');
+  });
+});
+
+describe('WalkMode — drag-to-look (default)', () => {
+  let camera: THREE.PerspectiveCamera;
+  let renderer: THREE.WebGLRenderer;
+  let dom: HTMLElement;
+  let wm: WalkMode;
+
+  beforeEach(() => {
+    lockSpy.mockClear();
+    unlockSpy.mockClear();
+    moveForwardSpy.mockClear();
+    moveRightSpy.mockClear();
+    camera = new THREE.PerspectiveCamera();
+    camera.position.set(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+    renderer = { domElement: document.createElement('canvas') } as unknown as THREE.WebGLRenderer;
+    dom = document.createElement('div');
+    // No lockCursor → default drag-to-look.
+    wm = new WalkMode({ camera, renderer, domElement: dom });
+  });
+
+  afterEach(() => {
+    wm.dispose();
+  });
+
+  it('default mode never constructs PointerLockControls / requests lock', () => {
+    wm.enable();
+    expect(wm.isEnabled()).toBe(true);
+    expect(wm.isPointerLockMode()).toBe(false);
+    // The whole point of the fix: no requestPointerLock, no native banner.
+    expect(lockSpy).not.toHaveBeenCalled();
+  });
+
+  it('shows a grab cursor on the dom element while enabled', () => {
+    wm.enable();
+    expect(dom.style.cursor).toBe('grab');
+    wm.disable();
+    expect(dom.style.cursor).toBe('');
+  });
+
+  it('WASD still moves the camera without PointerLockControls', () => {
+    wm.enable();
+    const startZ = camera.position.z;
+    pressKey('KeyW');
+    wm.tick(0.5); // 2 m/s * 0.5 s = 1 m forward (camera looks -Z)
+    expect(camera.position.z).toBeLessThan(startZ);
+    // Movement does NOT go through PointerLockControls in drag mode.
+    expect(moveForwardSpy).not.toHaveBeenCalled();
+    releaseKey('KeyW');
+  });
+
+  it('Space/Q move the camera up/down in drag mode', () => {
+    wm.enable();
+    const startY = camera.position.y;
+    pressKey('Space');
+    wm.tick(0.5);
+    expect(camera.position.y).toBeCloseTo(startY + 1, 6);
+    releaseKey('Space');
+    pressKey('KeyQ');
+    wm.tick(0.5);
+    expect(camera.position.y).toBeCloseTo(startY, 6);
+    releaseKey('KeyQ');
+  });
+
+  it('dragging the primary button rotates the camera and flips lock state', () => {
+    const lockStates: boolean[] = [];
+    const unsub = wm.onLockChange((locked) => lockStates.push(locked));
+    wm.enable();
+    const q0 = camera.quaternion.clone();
+    // jsdom does not implement PointerEvent — dispatch a plain Event and
+    // stamp the fields the handlers read. The handlers only access
+    // button / movementX / movementY / pointerId + preventDefault.
+    const fire = (
+      type: string,
+      props: { button?: number; movementX?: number; movementY?: number },
+    ): void => {
+      const ev = new Event(type, { bubbles: true, cancelable: true });
+      Object.assign(ev, { pointerId: 1, button: 0, movementX: 0, movementY: 0, ...props });
+      dom.dispatchEvent(ev);
+    };
+    fire('pointerdown', { button: 0 });
+    fire('pointermove', { movementX: 100, movementY: 0 });
+    // Camera orientation changed from the drag.
+    expect(camera.quaternion.equals(q0)).toBe(false);
+    // Lock mirror toggled true during the drag…
+    expect(lockStates).toContain(true);
+    fire('pointerup', { button: 0 });
+    // …and back to false on release.
+    expect(lockStates[lockStates.length - 1]).toBe(false);
+    unsub();
   });
 });

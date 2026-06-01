@@ -44,6 +44,28 @@ const installMock = installYaml as unknown as ReturnType<typeof vi.fn>;
 const apiGetMock = apiGet as unknown as ReturnType<typeof vi.fn>;
 
 const SEED = SEED_PACKS[0]!; // DIN 276
+
+/**
+ * The backend dry-run report is a FLAT list of per-(rule, element) rows
+ * ({ rule_id, element_id, passed }). Tests describe intent as per-rule
+ * pass/fail tallies; this helper expands those tallies into the real
+ * row shape so the mock matches production.
+ */
+function expandDryRunRows(
+  tallies: Array<{ rule_id: string; pass_count: number; fail_count: number }>,
+): Array<{ rule_id: string; element_id: string; passed: boolean }> {
+  const rows: Array<{ rule_id: string; element_id: string; passed: boolean }> = [];
+  let elementSeq = 0;
+  for (const t of tallies) {
+    for (let i = 0; i < t.pass_count; i += 1) {
+      rows.push({ rule_id: t.rule_id, element_id: `el-${elementSeq++}`, passed: true });
+    }
+    for (let i = 0; i < t.fail_count; i += 1) {
+      rows.push({ rule_id: t.rule_id, element_id: `el-${elementSeq++}`, passed: false });
+    }
+  }
+  return rows;
+}
 const SUCCESS_RESPONSE = {
   pack: {
     rules: [
@@ -153,7 +175,12 @@ describe('RulePackPreviewModal', () => {
 
   it('fires the install POST after confirming the dialog', async () => {
     previewMock.mockResolvedValue(SUCCESS_RESPONSE);
-    installMock.mockResolvedValue({ pack_id: 'p1', installed_rule_count: 2 });
+    installMock.mockResolvedValue({
+      requirement_set_id: 'rs-1',
+      pack_id: 'p1',
+      rules_installed: 2,
+      rule_ids: ['din276_code_present', 'din276_code_in_building_range'],
+    });
     renderModal();
     // Wait for the preview to land.
     await waitFor(() => expect(previewMock).toHaveBeenCalled());
@@ -174,7 +201,12 @@ describe('RulePackPreviewModal', () => {
 
   it('shows a success toast and closes the modal after install succeeds', async () => {
     previewMock.mockResolvedValue(SUCCESS_RESPONSE);
-    installMock.mockResolvedValue({ pack_id: 'p1', installed_rule_count: 2 });
+    installMock.mockResolvedValue({
+      requirement_set_id: 'rs-1',
+      pack_id: 'p1',
+      rules_installed: 2,
+      rule_ids: ['din276_code_present', 'din276_code_in_building_range'],
+    });
     const onClose = vi.fn();
     renderModal({ onClose });
     await waitFor(() => expect(previewMock).toHaveBeenCalled());
@@ -199,13 +231,15 @@ describe('RulePackPreviewModal', () => {
     previewMock.mockResolvedValue({
       ...SUCCESS_RESPONSE,
       dry_run: {
-        total_rules: 2,
-        total_pass: 5,
-        total_fail: 2,
-        results: [
+        pack_id: 'din276',
+        total_elements: 7,
+        passed: 5,
+        failed: 2,
+        not_applicable: 0,
+        results: expandDryRunRows([
           { rule_id: 'din276_code_present', pass_count: 3, fail_count: 1 },
           { rule_id: 'din276_code_in_building_range', pass_count: 2, fail_count: 1 },
-        ],
+        ]),
       },
     });
     renderModal();
@@ -262,13 +296,16 @@ describe('RulePackPreviewModal', () => {
     apiGetMock.mockResolvedValue({
       items: [{ id: 'model-a', name: 'Model A' }],
     });
+    const rows = expandDryRunRows(dryRunResults);
     previewMock.mockResolvedValue({
       ...SUCCESS_RESPONSE,
       dry_run: {
-        total_rules: 2,
-        total_pass: dryRunResults.reduce((s, r) => s + r.pass_count, 0),
-        total_fail: dryRunResults.reduce((s, r) => s + r.fail_count, 0),
-        results: dryRunResults,
+        pack_id: 'din276',
+        total_elements: rows.length,
+        passed: rows.filter((r) => r.passed).length,
+        failed: rows.filter((r) => !r.passed).length,
+        not_applicable: 0,
+        results: rows,
       },
     });
     renderModal();

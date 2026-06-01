@@ -18,13 +18,16 @@ import { fetchTagsForFile } from '@/features/file-tags/api';
 import { fileTagsKeys } from '@/features/file-tags/hooks';
 import type { TagRecord } from '@/features/file-tags/types';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useToastStore } from '@/stores/useToastStore';
 import {
+  useFavorites,
   useFileList,
   useFileTree,
   useFolderPermissionCounts,
   useIsProjectOwner,
   useProjectsLite,
   useStorageLocations,
+  useToggleFavorite,
 } from './hooks';
 import { PathBar } from './components/PathBar';
 import { FileTree } from './components/FileTree';
@@ -132,6 +135,7 @@ export function FileManagerPage() {
   // wired). SavedViewsRail can hydrate this via ``?tag_ids=...``.
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>(initialTagIds);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [previewRow, setPreviewRow] = useState<FileRow | null>(null);
   const [showExport, setShowExport] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -281,6 +285,26 @@ export function FileManagerPage() {
     filters,
   );
 
+  // Per-user favourites — drives the star toggle + the "Favourites only"
+  // filter chip. The hook returns an O(1) membership set keyed by
+  // ``kind:id`` so a large grid doesn't scan the row list per tile.
+  const favorites = useFavorites(projectId);
+  const toggleFavorite = useToggleFavorite(projectId);
+  const addToast = useToastStore((s) => s.addToast);
+  const handleToggleFavorite = (row: FileRow, isFavorite: boolean) => {
+    toggleFavorite.mutate(
+      { kind: row.kind, fileId: row.id, isFavorite },
+      {
+        onError: (err: unknown) =>
+          addToast({
+            type: 'error',
+            title: t('common.error', { defaultValue: 'Error' }),
+            message: err instanceof Error ? err.message : String(err),
+          }),
+      },
+    );
+  };
+
   // W4 — when a tag filter is active, fetch the tags assigned to each
   // visible file and drop rows that don't carry ALL selected tags.
   // ``useQueries`` fans out one request per visible item; the shared
@@ -314,6 +338,15 @@ export function FileManagerPage() {
       return selectedTagIds.every((id) => tagIds.has(id));
     });
   }, [tagFilterActive, visibleItems, tagQueries, selectedTagIds]);
+
+  // Final filter pass — when "Favourites only" is on, keep just the rows
+  // the current user has starred (membership keyed by ``kind:id``).
+  const displayItems = useMemo(() => {
+    if (!showFavoritesOnly) return tagFilteredItems;
+    return tagFilteredItems.filter((row) =>
+      favorites.keys.has(`${row.kind}:${row.id}`),
+    );
+  }, [showFavoritesOnly, tagFilteredItems, favorites.keys]);
 
   // Whenever filters change, drop selection that no longer matches the
   // visible result set so the preview pane never shows a stale row.
@@ -602,13 +635,20 @@ export function FileManagerPage() {
                 onViewChange={setView}
                 onExport={() => setShowExport(true)}
                 onImport={() => setShowImport(true)}
-                totalCount={tagFilterActive ? tagFilteredItems.length : list?.total ?? 0}
+                totalCount={
+                  showFavoritesOnly || tagFilterActive
+                    ? displayItems.length
+                    : list?.total ?? 0
+                }
                 extension={extension}
                 onExtensionChange={setExtension}
                 projectId={projectId}
                 category={selectedKind}
                 selectedTagIds={selectedTagIds}
                 onSelectedTagsChange={setSelectedTagIds}
+                favoritesOnly={showFavoritesOnly}
+                onFavoritesOnlyChange={setShowFavoritesOnly}
+                favoritesCount={favorites.keys.size}
               />
               <BulkActionsBar
                 selectedRows={selectedRows}
@@ -618,21 +658,25 @@ export function FileManagerPage() {
               <div className="flex-1 overflow-auto">
                 {view === 'grid' ? (
                   <FileGrid
-                    items={tagFilteredItems}
+                    items={displayItems}
                     selectedIds={selectedIds}
                     onSelect={handleSelect}
                     onOpen={handleOpen}
                     isLoading={listLoading}
+                    favoriteKeys={favorites.keys}
+                    onToggleFavorite={handleToggleFavorite}
                   />
                 ) : (
                   <FileList
-                    items={tagFilteredItems}
+                    items={displayItems}
                     selectedIds={selectedIds}
                     onSelect={handleSelect}
                     onOpen={handleOpen}
                     sort={sort}
                     onSortChange={setSort}
                     isLoading={listLoading}
+                    favoriteKeys={favorites.keys}
+                    onToggleFavorite={handleToggleFavorite}
                   />
                 )}
               </div>

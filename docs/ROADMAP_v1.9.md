@@ -3,7 +3,7 @@
 **Source:** `~/Downloads/openconstructionerp-17-04-2026.md` (33 items)
 **Started:** 2026-04-17
 **Principles:** offline-first, max test depth, incremental releases per round, self-directed RFCs
-**Policy reference:** `.claude/projects/.../memory/feedback_v19_workflow.md`
+**Policy reference:** internal workflow policy notes
 
 ---
 

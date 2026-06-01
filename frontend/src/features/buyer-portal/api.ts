@@ -193,7 +193,7 @@ export async function verifyPortalToken(
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Verify failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Verify failed (${res.status})`);
   }
   return (await res.json()) as PortalVerifyResponse;
 }
@@ -222,7 +222,7 @@ export async function fetchPortalOverview(
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Overview failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Overview failed (${res.status})`);
   }
   return (await res.json()) as PortalOverviewResponse;
 }
@@ -244,7 +244,7 @@ export async function uploadPortalKyc(
   if (res.status === 413) throw new Error('FILE_TOO_LARGE');
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Upload failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Upload failed (${res.status})`);
   }
   return (await res.json()) as PortalKycUploadResponse;
 }
@@ -272,14 +272,14 @@ export async function contactPortalAgent(
   if (res.status === 401) throw new Error('INVALID');
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Contact failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Contact failed (${res.status})`);
   }
   return (await res.json()) as PortalContactAgentResponse;
 }
 
 /* ── Internal (JWT-authed) helpers for the manager UI ───────────── */
 
-import { apiPost, apiGet } from '@/shared/lib/api';
+import { apiPost, apiGet, extractErrorMessageFromBody } from '@/shared/lib/api';
 
 export interface PortalIssueRequest {
   buyer_id: string;

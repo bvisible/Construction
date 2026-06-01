@@ -55,7 +55,7 @@ from app.modules.i18n_foundation.schemas import (
 )
 from app.modules.i18n_foundation.service import I18nFoundationService
 
-router = APIRouter()
+router = APIRouter(tags=["i18n_foundation"])
 logger = logging.getLogger(__name__)
 
 
@@ -276,9 +276,7 @@ async def update_work_calendar(
     service: I18nFoundationService = Depends(_get_service),
 ) -> WorkCalendarResponse:
     """Update a work calendar (auth required)."""
-    calendar = await service.update_work_calendar(
-        calendar_id, data.model_dump(exclude_unset=True)
-    )
+    calendar = await service.update_work_calendar(calendar_id, data.model_dump(exclude_unset=True))
     return WorkCalendarResponse.model_validate(calendar)
 
 

@@ -46,7 +46,7 @@ from app.modules.rfi.schemas import (
 )
 from app.modules.rfi.service import RFIService
 
-router = APIRouter()
+router = APIRouter(tags=["rfi"])
 logger = logging.getLogger(__name__)
 
 # R5 / BUG-RFI-ATT: allow-list of magic-byte tokens accepted for RFI reply
@@ -54,9 +54,7 @@ logger = logging.getLogger(__name__)
 # legacy OLE). ``xml`` is deliberately excluded — the stdlib detector
 # treats ``<html>`` as XML and an HTML payload served back out is a
 # stored-XSS vector.
-ALLOWED_ATTACHMENT_TYPES = frozenset(
-    {"pdf", "png", "jpeg", "gif", "webp", "heic", "heif", "tiff", "zip", "ole"}
-)
+ALLOWED_ATTACHMENT_TYPES = frozenset({"pdf", "png", "jpeg", "gif", "webp", "heic", "heif", "tiff", "zip", "ole"})
 
 # Cap on a single upload's size. Construction site photos run large; 25 MB
 # covers multi-page PDF transmittals and modern smartphone HEICs. Beyond
@@ -231,15 +229,20 @@ async def export_rfi_log(
     from openpyxl.styles import Font
     from sqlalchemy import select
 
+    from app.modules.projects.models import Project
     from app.modules.rfi.models import RFI
 
     result = await session.execute(
-        select(RFI)
-        .where(RFI.project_id == project_id)
-        .order_by(RFI.rfi_number)
-        .limit(50000)
+        select(RFI).where(RFI.project_id == project_id).order_by(RFI.rfi_number).limit(50000)
     )
     items = result.scalars().all()
+
+    # Resolve the project's currency so the cost-impact cell carries its ISO
+    # code — the value lives in the project's currency (EUR/BRL/GBP/…), never
+    # a bare number that downstream readers might assume is USD.
+    project_currency = (
+        await session.scalar(select(Project.currency).where(Project.id == project_id)) or ""
+    ).strip().upper()
 
     wb = Workbook()
     ws = wb.active
@@ -263,7 +266,6 @@ async def export_rfi_log(
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True)
 
-    now = datetime.now(UTC)
     for row_idx, item in enumerate(items, 2):
         ws.cell(row=row_idx, column=1, value=item.rfi_number)
         ws.cell(row=row_idx, column=2, value=item.subject)
@@ -273,26 +275,23 @@ async def export_rfi_log(
         ws.cell(row=row_idx, column=6, value=str(item.ball_in_court) if item.ball_in_court else "")
         ws.cell(row=row_idx, column=7, value=item.date_required or "")
         ws.cell(row=row_idx, column=8, value=item.response_due_date or "")
-        # Days open: from created_at to now (or responded_at if closed)
-        days_open = 0
-        if item.created_at:
-            start = item.created_at if hasattr(item.created_at, "date") else now
-            end = now
-            if item.responded_at:
-                try:
-                    end = datetime.fromisoformat(str(item.responded_at))
-                except (ValueError, TypeError):
-                    end = now
-            try:
-                days_open = max(0, (end - start).days)
-            except TypeError:
-                days_open = 0
+        # Days open: reuse the canonical helper so the export agrees with the
+        # list/detail figure. The previous inline version subtracted a naive
+        # ``datetime.fromisoformat(responded_at)`` from a tz-aware
+        # ``created_at``, which raised TypeError (swallowed) and emitted 0 for
+        # every answered/closed RFI. ``_compute_rfi_fields`` normalizes both
+        # sides to UTC before subtracting.
+        _, days_open = _compute_rfi_fields(item)
         ws.cell(row=row_idx, column=9, value=days_open)
-        ws.cell(
-            row=row_idx,
-            column=10,
-            value=f"Yes ({item.cost_impact_value})" if item.cost_impact else "No",
-        )
+        cost_cell = "No"
+        if item.cost_impact:
+            amount = item.cost_impact_value
+            if amount is not None and str(amount).strip():
+                suffix = f" {project_currency}" if project_currency else ""
+                cost_cell = f"Yes ({amount}{suffix})"
+            else:
+                cost_cell = "Yes"
+        ws.cell(row=row_idx, column=10, value=cost_cell)
         ws.cell(
             row=row_idx,
             column=11,
@@ -352,15 +351,16 @@ async def batch_delete_rfis(
     )
     owned_project_ids = {str(p.id) for p in owned_projects}
 
-    rows = (await session.execute(
-        _select(RFI.id, RFI.project_id).where(RFI.id.in_(body.ids))
-    )).all()
+    rows = (await session.execute(_select(RFI.id, RFI.project_id).where(RFI.id.in_(body.ids)))).all()
     allowed = [r[0] for r in rows if str(r[1]) in owned_project_ids]
 
     deleted = await bulk_delete(session, RFI, allowed)
     logger.info(
         "Bulk delete RFIs: requested=%d deleted=%d user=%s admin=%s",
-        len(body.ids), deleted, user_id, is_admin,
+        len(body.ids),
+        deleted,
+        user_id,
+        is_admin,
     )
     return {"requested": len(body.ids), "deleted": deleted}
 
@@ -405,17 +405,15 @@ async def batch_update_rfi_status(
     )
     owned_project_ids = {str(p.id) for p in owned_projects}
 
-    rows = (await session.execute(
-        _select(RFI.id, RFI.project_id).where(RFI.id.in_(body.ids))
-    )).all()
+    rows = (await session.execute(_select(RFI.id, RFI.project_id).where(RFI.id.in_(body.ids)))).all()
     allowed_ids = [r[0] for r in rows if str(r[1]) in owned_project_ids]
 
-    updated = await bulk_update_status(
-        session, RFI, allowed_ids, body.status, allowed_statuses=allowed_statuses
-    )
+    updated = await bulk_update_status(session, RFI, allowed_ids, body.status, allowed_statuses=allowed_statuses)
     logger.info(
         "Bulk update RFI status: requested=%d updated=%d user=%s",
-        len(body.ids), updated, user_id,
+        len(body.ids),
+        updated,
+        user_id,
     )
     return {"requested": len(body.ids), "updated": updated, "status": body.status}
 
@@ -513,6 +511,12 @@ async def create_variation_from_rfi(
     user_id: CurrentUserId,
     session: SessionDep,
     _perm: None = Depends(RequirePermission("rfi.update")),
+    # This flow mints a ChangeOrder, so the caller must also hold the
+    # changeorders.create permission — otherwise RBAC is inconsistent across
+    # the two modules (a user who cannot create a CO directly could mint one
+    # via the RFI side door). Both verbs are EDITOR-tier, so this does not
+    # raise the floor for legitimate editors.
+    _co_perm: None = Depends(RequirePermission("changeorders.create")),
     service: RFIService = Depends(_get_service),
 ) -> dict:
     """Create a change order/variation pre-filled from an RFI with cost impact.
@@ -537,65 +541,71 @@ async def create_variation_from_rfi(
 
     # Lazy import changeorders module
     try:
-        from app.modules.changeorders.models import ChangeOrder
-        from app.modules.changeorders.repository import ChangeOrderRepository
-
-        repo = ChangeOrderRepository(session)
-        count = await repo.count_for_project(rfi.project_id)
-        code = f"CO-{count + 1:03d}"
-
-        description_parts = [
-            f"Variation from RFI {rfi.rfi_number}: {rfi.subject}",
-            "",
-            "Question:",
-            rfi.question,
-        ]
-        if rfi.official_response:
-            description_parts.extend(["", "Response:", rfi.official_response])
-
-        order = ChangeOrder(
-            project_id=rfi.project_id,
-            code=code,
-            title=f"Variation: {rfi.subject}",
-            description="\n".join(description_parts),
-            reason_category="client_request",
-            cost_impact=rfi.cost_impact_value or "0",
-            schedule_impact_days=rfi.schedule_impact_days or 0,
-            metadata_={
-                "source": "rfi",
-                "rfi_id": str(rfi_id),
-                "rfi_number": rfi.rfi_number,
-            },
-        )
-        session.add(order)
-        await session.flush()
-
-        # Link the change order back to the RFI
-        rfi.change_order_id = str(order.id)
-        await session.flush()
-
-        logger.info(
-            "Created change order %s from RFI %s",
-            code,
-            rfi_id,
-        )
-        return {
-            "change_order_id": str(order.id),
-            "code": code,
-            "rfi_id": str(rfi_id),
-            "title": order.title,
-        }
+        from app.modules.changeorders.schemas import ChangeOrderCreate
+        from app.modules.changeorders.service import ChangeOrderService
     except ImportError:
         raise HTTPException(
             status_code=status.HTTP_501_NOT_IMPLEMENTED,
             detail="Change orders module is not available.",
         )
+
+    description_parts = [
+        f"Variation from RFI {rfi.rfi_number}: {rfi.subject}",
+        "",
+        "Question:",
+        rfi.question,
+    ]
+    if rfi.official_response:
+        description_parts.extend(["", "Response:", rfi.official_response])
+
+    # Route through ChangeOrderService.create_order so the change order
+    # inherits the project's currency (never an empty string / silent EUR —
+    # see ChangeOrderService._resolve_currency) and uses the collision-retry
+    # code generator instead of a non-atomic count+1 CO-{n} that can collide
+    # and surface as a generic 500.
+    co_service = ChangeOrderService(session)
+    try:
+        order = await co_service.create_order(
+            ChangeOrderCreate(
+                project_id=rfi.project_id,
+                title=f"Variation: {rfi.subject}",
+                description="\n".join(description_parts),
+                reason_category="client_request",
+                schedule_impact_days=rfi.schedule_impact_days or 0,
+                cost_impact=rfi.cost_impact_value or "0",
+                metadata={
+                    "source": "rfi",
+                    "rfi_id": str(rfi_id),
+                    "rfi_number": rfi.rfi_number,
+                },
+            )
+        )
+    except HTTPException:
+        # ChangeOrderService already raised a meaningful status (e.g. 503 on
+        # persistent code contention); propagate it unchanged.
+        raise
     except Exception as exc:
         logger.exception("Failed to create variation from RFI %s: %s", rfi_id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create change order from RFI.",
         )
+
+    # Link the change order back to the RFI.
+    rfi.change_order_id = str(order.id)
+    await session.flush()
+
+    logger.info(
+        "Created change order %s from RFI %s",
+        order.code,
+        rfi_id,
+    )
+    return {
+        "change_order_id": str(order.id),
+        "code": order.code,
+        "rfi_id": str(rfi_id),
+        "title": order.title,
+    }
 
 
 @router.post(
@@ -676,9 +686,7 @@ async def upload_rfi_attachment(
     if len(content) > _MAX_ATTACHMENT_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=(
-                f"Attachment exceeds {_MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB cap"
-            ),
+            detail=(f"Attachment exceeds {_MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB cap"),
         )
 
     try:

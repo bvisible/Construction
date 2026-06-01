@@ -37,6 +37,34 @@ const BASE_URL =
  */
 export const API_BASE = BASE_URL;
 
+/**
+ * Default client-side request timeouts (ms).
+ *
+ * Most interactive reads/writes resolve in well under a second; a moderate
+ * default keeps a stalled endpoint from blocking the UI for a minute and a
+ * half (the old 44.3s GET budget combined with a React-Query retry meant a
+ * single hung GET could freeze a screen for ~88s). The 30s GET budget still
+ * covers legitimately slow reads (e.g. the /api/health alembic check and the
+ * dashboard rollup) so they finish before the abort fires. The long budget is
+ * kept for genuinely heavy operations (CWICR import, AI estimation, CAD/BIM
+ * conversion) and must be opted into explicitly via `longRunning: true`.
+ */
+const DEFAULT_GET_TIMEOUT_MS = 30_000;
+const DEFAULT_MUTATION_TIMEOUT_MS = 30_000;
+const LONG_RUNNING_TIMEOUT_MS = 300_000; // 5 min — import / AI / CAD only
+
+/**
+ * Request init accepted by the typed API helpers.
+ *
+ * Extends the standard `RequestInit` with an opt-in `longRunning` flag that
+ * raises the abort timeout to {@link LONG_RUNNING_TIMEOUT_MS} for heavy
+ * import / AI / CAD operations. Omit it for normal interactive calls so a
+ * stalled request fails fast with a clear timeout error.
+ */
+export interface ApiRequestInit extends RequestInit {
+  longRunning?: boolean;
+}
+
 /** Retrieve the stored JWT token from the auth store. */
 function getToken(): string | null {
   return useAuthStore.getState().accessToken;
@@ -143,6 +171,19 @@ export function extractErrorMessageFromBody(body: unknown): string | null {
     if (parts.length > 0) return parts.slice(0, 3).join('; ');
   }
 
+  // FastAPI HTTPException with a STRUCTURED `detail` object — e.g. the
+  // bim_hub geometry errors return `{error, category, message, remediation,
+  // request_id, ...}`. Without this branch the object falls through and the
+  // caller's `${detail}` / `new Error(detail)` renders "[object Object]".
+  if (obj.detail && typeof obj.detail === 'object' && !Array.isArray(obj.detail)) {
+    const d = obj.detail as Record<string, unknown>;
+    const msg = typeof d.message === 'string' && d.message.length > 0 ? d.message : null;
+    const rem = typeof d.remediation === 'string' && d.remediation.length > 0 ? d.remediation : null;
+    if (msg) return rem ? `${msg} ${rem}` : msg;
+    const detailError = typeof d.error === 'string' && d.error.length > 0 ? d.error : null;
+    if (detailError) return detailError;
+  }
+
   // Generic envelopes
   if (typeof obj.message === 'string' && obj.message.length > 0) return obj.message;
   if (typeof obj.error === 'string' && obj.error.length > 0) return obj.error;
@@ -228,7 +269,49 @@ export function getErrorMessage(err: unknown): string {
     if (err.message && err.message.length < 200) return err.message;
   }
 
+  // A raw thrown value (plain object / array / FastAPI body) — run it through
+  // the same normaliser so a thrown `{detail: [...]}` or `{detail: {...}}`
+  // never reaches the UI as "[object Object]".
+  const fromBody = extractErrorMessageFromBody(err);
+  if (fromBody) return fromBody;
+
   return i18next.t('errors.unknown', { defaultValue: 'Something went wrong. Please try again.' });
+}
+
+/**
+ * Paths that must NEVER trigger the silent-refresh-and-retry dance on a 401.
+ *
+ * The auth endpoints themselves return 401 to mean "these credentials / this
+ * refresh token are bad" — retrying them with a refreshed token is nonsensical
+ * and would mask the real error. A 401 from `/auth/refresh` in particular is
+ * the one signal that genuinely warrants logging out.
+ */
+function isAuthEndpoint(path: string): boolean {
+  return (
+    path.includes('/auth/login') ||
+    path.includes('/auth/refresh') ||
+    path.includes('/auth/register') ||
+    path.includes('/auth/demo-login') ||
+    path.includes('/auth/forgot-password') ||
+    path.includes('/auth/reset-password')
+  );
+}
+
+/**
+ * Tear down the session and bounce to the login page.
+ *
+ * Called ONLY when the token is genuinely unrecoverable — i.e. a 401 survived
+ * a silent refresh attempt, or the 401 came from an auth endpoint itself. A
+ * plain per-feature 403 (permission denied) or an isolated, refreshable 401
+ * must never reach this path; that distinction is what stops a single
+ * incidental error from logging the whole session out.
+ */
+function forceLogoutRedirect(path: string, statusText: string): void {
+  logApiError(path, 401, statusText);
+  useAuthStore.getState().logout();
+  if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
+    window.location.href = '/login';
+  }
 }
 
 /**
@@ -237,13 +320,19 @@ export function getErrorMessage(err: unknown): string {
  * - Prepends `BASE_URL` to the path.
  * - Sets JSON content-type when a body is provided.
  * - Automatically parses JSON responses (returns `undefined` for 204 No Content).
- * - Redirects to `/login` on 401 Unauthorized.
+ * - On 401 from a protected endpoint, silently refreshes the access token and
+ *   retries once; only a 401 that survives the refresh (or a 401 from the auth
+ *   endpoints themselves) logs out and redirects to `/login`.
+ *
+ * `_isRetry` is an internal flag set on the single post-refresh retry so we
+ * never loop: a second 401 after a fresh token is a real auth failure.
  */
 async function request<TResponse>(
   method: string,
   path: string,
   body?: unknown,
-  init?: RequestInit,
+  init?: ApiRequestInit,
+  _isRetry = false,
 ): Promise<TResponse> {
   const headers = buildHeaders(init?.headers);
 
@@ -251,12 +340,36 @@ async function request<TResponse>(
     headers.set('Content-Type', 'application/json');
   }
 
+  // Guard against the recurring "double /api prefix" bug class. Every helper
+  // here prepends BASE_URL ("/api"), so a caller that passes a path which
+  // already starts with "/api" would produce "/api/api/..." and 404. Strip a
+  // single leading duplicate BASE_URL from the path before we concatenate it
+  // below, so the whole class of mistakes cannot reach the network.
+  if (path === BASE_URL) {
+    path = '';
+  } else if (path.startsWith(`${BASE_URL}/`)) {
+    path = path.slice(BASE_URL.length);
+  }
+
+  // Abort budget: fast by default, long only when explicitly opted in for
+  // heavy import / AI / CAD work. GET and mutations get distinct defaults.
+  const timeoutMs = init?.longRunning
+    ? LONG_RUNNING_TIMEOUT_MS
+    : method === 'GET'
+      ? DEFAULT_GET_TIMEOUT_MS
+      : DEFAULT_MUTATION_TIMEOUT_MS;
+  const controller = new AbortController();
+  // Only attribute an abort to our own timeout when we actually own the
+  // signal — a caller-supplied signal aborts for its own reasons.
+  const ownsSignal = init?.signal === undefined;
+  let didTimeout = false;
+  const timeoutId = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, timeoutMs);
+
   let response: Response;
   try {
-    // 5 minute timeout for long operations (CWICR import, AI estimation, CAD conversion)
-    const controller = new AbortController();
-    const timeoutMs = method === 'GET' ? 44_300 : 300_000; // ~44s GET, 5 min POST
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     response = await fetch(`${BASE_URL}${path}`, {
       ...init,
       method,
@@ -266,6 +379,27 @@ async function request<TResponse>(
     });
     clearTimeout(timeoutId);
   } catch (err) {
+    clearTimeout(timeoutId);
+    // A timeout fired by our own controller (not a caller-supplied signal).
+    // Surface it as a clear, actionable timeout error rather than a generic
+    // "Failed to fetch", and notify the user so the screen doesn't just sit
+    // on a spinner.
+    if (didTimeout && ownsSignal) {
+      const message = i18next.t('errors.timeout', {
+        defaultValue: 'The request took too long and was cancelled. Please try again.',
+      });
+      logError(new Error(`Request timeout after ${timeoutMs}ms: ${method} ${path}`), 'network', {
+        method,
+        path,
+        timeoutMs,
+      });
+      useToastStore.getState().addToast({
+        type: 'error',
+        title: i18next.t('errors.timeout_title', { defaultValue: 'Request timed out' }),
+        message,
+      });
+      throw new Error(message);
+    }
     // Log network errors
     logError(
       err instanceof Error ? err : new Error(String(err)),
@@ -299,13 +433,33 @@ async function request<TResponse>(
     throw err;
   }
 
-  // Handle 401 – logout via auth store and redirect to login.
+  // Handle 401 – try a silent token refresh before tearing down the session.
+  //
+  // A 401 most commonly means the short-lived access token expired while the
+  // user was actively working. Rather than logging them out (the historical
+  // behaviour, which caused "random logout" mid-session), we transparently
+  // exchange the stored refresh token for a new access token and replay the
+  // original request exactly once. Only if that refresh fails — or the 401
+  // came from an auth endpoint, or this is already the post-refresh retry —
+  // do we log out and redirect. A per-feature permission denial returns 403
+  // (handled below), so it never reaches this branch and never logs out.
   if (response.status === 401) {
-    logApiError(path, 401, response.statusText);
-    useAuthStore.getState().logout();
-    if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
-      window.location.href = '/login';
+    if (_isRetry || isAuthEndpoint(path)) {
+      forceLogoutRedirect(path, response.statusText);
+      throw new ApiError(response.status, response.statusText, undefined);
     }
+
+    const newToken = await useAuthStore.getState().refreshAccessToken();
+    if (newToken) {
+      // Refresh succeeded — replay the original request with the fresh token.
+      // buildHeaders() inside the recursive call reads the now-updated store,
+      // so the retry carries the new Authorization header automatically.
+      return request<TResponse>(method, path, body, init, true);
+    }
+
+    // No refresh token, or the refresh token is itself invalid/expired →
+    // the session is genuinely unrecoverable. Log out and redirect.
+    forceLogoutRedirect(path, response.statusText);
     throw new ApiError(response.status, response.statusText, undefined);
   }
 
@@ -370,7 +524,7 @@ async function request<TResponse>(
  */
 export async function apiGet<TResponse>(
   path: string,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<TResponse> {
   return request<TResponse>('GET', path, undefined, init);
 }
@@ -386,7 +540,7 @@ export async function apiGet<TResponse>(
 export async function apiPost<TResponse, TBody = unknown>(
   path: string,
   body?: TBody,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<TResponse> {
   return request<TResponse>('POST', path, body, init);
 }
@@ -397,7 +551,7 @@ export async function apiPost<TResponse, TBody = unknown>(
 export async function apiPatch<TResponse, TBody = unknown>(
   path: string,
   body?: TBody,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<TResponse> {
   return request<TResponse>('PATCH', path, body, init);
 }
@@ -408,7 +562,7 @@ export async function apiPatch<TResponse, TBody = unknown>(
 export async function apiPut<TResponse, TBody = unknown>(
   path: string,
   body?: TBody,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<TResponse> {
   return request<TResponse>('PUT', path, body, init);
 }
@@ -418,7 +572,7 @@ export async function apiPut<TResponse, TBody = unknown>(
  */
 export async function apiDelete<TResponse = void>(
   path: string,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<TResponse> {
   return request<TResponse>('DELETE', path, undefined, init);
 }

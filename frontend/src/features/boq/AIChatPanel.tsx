@@ -239,7 +239,7 @@ export function AIChatPanel({
         <button
           onClick={onClose}
           className="flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-red-600 dark:hover:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors"
-          aria-label="Close"
+          aria-label={t('common.close', { defaultValue: 'Close' })}
         >
           <X size={18} />
         </button>
@@ -432,6 +432,7 @@ export function AIChatPanel({
           <button
             onClick={handleSend}
             disabled={!inputValue.trim() || chatMutation.isPending}
+            aria-label={t('common.send', { defaultValue: 'Send' })}
             className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue text-white hover:bg-oe-blue-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Send size={16} />

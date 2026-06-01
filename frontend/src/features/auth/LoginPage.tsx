@@ -8,6 +8,7 @@ import {
   BarChart3, Upload, FileCheck,
   Box, Ruler, Layers,
   PenTool, FolderOpen, ClipboardList,
+  Sun, Moon, Monitor,
 } from 'lucide-react';
 import { Button, Input, Logo, LogoWithText, CountryFlag } from '@/shared/ui';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -16,6 +17,48 @@ import { BrandingEditorModal } from '@/app/layout/CustomBranding';
 import { extractErrorMessageFromBody } from '@/shared/lib/api';
 import { AuthBackground } from './AuthBackground';
 import { SUPPORTED_LANGUAGES } from '@/app/i18n';
+import { useThemeStore } from '@/stores/useThemeStore';
+
+/* Segmented theme switch (Light / Dark / System) for the login page. */
+function ThemeSwitch() {
+  const { t } = useTranslation();
+  const theme = useThemeStore((s) => s.theme);
+  const setTheme = useThemeStore((s) => s.setTheme);
+  const opts = [
+    { mode: 'light' as const, icon: Sun, label: t('theme.light', { defaultValue: 'Light' }) },
+    { mode: 'dark' as const, icon: Moon, label: t('theme.dark', { defaultValue: 'Dark' }) },
+    { mode: 'system' as const, icon: Monitor, label: t('theme.system', { defaultValue: 'System' }) },
+  ];
+  return (
+    <div
+      role="radiogroup"
+      aria-label={t('theme.label', { defaultValue: 'Theme' })}
+      className="flex items-center gap-0.5 rounded-xl border border-border-light bg-surface-elevated/85 backdrop-blur-sm p-0.5 shadow-sm"
+    >
+      {opts.map(({ mode, icon: Icon, label }) => {
+        const active = theme === mode;
+        return (
+          <button
+            key={mode}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={label}
+            aria-label={label}
+            onClick={() => setTheme(mode)}
+            className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${
+              active
+                ? 'bg-oe-blue text-white shadow-sm'
+                : 'text-content-tertiary hover:text-content-secondary hover:bg-surface-secondary'
+            }`}
+          >
+            <Icon size={15} strokeWidth={2} />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 export function LoginPage() {
   const { t, i18n } = useTranslation();
@@ -98,8 +141,8 @@ export function LoginPage() {
   };
 
   const demoAccounts = [
-    { email: 'demo@openestimator.io', name: 'Admin', role: t('auth.demo_role_admin', 'Administrator'), color: 'bg-blue-500', letter: 'A' },
-    { email: 'manager@openestimator.io', name: 'Thomas Müller', role: t('auth.demo_role_manager', 'Manager'), color: 'bg-[#7cd0ff]', letter: 'M' },
+    { email: 'demo@openconstructionerp.com', name: 'Admin', role: t('auth.demo_role_admin', 'Administrator'), color: 'bg-blue-500', letter: 'A' },
+    { email: 'manager@openconstructionerp.com', name: 'Thomas Müller', role: t('auth.demo_role_manager', 'Manager'), color: 'bg-[#7cd0ff]', letter: 'M' },
   ];
 
   const handleDemoLogin = async (demoEmail: string) => {
@@ -109,7 +152,7 @@ export function LoginPage() {
     setPassword('');
     try {
       // Use the dedicated demo-login endpoint (v2.6.22) which mints tokens
-      // for seeded demo accounts without a password — necessary because the
+      // for seeded demo accounts without a password - necessary because the
       // backend seeder generates a fresh `secrets.token_urlsafe(16)` per
       // install (BUG-D01) and the frontend has no way to read it.
       let res = await fetch('/api/v1/users/auth/demo-login/', {
@@ -173,7 +216,7 @@ export function LoginPage() {
     }
   };
 
-  /* Benefits list — reserved for future hero section layout
+  /* Benefits list - reserved for future hero section layout
   const benefits = [
     { icon: HardDrive, color: 'text-emerald-500 bg-emerald-500/10', title: t('login.benefit.local', 'Your data stays on your computer'), desc: t('login.benefit.local_desc', 'No cloud. No third-party servers. Full control.') },
     { icon: ShieldCheck, color: 'text-blue-500 bg-blue-500/10', title: t('login.benefit.open_source', '100% open source'), desc: t('login.benefit.open_source_desc', 'Transparent code. No vendor lock-in.') },
@@ -187,7 +230,7 @@ export function LoginPage() {
     <div className="relative grid h-screen grid-cols-1 lg:grid-cols-2 bg-surface-secondary overflow-hidden">
       <AuthBackground />
 
-      {/* Local style block — premium glass variant + drifting orb keyframes
+      {/* Local style block - premium glass variant + drifting orb keyframes
           scoped to the login page. Pattern mirrors LoginPageNext.tsx. */}
       <style>{`
         .login-glass-pro {
@@ -206,13 +249,11 @@ export function LoginPage() {
         .dark .login-glass-pro {
           background:
             linear-gradient(135deg, rgba(22, 26, 36, 0.78) 0%, rgba(15, 17, 23, 0.66) 100%);
-          border-color: rgba(255, 255, 255, 0.08);
+          border-color: transparent;
           box-shadow:
             0 30px 80px -24px rgba(14, 165, 233, 0.35),
             0 12px 40px -12px rgba(0, 0, 0, 0.55),
-            0 2px 6px -2px rgba(0, 0, 0, 0.4),
-            inset 0 1px 0 rgba(255, 255, 255, 0.12),
-            inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+            0 2px 6px -2px rgba(0, 0, 0, 0.4);
         }
         .login-glass-pro::after {
           content: '';
@@ -251,7 +292,7 @@ export function LoginPage() {
       `}</style>
 
       {/* ── Ambient mesh blobs (LEFT half only) ─────────────────────────
-          Restrained palette — single faint sky blob behind the marketing
+          Restrained palette - single faint sky blob behind the marketing
           column so the headline / stats sit on a near-white field.
           Dark mode keeps the original richer blob set for depth. */}
       <div className="absolute inset-y-0 left-0 right-1/2 z-0 pointer-events-none overflow-hidden hidden lg:block">
@@ -264,8 +305,10 @@ export function LoginPage() {
         <div className="absolute top-[-12%] left-[-6%] w-[520px] h-[520px] rounded-full bg-sky-300/12 dark:bg-oe-blue/35 blur-[110px] animate-blob-slow-1 mix-blend-screen" />
       </div>
 
-      {/* Language — top right (enlarged for /login so it's discoverable). */}
-      <div className="absolute top-4 right-4 z-30" ref={langRef}>
+      {/* Theme + Language - top right (enlarged for /login so discoverable). */}
+      <div className="absolute top-4 right-4 z-30 flex items-center gap-2">
+        <ThemeSwitch />
+        <div className="relative" ref={langRef}>
         <button
           onClick={() => setLangOpen(!langOpen)}
           className="flex items-center gap-2 rounded-xl border border-border-light bg-surface-elevated/85 backdrop-blur-sm px-4 py-2 text-sm font-medium text-content-secondary hover:bg-surface-elevated hover:border-oe-blue/30 transition-colors shadow-sm"
@@ -298,13 +341,14 @@ export function LoginPage() {
             })}
           </div>
         )}
+        </div>
       </div>
 
       {/* ── Right column on lg+: marketing & benefits.
           Order swap (lg:order-2) puts the form on the left so it's the
-          first thing the eye lands on — primary action priority. */}
+          first thing the eye lands on - primary action priority. */}
       <div className="hidden lg:flex relative z-10 lg:order-2 flex-col justify-center pl-14 xl:pl-20 pr-12 xl:pr-16 py-6 overflow-hidden">
-        {/* Marketing column showcase — color lives here. Sky/cyan mesh +
+        {/* Marketing column showcase - color lives here. Sky/cyan mesh +
             slow-drifting orbs + faint noise grain. The form column on the
             left stays a clean white field; this column carries the visual
             weight. */}
@@ -349,7 +393,7 @@ export function LoginPage() {
           </span>
         </div>
 
-        {/* Marketing headline — kept as h2 because the form panel below has the
+        {/* Marketing headline - kept as h2 because the form panel below has the
             authoritative h1 (visually hidden, always present in DOM). */}
         <h2 className="text-[32px] xl:text-[36px] font-semibold text-content-primary leading-[1.08] tracking-[-0.025em] animate-stagger-in" style={{ animationDelay: '60ms' }}>
           {t('login.hero_h_a', { defaultValue: 'The' })}{' '}
@@ -362,7 +406,7 @@ export function LoginPage() {
 
         {/* Subhead */}
         <p className="mt-5 text-[17px] text-content-secondary/70 leading-[1.65] tracking-[-0.008em] max-w-[420px] animate-stagger-in" style={{ animationDelay: '120ms' }}>
-          {t('login.hero_desc', { defaultValue: 'Plan, estimate, schedule, tender — every step of a project on one professional platform.' })}
+          {t('login.hero_desc', { defaultValue: 'Plan, estimate, schedule, tender - every step of a project on one professional platform.' })}
         </p>
 
         {/* Stats row */}
@@ -385,34 +429,34 @@ export function LoginPage() {
         {/* Divider */}
         <div className="mt-5 mb-4 h-px bg-gradient-to-r from-content-primary/[0.06] via-content-primary/[0.1] to-transparent animate-stagger-in" style={{ animationDelay: '220ms' }} />
 
-        {/* Module honeycomb — proper pointy-top hex grid where every cell
+        {/* Module honeycomb - proper pointy-top hex grid where every cell
             shares an edge with its neighbours. Layout is intentionally
             wider on the top/bottom rows (6 cells) than on the middle
             row (5 cells) so it reads as a real, naturally-extending
-            honeycomb. Every cell is a real module — no decorative
+            honeycomb. Every cell is a real module - no decorative
             placeholders. Math:
               hex width   = 88px (left vertex to right vertex)
               hex height  = 100px (top vertex to bottom vertex)
-              row stride  = 75px (3/4 of height — pointy-top step)
+              row stride  = 75px (3/4 of height - pointy-top step)
               column step = 88px (one hex width on the same row)
-              alternating rows are offset by 44px (half a hex) — that's
+              alternating rows are offset by 44px (half a hex) - that's
               what makes the slanted edges meet exactly. */}
         <div className="relative mt-1 mr-auto h-[280px] w-[560px] max-w-full overflow-hidden animate-stagger-in" style={{ animationDelay: '260ms' }}>
           {([
-            // Top row (y = -75) — 6 cells, offset by 44.
+            // Top row (y = -75) - 6 cells, offset by 44.
             { x: -220, y: -75, icon: ShieldCheck,     label: t('login.mod.local',     { defaultValue: 'Local' }) },
             { x: -132, y: -75, icon: Brain,           label: t('login.mod.ai',       { defaultValue: 'AI' }) },
             { x:  -44, y: -75, icon: Ruler,           label: t('login.mod.takeoff',  { defaultValue: 'Takeoff' }) },
             { x:   44, y: -75, icon: PenTool,         label: t('login.mod.cad',      { defaultValue: 'CAD' }) },
             { x:  132, y: -75, icon: Box,             label: t('login.mod.bim',      { defaultValue: 'BIM' }) },
             { x:  220, y: -75, icon: TrendingUp,      label: t('login.mod.cost5d',   { defaultValue: '5D' }) },
-            // Mid row (y = 0) — 5 cells aligned on the same axis.
+            // Mid row (y = 0) - 5 cells aligned on the same axis.
             { x: -176, y:  0,  icon: Database,        label: t('login.mod.costs',    { defaultValue: 'Costs' }) },
             { x:  -88, y:  0,  icon: FileSpreadsheet, label: t('common.boq') },
             { x:    0, y:  0,  icon: Layers,          label: t('login.mod.core',     { defaultValue: 'Workspace' }), accent: true },
             { x:   88, y:  0,  icon: CalendarClock,   label: t('login.mod.schedule', { defaultValue: 'Schedule' }) },
             { x:  176, y:  0,  icon: BarChart3,       label: t('login.mod.tender',   { defaultValue: 'Tendering' }) },
-            // Bottom row (y = 75) — 6 cells, offset by 44.
+            // Bottom row (y = 75) - 6 cells, offset by 44.
             { x: -220, y:  75, icon: Zap,             label: t('login.mod.realtime', { defaultValue: 'Realtime' }) },
             { x: -132, y:  75, icon: Boxes,           label: t('login.mod.resources',{ defaultValue: 'Resources' }) },
             { x:  -44, y:  75, icon: ClipboardList,   label: t('login.mod.tasks',    { defaultValue: 'Tasks' }) },
@@ -423,7 +467,7 @@ export function LoginPage() {
             const isAccent = 'accent' in cell && cell.accent === true;
             const Icon = cell.icon;
             return (
-              // Outer wrapper handles ABSOLUTE POSITIONING only — its
+              // Outer wrapper handles ABSOLUTE POSITIONING only - its
               // transform is the hex-grid offset and must never be
               // overridden by an animation. Animations live on the inner
               // cell so they don't fight with our positioning maths.
@@ -436,7 +480,7 @@ export function LoginPage() {
               >
                 <div
                   className={`relative flex flex-col items-center justify-center w-[88px] h-[100px] animate-fade-in transition-transform duration-300 hover:scale-[1.05] ${
-                    isAccent ? 'text-white' : 'text-content-primary'
+                    isAccent ? 'text-white' : 'text-slate-900'
                   }`}
                   style={{
                     animationDelay: `${280 + idx * 35}ms`,
@@ -453,11 +497,11 @@ export function LoginPage() {
                   <Icon
                     size={isAccent ? 22 : 18}
                     strokeWidth={isAccent ? 2 : 1.65}
-                    className={isAccent ? '' : 'text-oe-blue/90'}
+                    className={isAccent ? '' : 'text-oe-blue'}
                   />
                   <span
                     className={`mt-[5px] text-[10px] font-semibold tracking-[-0.01em] ${
-                      isAccent ? 'text-white/95' : 'text-content-primary/85'
+                      isAccent ? 'text-white/95' : 'text-slate-800'
                     }`}
                   >
                     {cell.label}
@@ -468,7 +512,7 @@ export function LoginPage() {
           })}
         </div>
 
-        {/* Value props — restored as a clean two-up grid with refined
+        {/* Value props - restored as a clean two-up grid with refined
             typography (no boxed icon backgrounds, accent rule above each
             title) so the marketing column lands on something concrete
             after the honeycomb. */}
@@ -506,27 +550,30 @@ export function LoginPage() {
         </div>
       </div>
 
-      {/* Center column removed — tags moved to left panel footer */}
+      {/* Center column removed - tags moved to left panel footer */}
 
       {/* ── Left column on lg+: logo + form (primary action). ── */}
       <div className="relative flex items-center justify-center p-4 sm:p-6 z-10 lg:order-1 overflow-hidden">
-        {/* Form column backdrop — clean near-white field on lg+ so the
+        {/* Form column backdrop - clean near-white field on lg+ so the
             glass card reads against a calm canvas. The decorative show
             (orbs / mesh) lives on the marketing column on the right. */}
         <div className="absolute inset-0 pointer-events-none overflow-hidden hidden lg:block" aria-hidden>
-          <div className="absolute inset-0 bg-white dark:bg-[#0b0d12]" />
-          <div className="absolute inset-0 bg-gradient-to-l from-white/0 via-white/60 to-white dark:from-[#0b0d12]/0 dark:via-[#0b0d12]/60 dark:to-[#0b0d12]" />
-          {/* Tiny far-corner sky tint just to soften the edge — the glass
+          {/* Dark mode: use #070912 (DARKER than #0f1117 surface-primary so
+              form inputs lift visibly off the column backdrop). Previously
+              #0b0d12 — too close to input bg, made inputs invisible. */}
+          <div className="absolute inset-0 bg-white dark:bg-[#070912]" />
+          <div className="absolute inset-0 bg-gradient-to-l from-white/0 via-white/60 to-white dark:from-[#070912]/0 dark:via-[#070912]/60 dark:to-[#070912]" />
+          {/* Tiny far-corner sky tint just to soften the edge - the glass
               still has something to lift off, but the field reads white. */}
           <div className="absolute -top-24 -left-24 w-[420px] h-[420px] rounded-full bg-sky-100/55 dark:bg-sky-500/12 blur-[110px]" />
         </div>
         <div className="w-full max-w-[380px] relative z-10">
-          {/* Logo — tenant white-label (logo / company name) when set via
+          {/* Logo - tenant white-label (logo / company name) when set via
               the in-app sidebar editor; otherwise the default brand. The
               small "by OpenConstructionERP" attribution stays visible in
               customised modes (AGPL-3.0 requirement). */}
           <div className="relative mb-5 flex flex-col items-center animate-stagger-in" style={{ animationDelay: '0ms' }}>
-            {/* Brand + edit-pencil row — grouped together and visually
+            {/* Brand + edit-pencil row - grouped together and visually
                 centered in the form column (previously the pencil was
                 pinned to the far right edge which made the brand block
                 look off-centre relative to the form below). */}
@@ -549,7 +596,7 @@ export function LoginPage() {
                       {brandName}
                     </span>
                   )}
-                  {/* "by OpenConstructionERP" — subordinate attribution that
+                  {/* "by OpenConstructionERP" - subordinate attribution that
                       stays visible (AGPL-3.0). Mirrors CustomBranding.tsx. */}
                   <span
                     className="mt-2 block text-[11px] leading-none text-content-tertiary"
@@ -573,7 +620,7 @@ export function LoginPage() {
                   </span>
                 </div>
               )}
-              {/* White-label trigger — same editor as the in-app sidebar
+              {/* White-label trigger - same editor as the in-app sidebar
                   brand control, available pre-auth so a tenant can put
                   their own logo on the sign-in screen. */}
               <button
@@ -607,7 +654,7 @@ export function LoginPage() {
             </div>
           </div>
 
-          {/* Form — premium multi-layer glass.
+          {/* Form - premium multi-layer glass.
               login-glass-pro adds layered borders, a coloured ambient drop
               shadow, an inset highlight, and a soft-light overlay tint via
               ::after. The DOM-level top sheen below adds the rim-light line. */}
@@ -615,7 +662,7 @@ export function LoginPage() {
             className="login-glass-pro relative rounded-2xl px-6 py-5 animate-form-scale-in"
             style={{ animationDelay: '150ms' }}
           >
-            {/* Top-edge sheen — bright highlight along the rim */}
+            {/* Top-edge sheen - bright highlight along the rim */}
             <div
               aria-hidden
               className="pointer-events-none absolute inset-x-6 top-0 h-px rounded-t-2xl"
@@ -633,7 +680,7 @@ export function LoginPage() {
                   'radial-gradient(circle at 0% 0%, rgba(255,255,255,0.5), transparent 70%)',
               }}
             />
-            {/* Visually hidden h1 for screen readers + a11y tools — visible text uses h2 below */}
+            {/* Visually hidden h1 for screen readers + a11y tools - visible text uses h2 below */}
             <h1 className="sr-only">{t('auth.login', 'Sign in')}</h1>
             <div className="animate-stagger-in" style={{ animationDelay: '200ms' }}>
               <h2 className="text-base font-semibold text-content-primary mb-0.5">{t('auth.login', 'Sign in')}</h2>
@@ -715,7 +762,7 @@ export function LoginPage() {
                       type="button"
                       onClick={() => handleDemoLogin(acct.email)}
                       disabled={demoLoading !== null}
-                      className="flex w-full items-center gap-3 rounded-xl border border-border-light/50 bg-surface-secondary/50 px-3.5 py-2.5 text-left transition-all hover:border-oe-blue/40 hover:bg-oe-blue/[0.05] hover:shadow-sm disabled:opacity-50 group"
+                      className="flex w-full items-center gap-3 rounded-xl border border-border-light/50 dark:border-white/12 bg-surface-secondary/50 dark:bg-white/[0.06] px-3.5 py-2.5 text-left transition-all hover:border-oe-blue/40 hover:bg-oe-blue/[0.05] dark:hover:bg-oe-blue/[0.14] hover:shadow-sm disabled:opacity-50 group"
                     >
                       <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${acct.color} text-white text-sm font-bold shadow-sm`}>
                         {demoLoading === acct.email ? (
@@ -726,7 +773,7 @@ export function LoginPage() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="text-[13px] font-semibold text-content-primary">{acct.name}</div>
-                        <div className="text-[11px] text-content-tertiary truncate">{acct.email} · {acct.role}</div>
+                        <div className="text-[11px] text-content-tertiary dark:text-content-secondary truncate">{acct.email} · {acct.role}</div>
                       </div>
                       <ChevronDown size={15} className="text-content-quaternary -rotate-90 group-hover:text-oe-blue transition-colors shrink-0" />
                     </button>
@@ -736,7 +783,7 @@ export function LoginPage() {
             </div>
           </div>
 
-          {/* GitHub + Community — two primary entry points for the
+          {/* GitHub + Community - two primary entry points for the
               open-source project (replaces the old single "Learn more"
               link). Premium two-line cards with a tinted icon badge:
               graphite for the source repo, oe-blue gradient for the
@@ -746,46 +793,46 @@ export function LoginPage() {
               href="https://github.com/datadrivenconstruction/OpenConstructionERP"
               target="_blank"
               rel="noopener noreferrer"
-              aria-label={`${t('login.github', { defaultValue: 'GitHub' })} — ${t('login.github_sub', { defaultValue: 'Source code' })}`}
-              className="group relative flex items-center gap-3 overflow-hidden rounded-xl border border-border-light/70 bg-white/75 dark:bg-surface-elevated/80 backdrop-blur-sm px-3.5 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/90 dark:hover:bg-surface-elevated/90 hover:border-content-primary/25 hover:shadow-lg"
+              aria-label={`${t('login.github', { defaultValue: 'GitHub' })} - ${t('login.github_sub', { defaultValue: 'Source code' })}`}
+              className="group relative flex items-center gap-3 overflow-hidden rounded-xl border border-border-light/70 dark:border-white/15 bg-white/75 dark:bg-white/[0.07] backdrop-blur-sm px-3.5 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/90 dark:hover:bg-white/[0.12] dark:hover:border-white/25 hover:border-content-primary/25 hover:shadow-lg"
             >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-content-primary/[0.06] text-content-primary transition-colors group-hover:bg-content-primary/10">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-content-primary/[0.06] dark:bg-white/10 text-content-primary transition-colors group-hover:bg-content-primary/10 dark:group-hover:bg-white/15">
                 <Github size={17} strokeWidth={1.9} />
               </span>
               <span className="min-w-0 flex-1 leading-tight">
                 <span className="block text-[13px] font-semibold text-content-primary">
                   {t('login.github', { defaultValue: 'GitHub' })}
                 </span>
-                <span className="block truncate text-[11px] text-content-tertiary">
+                <span className="block truncate text-[11px] text-content-tertiary dark:text-content-secondary">
                   {t('login.github_sub', { defaultValue: 'Source code' })}
                 </span>
               </span>
               <ArrowUpRight
                 size={15}
-                className="shrink-0 text-content-quaternary transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-content-secondary"
+                className="shrink-0 text-content-quaternary dark:text-content-tertiary transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-content-secondary"
               />
             </a>
             <a
               href="https://t.me/datadrivenconstruction"
               target="_blank"
               rel="noopener noreferrer"
-              aria-label={`${t('login.community', { defaultValue: 'Community' })} — ${t('login.community_sub', { defaultValue: 'Get help & discuss' })}`}
-              className="group relative flex items-center gap-3 overflow-hidden rounded-xl border border-border-light/70 bg-white/75 dark:bg-surface-elevated/80 backdrop-blur-sm px-3.5 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/90 dark:hover:bg-surface-elevated/90 hover:border-content-primary/25 hover:shadow-lg"
+              aria-label={`${t('login.community', { defaultValue: 'Community' })} - ${t('login.community_sub', { defaultValue: 'Get help & discuss' })}`}
+              className="group relative flex items-center gap-3 overflow-hidden rounded-xl border border-border-light/70 dark:border-white/15 bg-white/75 dark:bg-white/[0.07] backdrop-blur-sm px-3.5 py-3 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-white/90 dark:hover:bg-white/[0.12] dark:hover:border-white/25 hover:border-content-primary/25 hover:shadow-lg"
             >
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-content-primary/[0.06] text-content-primary transition-colors group-hover:bg-content-primary/10">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-content-primary/[0.06] dark:bg-white/10 text-content-primary transition-colors group-hover:bg-content-primary/10 dark:group-hover:bg-white/15">
                 <Users size={17} strokeWidth={1.9} />
               </span>
               <span className="min-w-0 flex-1 leading-tight">
                 <span className="block text-[13px] font-semibold text-content-primary">
                   {t('login.community', { defaultValue: 'Community' })}
                 </span>
-                <span className="block truncate text-[11px] text-content-tertiary">
+                <span className="block truncate text-[11px] text-content-tertiary dark:text-content-secondary">
                   {t('login.community_sub', { defaultValue: 'Get help & discuss' })}
                 </span>
               </span>
               <ArrowUpRight
                 size={15}
-                className="shrink-0 text-content-quaternary transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-content-secondary"
+                className="shrink-0 text-content-quaternary dark:text-content-tertiary transition-all duration-200 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 group-hover:text-content-secondary"
               />
             </a>
           </div>
@@ -819,13 +866,13 @@ export function LoginPage() {
             <div className="px-6 pt-5 pb-4 border-b border-border-light clear-both">
               <LogoWithText size="sm" className="mb-3" />
               <h3 className="text-base font-bold text-content-primary mb-2">
-                {t('about.title', 'Professional construction cost estimation — free and open source')}
+                {t('about.title', 'Professional construction cost estimation - free and open source')}
               </h3>
               <p className="text-[13px] text-content-secondary leading-relaxed">
-                {t('about.intro', 'OpenConstructionERP is a modern platform for construction cost management. It covers the full estimation workflow — from creating a bill of quantities to tendering and bid comparison. Designed for professionals worldwide, it supports international standards and works in 24 languages.')}
+                {t('about.intro', 'OpenConstructionERP is a modern platform for construction cost management. It covers the full estimation workflow - from creating a bill of quantities to tendering and bid comparison. Designed for professionals worldwide, it supports international standards and works in 24 languages.')}
               </p>
               <p className="mt-2 text-[13px] text-content-secondary leading-relaxed">
-                {t('about.intro2', 'Unlike traditional commercial solutions, OpenConstructionERP runs entirely on your computer. Your project data never leaves your machine — you have full ownership and control. The source code is open and auditable, so you always know exactly what the software does.')}
+                {t('about.intro2', 'Unlike traditional commercial solutions, OpenConstructionERP runs entirely on your computer. Your project data never leaves your machine - you have full ownership and control. The source code is open and auditable, so you always know exactly what the software does.')}
               </p>
             </div>
 
@@ -840,10 +887,10 @@ export function LoginPage() {
                   { icon: Database, color: 'text-blue-500 bg-blue-500/10', title: t('about.cap.costs', 'Cost Databases'), desc: t('about.cap.costs_desc', '55,000+ cost items across 48 regional databases worldwide. Add your own rates, import from Excel, or build a custom database from scratch.') },
                   { icon: CalendarClock, color: 'text-amber-500 bg-amber-500/10', title: t('about.cap.schedule', '4D Scheduling'), desc: t('about.cap.schedule_desc', 'Create project schedules with CPM critical path calculation, interactive Gantt charts, Monte Carlo risk analysis, resource assignment, and auto-generation of activities from your BOQ.') },
                   { icon: TrendingUp, color: 'text-violet-500 bg-violet-500/10', title: t('about.cap.costmodel', '5D Cost Model'), desc: t('about.cap.costmodel_desc', 'Track budgets over time with Earned Value Management (SPI, CPI), S-curve visualization, cash flow projections, cost snapshots, and what-if scenario modeling for informed decision-making.') },
-                  { icon: Boxes, color: 'text-rose-500 bg-rose-500/10', title: t('about.cap.catalog', 'Resource Catalog'), desc: t('about.cap.catalog_desc', '7,000+ resources — materials, equipment, labor, operators, and utilities. Build reusable assemblies (composite rates) from catalog items and apply them directly to BOQ positions.') },
+                  { icon: Boxes, color: 'text-rose-500 bg-rose-500/10', title: t('about.cap.catalog', 'Resource Catalog'), desc: t('about.cap.catalog_desc', '7,000+ resources - materials, equipment, labor, operators, and utilities. Build reusable assemblies (composite rates) from catalog items and apply them directly to BOQ positions.') },
                   { icon: BarChart3, color: 'text-cyan-500 bg-cyan-500/10', title: t('about.cap.tendering', 'Tendering & Bids'), desc: t('about.cap.tendering_desc', 'Create tender packages with scope and positions, distribute to subcontractors, collect and compare bids side-by-side in a price mirror, and make award decisions based on data.') },
                   { icon: Upload, color: 'text-orange-500 bg-orange-500/10', title: t('about.cap.import', 'Import & Export'), desc: t('about.cap.import_desc', 'Full support for GAEB XML (X83), Excel, and CSV import/export. Generate professional PDF reports. Seamlessly integrate with your existing tools and workflows.') },
-                  { icon: FileCheck, color: 'text-teal-500 bg-teal-500/10', title: t('about.cap.validation', 'Quality Validation'), desc: t('about.cap.validation_desc', 'Built-in quality engine automatically checks for missing quantities, zero prices, duplicate positions, classification compliance, and rate anomalies — with a traffic-light dashboard.') },
+                  { icon: FileCheck, color: 'text-teal-500 bg-teal-500/10', title: t('about.cap.validation', 'Quality Validation'), desc: t('about.cap.validation_desc', 'Built-in quality engine automatically checks for missing quantities, zero prices, duplicate positions, classification compliance, and rate anomalies - with a traffic-light dashboard.') },
                 ].map((cap, idx) => {
                   const Icon = cap.icon;
                   return (
@@ -867,9 +914,9 @@ export function LoginPage() {
                 {t('about.why_title', 'Why open source matters')}
               </h3>
               <div className="space-y-2 text-[13px] text-content-secondary leading-relaxed">
-                <p>{t('about.why_1', 'Construction cost data is one of the most valuable assets a company owns. With proprietary software, your data is often locked inside formats you cannot control. If the vendor raises prices, changes terms, or discontinues the product — you may lose access to years of work.')}</p>
+                <p>{t('about.why_1', 'Construction cost data is one of the most valuable assets a company owns. With proprietary software, your data is often locked inside formats you cannot control. If the vendor raises prices, changes terms, or discontinues the product - you may lose access to years of work.')}</p>
                 <p>{t('about.why_2', 'OpenConstructionERP takes a different approach. Your data is stored in open formats (SQLite, JSON, CSV) on your own hardware. You can export everything at any time. The source code is publicly auditable under AGPL-3.0, so there are no hidden data transfers, no telemetry, and no surprises.')}</p>
-                <p>{t('about.why_3', 'The platform is modular — install only what you need. Community modules extend functionality without bloating the core. And because it runs locally, it works offline and performs fast even with large projects.')}</p>
+                <p>{t('about.why_3', 'The platform is modular - install only what you need. Community modules extend functionality without bloating the core. And because it runs locally, it works offline and performs fast even with large projects.')}</p>
               </div>
             </div>
 
@@ -879,7 +926,7 @@ export function LoginPage() {
                 {t('about.who_title', 'Who is it for')}
               </h3>
               <p className="text-[13px] text-content-secondary leading-relaxed mb-3">
-                {t('about.who_desc', 'OpenConstructionERP is designed for anyone involved in construction cost management — whether you work on residential projects or large-scale infrastructure, in-house or as a consultant.')}
+                {t('about.who_desc', 'OpenConstructionERP is designed for anyone involved in construction cost management - whether you work on residential projects or large-scale infrastructure, in-house or as a consultant.')}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {[
@@ -927,7 +974,7 @@ export function LoginPage() {
                 {t('about.ai_title', 'About AI features')}
               </h3>
               <p className="text-[13px] text-content-secondary leading-relaxed">
-                {t('about.ai_desc', 'OpenConstructionERP includes optional AI-powered tools — quick estimation from text descriptions, smart cost suggestions, and BOQ chat assistant. These features require an API key from a provider of your choice (Anthropic, OpenAI, Google). AI is always opt-in: it only activates when you configure it, and you decide what data to send. Without an API key, all other features work fully offline.')}
+                {t('about.ai_desc', 'OpenConstructionERP includes optional AI-powered tools - quick estimation from text descriptions, smart cost suggestions, and BOQ chat assistant. These features require an API key from a provider of your choice (Anthropic, OpenAI, Google). AI is always opt-in: it only activates when you configure it, and you decide what data to send. Without an API key, all other features work fully offline.')}
               </p>
             </div>
 

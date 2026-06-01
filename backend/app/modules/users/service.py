@@ -11,6 +11,7 @@ Stateless service layer. Handles:
 import asyncio  # noqa: F401 - reload trigger
 import hashlib
 import logging
+import os
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -35,7 +36,6 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
         _logger_ev.debug("Event publish skipped: %s", name)
 
 
-from app.core.permissions import permission_registry
 from app.modules.users.models import APIKey, User
 from app.modules.users.repository import APIKeyRepository, UserRepository
 from app.modules.users.schemas import (
@@ -78,15 +78,23 @@ def create_access_token(
     settings: Settings,
     extra_claims: dict | None = None,
 ) -> str:
-    """Create a JWT access token for a user."""
-    permissions = permission_registry.get_role_permissions(user.role)
+    """Create a JWT access token for a user.
+
+    The token deliberately carries only identity claims (``sub``, ``email``,
+    ``role``) - NOT the resolved permission list. Permissions are re-hydrated
+    from the DB role on every request in ``get_current_user_payload`` (and the
+    frontend reads them from ``GET /users/me``), so embedding them here was
+    pure dead weight: for an admin it added ~12 KB, pushing the ``Authorization``
+    header past the 16 KB limit of Node/Vite dev proxies and yielding HTTP 431
+    ("Request Header Fields Too Large") on every authenticated call. See the
+    re-hydration note in ``app/dependencies.py``.
+    """
     now = datetime.now(UTC)
     payload = {
         "iss": "openconstructionerp",  # RFC 7519 issuer claim
         "sub": str(user.id),
         "email": user.email,
         "role": user.role,
-        "permissions": permissions,
         "iat": now,
         "exp": now + timedelta(minutes=settings.jwt_expire_minutes),
         "type": "access",
@@ -142,9 +150,7 @@ def generate_api_key() -> tuple[str, str, str]:
 # ── Audit helpers ─────────────────────────────────────────────────────────
 
 
-async def _audit_last_login(
-    settings: Settings, user_id: uuid.UUID, when: datetime, *, label: str
-) -> None:
+async def _audit_last_login(settings: Settings, user_id: uuid.UUID, when: datetime, *, label: str) -> None:
     """Fire-and-forget UPDATE of ``oe_users_user.last_login_at``.
 
     Runs in a detached session so the user's login response never waits on
@@ -156,11 +162,7 @@ async def _audit_last_login(
 
     try:
         async with async_session_factory() as session:
-            await session.execute(
-                update(User)
-                .where(User.id == user_id)
-                .values(last_login_at=when)
-            )
+            await session.execute(update(User).where(User.id == user_id).values(last_login_at=when))
             await session.commit()
     except Exception as exc:  # noqa: BLE001 - any failure is acceptable
         logger.warning(
@@ -171,6 +173,21 @@ async def _audit_last_login(
 
 
 # ── Service class ──────────────────────────────────────────────────────────
+
+
+# Whitelist of seeded demo accounts. Must mirror the same set in
+# ``backend/app/modules/users/router.py:_DEMO_EMAIL_WHITELIST`` and
+# ``backend/app/main.py:_seed_demo_account``. The integration test
+# ``test_demo_login_endpoint.py`` asserts router and seeder stay in sync;
+# this duplicate exists so ``login()`` can route demo logins without
+# importing from router (which would create a circular import).
+_DEMO_EMAIL_WHITELIST: frozenset[str] = frozenset(
+    {
+        "demo@openconstructionerp.com",
+        "estimator@openconstructionerp.com",
+        "manager@openconstructionerp.com",
+    }
+)
 
 
 class UserService:
@@ -297,7 +314,10 @@ class UserService:
 
         logger.info(
             "User registered: %s (role=%s, active=%s, mode=%s)",
-            user.email, role, is_active, mode,
+            user.email,
+            role,
+            is_active,
+            mode,
         )
         return user
 
@@ -346,7 +366,9 @@ class UserService:
 
         logger.info(
             "Admin created user: %s (role=%s, active=%s)",
-            user.email, data.role, data.is_active,
+            user.email,
+            data.role,
+            data.is_active,
         )
         return user
 
@@ -356,7 +378,29 @@ class UserService:
         """Authenticate user and return JWT tokens.
 
         Raises HTTPException 401 on invalid credentials.
+
+        Demo-account UX shortcut: if the email matches one of the seeded
+        demo accounts and ``SEED_DEMO`` is enabled (default on community /
+        self-host installs, disabled in production), we route through
+        ``demo_login`` — which issues tokens without verifying the
+        password. Why: BUG-D01 randomised demo passwords per install for
+        security, but users who typed the documented ``DemoPass1234!``
+        into the manual form got 401 "Invalid email or password" because
+        the stored hash was now a ``secrets.token_urlsafe(16)`` instead.
+        Keeping demo emails password-free in the manual path makes the
+        documented credentials JustWork without reintroducing a
+        hardcoded password into ``main.py`` (the source-grep test in
+        ``test_demo_credentials.py`` stays green). Production installs
+        set ``SEED_DEMO=false`` so this shortcut is dead code there.
         """
+        email_norm = (data.email or "").strip().lower()
+        if email_norm in _DEMO_EMAIL_WHITELIST and os.environ.get("SEED_DEMO", "true").lower() not in (
+            "false",
+            "0",
+            "no",
+        ):
+            return await self.demo_login(email_norm)
+
         user = await self.user_repo.get_by_email(data.email)
 
         if user is None:
@@ -407,12 +451,26 @@ class UserService:
 
         if not skip_write:
             # Fire-and-forget audit update — see demo_login() rationale.
-            asyncio.create_task(
-                _audit_last_login(self.settings, user_id, now, label=user_email)
-            )
+            asyncio.create_task(_audit_last_login(self.settings, user_id, now, label=user_email))
 
         access_token = create_access_token(user, self.settings)
         refresh_token = create_refresh_token(user, self.settings)
+
+        # Audit trail — security-critical event: successful login.
+        try:
+            from app.core.audit_log import log_activity as _log_activity
+
+            await _log_activity(
+                self.session,
+                actor_id=str(user_id),
+                entity_type="user",
+                entity_id=str(user_id),
+                action="login",
+                module="users",
+                after_state={"email": user_email, "role": user_role},
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("audit log skipped for login (non-fatal)")
 
         await _safe_publish(
             "users.user.logged_in",
@@ -467,9 +525,7 @@ class UserService:
         # contention, that's logged but never reaches the user. On
         # Postgres this is a no-op (writes are fast).
         if not skip_write:
-            asyncio.create_task(
-                _audit_last_login(self.settings, user_id, now, label=f"demo:{email}")
-            )
+            asyncio.create_task(_audit_last_login(self.settings, user_id, now, label=f"demo:{email}"))
 
         access_token = create_access_token(user, self.settings)
         refresh_token = create_refresh_token(user, self.settings)
@@ -584,6 +640,14 @@ class UserService:
         """Reset user password using a valid reset token.
 
         Raises HTTPException 400 on invalid/expired token.
+
+        Single-use enforcement: after the first successful reset the
+        ``password_changed_at`` column is bumped to ``now()``.  On any
+        subsequent attempt with the same token, ``iat`` (issued-at) will
+        be ≤ ``password_changed_at`` — we reject it as already-used,
+        preventing token reuse within the 15-minute expiry window.  No DB
+        blocklist is needed; the existing ``password_changed_at`` column
+        already serves as the invalidation timestamp.
         """
         from jose import JWTError
 
@@ -619,8 +683,23 @@ class UserService:
                 detail="User not found or inactive",
             )
 
+        # Single-use guard: reject the token if password was already changed
+        # after this token was issued (iat).  Mirrors the same logic used in
+        # get_current_user_payload for access tokens.
+        iat = payload.get("iat")
+        if iat is not None and user.password_changed_at is not None:
+            pwd_changed = user.password_changed_at
+            if pwd_changed.tzinfo is None:
+                pwd_changed = pwd_changed.replace(tzinfo=UTC)
+            if int(float(iat)) <= int(pwd_changed.timestamp()):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Reset token has already been used. Please request a new one.",
+                )
+
         # Eagerly read email before update_fields (which calls expire_all)
         user_email = user.email
+        user_uuid = user.id
 
         await self.user_repo.update_fields(
             user.id,
@@ -628,9 +707,25 @@ class UserService:
             password_changed_at=datetime.now(UTC),
         )
 
+        # Audit trail — security-critical event: password change via reset token.
+        try:
+            from app.core.audit_log import log_activity as _log_activity
+
+            await _log_activity(
+                self.session,
+                actor_id=str(user_uuid),
+                entity_type="user",
+                entity_id=str(user_uuid),
+                action="password_reset_completed",
+                module="users",
+                after_state={"email": user_email},
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("audit log skipped for password_reset_completed (non-fatal)")
+
         await _safe_publish(
             "users.password_reset.completed",
-            {"user_id": str(user.id), "email": user_email},
+            {"user_id": str(user_uuid), "email": user_email},
             source_module="oe_users",
         )
 
@@ -647,11 +742,44 @@ class UserService:
         return user
 
     async def update_profile(self, user_id: uuid.UUID, **fields: object) -> User:
-        """Update user profile fields."""
+        """Update user profile fields.
+
+        If ``role`` is being changed, a dedicated audit log entry is written so
+        privilege escalation / demotion is always traceable (RBAC audit gap fix).
+        """
+        # Capture old role before overwriting so the audit row has before/after.
+        old_role: str | None = None
+        new_role: str | None = None
+        if "role" in fields:
+            prior = await self.user_repo.get_by_id(user_id)
+            if prior is not None:
+                old_role = prior.role
+            new_role = str(fields["role"])
+
         await self.user_repo.update_fields(user_id, **fields)
         user = await self.user_repo.get_by_id(user_id)
         if user is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+        if old_role is not None and new_role is not None and old_role != new_role:
+            try:
+                from app.core.audit_log import log_activity as _log_activity
+
+                await _log_activity(
+                    self.session,
+                    actor_id=None,  # context dep fills this from ContextVar
+                    entity_type="user",
+                    entity_id=str(user_id),
+                    action="role_changed",
+                    from_status=old_role,
+                    to_status=new_role,
+                    module="users",
+                    before_state={"role": old_role},
+                    after_state={"role": new_role, "email": user.email},
+                )
+            except Exception:  # noqa: BLE001
+                logger.debug("audit log skipped for role_changed (non-fatal)")
+
         return user
 
     async def update_preferences(

@@ -224,11 +224,7 @@ async def encode_texts_async(texts: list[str]) -> list[list[float]]:
         # one OTHER call is in flight (so this one would otherwise
         # serialise behind it). With ``inflight == 1`` we're alone —
         # encode inline.
-        if (
-            _pool_mod is not None
-            and _pool_mod._pool is not None
-            and _pool_mod._inflight > 1
-        ):
+        if _pool_mod is not None and _pool_mod._pool is not None and _pool_mod._inflight > 1:
             try:
                 pooled = await _pool_mod.encode_texts_pooled(texts)
                 if pooled is not None:
@@ -372,6 +368,41 @@ def _lancedb_status() -> dict[str, Any]:
 # ── Multi-collection LanceDB helpers ─────────────────────────────────────
 
 
+import re as _re
+
+# Allowlist for string fields interpolated into LanceDB WHERE expressions.
+# Only printable ASCII minus single-quote and backslash are allowed so a
+# caller-supplied region / project_id / tenant_id can never break out of
+# the surrounding ``field = '<value>'`` literal.  The cap (128 chars) is
+# generous — real values are ≤ 64 chars.
+_LANCEDB_SAFE_STRING_RE = _re.compile(r"^[^\x00-\x1f\x7f'\\]{1,128}$")
+
+
+def _safe_quote_scalar(value: str, field: str = "field") -> str | None:
+    """Validate and single-quote a scalar string for a LanceDB WHERE literal.
+
+    Returns the quoted string (``'value'``) when the input passes the
+    allowlist, or ``None`` when it must be rejected.  Callers MUST treat
+    a ``None`` return as "drop this filter" — never fall through to
+    interpolating the raw value.
+
+    The allowlist is intentionally restrictive (printable ASCII excluding
+    ``'`` and ``\\``) so the function stays correct even when LanceDB
+    changes its SQL parser internals.  Legitimate CWICR region codes and
+    UUID strings all pass; only crafted injection payloads fail.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    if not _LANCEDB_SAFE_STRING_RE.match(value):
+        logger.warning(
+            "LanceDB filter: unsafe %s value rejected (injection guard): %r",
+            field,
+            value[:80],
+        )
+        return None
+    return f"'{value}'"
+
+
 def _safe_quote_ids(raw_ids: list[Any]) -> list[str]:
     """Validate and quote a list of row ids for inclusion in a LanceDB SQL filter.
 
@@ -478,9 +509,13 @@ def _lancedb_search_generic(
     q = tbl.search(query_vector).limit(limit)
     where_parts: list[str] = []
     if project_id:
-        where_parts.append(f"project_id = '{project_id}'")
+        safe_pid = _safe_quote_scalar(project_id, "project_id")
+        if safe_pid:
+            where_parts.append(f"project_id = {safe_pid}")
     if tenant_id:
-        where_parts.append(f"tenant_id = '{tenant_id}'")
+        safe_tid = _safe_quote_scalar(tenant_id, "tenant_id")
+        if safe_tid:
+            where_parts.append(f"tenant_id = {safe_tid}")
     if extra_where:
         where_parts.append(extra_where)
     if where_parts:
@@ -585,7 +620,9 @@ def _lancedb_search(
 
     q = tbl.search(query_vector).limit(limit)
     if region:
-        q = q.where(f"region = '{region}'")
+        safe_region = _safe_quote_scalar(region, "region")
+        if safe_region:
+            q = q.where(f"region = {safe_region}")
 
     results = q.to_list()
     return [
@@ -609,6 +646,12 @@ _qdrant_instance: Any = None
 _qdrant_tried: bool = False
 _qdrant_last_attempt_ts: float = 0.0
 _QDRANT_RETRY_COOLDOWN_S: float = 5.0
+# Bounded connect/request timeout (seconds) for the Qdrant probe. Keep it
+# tight: ``vector_status()`` runs this on every ``/api/system/status`` poll
+# (offloaded to a worker thread by the caller), so a wedged or unreachable
+# Qdrant must fail fast rather than hang the probe thread for tens of
+# seconds. 2s is comfortably above a healthy localhost round-trip.
+_QDRANT_CONNECT_TIMEOUT_S: float = 2.0
 
 
 def reset_qdrant_client() -> None:
@@ -652,7 +695,11 @@ def _get_qdrant():
         from app.config import get_settings
 
         url = get_settings().qdrant_url or "http://localhost:6333"
-        client = QdrantClient(url=url, timeout=2, check_compatibility=False)
+        client = QdrantClient(
+            url=url,
+            timeout=_QDRANT_CONNECT_TIMEOUT_S,
+            check_compatibility=False,
+        )
         client.get_collections()
         _qdrant_instance = client
         logger.info("Connected to Qdrant at %s", url)
@@ -715,6 +762,27 @@ def vector_status() -> dict[str, Any]:
     return _lancedb_status()
 
 
+def _qdrant_vector_size(client: Any, name: str) -> int | None:
+    """Return the configured vector dimension of an existing Qdrant collection.
+
+    Handles both the single-unnamed-vector layout (``VectorParams``) and the
+    named-vectors layout (``dict[str, VectorParams]``).  Returns ``None`` when
+    the size cannot be determined so callers can fall back gracefully.
+    """
+    try:
+        cfg = client.get_collection(name).config.params.vectors
+    except Exception:
+        return None
+    size = getattr(cfg, "size", None)
+    if size is not None:
+        return int(size)
+    if isinstance(cfg, dict) and cfg:
+        first = next(iter(cfg.values()))
+        size = getattr(first, "size", None)
+        return int(size) if size is not None else None
+    return None
+
+
 def vector_index(items: list[dict]) -> int:
     """Index items into vector DB. Items: [{id, vector, code, description, unit, rate, region}]."""
     if _backend() == "qdrant":
@@ -723,12 +791,43 @@ def vector_index(items: list[dict]) -> int:
             raise RuntimeError("Qdrant not available")
         from qdrant_client.models import Distance, PointStruct, VectorParams
 
-        # Ensure collection
+        # The collection dimension must match the vectors we are about to
+        # write.  Those come from the active embedding model, so derive the
+        # size from the data itself (falling back to the configured model dim
+        # for an empty call).  Creating the cost collection at the fixed
+        # GitHub-snapshot dimension instead made every local upsert fail with a
+        # Qdrant 400 ("expected dim 3072, got 384"), so the catalogue badge
+        # stayed stuck at 0 vectorised items (issue #170).
+        vec_dim = (
+            len(items[0]["vector"])
+            if items and items[0].get("vector") is not None
+            else _resolve_active_model()[1]
+        )
+
         collections = [c.name for c in client.get_collections().collections]
         if COST_TABLE not in collections:
             client.create_collection(
-                COST_TABLE, vectors_config=VectorParams(size=QDRANT_SNAPSHOT_DIM, distance=Distance.COSINE)
+                COST_TABLE, vectors_config=VectorParams(size=vec_dim, distance=Distance.COSINE)
             )
+        else:
+            # A collection left over from a different embedding model (for
+            # example a 3072-d prebuilt snapshot that was later cleared) is
+            # incompatible with locally generated vectors.  Rebuild it at the
+            # correct size so indexing proceeds instead of 400-ing — the old
+            # vectors could not be searched with the current model anyway.
+            existing_dim = _qdrant_vector_size(client, COST_TABLE)
+            if existing_dim is not None and existing_dim != vec_dim:
+                logger.warning(
+                    "Cost vector collection %r has dim %d but the active model "
+                    "produces dim %d; rebuilding it to match the model.",
+                    COST_TABLE,
+                    existing_dim,
+                    vec_dim,
+                )
+                client.delete_collection(COST_TABLE)
+                client.create_collection(
+                    COST_TABLE, vectors_config=VectorParams(size=vec_dim, distance=Distance.COSINE)
+                )
 
         points = [
             PointStruct(
@@ -818,9 +917,7 @@ def vector_index_collection(collection_name: str, items: list[dict]) -> int:
                 "module": it.get("module", ""),
                 **payload_dict,
             }
-            points.append(
-                PointStruct(id=it["id"], vector=it["vector"], payload=qdrant_payload)
-            )
+            points.append(PointStruct(id=it["id"], vector=it["vector"], payload=qdrant_payload))
         client.upsert(collection_name, points=points)
         return len(points)
 
@@ -850,13 +947,9 @@ def vector_search_collection(
 
         must_clauses: list[Any] = []
         if project_id:
-            must_clauses.append(
-                FieldCondition(key="project_id", match=MatchValue(value=project_id))
-            )
+            must_clauses.append(FieldCondition(key="project_id", match=MatchValue(value=project_id)))
         if tenant_id:
-            must_clauses.append(
-                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id))
-            )
+            must_clauses.append(FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id)))
         search_filter = Filter(must=must_clauses) if must_clauses else None
         try:
             results = client.search(
@@ -886,9 +979,7 @@ def vector_search_collection(
             mod = str(raw_payload.get("module") or "")
             # Build the user-facing payload without the reserved keys, but
             # without touching the qdrant-owned dict.
-            user_payload = {
-                k: v for k, v in raw_payload.items() if k not in _RESERVED
-            }
+            user_payload = {k: v for k, v in raw_payload.items() if k not in _RESERVED}
             out.append(
                 {
                     "id": str(h.id),
@@ -955,7 +1046,8 @@ def vector_count_collection(collection_name: str) -> int:
 
 
 def vector_count_with_payload_substring(
-    collection_name: str, substring: str,
+    collection_name: str,
+    substring: str,
 ) -> int:
     """Count vectors whose stringified payload contains ``substring``.
 
@@ -974,6 +1066,7 @@ def vector_count_with_payload_substring(
     # expression. The whitelist is intentionally tight — every legitimate
     # CWICR id matches it (e.g. ``RU_STPETERSBURG``, ``USA_USD``).
     import re  # noqa: PLC0415
+
     if not re.fullmatch(r"[A-Z0-9_]{1,32}", substring):
         return 0
     if _backend() == "qdrant":
@@ -991,4 +1084,52 @@ def vector_count_with_payload_substring(
         return int(tbl.count_rows(filter=f"payload LIKE '%{substring}%'"))
     except Exception as exc:
         logger.debug("vector_count_with_payload_substring failed: %s", exc)
+        return 0
+
+
+def vector_count_for_region(region: str) -> int:
+    """Count cost-item vectors for a single catalogue region.
+
+    Reads the SAME store the ``/vector/index/`` action writes — the cost
+    collection ``COST_TABLE`` (``cost_items``) on both backends — filtered by
+    the dedicated ``region`` field. This is what the per-catalogue
+    "vectorised" badge in the UI must reflect, so the count rises right after
+    a vectorise run instead of staying stuck (issue #170). Returns 0 on any
+    failure so the call site stays one line.
+
+    Note: the older ``vector_count_with_payload_substring`` counted a
+    different collection (``oe_cost_items``) against a non-existent
+    ``payload`` column, which is why the loaded-databases count never moved.
+    """
+    if not region:
+        return 0
+    if _backend() == "qdrant":
+        client = _get_qdrant()
+        if client is None:
+            return 0
+        try:
+            from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+            flt = Filter(must=[FieldCondition(key="region", match=MatchValue(value=region))])
+            # Qdrant create_collection is lazy; an un-vectorised region's
+            # collection may not exist yet, in which case count() raises.
+            collections = [c.name for c in client.get_collections().collections]
+            if COST_TABLE not in collections:
+                return 0
+            return int(client.count(COST_TABLE, count_filter=flt, exact=True).count)
+        except Exception as exc:
+            logger.debug("vector_count_for_region (qdrant) failed: %s", exc)
+            return 0
+    db = _get_lancedb()
+    if db is None:
+        return 0
+    try:
+        if COST_TABLE not in db.table_names():
+            return 0
+        safe = _safe_quote_scalar(region, "region")
+        if safe is None:
+            return 0
+        return int(db.open_table(COST_TABLE).count_rows(filter=f"region = {safe}"))
+    except Exception as exc:
+        logger.debug("vector_count_for_region (lancedb) failed: %s", exc)
         return 0

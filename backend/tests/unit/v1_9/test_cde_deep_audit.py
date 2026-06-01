@@ -75,7 +75,9 @@ class _StubContainerRepo:
         return self.rows.get(container_id)
 
     async def get_by_code_and_project(
-        self, project_id: uuid.UUID, code: str,  # noqa: ARG002
+        self,
+        project_id: uuid.UUID,
+        code: str,  # noqa: ARG002
     ) -> Any:
         return None
 
@@ -87,9 +89,7 @@ class _StubContainerRepo:
         self.rows[container.id] = container
         return container
 
-    async def update_fields(
-        self, container_id: uuid.UUID, **fields: object
-    ) -> None:
+    async def update_fields(self, container_id: uuid.UUID, **fields: object) -> None:
         row = self.rows.get(container_id)
         if row is None:
             return
@@ -239,11 +239,7 @@ class TestRevisionDocumentCrossLink:
         )
 
         # Nothing added to the documents hub because storage_key is None.
-        doc_added = [
-            obj
-            for obj in session.added
-            if obj.__class__.__name__ == "Document"
-        ]
+        doc_added = [obj for obj in session.added if obj.__class__.__name__ == "Document"]
         assert doc_added == []
         # Revision is still persisted and has no document_id.
         assert rev.id in r_repo.rows
@@ -265,11 +261,7 @@ class TestRevisionDocumentCrossLink:
             user_id="user-1",
         )
 
-        doc_added = [
-            obj
-            for obj in session.added
-            if obj.__class__.__name__ == "Document"
-        ]
+        doc_added = [obj for obj in session.added if obj.__class__.__name__ == "Document"]
         assert len(doc_added) == 1
         doc = doc_added[0]
         assert doc.category == "cde"
@@ -361,11 +353,7 @@ class TestStateTransitionAuditLog:
             user_id="user-7",
         )
 
-        audit = [
-            obj
-            for obj in session.added
-            if obj.__class__.__name__ == "StateTransition"
-        ]
+        audit = [obj for obj in session.added if obj.__class__.__name__ == "StateTransition"]
         assert len(audit) == 1
         row = audit[0]
         assert row.from_state == "wip"
@@ -392,11 +380,7 @@ class TestStateTransitionAuditLog:
             user_id="user-9",
         )
 
-        audit = [
-            obj
-            for obj in session.added
-            if obj.__class__.__name__ == "StateTransition"
-        ]
+        audit = [obj for obj in session.added if obj.__class__.__name__ == "StateTransition"]
         assert len(audit) == 1
         assert audit[0].gate_code == "B"
         assert audit[0].signature == "S. Signed"
@@ -415,9 +399,172 @@ class TestStateTransitionAuditLog:
                 user_id="user-1",
             )
 
-        audit = [
-            obj
-            for obj in session.added
-            if obj.__class__.__name__ == "StateTransition"
-        ]
+        audit = [obj for obj in session.added if obj.__class__.__name__ == "StateTransition"]
         assert audit == []
+
+
+# ── App-role → ISO gate mapping (RFC 33 follow-up) ────────────────────────
+#
+# The JWT only ever carries the canonical app role (admin / manager / editor /
+# viewer). These tests drive transition_state with the REAL payload role — not
+# the synthetic ISO names — to catch the regression where only admin could ever
+# promote a container.
+
+
+class TestAppRoleGateMapping:
+    @pytest.mark.asyncio
+    async def test_manager_can_pass_gate_a(self) -> None:
+        service, _session, c_repo, _r_repo = _make_service()
+        container = _seed_container(c_repo, state="wip")
+
+        await service.transition_state(
+            container.id,
+            StateTransitionRequest(target_state="shared"),
+            user_role="manager",
+            user_id="mgr-1",
+        )
+
+        assert container.cde_state == "shared"
+
+    @pytest.mark.asyncio
+    async def test_manager_can_pass_gate_b(self) -> None:
+        service, _session, c_repo, _r_repo = _make_service()
+        container = _seed_container(c_repo, state="shared")
+
+        await service.transition_state(
+            container.id,
+            StateTransitionRequest(target_state="published", approver_signature="M. Gr"),
+            user_role="manager",
+            user_id="mgr-1",
+        )
+
+        assert container.cde_state == "published"
+
+    @pytest.mark.asyncio
+    async def test_manager_cannot_archive_gate_c(self) -> None:
+        service, _session, c_repo, _r_repo = _make_service()
+        container = _seed_container(c_repo, state="published")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.transition_state(
+                container.id,
+                StateTransitionRequest(target_state="archived"),
+                user_role="manager",
+                user_id="mgr-1",
+            )
+
+        assert exc_info.value.status_code == 400
+        # Gate C is admin-only.
+        assert "role" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
+    async def test_admin_can_archive_gate_c(self) -> None:
+        service, _session, c_repo, _r_repo = _make_service()
+        container = _seed_container(c_repo, state="published")
+
+        await service.transition_state(
+            container.id,
+            StateTransitionRequest(target_state="archived"),
+            user_role="admin",
+            user_id="adm-1",
+        )
+
+        assert container.cde_state == "archived"
+
+    @pytest.mark.asyncio
+    async def test_editor_cannot_promote(self) -> None:
+        service, _session, c_repo, _r_repo = _make_service()
+        container = _seed_container(c_repo, state="wip")
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.transition_state(
+                container.id,
+                StateTransitionRequest(target_state="shared"),
+                user_role="editor",
+                user_id="ed-1",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "role" in str(exc_info.value.detail).lower()
+
+    @pytest.mark.asyncio
+    async def test_role_alias_owner_maps_to_admin(self) -> None:
+        service, _session, c_repo, _r_repo = _make_service()
+        container = _seed_container(c_repo, state="published")
+
+        await service.transition_state(
+            container.id,
+            StateTransitionRequest(target_state="archived"),
+            user_role="owner",  # alias → admin
+            user_id="own-1",
+        )
+
+        assert container.cde_state == "archived"
+
+
+# ── Link-mode revision (RFC 33 follow-up) ─────────────────────────────────
+#
+# Linking an EXISTING document must reuse its real file_path and must NOT
+# create a duplicate Document row (the old behaviour pointed the duplicate at
+# a UUID and 404'd on download).
+
+
+class _DocStub:
+    """Stand-in for documents.Document so isinstance/class-name checks pass."""
+
+    __name__ = "Document"
+
+    def __init__(self, *, doc_id: uuid.UUID, project_id: uuid.UUID) -> None:
+        self.id = doc_id
+        self.project_id = project_id
+        self.file_path = "uploads/2026/real-file.pdf"
+        self.file_size = 4096
+        self.mime_type = "application/pdf"
+        self.name = "Existing Drawing.pdf"
+
+
+class TestLinkExistingDocument:
+    @pytest.mark.asyncio
+    async def test_link_reuses_path_and_creates_no_duplicate(self) -> None:
+        service, session, c_repo, r_repo = _make_service()
+        container = _seed_container(c_repo, state="wip")
+
+        existing_doc_id = uuid.uuid4()
+        existing = _DocStub(doc_id=existing_doc_id, project_id=container.project_id)
+
+        async def _get(model: Any, pk: Any) -> Any:  # noqa: ARG001
+            return existing if pk == existing_doc_id else None
+
+        session.get = _get  # type: ignore[attr-defined]
+
+        rev = await service.create_revision(
+            container.id,
+            RevisionCreate(file_name="link.pdf", document_id=existing_doc_id),
+            user_id="user-1",
+        )
+
+        # No second Document row was synthesised.
+        doc_added = [obj for obj in session.added if obj.__class__.__name__ == "Document"]
+        assert doc_added == []
+        # Revision points at the existing document and reuses its real path.
+        assert str(rev.document_id) == str(existing_doc_id)
+        assert rev.storage_key == existing.file_path
+
+    @pytest.mark.asyncio
+    async def test_link_missing_document_raises_404(self) -> None:
+        service, session, c_repo, _r_repo = _make_service()
+        container = _seed_container(c_repo, state="wip")
+
+        async def _get(model: Any, pk: Any) -> Any:  # noqa: ARG001
+            return None
+
+        session.get = _get  # type: ignore[attr-defined]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await service.create_revision(
+                container.id,
+                RevisionCreate(file_name="link.pdf", document_id=uuid.uuid4()),
+                user_id="user-1",
+            )
+
+        assert exc_info.value.status_code == 404

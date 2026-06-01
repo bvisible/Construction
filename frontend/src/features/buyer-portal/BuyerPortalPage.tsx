@@ -66,6 +66,9 @@ import {
   X,
 } from 'lucide-react';
 
+import { BetaBanner } from '@/shared/ui';
+import { SUPPORTED_LANGUAGES } from '@/app/i18n';
+
 import {
   contactPortalAgent,
   fetchPortalOverview,
@@ -79,13 +82,6 @@ import {
 type PageState =
   | { kind: 'loading' }
   | { kind: 'invalid' }
-  // 'already_used' — backend code ``portal_token_already_used``. The
-  // magic-link was previously redeemed (single-use semantics, industry
-  // standard — Slack/Notion/Linear). Render a dedicated "request a new
-  // login link" CTA (RecoveryCard-shaped) instead of the generic
-  // "expired" copy so the buyer knows to ask the agent for a fresh link
-  // rather than retrying the same one.
-  | { kind: 'already_used' }
   | { kind: 'error'; message: string }
   | { kind: 'ready'; data: PortalOverviewResponse };
 
@@ -129,6 +125,12 @@ export function BuyerPortalPage() {
   // highlight only the active target (not every dropzone on the page).
   const [dragTarget, setDragTarget] = useState<string | null>(null);
 
+  // Honor the buyer's preferred language exactly once on first load.
+  // After that the buyer is free to switch manually via the header
+  // switcher without us snapping back. The ref guards against the
+  // effect re-applying on later re-renders / data refetches.
+  const appliedBuyerLanguageRef = useRef(false);
+
   // 1. Initial overview fetch (verify happens implicitly).
   useEffect(() => {
     let cancelled = false;
@@ -143,12 +145,13 @@ export function BuyerPortalPage() {
       } catch (err) {
         if (cancelled) return;
         const msg = (err as Error).message;
-        if (msg === 'ALREADY_USED') {
-          // Single-use magic-link was previously redeemed (Slack/Notion
-          // /Linear-style verify semantics). Different from the generic
-          // "expired" copy so the buyer knows exactly what to do next.
-          setState({ kind: 'already_used' });
-        } else if (msg === 'INVALID') {
+        // The landing page only calls /overview/ (which never consumes
+        // the magic link — single-use is enforced solely by /verify/),
+        // so a previously-redeemed link surfaces as the generic
+        // invalid/expired bucket here, not ALREADY_USED. We therefore
+        // map every auth failure to the "ask your agent for a new link"
+        // invalid screen and surface anything else as a soft error.
+        if (msg === 'INVALID' || msg === 'ALREADY_USED') {
           setState({ kind: 'invalid' });
         } else {
           setState({ kind: 'error', message: msg });
@@ -159,6 +162,22 @@ export function BuyerPortalPage() {
       cancelled = true;
     };
   }, [token]);
+
+  // 1b. Apply the buyer's preferred language once, when the overview
+  //     payload first arrives. Only switch when the language is one we
+  //     actually ship and it differs from the current UI language —
+  //     otherwise a buyer whose record says e.g. ``fr`` would stay on
+  //     the default English UI despite the backend knowing better.
+  useEffect(() => {
+    if (state.kind !== 'ready' || appliedBuyerLanguageRef.current) return;
+    appliedBuyerLanguageRef.current = true;
+    const lang = (state.data.buyer_language || '').trim().toLowerCase();
+    if (!lang) return;
+    const supported = SUPPORTED_LANGUAGES.some((l) => l.code === lang);
+    if (supported && !i18n.language.startsWith(lang)) {
+      void i18n.changeLanguage(lang);
+    }
+  }, [state, i18n]);
 
   // 2. Stage files into the per-code pending list (does NOT upload yet).
   //    This lets the buyer preview filenames, drop extras, then hit
@@ -302,53 +321,7 @@ export function BuyerPortalPage() {
     }
   }
 
-  // ── Render: already-used / invalid / error / loading shells ──────
-
-  if (state.kind === 'already_used') {
-    // RecoveryCard-shaped surface for ``portal_token_already_used``.
-    // We don't reuse the shared <RecoveryCard> directly because the
-    // buyer-portal is a public, unauthenticated shell — RecoveryCard
-    // links to ``/login`` which doesn't exist for buyers. The shape /
-    // tone matches it so the visual language is consistent.
-    const mailto =
-      'mailto:info@datadrivenconstruction.io?subject=' +
-      encodeURIComponent('Buyer portal — request a new login link');
-    return (
-      <ShellWrapper>
-        <div
-          data-testid="buyer-portal-already-used"
-          className="rounded-2xl border border-amber-300/40 bg-amber-50 dark:bg-amber-900/20 p-6 text-center space-y-3"
-        >
-          <ShieldX
-            size={32}
-            strokeWidth={1.5}
-            className="mx-auto text-amber-600 dark:text-amber-400"
-          />
-          <h2 className="text-base font-semibold text-content-primary">
-            {t('buyer_portal.already_used.title', {
-              defaultValue: 'This link has already been used',
-            })}
-          </h2>
-          <p className="text-sm text-content-secondary">
-            {t('buyer_portal.already_used.body', {
-              defaultValue:
-                'For your security, each login link works only once. Request a new login link to continue.',
-            })}
-          </p>
-          <a
-            href={mailto}
-            className="mt-2 inline-flex items-center justify-center gap-2 h-9 px-4 rounded-lg bg-oe-blue text-white text-sm font-medium hover:bg-oe-blue-hover"
-            data-testid="buyer-portal-request-new-link"
-          >
-            <Mail size={14} aria-hidden />
-            {t('buyer_portal.already_used.request', {
-              defaultValue: 'Email a fresh link',
-            })}
-          </a>
-        </div>
-      </ShellWrapper>
-    );
-  }
+  // ── Render: invalid / error / loading shells ──────
 
   if (state.kind === 'invalid') {
     return (
@@ -454,6 +427,7 @@ export function BuyerPortalPage() {
       <main
         className="w-full max-w-3xl mx-auto px-4 sm:px-6 py-6 space-y-6 pb-32 sm:pb-6"
       >
+        <BetaBanner moduleKey="buyer-portal" className="mt-3" />
         {/* 1. Welcome hero with project banner + quick links */}
         <HeroSection
           firstName={firstName}
@@ -900,6 +874,10 @@ function PaymentScheduleSection({
   const paidNum = Number(totalPaid || '0');
   const totalNum = Number(totalValue || '0');
   const paidPct = totalNum > 0 ? Math.min(100, (paidNum / totalNum) * 100) : 0;
+  // Only show the outstanding figure when a real schedule exists. With
+  // no schedule, currency is empty and the amount is 0, so formatMoney
+  // would fabricate an "EUR 0.00" balance implying a genuine zero owing.
+  const hasSchedule = totalNum > 0 && !!currency;
 
   return (
     <section
@@ -916,12 +894,14 @@ function PaymentScheduleSection({
             defaultValue: 'Payment schedule',
           })}
         </h2>
-        <div className="text-xs text-content-tertiary">
-          {t('buyer_portal.payments.outstanding', {
-            defaultValue: 'Outstanding: {{value}}',
-            value: formatMoney(totalOutstanding, currency, locale),
-          })}
-        </div>
+        {hasSchedule && (
+          <div className="text-xs text-content-tertiary">
+            {t('buyer_portal.payments.outstanding', {
+              defaultValue: 'Outstanding: {{value}}',
+              value: formatMoney(totalOutstanding, currency, locale),
+            })}
+          </div>
+        )}
       </div>
 
       {/* Sum bar — paid vs total */}
@@ -1833,11 +1813,13 @@ function ShellWrapper({
 }) {
   const { t, i18n } = useTranslation();
 
-  const SUPPORTED: ReadonlyArray<{ code: string; label: string }> = [
-    { code: 'en', label: 'EN' },
-    { code: 'de', label: 'DE' },
-    { code: 'ru', label: 'RU' },
-  ];
+  // Drive the switcher from the full shipped locale catalogue (not a
+  // hard-coded en/de/ru subset) so a buyer in any of the supported
+  // languages can pick their own. A native <select> keeps all 27
+  // options accessible and compact in the header.
+  const currentLang =
+    SUPPORTED_LANGUAGES.find((l) => (locale || i18n.language).startsWith(l.code))
+      ?.code ?? 'en';
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-surface-secondary via-surface-primary to-surface-elevated">
@@ -1870,22 +1852,22 @@ function ShellWrapper({
             })}
             className="flex items-center gap-1"
           >
-            {SUPPORTED.map((loc) => (
-              <button
-                key={loc.code}
-                type="button"
-                onClick={() => i18n.changeLanguage(loc.code)}
-                className={`min-h-11 min-w-11 text-xs font-medium px-2 py-1 rounded ${
-                  (locale || i18n.language).startsWith(loc.code)
-                    ? 'bg-oe-blue text-white'
-                    : 'text-content-tertiary hover:bg-surface-secondary'
-                }`}
-                data-testid={`locale-${loc.code}`}
-                aria-pressed={(locale || i18n.language).startsWith(loc.code)}
-              >
-                {loc.label}
-              </button>
-            ))}
+            <label htmlFor="buyer-portal-locale" className="sr-only">
+              {t('buyer_portal.locale.label', { defaultValue: 'Language' })}
+            </label>
+            <select
+              id="buyer-portal-locale"
+              value={currentLang}
+              onChange={(e) => i18n.changeLanguage(e.target.value)}
+              className="min-h-11 text-xs font-medium px-2 py-1 rounded border border-border-light bg-surface-primary text-content-secondary hover:bg-surface-secondary focus:outline-none focus:ring-2 focus:ring-oe-blue"
+              data-testid="locale-select"
+            >
+              {SUPPORTED_LANGUAGES.map((loc) => (
+                <option key={loc.code} value={loc.code}>
+                  {loc.name}
+                </option>
+              ))}
+            </select>
           </nav>
         </div>
       </header>
@@ -1919,7 +1901,19 @@ function ShellWrapper({
   );
 }
 
+// Humanize a raw backend enum (``countersigned`` → ``Countersigned``) as
+// the i18n fallback so a status without an explicit translation still
+// reads cleanly instead of leaking the snake_case enum to the buyer.
+function humanizeStatus(status: string): string {
+  if (!status) return '';
+  return status
+    .split('_')
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
 function StatusBadge({ status }: { status: string }) {
+  const { t } = useTranslation();
   const tone =
     status === 'active' || status === 'signed' || status === 'countersigned'
       ? 'bg-semantic-success/10 text-semantic-success'
@@ -1930,7 +1924,9 @@ function StatusBadge({ status }: { status: string }) {
     <span
       className={`inline-flex items-center px-2 py-0.5 rounded text-2xs font-medium ${tone}`}
     >
-      {status}
+      {t(`buyer_portal.status.${status}`, {
+        defaultValue: humanizeStatus(status),
+      })}
     </span>
   );
 }
@@ -1940,6 +1936,7 @@ function InstalmentStatusPill({
 }: {
   status: PortalInstalmentRow['status'];
 }) {
+  const { t } = useTranslation();
   const tone =
     status === 'paid'
       ? 'bg-semantic-success/10 text-semantic-success'
@@ -1955,7 +1952,9 @@ function InstalmentStatusPill({
       className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-2xs font-medium ${tone}`}
     >
       {status === 'overdue' && <Clock size={10} aria-hidden />}
-      {status}
+      {t(`buyer_portal.status.${status}`, {
+        defaultValue: humanizeStatus(status),
+      })}
     </span>
   );
 }

@@ -30,6 +30,18 @@ export interface HrAutobookModalProps {
   onClose: () => void;
 }
 
+/**
+ * Parse-free positivity check for a Decimal-as-string money value. We
+ * deliberately avoid `Number()` / `parseFloat()` on money (precision and
+ * very-large-value safety): a value is "positive" iff it contains at
+ * least one non-zero digit. Strips sign, separators and zeros, then
+ * checks for any remaining 1-9 digit. Returns false for empty / nullish.
+ */
+function isPositiveDecimalString(value: string | null | undefined): boolean {
+  if (!value) return false;
+  return /[1-9]/.test(value);
+}
+
 export function HrAutobookModal({ onClose }: HrAutobookModalProps) {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
@@ -228,7 +240,7 @@ export function HrAutobookModal({ onClose }: HrAutobookModalProps) {
                   count: suggestion.capacity,
                 })}
                 {suggestion.base_rate_currency &&
-                  Number(suggestion.base_rate) > 0 && (
+                  isPositiveDecimalString(suggestion.base_rate) && (
                     <>
                       {' · '}
                       {suggestion.base_rate} {suggestion.base_rate_currency}

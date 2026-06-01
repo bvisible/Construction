@@ -136,7 +136,12 @@ interface UserPreferencesResponse {
   paper_size?: string;
   date_format?: string;
   number_format?: string;
-  currency?: string;
+  // MONEY-BUG FIX: the backend persists the currency under `currency_code`
+  // (UserPreferencesUpdate / UserPreferencesResponse / User.currency_code).
+  // The FE previously sent/read `currency`, which the backend silently dropped
+  // (no extra="forbid"), so the chosen currency never round-tripped and
+  // vanished on reload. Use the real wire key so it persists server-side.
+  currency_code?: string;
 }
 
 // ── Searchable Dropdown ──────────────────────────────────────────────────────
@@ -239,7 +244,7 @@ function SearchableSelect<T extends string>({
                     className={clsx(
                       'flex w-full items-center gap-2 px-3 py-1.5 text-sm transition-colors',
                       opt.value === value
-                        ? 'bg-oe-blue-subtle text-oe-blue font-medium'
+                        ? 'bg-oe-blue-subtle text-oe-blue-text font-medium'
                         : 'text-content-primary hover:bg-surface-secondary',
                     )}
                   >
@@ -280,7 +285,7 @@ function ToggleGroup<T extends string>({
             className={clsx(
               'flex-1 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-fast',
               active
-                ? 'bg-oe-blue-subtle border-2 border-oe-blue text-oe-blue'
+                ? 'bg-oe-blue-subtle border-2 border-oe-blue text-oe-blue-text'
                 : 'border-2 border-border-light text-content-secondary hover:bg-surface-secondary hover:text-content-primary',
             )}
           >
@@ -318,7 +323,11 @@ export function RegionalSettings({ animationDelay = '0ms' }: { animationDelay?: 
   const paperSize = prefs?.paper_size ?? 'A4';
   const dateFormat = (prefs?.date_format as DateFormat) ?? storeDateFormat;
   const numberFormat = (prefs?.number_format as NumberLocale) ?? storeNumberLocale;
-  const currency = prefs?.currency ?? storeCurrency;
+  // MONEY-BUG FIX: read the persisted server value from `currency_code`
+  // (the real backend field) instead of the non-existent `currency`, so a
+  // saved currency survives reload. Do NOT hardcode 'EUR' here — fall back to
+  // the local store, which carries the user's last-selected currency.
+  const currency = prefs?.currency_code ?? storeCurrency;
 
   // Patch mutation
   const patchMutation = useMutation({
@@ -347,7 +356,9 @@ export function RegionalSettings({ animationDelay = '0ms' }: { animationDelay?: 
 
       // Update local store for immediate UI effect
       switch (field) {
-        case 'currency':
+        // MONEY-BUG FIX: the wire field is `currency_code` (backend key); the
+        // local Zustand store still uses `currency` / `defaultCurrency`.
+        case 'currency_code':
           setPreference('currency', value);
           setPreference('defaultCurrency', value);
           break;
@@ -468,6 +479,10 @@ export function RegionalSettings({ animationDelay = '0ms' }: { animationDelay?: 
           </div>
 
           {/* Currency */}
+          {/* MONEY-BUG FIX: handleChange uses the real backend wire key
+              `currency_code` so the chosen currency is persisted server-side
+              and survives reload (was `currency`, silently dropped by the
+              backend because UserPreferencesUpdate only declares currency_code). */}
           <div>
             <label className="flex items-center gap-2 text-sm font-medium text-content-primary mb-1.5">
               <DollarSign size={14} className="text-content-tertiary" />
@@ -476,7 +491,7 @@ export function RegionalSettings({ animationDelay = '0ms' }: { animationDelay?: 
             <SearchableSelect
               value={currency}
               options={currencyOptions}
-              onChange={(val) => handleChange('currency', val)}
+              onChange={(val) => handleChange('currency_code', val)}
               placeholder={t('common.search', { defaultValue: 'Search...' })}
             />
           </div>

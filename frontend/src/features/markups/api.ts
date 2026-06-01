@@ -30,6 +30,8 @@ export interface Markup {
   line_width: number;
   opacity: number;
   author_id: string;
+  /** M3 — optional follow-up owner. NULL = unassigned. */
+  assignee_id: string | null;
   status: MarkupStatus;
   label: string | null;
   measurement_value: number | null;
@@ -85,6 +87,11 @@ export interface MarkupFilters {
   type?: MarkupType | '';
   status?: MarkupStatus | '';
   author_id?: string;
+  /** M3 — filter to a specific assignee. Empty string = no filter. */
+  assignee_id?: string;
+  /** M3 — when true, only markups with NULL assignee_id are returned.
+   *  Mutually exclusive with assignee_id (the latter wins server-side). */
+  unassigned?: boolean;
   document_id?: string;
   page?: number;
 }
@@ -101,6 +108,8 @@ export interface CreateMarkupPayload {
   measurement_value?: number;
   measurement_unit?: string;
   stamp_template_id?: string;
+  /** M3 — optional follow-up owner. */
+  assignee_id?: string | null;
 }
 
 export interface UpdateMarkupPayload {
@@ -110,6 +119,8 @@ export interface UpdateMarkupPayload {
   label?: string;
   measurement_value?: number;
   measurement_unit?: string;
+  /** M3 — re-assign or clear the follow-up owner. Pass null to clear. */
+  assignee_id?: string | null;
 }
 
 /* ── Markups CRUD ─────────────────────────────────────────────────────── */
@@ -124,8 +135,12 @@ export async function fetchMarkups(
   if (filters?.type) params.set('type', filters.type);
   if (filters?.status) params.set('status', filters.status);
   if (filters?.author_id) params.set('author_id', filters.author_id);
+  if (filters?.assignee_id) params.set('assignee_id', filters.assignee_id);
+  if (filters?.unassigned) params.set('unassigned', 'true');
   if (filters?.document_id) params.set('document_id', filters.document_id);
-  if (filters?.page) params.set('page', String(filters.page));
+  // Explicit nullish check so page 0 (a valid 0-indexed page) is honoured
+  // rather than dropped by a falsy check, which would over-fetch all pages.
+  if (filters?.page != null) params.set('page', String(filters.page));
   return apiGet<Markup[]>(`/v1/markups/?${params.toString()}`);
 }
 

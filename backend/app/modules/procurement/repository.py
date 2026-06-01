@@ -96,11 +96,7 @@ class PurchaseOrderRepository:
         total_received (confirmed GR count), pending_delivery_count.
         """
         # Total POs
-        total_stmt = (
-            select(func.count())
-            .select_from(PurchaseOrder)
-            .where(PurchaseOrder.project_id == project_id)
-        )
+        total_stmt = select(func.count()).select_from(PurchaseOrder).where(PurchaseOrder.project_id == project_id)
         total_pos = (await self.session.execute(total_stmt)).scalar_one()
 
         # By status
@@ -161,24 +157,33 @@ class PurchaseOrderRepository:
     async def next_po_number(self, project_id: uuid.UUID) -> str:
         """Generate the next PO number for a project.
 
-        Uses MAX of existing PO numbers to avoid race conditions where
-        COUNT-based generation would produce duplicates under concurrency.
+        Uses the NUMERIC MAX of the existing PO suffixes (not a lexicographic
+        string MAX) to avoid race conditions where COUNT-based generation would
+        produce duplicates under concurrency, and to keep ordering correct past
+        PO-999 (a string MAX ranks 'PO-999' above 'PO-1000'). The suffix after
+        the ``PO-`` prefix (4th char onward) is cast to an integer before MAX,
+        which is dialect-safe on both embedded PostgreSQL and SQLite.
         """
-        stmt = (
-            select(func.max(PurchaseOrder.po_number))
-            .where(PurchaseOrder.project_id == project_id)
-            .where(PurchaseOrder.po_number.like("PO-%"))
+        from sqlalchemy import Integer as SAInteger
+        from sqlalchemy import cast
+        from sqlalchemy.sql import func as sqlfunc
+
+        stmt = select(
+            sqlfunc.coalesce(
+                sqlfunc.max(
+                    cast(
+                        func.substr(PurchaseOrder.po_number, 4),
+                        SAInteger,
+                    )
+                ),
+                0,
+            )
+        ).where(
+            PurchaseOrder.project_id == project_id,
+            PurchaseOrder.po_number.like("PO-%"),
         )
-        max_number = (await self.session.execute(stmt)).scalar_one_or_none()
-
-        if max_number:
-            try:
-                suffix = int(max_number.rsplit("-", 1)[-1])
-            except (ValueError, IndexError):
-                suffix = 0
-            return f"PO-{suffix + 1:03d}"
-
-        return "PO-001"
+        max_suffix = (await self.session.execute(stmt)).scalar_one()
+        return f"PO-{max_suffix + 1:03d}"
 
 
 class POItemRepository:
@@ -234,6 +239,51 @@ class GoodsReceiptRepository:
         items = list(result.scalars().all())
 
         return items, total
+
+    async def list_by_project(
+        self,
+        *,
+        project_id: uuid.UUID,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+        # NOTE: annotation is quoted (lazy) on purpose — this class defines a
+        # method named ``list`` above, which shadows the ``list`` builtin inside
+        # the class-body namespace, so an *eagerly evaluated* ``list[...]`` here
+        # raises "'function' object is not subscriptable" at import time.
+    ) -> "tuple[list[tuple[GoodsReceipt, str]], int]":
+        """List goods receipts across ALL POs of a project.
+
+        api-HIGH (GR tab): the frontend lists GRs by ``project_id`` (the
+        active project) rather than by a single ``po_id``. We join
+        GoodsReceipt -> PurchaseOrder so we can both scope to the project
+        and carry each GR's parent ``po_number`` back to the response,
+        without an N+1 lookup. Eager-loads ``items`` so the response
+        aggregates can serialise outside the async greenlet.
+
+        Returns ``([(GoodsReceipt, po_number), ...], total)``.
+        """
+        from sqlalchemy.orm import selectinload
+
+        base = (
+            select(GoodsReceipt, PurchaseOrder.po_number)
+            .join(PurchaseOrder, GoodsReceipt.po_id == PurchaseOrder.id)
+            .where(PurchaseOrder.project_id == project_id)
+        )
+        if status is not None:
+            base = base.where(GoodsReceipt.status == status)
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = (await self.session.execute(count_stmt)).scalar_one()
+
+        stmt = (
+            base.options(selectinload(GoodsReceipt.items))
+            .order_by(GoodsReceipt.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [(row[0], row[1]) for row in rows], total
 
     async def create(self, gr: GoodsReceipt) -> GoodsReceipt:
         """Insert a new goods receipt."""

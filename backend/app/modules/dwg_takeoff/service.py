@@ -39,6 +39,29 @@ from app.modules.dwg_takeoff.schemas import (
 logger = logging.getLogger(__name__)
 
 
+# Strong references to in-flight background conversion tasks. asyncio only
+# keeps a WEAK reference to a task, so a detached ``create_task`` whose
+# handle is dropped can be garbage-collected mid-run — cancelling the
+# conversion and leaving the drawing stuck at status=uploaded/processing
+# forever (the frontend poll of /drawings/{id} never completes). Holding
+# the task here until it finishes prevents that; the done-callback evicts
+# it so the set does not grow unbounded.
+_BACKGROUND_CONVERSION_TASKS: set["asyncio.Task[None]"] = set()
+
+
+def _spawn_dwg_conversion(drawing_id: uuid.UUID, file_path: str) -> "asyncio.Task[None]":
+    """Launch the detached DWG conversion and retain a strong reference.
+
+    Wraps ``asyncio.create_task`` so the returned task is stored in a
+    module-level set (preventing premature garbage collection) and removed
+    again once it completes. Returns the created task for callers/tests.
+    """
+    task = asyncio.create_task(_run_dwg_conversion_in_background(drawing_id, file_path))
+    _BACKGROUND_CONVERSION_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_CONVERSION_TASKS.discard)
+    return task
+
+
 # ── DWG version sniff & gating (Indian-user stability ticket 2026-05-13) ────
 
 
@@ -315,9 +338,7 @@ def _process_dxf_sync(file_path: str, entities_key: str, thumbnail_key: str) -> 
 
     # Generate and save SVG thumbnail
     svg_content = generate_svg_thumbnail(file_path)
-    thumb_dir = os.path.join(
-        os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data")), "dwg_thumbnails"
-    )
+    thumb_dir = os.path.join(os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data")), "dwg_thumbnails")
     thumb_path = os.path.join(thumb_dir, thumbnail_key)
     os.makedirs(os.path.dirname(thumb_path), exist_ok=True)
     with open(thumb_path, "w", encoding="utf-8") as f:
@@ -469,12 +490,213 @@ class DwgTakeoffService:
             await self._process_drawing(drawing_id, file_path)
         elif file_format == "dwg":
             await self.session.commit()
-            asyncio.create_task(
-                _run_dwg_conversion_in_background(drawing_id, file_path),
-            )
+            # Retain a strong reference so the detached task isn't GC'd
+            # mid-conversion (see _spawn_dwg_conversion).
+            _spawn_dwg_conversion(drawing_id, file_path)
 
         await self.session.refresh(drawing)
         return drawing
+
+    async def import_drawing_from_document(
+        self,
+        document_id: uuid.UUID,
+        user_id: str,
+        *,
+        name: str | None = None,
+        discipline: str | None = None,
+    ) -> DwgDrawing:
+        """Create a DWG/DXF drawing from an already-uploaded Document.
+
+        The Documents hub and DWG takeoff module both persist files on
+        disk; a CAD file uploaded through /files (or any other module)
+        lives only as a ``Document`` row and has no ``DwgDrawing`` to
+        render in the takeoff viewer. Opening it via "Open in DWG Takeoff"
+        previously produced a blank page because the deep-link handler
+        could only resolve an *existing* drawing. This method materialises
+        the missing drawing on demand so the document opens immediately.
+
+        Behaviour:
+
+        * **Idempotent** — if a drawing already references this document
+          (cross-link ``source_id`` / ``imported_from_document_id``) or
+          points at the same blob on disk, the existing one is returned
+          instead of creating a duplicate (re-clicking is a no-op).
+        * Reads the document's bytes from disk, runs the same magic-byte
+          validation as the direct upload path, copies the blob into the
+          DWG upload dir, creates the drawing row, and dispatches
+          processing (DXF inline → ``ready``; DWG fire-and-forget).
+        * Raises 404 when the document or its file is missing, 400 when
+          it is not a ``.dwg`` / ``.dxf`` file.
+
+        The owning project's access has already been gated by the router
+        (``verify_project_access`` on ``document.project_id``) before this
+        runs, so ``project_id`` here is trusted.
+        """
+        from app.modules.documents.models import Document
+
+        document = await self.session.get(Document, document_id)
+        if document is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found",
+            )
+
+        project_id = document.project_id
+        source_filename = document.name or "drawing.dxf"
+        ext = os.path.splitext(source_filename)[1].lower()
+        if ext not in (".dwg", ".dxf"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This document is not a DWG/DXF file and cannot be opened in DWG Takeoff.",
+            )
+        file_format = ext.lstrip(".")
+
+        # Idempotency — never create a second drawing for the same
+        # document. Two earlier rows can reference it:
+        #   1. A drawing imported here before (``imported_from_document_id``).
+        #   2. The drawing whose own upload created this document via the
+        #      cross-link (``Document.metadata.source_id`` → drawing id).
+        # Both are checked so re-clicking "Open in DWG Takeoff" reuses the
+        # existing drawing instead of duplicating files + DB rows.
+        doc_meta = dict(document.metadata_ or {})
+        if doc_meta.get("source_module") == "dwg_takeoff" and doc_meta.get("source_id"):
+            try:
+                existing = await self.drawing_repo.get_by_id(
+                    uuid.UUID(str(doc_meta["source_id"])),
+                )
+            except (ValueError, TypeError):
+                existing = None
+            if existing is not None and existing.project_id == project_id:
+                return existing
+
+        existing_by_link = await self._find_drawing_for_document(project_id, document_id)
+        if existing_by_link is not None:
+            return existing_by_link
+
+        # Read the source bytes from disk. A missing blob is a 404 (the
+        # document row exists but the file is gone) rather than a 500.
+        src_path = document.file_path or ""
+        if not src_path or not os.path.exists(src_path):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="The document's file is no longer available on disk.",
+            )
+        try:
+            with open(src_path, "rb") as f:
+                content = f.read()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Unable to read the document's file.",
+            ) from exc
+
+        size_bytes = len(content)
+
+        # Same magic-byte gate as the direct upload path — a document
+        # whose name ends in .dwg/.dxf but whose bytes are a renamed
+        # PDF/ZIP/image is rejected before we burn a drawing row.
+        ok, reason = _validate_cad_magic_bytes(content, file_format)
+        if not ok:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=reason,
+            )
+
+        # Copy the blob into the DWG upload dir under a fresh id so the
+        # drawing owns its own file (deleting the drawing won't strand the
+        # original document, and vice versa).
+        upload_dir = _get_upload_dir()
+        file_id = str(uuid.uuid4())
+        file_path = os.path.join(upload_dir, f"{file_id}{ext}")
+
+        drawing = DwgDrawing(
+            project_id=project_id,
+            name=name or os.path.splitext(source_filename)[0],
+            filename=source_filename,
+            file_format=file_format,
+            file_path=file_path,
+            size_bytes=size_bytes,
+            status="uploaded",
+            discipline=discipline,
+            created_by=user_id or "",
+            metadata_={"imported_from_document_id": str(document_id)},
+        )
+        drawing = await self.drawing_repo.create(drawing)
+        drawing_id = drawing.id
+
+        try:
+            with open(file_path, "wb") as f:
+                f.write(content)
+        except Exception:
+            await self.drawing_repo.delete(drawing_id)
+            raise
+
+        # Point the source document back at its new drawing so the
+        # Documents hub deep-link resolves the drawing directly next time
+        # (and the idempotency check above short-circuits future imports).
+        try:
+            document.metadata_ = {
+                **doc_meta,
+                "source_module": "dwg_takeoff",
+                "source_id": str(drawing_id),
+            }
+            self.session.add(document)
+            await self.session.flush()
+        except Exception as exc:  # noqa: BLE001 — best-effort cross-link
+            logger.warning(
+                "Failed to back-link document %s → drawing %s: %s",
+                document_id,
+                drawing_id,
+                exc,
+            )
+
+        logger.info(
+            "Imported drawing %s from document %s (%s, %d bytes) project=%s",
+            drawing_id,
+            document_id,
+            file_format,
+            size_bytes,
+            project_id,
+        )
+
+        # Same dispatch policy as upload_drawing: DXF parses inline so the
+        # response already carries status=ready; DWG is committed first and
+        # converted in a detached task while the client polls /drawings/{id}.
+        if file_format == "dxf":
+            await self._process_drawing(drawing_id, file_path)
+        elif file_format == "dwg":
+            await self.session.commit()
+            # Retain a strong reference so the detached task isn't GC'd
+            # mid-conversion (see _spawn_dwg_conversion).
+            _spawn_dwg_conversion(drawing_id, file_path)
+
+        await self.session.refresh(drawing)
+        return drawing
+
+    async def _find_drawing_for_document(
+        self,
+        project_id: uuid.UUID,
+        document_id: uuid.UUID,
+    ) -> DwgDrawing | None:
+        """Return a drawing already imported from ``document_id``, if any.
+
+        Scans the project's drawings for one whose metadata carries the
+        ``imported_from_document_id`` back-reference. The drawing count
+        per project is small (tens, not thousands), so a list scan is
+        cheaper than adding an indexed JSON column for a once-per-open
+        idempotency check.
+        """
+        items, _ = await self.drawing_repo.list_for_project(
+            project_id,
+            offset=0,
+            limit=200,
+        )
+        target = str(document_id)
+        for item in items:
+            meta = item.metadata_ or {}
+            if str(meta.get("imported_from_document_id") or "") == target:
+                return item
+        return None
 
     async def _process_drawing(self, drawing_id: uuid.UUID, file_path: str) -> None:
         """Process a DXF file: parse layers/entities, generate thumbnail."""
@@ -485,9 +707,7 @@ class DwgTakeoffService:
         thumbnail_key = f"{drawing_id}/thumbnail.svg"
 
         try:
-            result = await asyncio.to_thread(
-                _process_dxf_sync, file_path, entities_key, thumbnail_key
-            )
+            result = await asyncio.to_thread(_process_dxf_sync, file_path, entities_key, thumbnail_key)
 
             # Create drawing version
             version_number = await self.version_repo.get_next_version_number(drawing_id)
@@ -520,17 +740,17 @@ class DwgTakeoffService:
                 status="empty" if is_empty else "ready",
                 thumbnail_key=thumbnail_key,
                 error_message=(
-                    "This DXF/DWG contains no drawable entities — "
-                    "the file is empty or contains only metadata."
-                    if is_empty else None
+                    "This DXF/DWG contains no drawable entities — the file is empty or contains only metadata."
+                    if is_empty
+                    else None
                 ),
             )
 
             if is_empty:
                 logger.warning(
-                    "Drawing %s parsed as empty (0 entities, %d layers) — "
-                    "surfacing status=empty to the user",
-                    drawing_id, len(result["layers"]),
+                    "Drawing %s parsed as empty (0 entities, %d layers) — surfacing status=empty to the user",
+                    drawing_id,
+                    len(result["layers"]),
                 )
             else:
                 logger.info(
@@ -597,19 +817,36 @@ class DwgTakeoffService:
             return
 
         try:
-            from app.modules.boq.cad_import import find_converter
+            from app.modules.boq.cad_import import (
+                build_ddc_args,
+                detect_converter_capabilities,
+                find_converter,
+            )
 
             converter = find_converter("dwg")
         except ImportError:
             converter = None
+            build_ddc_args = None  # type: ignore[assignment]
+            detect_converter_capabilities = None  # type: ignore[assignment]
 
         if converter is None:
+            # Actionable install path — the previous message ("Please upload
+            # DXF format") hid the fact that DWG conversion is supported and
+            # just needs a one-time install. Surfacing the Quantities-page
+            # link + the GitHub manual fallback closes the support loop the
+            # multi-user reports landed in (the Offline Ready pill on the
+            # /dwg-takeoff page also offers a one-click install via the
+            # same /v1/takeoff/converters/dwg/install/ endpoint).
             await self.drawing_repo.update_fields(
                 drawing_id,
                 status="error",
                 error_message=(
-                    "DWG conversion requires DDC DwgExporter. "
-                    "Please upload DXF format or install the converter."
+                    "DWG conversion requires the DDC DwgExporter binary, "
+                    "which was not found on this server. Click the "
+                    "\"Install converter\" pill at the top right of /dwg-takeoff, "
+                    "or download manually from "
+                    "https://github.com/datadrivenconstruction/cad2data-Revit-IFC-DWG-DGN. "
+                    "DXF files work without the converter."
                 ),
             )
             return
@@ -619,12 +856,33 @@ class DwgTakeoffService:
         import subprocess
         from pathlib import Path as _Path
 
-        # DDC DwgExporter → Excel (dispatched by output file extension)
+        # DDC DwgExporter → Excel. Compose the CLI through the same
+        # capability-aware builder the takeoff router uses so we don't
+        # hand v18 flag-driven binaries the legacy positional shape
+        # (``<input> <output> -no-collada``) — that returns exit 15 with
+        # ``arguments were not expected: ... -no-collada``, the same root
+        # cause that previously surfaced as "CAD conversion failed for
+        # .rvt" in the CAD/BIM Data Explorer. Once DDC ships a v18
+        # DwgExporter this code keeps working without any further patch.
         xlsx_path = file_path.rsplit(".", 1)[0] + "_dwg.xlsx"
         try:
+            caps = detect_converter_capabilities("dwg")
+            args = build_ddc_args(
+                converter,
+                _Path(file_path).resolve(),
+                caps=caps,
+                xlsx_out=_Path(xlsx_path).resolve(),
+                # DWG converters historically do not support a mode preset
+                # (the takeoff router only emits ``standard`` for RVT/IFC).
+                # build_ddc_args' v18 path emits ``-m standard`` only when
+                # ``caps.accepts_flag_mode`` is True, which currently fires
+                # for RVT — harmless on DWG should DDC adopt it later.
+                mode="standard",
+                include_no_dae=True,
+            )
             proc = await asyncio.to_thread(
                 lambda: subprocess.run(
-                    [str(converter), str(_Path(file_path).resolve()), str(_Path(xlsx_path).resolve()), "-no-collada"],
+                    args,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     cwd=str(converter.parent),
@@ -656,13 +914,15 @@ class DwgTakeoffService:
                 return
         except subprocess.TimeoutExpired:
             await self.drawing_repo.update_fields(
-                drawing_id, status="error",
+                drawing_id,
+                status="error",
                 error_message="DWG conversion timed out (120s limit)",
             )
             return
         except Exception as exc:
             await self.drawing_repo.update_fields(
-                drawing_id, status="error",
+                drawing_id,
+                status="error",
                 error_message=f"DWG conversion error: {exc}"[:500],
             )
             return
@@ -675,15 +935,23 @@ class DwgTakeoffService:
 
             if result["entity_count"] == 0:
                 await self.drawing_repo.update_fields(
-                    drawing_id, status="error",
+                    drawing_id,
+                    status="error",
                     error_message="No drawable entities found in DWG file",
                 )
                 return
 
-            # Store entities JSON
+            # Store entities JSON under the SAME relative key the DXF path
+            # uses ({drawing_id}/entities.json inside _get_entities_dir()), so
+            # get_entities()/list-versions resolve it via os.path.join on every
+            # platform and the row survives a DATA_DIR move or cross-host
+            # restore. Previously DWG stored an absolute, env-specific path
+            # next to the source file, which only resolved on the same machine.
             entities_key = f"{drawing_id}/entities.json"
-            entities_path = os.path.join(os.path.dirname(file_path), f"{drawing_id}_entities.json")
+            entities_path = os.path.join(_get_entities_dir(), entities_key)
+            os.makedirs(os.path.dirname(entities_path), exist_ok=True)
             import json
+
             with open(entities_path, "w", encoding="utf-8") as f:
                 json.dump(result["entities"], f)
 
@@ -693,7 +961,7 @@ class DwgTakeoffService:
                 drawing_id=drawing_id,
                 version_number=version_number,
                 layers=result["layers"],
-                entities_key=entities_path,
+                entities_key=entities_key,
                 entity_count=result["entity_count"],
                 extents=result["extents"],
                 units=result.get("units", "unitless"),
@@ -709,12 +977,15 @@ class DwgTakeoffService:
 
             logger.info(
                 "DWG processed via DDC: %s — %d entities, %d layers",
-                drawing_id, result["entity_count"], len(result["layers"]),
+                drawing_id,
+                result["entity_count"],
+                len(result["layers"]),
             )
 
         except Exception as exc:
             await self.drawing_repo.update_fields(
-                drawing_id, status="error",
+                drawing_id,
+                status="error",
                 error_message=f"DWG parsing error: {exc}"[:500],
             )
             logger.exception("Failed to parse DWG %s: %s", drawing_id, exc)
@@ -784,9 +1055,7 @@ class DwgTakeoffService:
         # Remove entities and thumbnail files for all versions
         versions = await self.version_repo.list_for_drawing(drawing_id)
         entities_dir = _get_entities_dir()
-        thumb_dir = os.path.join(
-            os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data")), "dwg_thumbnails"
-        )
+        thumb_dir = os.path.join(os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data")), "dwg_thumbnails")
         for version in versions:
             if version.entities_key:
                 ent_path = os.path.join(entities_dir, version.entities_key)
@@ -837,7 +1106,9 @@ class DwgTakeoffService:
             return []
         except json.JSONDecodeError as exc:
             logger.error(
-                "Corrupt entities JSON for drawing %s: %s", drawing_id, exc,
+                "Corrupt entities JSON for drawing %s: %s",
+                drawing_id,
+                exc,
             )
             return []
         except Exception:
@@ -860,9 +1131,7 @@ class DwgTakeoffService:
         if not drawing.thumbnail_key:
             return None
 
-        thumb_dir = os.path.join(
-            os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data")), "dwg_thumbnails"
-        )
+        thumb_dir = os.path.join(os.environ.get("DATA_DIR", os.path.join(os.getcwd(), "data")), "dwg_thumbnails")
         thumb_path = os.path.join(thumb_dir, drawing.thumbnail_key)
         if not os.path.exists(thumb_path):
             return None
@@ -1000,17 +1269,75 @@ class DwgTakeoffService:
         self,
         annotation_id: uuid.UUID,
         position_id: str,
+        *,
+        push_quantity: bool = False,
     ) -> DwgAnnotation:
-        """Link an annotation to a BOQ position."""
+        """Link an annotation to a BOQ position.
+
+        Estimation-cluster wave (2026-05-28) — opt-in ``push_quantity``.
+        When true, the annotation's measured value is copied into the
+        target BOQ position's ``quantity`` and the position total is
+        recomputed. An annotation with no usable value is a no-op.
+        """
         item = await self.get_annotation(annotation_id)
 
-        await self.annotation_repo.update_fields(
-            annotation_id, linked_boq_position_id=position_id
-        )
+        await self.annotation_repo.update_fields(annotation_id, linked_boq_position_id=position_id)
         await self.session.refresh(item)
 
         logger.info("Annotation %s linked to BOQ position %s", annotation_id, position_id)
+
+        if push_quantity:
+            await self._push_quantity_to_position(position_id, item)
         return item
+
+    async def _push_quantity_to_position(self, position_id: str, annotation: DwgAnnotation) -> None:
+        """Copy an annotation's value into a BOQ position's quantity.
+
+        Reuses the takeoff module's :func:`_pick_takeoff_value` value
+        picker and the BOQ module's canonical total-recompute path. The
+        ``DwgAnnotation`` ORM only carries a scalar ``measurement_value``
+        (no separate volume/count columns), so we adapt it to the shape
+        the picker expects. A ``None`` picked value is a no-op — we never
+        zero an existing BOQ quantity from an annotation with no number.
+        """
+        from types import SimpleNamespace
+
+        from app.modules.takeoff.service import _pick_takeoff_value
+
+        adapter = SimpleNamespace(
+            type=annotation.annotation_type,
+            measurement_value=annotation.measurement_value,
+            volume=None,
+            count_value=None,
+            id=annotation.id,
+        )
+        value = _pick_takeoff_value(adapter)
+        if value is None:
+            logger.info(
+                "push_quantity: annotation %s has no usable value — leaving BOQ position %s untouched",
+                annotation.id,
+                position_id,
+            )
+            return
+
+        from app.modules.boq.service import BOQService
+
+        try:
+            position_uuid = uuid.UUID(str(position_id))
+        except (ValueError, AttributeError):
+            logger.warning("push_quantity: BOQ position id %r is not a UUID — skipping", position_id)
+            return
+
+        boq_service = BOQService(self.session)
+        position = await boq_service.position_repo.get_by_id(position_uuid)
+        if position is None:
+            logger.warning("push_quantity: BOQ position %s not found — skipping", position_id)
+            return
+
+        await boq_service.position_repo.update_fields(position.id, quantity=str(value))
+        await self.session.refresh(position)
+        await boq_service._recompute_position_total(position)  # noqa: SLF001 — reuse canonical recompute path
+        logger.info("push_quantity: BOQ position %s quantity set to %s", position_id, value)
 
     # ── Pins (task/punchlist) ───────────────────────────────────────────
 
@@ -1063,7 +1390,9 @@ class DwgTakeoffService:
     ) -> tuple[list[DwgEntityGroup], int]:
         """List saved entity groups for a drawing."""
         return await self.group_repo.list_for_drawing(
-            drawing_id, offset=offset, limit=limit,
+            drawing_id,
+            offset=offset,
+            limit=limit,
         )
 
     async def delete_entity_group(self, group_id: uuid.UUID) -> None:
@@ -1095,10 +1424,7 @@ class DwgTakeoffService:
                 "ready": False,
                 "converter_available": False,
                 "version": None,
-                "message": (
-                    "Install dwg2data to enable offline DWG conversion. "
-                    "DXF files already work without it."
-                ),
+                "message": ("Install dwg2data to enable offline DWG conversion. DXF files already work without it."),
             }
 
         version: str | None = None
@@ -1116,7 +1442,8 @@ class DwgTakeoffService:
 
 
 async def _run_dwg_conversion_in_background(
-    drawing_id: uuid.UUID, file_path: str,
+    drawing_id: uuid.UUID,
+    file_path: str,
 ) -> None:
     """Detached DDC conversion task with its own DB session.
 

@@ -45,6 +45,24 @@ class VendorRepository:
     async def get(self, vendor_id: uuid.UUID) -> Vendor | None:
         return await self.session.get(Vendor, vendor_id)
 
+    async def get_loaded(self, vendor_id: uuid.UUID) -> Vendor | None:
+        """Re-select a vendor with ``price_lists`` eagerly loaded inside async.
+
+        After a bulk ``update().values()`` the identity-mapped Vendor is
+        expired; serializing it would refresh it and trigger the
+        ``lazy="selectin"`` ``price_lists`` load synchronously outside the
+        async greenlet (-> MissingGreenlet on asyncpg). ``populate_existing``
+        forces the expired instance and its relationship to be re-populated
+        here, within the greenlet.
+        """
+        stmt = (
+            select(Vendor)
+            .options(selectinload(Vendor.price_lists))
+            .where(Vendor.id == vendor_id)
+            .execution_options(populate_existing=True)
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def get_by_code(self, code: str) -> Vendor | None:
         stmt = select(Vendor).where(Vendor.code == code)
         return (await self.session.execute(stmt)).scalar_one_or_none()
@@ -439,16 +457,22 @@ class CommodityCodeRepository:
         if search:
             like = f"%{search.lower()}%"
             stmt = stmt.where(
-                func.lower(CommodityCode.name).like(like)
-                | (CommodityCode.code == search),
+                func.lower(CommodityCode.name).like(like) | (CommodityCode.code == search),
             )
-        stmt = stmt.order_by(
-            CommodityCode.scheme, CommodityCode.code,
-        ).offset(offset).limit(limit)
+        stmt = (
+            stmt.order_by(
+                CommodityCode.scheme,
+                CommodityCode.code,
+            )
+            .offset(offset)
+            .limit(limit)
+        )
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def get_by_code(
-        self, scheme: str, code: str,
+        self,
+        scheme: str,
+        code: str,
     ) -> CommodityCode | None:
         stmt = select(CommodityCode).where(
             CommodityCode.scheme == scheme,
@@ -504,12 +528,12 @@ class TolerianceProfileRepository:
         return profile
 
     async def update(
-        self, profile_id: uuid.UUID, **fields: Any,
+        self,
+        profile_id: uuid.UUID,
+        **fields: Any,
     ) -> None:
         await self.session.execute(
-            update(TolerianceProfile)
-            .where(TolerianceProfile.id == profile_id)
-            .values(**fields),
+            update(TolerianceProfile).where(TolerianceProfile.id == profile_id).values(**fields),
         )
         await self.session.flush()
 
@@ -527,7 +551,8 @@ class KYCDocumentRepository:
         return await self.session.get(KYCDocument, doc_id)
 
     async def list_for_vendor(
-        self, vendor_id: uuid.UUID,
+        self,
+        vendor_id: uuid.UUID,
     ) -> list[KYCDocument]:
         stmt = (
             select(KYCDocument)
@@ -537,7 +562,9 @@ class KYCDocumentRepository:
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_expiring(
-        self, *, on_or_before: Any,
+        self,
+        *,
+        on_or_before: Any,
     ) -> list[KYCDocument]:
         """Return active KYC docs with ``expires_on <= on_or_before``."""
         stmt = select(KYCDocument).where(
@@ -594,7 +621,10 @@ class ScorecardRepository:
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def list_for_vendor(
-        self, vendor_id: uuid.UUID, *, limit: int = 24,
+        self,
+        vendor_id: uuid.UUID,
+        *,
+        limit: int = 24,
     ) -> list[VendorScorecard]:
         stmt = (
             select(VendorScorecard)
@@ -620,7 +650,9 @@ class ScorecardRepository:
         computed_at: Any,
     ) -> VendorScorecard:
         existing = await self.get_for_period(
-            vendor_id, period_start, period_end,
+            vendor_id,
+            period_start,
+            period_end,
         )
         if existing is not None:
             existing.delivery_score = delivery_score
@@ -662,7 +694,9 @@ class VendorInvoiceLineRepository:
         self.session = session
 
     async def create_batch(
-        self, invoice_id: uuid.UUID, lines: list[VendorInvoiceLine],
+        self,
+        invoice_id: uuid.UUID,
+        lines: list[VendorInvoiceLine],
     ) -> int:
         for line in lines:
             line.invoice_id = invoice_id
@@ -671,11 +705,10 @@ class VendorInvoiceLineRepository:
         return len(lines)
 
     async def list_for_invoice(
-        self, invoice_id: uuid.UUID,
+        self,
+        invoice_id: uuid.UUID,
     ) -> list[VendorInvoiceLine]:
         stmt = (
-            select(VendorInvoiceLine)
-            .where(VendorInvoiceLine.invoice_id == invoice_id)
-            .order_by(VendorInvoiceLine.id)
+            select(VendorInvoiceLine).where(VendorInvoiceLine.invoice_id == invoice_id).order_by(VendorInvoiceLine.id)
         )
         return list((await self.session.execute(stmt)).scalars().all())

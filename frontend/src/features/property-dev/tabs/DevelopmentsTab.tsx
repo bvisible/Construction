@@ -17,9 +17,8 @@ import {
   LayoutDashboard,
 } from 'lucide-react';
 import { Badge, Card, EmptyState } from '@/shared/ui';
-import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
+import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { getDevelopmentDashboard, type Development } from '../api';
-import { toNumber } from './_shared';
 
 export function DevelopmentsGrid({
   rows,
@@ -147,9 +146,15 @@ function DevelopmentCard({
                 {t('propdev.contracted', { defaultValue: 'Contracted' })}
               </p>
               <p className="font-medium">
-                <MoneyDisplay
-                  amount={toNumber(dash.contracted_value)}
-                  currency={undefined}
+                {/* Buyers in a development may contract in different
+                    currencies, so render the honest per-currency breakdown
+                    rather than a single blended figure (mirrors OverviewTab). */}
+                <MultiCurrencyTotal
+                  variant="inline"
+                  compact
+                  items={Object.entries(
+                    dash.contracted_value_by_currency ?? {},
+                  ).map(([currency, amount]) => ({ amount, currency }))}
                 />
               </p>
             </div>

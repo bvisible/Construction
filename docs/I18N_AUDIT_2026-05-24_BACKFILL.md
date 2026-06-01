@@ -73,7 +73,7 @@ Coverage per locale was then computed by checking literal `"<key>":` presence in
 
 ## Translation principles applied
 
-Per project policy (CLAUDE.md, German construction vocab, RU industry terms, etc.):
+Per project policy (the architecture guide, German construction vocab, RU industry terms, etc.):
 
 - **DE**: construction/real-estate German — *Bauträger* (developer), *Leistungsverzeichnis (LV)* (BOQ), *Aufmaß* (takeoff), *Mängel* (snags), *Treuhand* (escrow), *Übergabe* (handover), *Gewährleistung* (warranty), *Nachträge* (variations/change orders), *Kollisionsprüfung* (clash detection), *Preisliste* (price list), *Geocode-Cache* (geocode cache), *Vorrang-Erklärung* (precedence explanation).
 - **RU**: industry RU — *спецификация работ/BOQ*, *застройщик*, *Эскроу*, *передача*, *гарантия*, *Снимки*, *прайс-лист*, *перепривязать* (re-anchor), *маркер* / *якорь* for anchor depending on context. Loanwords preserved for product names (BIM Hub, Geo Hub, PropDev, Nominatim) per established locale-file convention.

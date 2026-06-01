@@ -102,16 +102,10 @@ data/cwicr/cache/
 data/approvals/
 data/transmittals/
 data/tilesets/
+data/reports/
 frontend/debug-bim/
 
-# Claude Code / MCP — keep instruction files (.claude/*.md) but
-# ignore session cache, temp data, and MCP artifacts
-.claude/tmp/
-.claude/cache/
-.claude/projects/
-.claude/worktrees/
-.claude/scheduled_tasks.lock
-*.claude-session
+# MCP artifacts
 .mcp.json
 .playwright-mcp/
 
@@ -143,9 +137,16 @@ test-screenshots/
 *.png
 *.jpeg
 *.jpg
+# Desktop (Tauri) app icons are real source, not dev screenshots
+!desktop/src-tauri/icons/**/*.png
 !frontend/public/favicon.png
 !frontend/public/logo.png
 !docs/screenshots/*.png
+!docs/screenshots/*.jpg
+!docs/screenshots/*.jpeg
+!docs/qa/**/*.png
+!docs/qa/**/*.jpg
+!docs/qa/**/*.jpeg
 !frontend/public/og-image.png
 !frontend/public/*.jpg
 !frontend/public/*.jpeg
@@ -183,48 +184,8 @@ backend/*.log.out
 frontend/*.log.err
 frontend/*.log.out
 qa-tests/v275-probe/shots*/
-.claude/settings.local.json
 i18n_audit_report.md
 qa-report/
-
-# Internal audit reports — never commit
-.claude/audit/
-
-# Internal Claude planning/research/services — NEVER commit
-# (These can contain commit hashes, ports, and architectural detail
-# useful to someone targeting a specific deploy.)
-.claude/PRD_MODULES_18.md
-.claude/HANDOVER_NEXT_SESSION.md
-.claude/backend.md
-.claude/frontend.md
-.claude/research/
-.claude/services/
-.claude/scheduled_tasks.lock
-.claude/qa_parts_*/
-.claude/qa-parts-*/
-.claude/qa_report/
-.claude/qa-reports/
-.claude/audit_reports/
-.claude/security_audit/
-.claude/orphan_test_backups/
-
-# Secrets and ad-hoc dev artifacts under .claude/ — never commit
-.claude/_pat.txt
-.claude/_pat
-.claude/token.txt
-.claude/_three_cards_*.txt
-.claude/_three_ddc_cards.txt
-.claude/RELEASE_NOTES_*.md
-.claude/PYPI_PUSH_BLOCKER.md
-.claude/probe_*.mjs
-.claude/probe_*.cjs
-.claude/reingest_*.sh
-.claude/reingest_*.py
-.claude/repro*.cjs
-.claude/repro*.mjs
-.claude/repro*.py
-.claude/swap_emojis.py
-.claude/*.rvt
 
 # Ad-hoc QA/test scripts that hit a hardcoded localhost — not real tests
 backend/qa_api_test.py
@@ -247,3 +208,27 @@ data/reingest_backup_*.json
 # Generated license inventories — attached to GH Releases, not committed
 /NOTICE.backend.json
 /NOTICE.frontend.json
+
+# Runtime QMS upload artifacts (smoke/demo attachments, not source)
+backend/uploads/qms/
+
+# Scratch dev/test output
+backend/.pytest_*.out
+backend/_dev_backend.err
+backend/*.err
+
+# Deep-QA sweep working artifacts (progress + per-module findings; durable on disk, not committed)
+qa-sweep/
+
+# Scratch/debug artifacts (never commit)
+__diag.txt
+_ddltest.py
+_verify_out.txt
+/zzqacopy.txt
+/ddl_echo.txt
+/qa_verify_out.txt
+/__qa_snippet.txt
+
+# Embedded-Postgres (pixeltable-pgserver) data dirs — never commit
+.smoke_pgdata/
+**/test_pgdata/

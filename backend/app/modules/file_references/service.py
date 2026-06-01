@@ -157,19 +157,13 @@ def validate_iso19650_name(filename: str) -> Iso19650Result:
         # doesn't escalate to the catch-all "not-iso19650".
         codes.append("missing-volume")
 
-    if level and not _LEVEL_RE.match(level):
-        codes.append("bad-level")
-    elif not level:
+    if level and not _LEVEL_RE.match(level) or not level:
         codes.append("bad-level")
 
-    if role and not _ROLE_RE.match(role):
-        codes.append("bad-role-code")
-    elif not role:
+    if role and not _ROLE_RE.match(role) or not role:
         codes.append("bad-role-code")
 
-    if number and not _NUMBER_RE.match(number):
-        codes.append("bad-number")
-    elif not number:
+    if number and not _NUMBER_RE.match(number) or not number:
         codes.append("bad-number")
 
     # Structural fields outside the seven we already gate — when both
@@ -181,9 +175,7 @@ def validate_iso19650_name(filename: str) -> Iso19650Result:
         # Don't double-up "not-iso19650" if a more specific code already
         # explains the failure. Add it only when no specific code has
         # been raised yet.
-        if not codes:
-            codes.append("not-iso19650")
-        elif (
+        if not codes or (
             "missing-volume" not in codes
             and "bad-level" not in codes
             and "bad-role-code" not in codes
@@ -227,9 +219,7 @@ def validate_iso19650_name(filename: str) -> Iso19650Result:
 # Per-kind importer for filename extraction. The scan is best-effort:
 # any kind whose table or filename column is missing is skipped with a
 # warning so the sweep keeps running for the rest.
-async def _iter_project_files(
-    session: AsyncSession, project_id: uuid.UUID
-) -> list[tuple[str, str, str]]:
+async def _iter_project_files(session: AsyncSession, project_id: uuid.UUID) -> list[tuple[str, str, str]]:
     """Return ``[(file_kind, file_id, filename), ...]`` for a project.
 
     The list is deliberately materialised in-memory: a single project
@@ -243,11 +233,7 @@ async def _iter_project_files(
         from app.modules.documents.models import Document
 
         rows = (
-            await session.execute(
-                select(Document.id, Document.name).where(
-                    Document.project_id == project_id
-                )
-            )
+            await session.execute(select(Document.id, Document.name).where(Document.project_id == project_id))
         ).all()
         for did, name in rows:
             out.append(("document", str(did), name or ""))
@@ -261,9 +247,7 @@ async def _iter_project_files(
         if hasattr(DiaryPhoto, "project_id") and hasattr(DiaryPhoto, "filename"):
             rows = (
                 await session.execute(
-                    select(DiaryPhoto.id, DiaryPhoto.filename).where(
-                        DiaryPhoto.project_id == project_id
-                    )
+                    select(DiaryPhoto.id, DiaryPhoto.filename).where(DiaryPhoto.project_id == project_id)
                 )
             ).all()
             for pid, name in rows:
@@ -276,9 +260,7 @@ async def _iter_project_files(
         from app.modules.dwg_takeoff.models import DwgSheet  # type: ignore
 
         if hasattr(DwgSheet, "project_id"):
-            name_attr = "filename" if hasattr(DwgSheet, "filename") else (
-                "name" if hasattr(DwgSheet, "name") else None
-            )
+            name_attr = "filename" if hasattr(DwgSheet, "filename") else ("name" if hasattr(DwgSheet, "name") else None)
             if name_attr is not None:
                 rows = (
                     await session.execute(
@@ -298,9 +280,7 @@ async def _iter_project_files(
         from app.modules.bim_hub.models import BimModel  # type: ignore
 
         if hasattr(BimModel, "project_id"):
-            name_attr = "filename" if hasattr(BimModel, "filename") else (
-                "name" if hasattr(BimModel, "name") else None
-            )
+            name_attr = "filename" if hasattr(BimModel, "filename") else ("name" if hasattr(BimModel, "name") else None)
             if name_attr is not None:
                 rows = (
                     await session.execute(
@@ -334,11 +314,7 @@ async def scan_project(
         # The "none" rule_set explicitly skips validation but still
         # clears stale rows so the banner disappears project-wide.
         cleared = (
-            await session.execute(
-                delete(FileNamingViolation).where(
-                    FileNamingViolation.project_id == project_id
-                )
-            )
+            await session.execute(delete(FileNamingViolation).where(FileNamingViolation.project_id == project_id))
         ).rowcount or 0
         await session.flush()
         return ProjectScanResponse(
@@ -358,9 +334,7 @@ async def scan_project(
         FileNamingViolation.rule_set == rule_set,
     )
     existing = list((await session.execute(existing_stmt)).scalars().all())
-    existing_by_key: dict[tuple[str, str], FileNamingViolation] = {
-        (r.file_kind, r.file_id): r for r in existing
-    }
+    existing_by_key: dict[tuple[str, str], FileNamingViolation] = {(r.file_kind, r.file_id): r for r in existing}
 
     added = 0
     updated = 0
@@ -430,23 +404,13 @@ async def list_violations(
     offset: int = 0,
 ) -> tuple[list[NamingViolationResponse], int]:
     """Paginated list of naming violations for a project."""
-    base = select(FileNamingViolation).where(
-        FileNamingViolation.project_id == project_id
-    )
+    base = select(FileNamingViolation).where(FileNamingViolation.project_id == project_id)
     if not include_acknowledged:
         base = base.where(FileNamingViolation.acknowledged_at.is_(None))
     base = base.order_by(FileNamingViolation.created_at.desc())
 
-    total = int(
-        (
-            await session.execute(
-                select(func.count()).select_from(base.subquery())
-            )
-        ).scalar_one()
-    )
-    rows = list(
-        (await session.execute(base.limit(limit).offset(offset))).scalars().all()
-    )
+    total = int((await session.execute(select(func.count()).select_from(base.subquery()))).scalar_one())
+    rows = list((await session.execute(base.limit(limit).offset(offset))).scalars().all())
     items = [NamingViolationResponse.model_validate(r) for r in rows]
     return items, total
 
@@ -460,9 +424,7 @@ async def acknowledge_violation(
 
     Returns ``None`` when the row is missing — the router emits 404.
     """
-    stmt = select(FileNamingViolation).where(
-        FileNamingViolation.id == violation_id
-    )
+    stmt = select(FileNamingViolation).where(FileNamingViolation.id == violation_id)
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         return None
@@ -537,9 +499,20 @@ async def create_reference(
 async def delete_reference(
     session: AsyncSession,
     reference_id: uuid.UUID,
+    *,
+    project_id: uuid.UUID,
 ) -> bool:
-    """Delete a single reference by id. ``False`` when missing."""
-    stmt = select(FileReference).where(FileReference.id == reference_id)
+    """Delete a single reference by id. ``False`` when missing.
+
+    Scoped by ``project_id`` (verified by the router) so a reference id
+    from another project cannot be deleted — closes a cross-project IDOR
+    on the DELETE endpoint.
+    """
+    # IDOR fix: only delete when the row belongs to the verified project.
+    stmt = select(FileReference).where(
+        FileReference.id == reference_id,
+        FileReference.project_id == project_id,
+    )
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         return False
@@ -551,13 +524,17 @@ async def delete_reference(
 async def list_references_for_file(
     session: AsyncSession,
     *,
+    project_id: uuid.UUID,
     file_kind: str,
     file_id: str,
 ) -> tuple[list[FileReferenceResponse], int]:
-    """All entities that reference a given file."""
+    """All entities that reference a given file (within one project)."""
+    # IDOR fix: scope by the router-verified project_id so a file_id
+    # cannot leak references that belong to another project.
     stmt = (
         select(FileReference)
         .where(
+            FileReference.project_id == project_id,
             FileReference.file_kind == file_kind,
             FileReference.file_id == file_id,
         )
@@ -571,13 +548,17 @@ async def list_references_for_file(
 async def list_files_for_target(
     session: AsyncSession,
     *,
+    project_id: uuid.UUID,
     target_type: str,
     target_id: str,
 ) -> tuple[list[FileReferenceResponse], int]:
-    """All files that reference a given entity."""
+    """All files that reference a given entity (within one project)."""
+    # IDOR fix: scope by the router-verified project_id so a target_id
+    # cannot leak file references that belong to another project.
     stmt = (
         select(FileReference)
         .where(
+            FileReference.project_id == project_id,
             FileReference.target_type == target_type,
             FileReference.target_id == target_id,
         )

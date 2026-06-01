@@ -121,7 +121,7 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
   // IFC → BIM Viewer, DWG → DWG Takeoff). Falls back to the kind's
   // default module when the extension isn't in the override map.
   const primary = primaryModule(row.kind, row.extension);
-  const allModules = modulesForKind(row.kind);
+  const allModules = modulesForKind(row.kind, row.extension);
   const PrimaryIcon = primary.icon;
   // `row` is narrowed by the `if (!row) return` guard above, but TS
   // doesn't carry that narrowing into nested function declarations —
@@ -160,8 +160,11 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
     }
   }
 
+  // Surfaced inline next to the size rather than as a raw metadata row.
+  const sizeIsConvertedArtifact = row.extra?.size_is_converted_artifact === true;
   const extras = Object.entries(row.extra ?? {}).filter(
-    ([, v]) => v !== null && v !== undefined && v !== '',
+    ([k, v]) =>
+      v !== null && v !== undefined && v !== '' && k !== 'size_is_converted_artifact',
   );
 
   return (
@@ -214,6 +217,19 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
           </h3>
           <p className="mt-0.5 text-2xs text-content-tertiary">
             {fmtBytes(row.size_bytes)}
+            {sizeIsConvertedArtifact && (
+              <span
+                className="ms-1.5 text-content-quaternary"
+                title={t('files.detail.size_converted_artifact_hint', {
+                  defaultValue:
+                    'The original source upload is unavailable; this is the size of the converted geometry artifact.',
+                })}
+              >
+                {t('files.detail.size_converted_artifact', {
+                  defaultValue: '(converted artifact)',
+                })}
+              </span>
+            )}
             {row.mime_type && <span className="ms-2">{row.mime_type}</span>}
           </p>
         </div>
@@ -431,13 +447,15 @@ export function FilePreviewPane({ row, onClose, onEmail, onShare, onManageAccess
           </div>
         )}
 
-        {/* Per-file audit timeline. Renders for any kind backed by the
-            ``oe_documents_document`` table; the section gracefully
-            returns null for other backings (photo / bim_model / dwg)
-            because the API responds 404 and useQuery is in retry:false.
+        {/* Per-file audit timeline. The activity endpoint lives on the
+            ``oe_documents_document`` table, so it only resolves for
+            document-backed kinds (document / sheet / photo). For other
+            kinds (bim_model / dwg / takeoff / report / markup) the id is
+            not a valid document id and the request would 404, so we skip
+            it entirely rather than firing a guaranteed-404 query.
             The compact in-pane strip stays for at-a-glance scanning;
             the full timeline lives in the slide-over drawer below. */}
-        <ActivityLogSection documentId={row.id} />
+        <ActivityLogSection documentId={row.id} kind={row.kind} />
 
         {/* W9 — "Referenced in" panel. Lists all RFIs / tasks / change
             orders / etc. that link to this file. */}
@@ -581,18 +599,31 @@ function formatActivityMeta(action: string, meta: Record<string, unknown>): stri
   return '';
 }
 
-function ActivityLogSection({ documentId }: { documentId: string }) {
+// Only these kinds are backed by the ``oe_documents_document`` table that
+// owns the /documents/{id}/activity endpoint. Other kinds carry ids from
+// their own modules (BIM models, DWG drawings, takeoff sessions, …) that
+// are not valid document ids, so the activity query is disabled for them.
+const ACTIVITY_BACKED_KINDS: ReadonlySet<FileKind> = new Set<FileKind>([
+  'document',
+  'sheet',
+  'photo',
+]);
+
+function ActivityLogSection({ documentId, kind }: { documentId: string; kind: FileKind }) {
   const { t } = useTranslation();
+  const enabled = ACTIVITY_BACKED_KINDS.has(kind);
   const { data, isLoading, isError } = useQuery({
     queryKey: ['document-activity', documentId],
     queryFn: () =>
       apiGet<ActivityEvent[]>(`/v1/documents/${documentId}/activity/?limit=20`),
     staleTime: 30_000,
     retry: false,
+    enabled,
   });
+  /* Not a document-backed kind → never fire the request (it would 404). */
+  if (!enabled) return null;
   /* 404 / 5xx must never break the pane — the endpoint is new and may
-     legitimately be missing on an un-migrated backend, and photo / BIM
-     IDs aren't valid document ids so the API responds 404 for them. */
+     legitimately be missing on an un-migrated backend. */
   if (isError) return null;
   const events = data ?? [];
   if (!isLoading && events.length === 0) return null;

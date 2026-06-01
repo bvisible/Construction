@@ -61,5 +61,8 @@ export function AuthImage({
 
   if (failed) return <>{fallback}</>;
   if (!objUrl) return <>{placeholder}</>;
-  return <img {...imgProps} src={objUrl} />;
+  // A11y: every <img> needs an alt attribute. Callers that pass `alt`
+  // win via {...imgProps}; we fall back to an empty alt (decorative)
+  // so the rendered <img> always has the attribute present.
+  return <img alt="" {...imgProps} src={objUrl} />;
 }

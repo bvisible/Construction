@@ -40,6 +40,7 @@ import {
   assembliesApi,
   type CreateAssemblyData,
   type CreateComponentData,
+  type ResourceType,
 } from '@/features/assemblies/api';
 import { getResourceTypeLabel } from '@/features/boq/boqResourceTypes';
 
@@ -52,9 +53,11 @@ interface CatalogResource {
   resource_type: string;
   category: string;
   unit: string;
-  base_price: number;
-  min_price: number;
-  max_price: number;
+  // Decimal money values arrive as serialised strings to preserve precision;
+  // call Number() at every numeric boundary (math, formatting, payloads).
+  base_price: string;
+  min_price: string;
+  max_price: string;
   currency: string;
   usage_count: number;
   source: string;
@@ -161,6 +164,23 @@ function buildSearchUrl(
   return `/v1/catalog/?${params.toString()}`;
 }
 
+// Catalog resource_type is a free string; the assembly component column is a
+// constrained enum. Narrow to the known set so we only send valid values.
+const COMPONENT_RESOURCE_TYPES: ReadonlySet<ResourceType> = new Set<ResourceType>([
+  'material',
+  'labor',
+  'equipment',
+  'operator',
+  'subcontractor',
+  'overhead',
+]);
+
+function toComponentResourceType(value: string): ResourceType | undefined {
+  return COMPONENT_RESOURCE_TYPES.has(value as ResourceType)
+    ? (value as ResourceType)
+    : undefined;
+}
+
 /* ── Number formatting ─────────────────────────────────────────────────── */
 
 const fmt = (n: number) =>
@@ -227,7 +247,7 @@ function RegionImportGrid({
     <Card padding="none" className="mb-6">
       <div className="p-5 border-b border-border-light">
         <div className="flex items-center gap-3 mb-1">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
             <Database size={18} />
           </div>
           <div>
@@ -465,7 +485,7 @@ function RegionTabBar({
         {/* Import button */}
         <button
           onClick={onImportClick}
-          className="flex items-center gap-1.5 shrink-0 rounded-t-lg px-3 py-2.5 border-b-2 border-transparent text-content-tertiary hover:text-oe-blue hover:bg-oe-blue-subtle/10 transition-all duration-fast ease-oe"
+          className="flex items-center gap-1.5 shrink-0 rounded-t-lg px-3 py-2.5 border-b-2 border-transparent text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle/10 transition-all duration-fast ease-oe"
           title={t('catalog.import_region', { defaultValue: 'Import region' })}
         >
           <Plus size={14} />
@@ -681,15 +701,15 @@ function ResourceRow({
 
         {/* Price (avg) */}
         <td className="px-3 py-3 text-right text-xs font-semibold text-content-primary tabular-nums whitespace-nowrap">
-          {fmt(resource.base_price)}
+          {fmt(Number(resource.base_price))}
         </td>
 
         {/* Price Range */}
         <td className="px-4 py-3">
           <PriceBar
-            min={resource.min_price}
-            avg={resource.base_price}
-            max={resource.max_price}
+            min={Number(resource.min_price)}
+            avg={Number(resource.base_price)}
+            max={Number(resource.max_price)}
             currency={resource.currency}
           />
         </td>
@@ -767,7 +787,10 @@ function ResourceDetailPanel({
   translate: (key: string, opts?: Record<string, string>) => string;
 }) {
   const specs = resource.specifications || {};
-  const priceSpread = resource.max_price > 0 ? ((resource.max_price - resource.min_price) / resource.max_price * 100) : 0;
+  const minPrice = Number(resource.min_price);
+  const basePrice = Number(resource.base_price);
+  const maxPrice = Number(resource.max_price);
+  const priceSpread = maxPrice > 0 ? ((maxPrice - minPrice) / maxPrice) * 100 : 0;
 
   // Parse hierarchy from specs
   const hierarchy = [
@@ -776,6 +799,27 @@ function ResourceDetailPanel({
     specs.parent_department,
     specs.parent_section,
   ].filter(Boolean).map(String);
+
+  // Finite source enum — translate the known values, fall back to a
+  // humanised form of the raw token for anything not yet mapped.
+  const sourceLabels: Record<string, string> = {
+    manual: t('catalog.source_manual', { defaultValue: 'Manual' }),
+    boq_import: t('catalog.source_boq_import', { defaultValue: 'BOQ import' }),
+    cad_import: t('catalog.source_cad_import', { defaultValue: 'CAD import' }),
+    gaeb_import: t('catalog.source_gaeb_import', { defaultValue: 'GAEB import' }),
+    ai_takeoff: t('catalog.source_ai_takeoff', { defaultValue: 'AI takeoff' }),
+    cwicr: t('catalog.source_cwicr', { defaultValue: 'CWICR' }),
+  };
+  const sourceLabel =
+    sourceLabels[resource.source] ?? resource.source.replace(/_/g, ' ');
+
+  // Category derives from imported data and isn't a fixed enum, so reuse
+  // the same key-slug scheme the table/sidebar use (falls back to the raw
+  // label when no translation exists).
+  const categoryLabel = t(
+    `catalog.category_${resource.category.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`,
+    { defaultValue: resource.category },
+  );
 
   return (
     <div className="bg-surface-secondary/20 border-t border-b border-border-light animate-fade-in">
@@ -814,15 +858,15 @@ function ResourceDetailPanel({
           <div className="flex gap-2 shrink-0">
             <div className="rounded-lg bg-green-50 dark:bg-green-500/10 border border-green-200/50 dark:border-green-500/20 px-3 py-2 text-center min-w-[80px]">
               <div className="text-2xs text-green-600 dark:text-green-400 font-medium mb-0.5">{t('common.min', { defaultValue: 'Min' })}</div>
-              <div className="text-sm font-bold text-green-700 dark:text-green-300 tabular-nums">{fmt(resource.min_price)}</div>
+              <div className="text-sm font-bold text-green-700 dark:text-green-300 tabular-nums">{fmt(minPrice)}</div>
             </div>
             <div className="rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200/50 dark:border-amber-500/20 px-3 py-2 text-center min-w-[80px]">
               <div className="text-2xs text-amber-600 dark:text-amber-400 font-medium mb-0.5">{t('common.avg', { defaultValue: 'Avg' })}</div>
-              <div className="text-sm font-bold text-amber-700 dark:text-amber-300 tabular-nums">{fmt(resource.base_price)}</div>
+              <div className="text-sm font-bold text-amber-700 dark:text-amber-300 tabular-nums">{fmt(basePrice)}</div>
             </div>
             <div className="rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200/50 dark:border-red-500/20 px-3 py-2 text-center min-w-[80px]">
               <div className="text-2xs text-red-600 dark:text-red-400 font-medium mb-0.5">{t('common.max', { defaultValue: 'Max' })}</div>
-              <div className="text-sm font-bold text-red-700 dark:text-red-300 tabular-nums">{fmt(resource.max_price)}</div>
+              <div className="text-sm font-bold text-red-700 dark:text-red-300 tabular-nums">{fmt(maxPrice)}</div>
             </div>
           </div>
 
@@ -849,7 +893,7 @@ function ResourceDetailPanel({
           <div className="rounded-lg bg-surface-primary border border-border-light p-2.5">
             <div className="text-2xs text-content-quaternary uppercase tracking-wider mb-1">{t('catalog.type_label', { defaultValue: 'Type' })}</div>
             <div className="text-xs font-medium text-content-primary">{getResourceTypeLabel(resource.resource_type, t)}</div>
-            <div className="text-2xs text-content-tertiary mt-0.5">{resource.category}</div>
+            <div className="text-2xs text-content-tertiary mt-0.5">{categoryLabel}</div>
           </div>
 
           {/* Usage */}
@@ -868,7 +912,7 @@ function ResourceDetailPanel({
               {regionInfo && <MiniFlag code={regionInfo.flag} size={12} />}
               <span className="text-xs font-medium text-content-primary">{regionInfo?.name ?? resource.region}</span>
             </div>
-            <div className="text-2xs text-content-tertiary mt-0.5">{resource.unit} · {resource.source}</div>
+            <div className="text-2xs text-content-tertiary mt-0.5">{resource.unit} · {sourceLabel}</div>
           </div>
         </div>
 
@@ -957,8 +1001,23 @@ function BuildAssemblyModal({
     resources.map((r) => ({ resource: r, quantity: 1 })),
   );
 
-  const total = entries.reduce((sum, e) => sum + e.resource.base_price * e.quantity, 0);
-  const currency = resources[0]?.currency ?? 'EUR';
+  // An assembly carries a single base currency, but the selected catalog
+  // resources may span several (e.g. an EUR material + a USD labour rate).
+  // There is no cross-currency rate table here, so we must NOT blend them
+  // into one scalar. Detect the spread, group the running total per
+  // currency, and block creation while it's ambiguous.
+  const distinctCurrencies = Array.from(
+    new Set(entries.map((e) => e.resource.currency || 'EUR')),
+  );
+  const isMultiCurrency = distinctCurrencies.length > 1;
+  const currency = distinctCurrencies[0] ?? 'EUR';
+
+  const totalsByCurrency = entries.reduce<Record<string, number>>((acc, e) => {
+    const code = e.resource.currency || 'EUR';
+    acc[code] = (acc[code] ?? 0) + Number(e.resource.base_price) * e.quantity;
+    return acc;
+  }, {});
+  const total = totalsByCurrency[currency] ?? 0;
 
   const handleQuantityChange = useCallback((idx: number, value: string) => {
     setEntries((prev) =>
@@ -972,6 +1031,21 @@ function BuildAssemblyModal({
 
   const handleCreate = useCallback(async () => {
     if (!name.trim() || entries.length === 0) return;
+    // Mixed currencies can't be summed into a single assembly rate, and
+    // there's no rate table to convert them. Refuse rather than fabricate
+    // a misleading blended total.
+    if (isMultiCurrency) {
+      addToast({
+        type: 'error',
+        title: t('catalog.mixed_currency_title', { defaultValue: 'Mixed currencies' }),
+        message: t('catalog.mixed_currency_block', {
+          defaultValue:
+            'Selected resources use different currencies ({{codes}}). Build the assembly from resources sharing one currency.',
+          codes: distinctCurrencies.join(', '),
+        }),
+      });
+      return;
+    }
     setIsCreating(true);
 
     try {
@@ -986,13 +1060,17 @@ function BuildAssemblyModal({
       };
       const assembly = await assembliesApi.create(assemblyData);
 
-      // Add components
+      // Add components — link each back to its catalog resource so future
+      // catalog price changes can propagate into the assembly, and carry the
+      // resource type for typed (M/L/E) roll-ups.
       for (const entry of entries) {
         if (entry.quantity <= 0) continue;
         const componentData: CreateComponentData = {
+          catalog_resource_id: entry.resource.id,
+          resource_type: toComponentResourceType(entry.resource.resource_type),
           description: entry.resource.name,
           unit: entry.resource.unit,
-          unit_cost: entry.resource.base_price,
+          unit_cost: Number(entry.resource.base_price),
           quantity: entry.quantity,
           factor: 1.0,
         };
@@ -1015,7 +1093,19 @@ function BuildAssemblyModal({
     } finally {
       setIsCreating(false);
     }
-  }, [name, assemblyUnit, assemblyCategory, currency, entries, addToast, t, onSuccess, navigate]);
+  }, [
+    name,
+    assemblyUnit,
+    assemblyCategory,
+    currency,
+    isMultiCurrency,
+    distinctCurrencies,
+    entries,
+    addToast,
+    t,
+    onSuccess,
+    navigate,
+  ]);
 
   return (
     <div
@@ -1032,7 +1122,7 @@ function BuildAssemblyModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-border-light shrink-0">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
               <Layers size={18} />
             </div>
             <div>
@@ -1130,6 +1220,9 @@ function BuildAssemblyModal({
                   <th className="px-3 py-2 text-right font-medium w-24">
                     {t('catalog.unit_rate', { defaultValue: 'Unit Rate' })}
                   </th>
+                  <th className="px-3 py-2 text-center font-medium w-16">
+                    {t('catalog.currency', { defaultValue: 'Currency' })}
+                  </th>
                   <th className="px-3 py-2 text-center font-medium w-20">
                     {t('catalog.quantity', { defaultValue: 'Qty' })}
                   </th>
@@ -1149,7 +1242,16 @@ function BuildAssemblyModal({
                       {entry.resource.unit}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium text-content-primary">
-                      {fmt(entry.resource.base_price)}
+                      {fmt(Number(entry.resource.base_price))}
+                    </td>
+                    <td
+                      className={`px-3 py-2 text-center font-medium tabular-nums ${
+                        isMultiCurrency
+                          ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-content-tertiary'
+                      }`}
+                    >
+                      {entry.resource.currency || 'EUR'}
                     </td>
                     <td className="px-3 py-2 text-center">
                       <input
@@ -1163,7 +1265,7 @@ function BuildAssemblyModal({
                       />
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums font-medium text-content-primary">
-                      {fmt(entry.resource.base_price * entry.quantity)}
+                      {fmt(Number(entry.resource.base_price) * entry.quantity)}
                     </td>
                     <td className="px-1 py-2 text-center">
                       <button
@@ -1177,18 +1279,53 @@ function BuildAssemblyModal({
                 ))}
               </tbody>
               <tfoot>
-                <tr className="bg-surface-tertiary font-medium">
-                  <td colSpan={4} className="px-3 py-2 text-right text-sm text-content-primary">
-                    {t('catalog.total', { defaultValue: 'Total' })}:
-                  </td>
-                  <td className="px-3 py-2 text-right text-sm tabular-nums text-content-primary">
-                    {fmt(total)} {currency}
-                  </td>
-                  <td />
-                </tr>
+                {isMultiCurrency ? (
+                  distinctCurrencies.map((code) => (
+                    <tr key={code} className="bg-surface-tertiary font-medium">
+                      <td colSpan={5} className="px-3 py-2 text-right text-sm text-content-primary">
+                        {t('catalog.total', { defaultValue: 'Total' })} ({code}):
+                      </td>
+                      <td className="px-3 py-2 text-right text-sm tabular-nums text-content-primary">
+                        {fmt(totalsByCurrency[code] ?? 0)} {code}
+                      </td>
+                      <td />
+                    </tr>
+                  ))
+                ) : (
+                  <tr className="bg-surface-tertiary font-medium">
+                    <td colSpan={5} className="px-3 py-2 text-right text-sm text-content-primary">
+                      {t('catalog.total', { defaultValue: 'Total' })}:
+                    </td>
+                    <td className="px-3 py-2 text-right text-sm tabular-nums text-content-primary">
+                      {fmt(total)} {currency}
+                    </td>
+                    <td />
+                  </tr>
+                )}
               </tfoot>
             </table>
           </div>
+
+          {/* Mixed-currency warning — an assembly has one base currency and
+              there is no rate table here to convert across currencies, so we
+              block creation until the selection shares a single currency. */}
+          {isMultiCurrency && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/10 px-4 py-3">
+              <AlertTriangle size={16} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+                  {t('catalog.mixed_currency_title', { defaultValue: 'Mixed currencies' })}
+                </p>
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+                  {t('catalog.mixed_currency_warning', {
+                    defaultValue:
+                      'Selected resources use {{codes}}. An assembly has a single currency, so amounts cannot be combined. Remove rows until one currency remains.',
+                    codes: distinctCurrencies.join(', '),
+                  })}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -1199,7 +1336,11 @@ function BuildAssemblyModal({
               ? t('catalog.component', { defaultValue: 'component' })
               : t('catalog.components', { defaultValue: 'components' })}
             {' | '}
-            {fmt(total)} {currency}
+            {isMultiCurrency
+              ? distinctCurrencies
+                  .map((code) => `${fmt(totalsByCurrency[code] ?? 0)} ${code}`)
+                  .join('  ·  ')
+              : `${fmt(total)} ${currency}`}
           </span>
           <div className="flex items-center gap-2">
             <Button variant="secondary" size="sm" onClick={onClose}>
@@ -1216,7 +1357,7 @@ function BuildAssemblyModal({
                 )
               }
               onClick={handleCreate}
-              disabled={!name.trim() || entries.length === 0 || isCreating}
+              disabled={!name.trim() || entries.length === 0 || isCreating || isMultiCurrency}
             >
               {isCreating
                 ? t('catalog.creating', { defaultValue: 'Creating...' })
@@ -1363,6 +1504,11 @@ export function CatalogPage() {
   const handleRegionChange = useCallback((value: string) => {
     setRegion(value);
     setOffset(0);
+    // Clear any active selection / expansion: the previously selected rows
+    // belong to a different region's result set and would otherwise feed a
+    // stale, mixed-region selection into Build Assembly / Copy.
+    setSelectedIds(new Set());
+    setExpandedId(null);
   }, []);
 
   const handleCopyRate = useCallback(async (resource: CatalogResource) => {
@@ -2166,7 +2312,7 @@ function PriceAdjustModal({
       if (filterRegion) params.set('region', filterRegion);
 
       const result = await apiPatch<{ adjusted: number; factor: number }>(
-        `/v1/catalog/adjust-prices?${params.toString()}`,
+        `/v1/catalog/adjust-prices/?${params.toString()}`,
       );
 
       addToast({

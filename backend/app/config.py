@@ -143,10 +143,36 @@ def _find_env_file() -> list[str]:
     """
     here = Path(__file__).resolve()
     candidates = [
-        here.parent.parent / ".env",        # backend/.env (app/ is one up)
-        here.parent.parent.parent / ".env", # repo root .env (optional)
+        here.parent.parent / ".env",  # backend/.env (app/ is one up)
+        here.parent.parent.parent / ".env",  # repo root .env (optional)
     ]
     return [str(p) for p in candidates if p.is_file()]
+
+
+def _canonicalize_db_url(url: str, *, driver: str) -> str:
+    """Canonicalize a PostgreSQL connection URL to ``postgresql+<driver>://``.
+
+    Managed-Postgres providers (Heroku, Supabase, Railway, Render, Fly) hand
+    out ``postgres://`` URLs, and some tutorials use ``postgres+asyncpg://``.
+    SQLAlchemy removed the ``postgres`` dialect alias in 1.4, so either form
+    makes the engine raise ``NoSuchModuleError: Can't load plugin:
+    sqlalchemy.dialects:postgres`` (or ``...:postgres.asyncpg`` once a driver is
+    attached). Rewrite any ``postgres`` / ``postgresql`` URL -- with or without a
+    driver -- to the dialect and driver this engine actually needs, so the same
+    ``DATABASE_URL`` works whether the operator pasted a cloud connection string
+    or our own canonical form. SQLite and blank URLs pass through untouched.
+    """
+    if not url:
+        return url
+    scheme = url.split("://", 1)[0].lower()
+    if not scheme.startswith("postgres"):
+        return url
+    try:
+        from sqlalchemy.engine import make_url
+
+        return make_url(url).set(drivername=f"postgresql+{driver}").render_as_string(hide_password=False)
+    except Exception:  # noqa: BLE001 — never block boot on a URL we cannot parse
+        return url
 
 
 class Settings(BaseSettings):
@@ -176,6 +202,12 @@ class Settings(BaseSettings):
     database_pool_size: int = 24
     database_max_overflow: int = 10
     database_echo: bool = False
+    # PostgreSQL only: seconds before a pooled connection is recycled. Kept
+    # below common infra idle timeouts (pgbouncer / cloud LB ~5-10 min) so the
+    # pool never serves a connection the server already dropped. Paired with
+    # pool_pre_ping in ``app.database``. Ignored on SQLite. Env:
+    # ``OE_DATABASE_POOL_RECYCLE`` / ``DATABASE_POOL_RECYCLE``.
+    database_pool_recycle: int = 1800
     max_batch_size: int = 443
     # Slow-query threshold (milliseconds). Statements exceeding this elapsed
     # wall time are logged at WARNING level via SQLAlchemy ``before_cursor_execute``
@@ -445,6 +477,37 @@ class Settings(BaseSettings):
                 "default) or remove the line from your .env."
             )
         return value
+
+    @field_validator("database_url", mode="after")
+    @classmethod
+    def _canonical_async_db_url(cls, value: str) -> str:
+        """Accept any postgres:// form for the async engine, normalize to asyncpg."""
+        return _canonicalize_db_url(value, driver="asyncpg")
+
+    @field_validator("database_sync_url", mode="after")
+    @classmethod
+    def _canonical_sync_db_url(cls, value: str) -> str:
+        """Accept any postgres:// form for the sync engine, normalize to psycopg2."""
+        return _canonicalize_db_url(value, driver="psycopg2")
+
+    @model_validator(mode="after")
+    def _cross_fill_db_urls(self) -> "Settings":
+        """Derive the missing async/sync DB URL when only one points at Postgres.
+
+        Operators commonly set only ``DATABASE_URL`` (the async one). If that
+        points at Postgres but ``DATABASE_SYNC_URL`` is still the bundled SQLite
+        default, alembic, the CWICR bulk import and the migration helper would
+        silently target a stray local SQLite file instead of the real database.
+        Mirror whichever side is set to Postgres into the other so both halves
+        always agree on the same cluster.
+        """
+        async_default = "sqlite+aiosqlite:///./openestimate.db"
+        sync_default = "sqlite:///./openestimate.db"
+        if self.database_url.startswith("postgresql") and self.database_sync_url == sync_default:
+            self.database_sync_url = _canonicalize_db_url(self.database_url, driver="psycopg2")
+        elif self.database_sync_url.startswith("postgresql") and self.database_url == async_default:
+            self.database_url = _canonicalize_db_url(self.database_sync_url, driver="asyncpg")
+        return self
 
     # ── Computed ─────────────────────────────────────────────────────────
     @computed_field  # type: ignore[prop-decorator]

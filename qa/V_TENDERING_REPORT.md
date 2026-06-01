@@ -29,7 +29,7 @@ Base: `f86d2dfe` (main HEAD at audit start)
 - `backend/tests/unit/test_tendering_leveling.py` (403 LOC) — **all skipped** (feature not yet implemented).
 - **No tests for `compare_bids`, FSM transitions, PDF export, or frontend.**
 
-### Top gaps vs CLAUDE.md workflow (TENDER step 7)
+### Top gaps vs the architecture guide workflow (TENDER step 7)
 
 | # | Gap | Severity |
 |---|-----|----------|

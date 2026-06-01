@@ -36,6 +36,50 @@ logger = logging.getLogger(__name__)
 
 _state_machine = CDEStateMachine()
 
+# Map the platform's canonical RBAC roles (admin / manager / editor / viewer,
+# see app.core.permissions.Role) onto the ISO 19650 role names the
+# CDEStateMachine gates are keyed by (viewer / editor / task_team_manager /
+# lead_ap / admin). The JWT payload only ever carries an app role, so without
+# this translation a project ``manager`` resolved to rank -1 and could never
+# cross any gate — only ``admin`` could promote a container.
+#
+# Gate ranks: Gate A needs task_team_manager(2), Gate B needs lead_ap(3),
+# Gate C needs admin(4). The ``cde.transition`` permission is MANAGER-level,
+# so a manager must clear Gate A and Gate B (→ lead_ap) while archiving
+# (Gate C) stays admin-only.
+_APP_ROLE_TO_ISO: dict[str, str] = {
+    "admin": "admin",
+    "manager": "lead_ap",
+    "editor": "editor",
+    "viewer": "viewer",
+}
+
+# Industry-title aliases that behave like one of the canonical four roles
+# (mirrors app.core.permissions.ROLE_ALIASES so a "quantity_surveyor" maps to
+# editor, "owner" to admin, etc.). Kept local to avoid importing the alias
+# table at module import time.
+_ROLE_ALIASES: dict[str, str] = {
+    "estimator": "editor",
+    "quantity_surveyor": "editor",
+    "qs": "editor",
+    "user": "editor",
+    "superuser": "admin",
+    "owner": "admin",
+    "readonly": "viewer",
+    "guest": "viewer",
+}
+
+
+def _iso_role_for(app_role: str | None) -> str:
+    """Translate an app/JWT role into the ISO 19650 role the gates use.
+
+    Unknown roles fall through to ``viewer`` (least authority) so an
+    unrecognised role can never accidentally pass a gate.
+    """
+    role = (app_role or "viewer").strip().lower()
+    role = _ROLE_ALIASES.get(role, role)
+    return _APP_ROLE_TO_ISO.get(role, role)
+
 
 class CDEService:
     """‌⁠‍Business logic for CDE operations."""
@@ -83,16 +127,11 @@ class CDEService:
                     ),
                 )
 
-        existing = await self.container_repo.get_by_code_and_project(
-            data.project_id, data.container_code
-        )
+        existing = await self.container_repo.get_by_code_and_project(data.project_id, data.container_code)
         if existing is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Container code '{data.container_code}' already exists "
-                    f"in project {data.project_id}"
-                ),
+                detail=(f"Container code '{data.container_code}' already exists in project {data.project_id}"),
             )
 
         container = DocumentContainer(
@@ -229,9 +268,16 @@ class CDEService:
                 detail=f"Container is already in '{current_state}' state",
             )
 
-        # Validate via CDEStateMachine (checks allowed transitions + role gates)
+        # Validate via CDEStateMachine (checks allowed transitions + role gates).
+        # The gates are keyed by ISO 19650 role names, but ``user_role`` is the
+        # canonical app role from the JWT (admin / manager / editor / viewer) —
+        # translate it first, otherwise everyone except admin gets a spurious
+        # "Insufficient role" 400.
+        iso_role = _iso_role_for(user_role)
         allowed, reason = _state_machine.validate_transition(
-            current_state, target_state, user_role=user_role,
+            current_state,
+            target_state,
+            user_role=iso_role,
         )
         if not allowed:
             raise HTTPException(
@@ -255,10 +301,7 @@ class CDEService:
         # Gate B — SHARED → PUBLISHED also captures the signature in the
         # container's metadata for the compliance trail.
         updated_metadata: dict[str, Any] | None = None
-        is_gate_b = (
-            target_state == CDEState.PUBLISHED.value
-            and current_state == CDEState.SHARED.value
-        )
+        is_gate_b = target_state == CDEState.PUBLISHED.value and current_state == CDEState.SHARED.value
         if is_gate_b:
             # Merge-in the approval block into metadata_ so it's persisted.
             md = dict(container.metadata_ or {})
@@ -401,11 +444,20 @@ class CDEService:
     ) -> DocumentRevision:
         """Create a new revision for a container.
 
-        When ``storage_key`` is provided, also materialise a ``Document`` row
-        in the Documents hub so the file appears at ``/documents`` (per the
-        platform cross-link rule — see meetings/router.py:991-1020 pattern).
-        If no storage_key is supplied, the revision is metadata-only and no
-        Document is created (no error).
+        Two file-linking modes:
+
+        - **Link mode** (``data.document_id`` set): reference an *existing*
+          ``Document`` from the Documents hub. The revision reuses that
+          document's real ``file_path`` (as its ``storage_key``), size and mime
+          type so the file stays downloadable, and ``DocumentRevision.document_id``
+          points at the existing row. **No duplicate Document is created.**
+        - **Upload mode** (``data.storage_key`` set, no ``document_id``):
+          materialise a new ``Document`` row in the Documents hub so a
+          freshly-uploaded file appears at ``/documents`` (per the platform
+          cross-link rule — see meetings/router.py:991-1020 pattern).
+
+        If neither is supplied, the revision is metadata-only and no Document is
+        created (no error).
         """
         container = await self.get_container(container_id)
 
@@ -414,6 +466,40 @@ class CDEService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cannot add revisions to an archived container",
             )
+
+        # ── Link mode: resolve an existing Document up-front ─────────────────
+        # When linking, the revision must carry the source document's REAL
+        # file_path so downloads resolve, not a synthesised key. We read the
+        # source's path/size/mime here and feed them into the revision below.
+        linked_doc_id: str | None = None
+        storage_key = data.storage_key
+        file_name = data.file_name
+        file_size = data.file_size
+        mime_type = data.mime_type
+        if data.document_id is not None:
+            from app.modules.documents.models import Document as _Document
+
+            source_doc = await self.session.get(_Document, data.document_id)
+            if source_doc is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Document to link not found",
+                )
+            if source_doc.project_id != container.project_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Document belongs to a different project than the container",
+                )
+            linked_doc_id = str(source_doc.id)
+            # Reuse the source document's real storage path + metadata so the
+            # revision points at the actual file (no broken duplicate path).
+            storage_key = source_doc.file_path or None
+            if not file_size and source_doc.file_size:
+                file_size = str(source_doc.file_size)
+            if not mime_type and source_doc.mime_type:
+                mime_type = source_doc.mime_type
+            if not file_name:
+                file_name = source_doc.name
 
         rev_number = await self.revision_repo.next_revision_number(container_id)
 
@@ -426,7 +512,7 @@ class CDEService:
         # Content-addressable storage: compute SHA-256 if not supplied
         content_hash = data.content_hash
         if not content_hash:
-            hash_input = f"{container_id}:{revision_code}:{data.file_name}:{data.file_size or ''}"
+            hash_input = f"{container_id}:{revision_code}:{file_name}:{file_size or ''}"
             content_hash = hashlib.sha256(hash_input.encode()).hexdigest()
 
         revision = DocumentRevision(
@@ -435,12 +521,13 @@ class CDEService:
             revision_number=rev_number,
             is_preliminary=data.is_preliminary,
             content_hash=content_hash,
-            file_name=data.file_name,
-            file_size=data.file_size,
-            mime_type=data.mime_type,
-            storage_key=data.storage_key,
+            file_name=file_name,
+            file_size=file_size,
+            mime_type=mime_type,
+            storage_key=storage_key,
             status="draft",
             change_summary=data.change_summary,
+            document_id=linked_doc_id,
             created_by=user_id,
             metadata_=data.metadata,
         )
@@ -451,27 +538,44 @@ class CDEService:
         # of the primary key outside the async context.
         revision_id = revision.id
 
-        # Cross-link into the Documents hub when the revision carries a file.
-        # Best-effort: failure here must not break the revision create — the
-        # CDE row is the source of truth, the Documents row is an index.
-        if data.storage_key:
+        # Link mode is complete — the revision already points at the existing
+        # Document row, so we must NOT synthesise a second one. Update the
+        # container's current_revision_id and return.
+        if linked_doc_id is not None:
+            await self.container_repo.update_fields(
+                container_id,
+                current_revision_id=str(revision_id),
+            )
+            revision = await self.revision_repo.get_by_id(revision_id)
+            assert revision is not None, "Revision vanished between insert and re-read"
+            logger.info(
+                "CDE revision %s linked to existing document %s (container %s)",
+                revision_code,
+                linked_doc_id,
+                container_id,
+            )
+            return revision
+
+        # Upload mode: cross-link into the Documents hub when the revision
+        # carries a freshly-uploaded file. Best-effort: failure here must not
+        # break the revision create — the CDE row is the source of truth, the
+        # Documents row is an index.
+        if storage_key:
             try:
                 from app.modules.documents.models import Document
 
                 try:
-                    file_size_int = int(data.file_size) if data.file_size else 0
+                    file_size_int = int(file_size) if file_size else 0
                 except (TypeError, ValueError):
                     file_size_int = 0
                 doc = Document(
                     project_id=container.project_id,
-                    name=data.file_name,
-                    description=(
-                        f"CDE rev {revision_code} — {container.container_code}"
-                    ),
+                    name=file_name,
+                    description=(f"CDE rev {revision_code} — {container.container_code}"),
                     category="cde",
                     file_size=file_size_int,
-                    mime_type=data.mime_type or "",
-                    file_path=data.storage_key,
+                    mime_type=mime_type or "",
+                    file_path=storage_key,
                     version=rev_number,
                     uploaded_by=str(user_id) if user_id else "",
                     tags=["cde", container.container_code],
@@ -480,9 +584,7 @@ class CDEService:
                 await self.session.flush()
                 # Read out doc.id before any expire_all() invalidates it.
                 doc_id = doc.id
-                await self.revision_repo.update_fields(
-                    revision_id, document_id=str(doc_id)
-                )
+                await self.revision_repo.update_fields(revision_id, document_id=str(doc_id))
                 logger.info(
                     "Cross-linked CDE revision %s -> document %s",
                     revision_id,
@@ -505,9 +607,7 @@ class CDEService:
 
                     fv_svc = FileVersionService(self.session)
                     try:
-                        uploader = (
-                            uuid.UUID(str(user_id)) if user_id else None
-                        )
+                        uploader = uuid.UUID(str(user_id)) if user_id else None
                     except (TypeError, ValueError):
                         uploader = None
                     fv_payload = FileVersionCreate(
@@ -518,9 +618,7 @@ class CDEService:
                         file_size=file_size_int,
                         notes=data.change_summary,
                     )
-                    await fv_svc.register_new_version(
-                        fv_payload, uploaded_by_id=uploader
-                    )
+                    await fv_svc.register_new_version(fv_payload, uploaded_by_id=uploader)
                 except Exception:
                     logger.warning(
                         "Failed to register FileVersion for CDE revision (doc=%s)",
@@ -608,9 +706,5 @@ class CDEService:
         Pattern: ``{Project}-{Originator}-{Functional}-{Spatial}-{Form}-{Discipline}-{Number}``
         Empty parts are omitted.
         """
-        parts = [
-            p
-            for p in (project, originator, functional, spatial, form, discipline, number)
-            if p
-        ]
+        parts = [p for p in (project, originator, functional, spatial, form, discipline, number) if p]
         return "-".join(parts)

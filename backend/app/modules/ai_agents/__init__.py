@@ -9,7 +9,7 @@ observation / answer.
 
 The runner NEVER auto-applies an agent's output to the BOQ /
 project — it returns the proposal so the user can review it in the
-review panel (CLAUDE.md "AI-augmented, human-confirmed" principle).
+review panel (the architecture guide "AI-augmented, human-confirmed" principle).
 """
 
 

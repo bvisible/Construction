@@ -278,7 +278,7 @@ export function TopRisksWidget(_props: { projects?: ProjectRef[] } = {}) {
         <EmptyCTA
           message={t('dashboard.risk_top_empty', { defaultValue: 'No risks logged yet.' })}
           ctaLabel={t('dashboard.risk_top_cta', { defaultValue: 'Open Risk Register' })}
-          onClick={() => navigate('/risk-register')}
+          onClick={() => navigate('/risks')}
         />
       </WidgetCard>
     );
@@ -324,7 +324,7 @@ export function HSEScoreCardWidget(_props: { projects?: ProjectRef[] } = {}) {
         <EmptyCTA
           message={t('dashboard.hse_empty', { defaultValue: 'No incidents logged yet.' })}
           ctaLabel={t('dashboard.hse_cta', { defaultValue: 'Open HSE module' })}
-          onClick={() => navigate('/hse')}
+          onClick={() => navigate('/hse-advanced')}
         />
       </WidgetCard>
     );

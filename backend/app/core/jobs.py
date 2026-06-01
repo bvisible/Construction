@@ -76,6 +76,24 @@ def make_celery_app(broker_url: str, result_backend: str) -> Celery:
         # Prefetch=1 makes per-task duration fairer across workers; one
         # heavy task does not get to monopolise a worker's prefetch buffer.
         worker_prefetch_multiplier=1,
+        # Fail fast when the broker is unreachable instead of blocking the
+        # caller (e.g. an async request handler) on kombu's connection
+        # retry loop. In the no-Docker dev env Redis is not running, so an
+        # ``apply_async()`` must surface a connection error promptly rather
+        # than pin the event loop. A real broker connects well under 2s.
+        broker_connection_timeout=2.0,
+        broker_connection_retry_on_startup=False,
+        broker_connection_max_retries=0,
+        # ``apply_async`` also touches the *result backend*; without these
+        # caps the redis result backend retries for ~minutes (its default
+        # retry policy + 120s socket timeout) when Redis is down, which is
+        # the real source of the hang. Bound the socket + disable retries
+        # so a missing backend fails fast too.
+        result_backend_always_retry=False,
+        result_backend_max_retries=0,
+        redis_socket_connect_timeout=2.0,
+        redis_socket_timeout=2.0,
+        redis_retry_on_timeout=False,
     )
     return app
 

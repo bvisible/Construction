@@ -21,7 +21,7 @@ This RFC is the **strategic integration plan** that locks decisions, names the g
 ### What the user locked in (2026-04-25)
 
 1. **DDC `cad2data` only.** No IfcOpenShell, no `web-ifc`, no `ifctester` runtime parsing — see ADR 002.
-2. **Stack: pick what's best for fast iteration.** I'm choosing Celery (already in `CLAUDE.md` stack, mature, integrates with Redis we already need), pgvector (single PG dep, no separate Qdrant), `bge-m3` for multilingual embeddings (open-source, multilingual, dense+sparse modes — perfect for hybrid search).
+2. **Stack: pick what's best for fast iteration.** I'm choosing Celery (already in `the architecture guide` stack, mature, integrates with Redis we already need), pgvector (single PG dep, no separate Qdrant), `bge-m3` for multilingual embeddings (open-source, multilingual, dense+sparse modes — perfect for hybrid search).
 3. **TDD + browser-verified.** Every ticket = unit/integration tests written **first**, then implementation, then Playwright E2E with screenshot. No ticket is "done" without a screenshot in `frontend/test-results/`.
 
 ### What the gap audit found
@@ -44,12 +44,12 @@ Existing modules vs. spec coverage (verified via two parallel codebase audits):
 | # | Decision | Rationale |
 |---|---|---|
 | L1 | **DDC `cad2data`** is the single CAD/BIM parser. All six modules read its canonical Parquet/JSON. | ADR 002. User-confirmed 2026-04-25. |
-| L2 | **Celery + Redis** is the async job runner. `JobRun` table records all background work. | Already in `CLAUDE.md` stack table. Mature. Integrates with existing Redis. |
+| L2 | **Celery + Redis** is the async job runner. `JobRun` table records all background work. | Already in `the architecture guide` stack table. Mature. Integrates with existing Redis. |
 | L3 | **pgvector** is the vector store. No Qdrant in core; Qdrant remains as an optional enterprise plugin. | User emphasis on pgvector. One DB to operate. PostgreSQL 16 already required. |
 | L4 | **`bge-m3`** is the embedding model (1024-dim dense + sparse). Loaded via `sentence-transformers` or via `infinity` server (CPU-tolerant). | Multilingual (50+ langs), open-source, dense + sparse out of the box, retrieval-tuned, runs on CPU for on-prem. |
 | L5 | **Tests first, every ticket.** Unit (pytest) + integration (httpx + real PG/Redis) + E2E (Playwright) + visual screenshot. No screenshot, no merge. | User mandate 2026-04-25. |
-| L6 | **i18n from day one** for every new user-facing string. 21 locales already supported by the stack. | `CLAUDE.md` §i18n + spec §0.6. |
-| L7 | **One PR = one logical change.** Wave names map to GitHub project columns; tickets map to PRs. | `CLAUDE.md` + spec §"Финальные принципы". |
+| L6 | **i18n from day one** for every new user-facing string. 21 locales already supported by the stack. | `the architecture guide` §i18n + spec §0.6. |
+| L7 | **One PR = one logical change.** Wave names map to GitHub project columns; tickets map to PRs. | `the architecture guide` + spec §"Финальные принципы". |
 | L8 | **Schema migrations are reversible.** Each ticket = one Alembic migration with `downgrade()` that survives `alembic downgrade base && alembic upgrade head` round-trip. | Spec §0.3, project convention. |
 | L9 | **Multi-tenancy via RLS.** PostgreSQL Row-Level Security policies are enabled for every new table that has `tenant_id`. | Spec §0.7 #2. Currently `tenant_id` columns exist but RLS is off. |
 | L10 | **Observability built-in.** Every new endpoint emits an OpenTelemetry span; every Celery task emits a `JobRun` row with structured outcome. | Spec §"Финальные принципы" #8. |

@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ── BidPackage ────────────────────────────────────────────────────────────
 
@@ -187,7 +187,9 @@ class BidInvitationResponse(BaseModel):
     declined_at: str | None = None
     decline_reason: str | None = None
     status: str = "pending"
-    token_hash: str | None = None
+    # token_hash is intentionally excluded — it is a server-side secret
+    # used to authenticate magic-link bidder access and must never be
+    # returned to API callers (including owner roles).
     created_at: datetime
     updated_at: datetime
 
@@ -441,6 +443,16 @@ class BidComparisonCreate(BaseModel):
     commercial_weight_pct: int = Field(default=100, ge=0, le=100)
     technical_weight_pct: int = Field(default=0, ge=0, le=100)
 
+    @model_validator(mode="after")
+    def _weights_sum_to_100(self) -> BidComparisonCreate:
+        total = self.commercial_weight_pct + self.technical_weight_pct
+        if total != 100:
+            raise ValueError(
+                "commercial_weight_pct + technical_weight_pct must equal 100 "
+                f"(got {total})"
+            )
+        return self
+
 
 class BidComparisonUpdate(BaseModel):
     """Partial update for a comparison."""
@@ -452,6 +464,20 @@ class BidComparisonUpdate(BaseModel):
     technical_weight_pct: int | None = Field(default=None, ge=0, le=100)
     recommended_bidder_id: UUID | None = None
     recommended_reason: str | None = None
+
+    @model_validator(mode="after")
+    def _weights_sum_to_100(self) -> BidComparisonUpdate:
+        # Only validate when BOTH weights are supplied — a partial update of
+        # one weight alone cannot know the persisted value of the other, so
+        # the sum is enforced in the service layer after merging.
+        if self.commercial_weight_pct is not None and self.technical_weight_pct is not None:
+            total = self.commercial_weight_pct + self.technical_weight_pct
+            if total != 100:
+                raise ValueError(
+                    "commercial_weight_pct + technical_weight_pct must equal 100 "
+                    f"(got {total})"
+                )
+        return self
 
 
 class BidComparisonResponse(BaseModel):

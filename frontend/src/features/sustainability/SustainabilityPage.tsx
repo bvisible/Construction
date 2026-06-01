@@ -230,6 +230,63 @@ export function SustainabilityPage() {
     ? t('sustainability.quality_mixed', { defaultValue: 'Mixed (stored + auto)' })
     : t('sustainability.quality_estimated', { defaultValue: 'Estimated (auto-detected)' });
 
+  // Client-side CSV export of the loaded CO2 analysis (header summary +
+  // category breakdown + position-level detail). No server round-trip.
+  function handleExportCsv() {
+    if (!data) return;
+    try {
+      const csvCell = (val: string | number | null | undefined): string => {
+        const s = val === null || val === undefined ? '' : String(val);
+        return /[",\n;]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const lines: string[] = [];
+      // Summary block
+      lines.push(['section', 'key', 'value'].join(','));
+      lines.push(['summary', 'total_co2_tons', data.total_co2_tons].map(csvCell).join(','));
+      lines.push(['summary', 'benchmark_per_m2_kg', data.benchmark_per_m2 ?? ''].map(csvCell).join(','));
+      lines.push(['summary', 'rating', data.rating].map(csvCell).join(','));
+      lines.push(['summary', 'eu_cpr_compliance', data.eu_cpr_compliance].map(csvCell).join(','));
+      lines.push('');
+      // Breakdown by category
+      lines.push(['breakdown', 'material', 'category', 'quantity', 'unit', 'co2_kg', 'percentage'].join(','));
+      for (const b of data.breakdown) {
+        lines.push(
+          ['breakdown', b.material, b.category, b.quantity, b.unit, b.co2_kg, b.percentage]
+            .map(csvCell)
+            .join(','),
+        );
+      }
+      lines.push('');
+      // Position-level detail
+      lines.push(
+        ['position', 'ordinal', 'description', 'quantity', 'unit', 'epd_material', 'gwp_per_unit', 'gwp_total_kg', 'category', 'source'].join(','),
+      );
+      for (const p of data.positions_detail) {
+        lines.push(
+          ['position', p.ordinal, p.description, p.quantity, p.unit, p.epd_name ?? '', p.gwp_per_unit, p.gwp_total, p.category, p.source]
+            .map(csvCell)
+            .join(','),
+        );
+      }
+      const csv = lines.join('\r\n');
+      // Prepend a UTF-8 BOM so Excel opens non-ASCII material names correctly.
+      const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'co2-report.csv';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 200);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addToast({ type: 'error', title: t('sustainability.export_failed', { defaultValue: 'Could not export CO2 report' }), message });
+    }
+  }
+
   return (
     <div className="w-full animate-fade-in">
       {/* Header */}
@@ -522,8 +579,8 @@ export function SustainabilityPage() {
               ))}
             </div>
             <Button variant="secondary" size="sm" icon={<Download size={14} />}
-              onClick={() => { /* PDF export placeholder */ }}>
-              {t('sustainability.export_pdf', 'Export CO2 Report')}
+              onClick={handleExportCsv}>
+              {t('sustainability.export_csv', 'Export CO2 Report (CSV)')}
             </Button>
           </div>
         </div>

@@ -98,26 +98,18 @@ def test_position_total_in_base_converts_foreign():
 
 
 def test_position_total_in_base_base_currency_passthrough():
-    assert _position_total_in_base("1000", "EUR", {"USD": "1.10"}, "EUR") == Decimal(
-        "1000"
-    )
+    assert _position_total_in_base("1000", "EUR", {"USD": "1.10"}, "EUR") == Decimal("1000")
     # No currency on the row → treated as base.
-    assert _position_total_in_base("1000", "", {"USD": "1.10"}, "EUR") == Decimal(
-        "1000"
-    )
+    assert _position_total_in_base("1000", "", {"USD": "1.10"}, "EUR") == Decimal("1000")
 
 
 def test_position_total_in_base_missing_rate_not_zeroed():
     # GBP has no configured rate — must be summed in its own units, never 0.
-    assert _position_total_in_base("800", "GBP", {"USD": "1.10"}, "EUR") == Decimal(
-        "800"
-    )
+    assert _position_total_in_base("800", "GBP", {"USD": "1.10"}, "EUR") == Decimal("800")
 
 
 def test_position_total_in_base_garbage_total_is_zero():
-    assert _position_total_in_base("not-a-number", "USD", {"USD": "1.1"}, "EUR") == (
-        Decimal("0")
-    )
+    assert _position_total_in_base("not-a-number", "USD", {"USD": "1.1"}, "EUR") == (Decimal("0"))
 
 
 def test_position_currency_priority():
@@ -211,9 +203,7 @@ async def _make_boq_with_mixed_currency(session, fx_rates):
 
 @pytest.mark.asyncio
 async def test_get_boq_structured_converts_foreign_currency(session):
-    boq = await _make_boq_with_mixed_currency(
-        session, [{"code": "USD", "rate": "1.10", "label": "US Dollar"}]
-    )
+    boq = await _make_boq_with_mixed_currency(session, [{"code": "USD", "rate": "1.10", "label": "US Dollar"}])
     service = BOQService(session)
     structured = await service.get_boq_structured(boq.id)
 
@@ -228,9 +218,7 @@ async def test_get_boq_structured_converts_foreign_currency(session):
 async def test_get_boq_structured_missing_rate_not_zeroed(session):
     # USD has a rate; the project also has a position implicitly in EUR.
     # Swap the USD leaf's currency to an unconfigured GBP via no GBP rate.
-    boq = await _make_boq_with_mixed_currency(
-        session, [{"code": "CHF", "rate": "0.95", "label": "Swiss Franc"}]
-    )
+    boq = await _make_boq_with_mixed_currency(session, [{"code": "CHF", "rate": "0.95", "label": "Swiss Franc"}])
     service = BOQService(session)
     structured = await service.get_boq_structured(boq.id)
 
@@ -252,3 +240,98 @@ async def test_get_export_fx_returns_frozen_table(session):
     base, fx_map = await service.get_export_fx(boq.id)
     assert base == "EUR"
     assert fx_map == {"USD": "1.10", "GBP": "1.18"}
+
+
+# ── Issue #157 (skolodi): missing-FX warning detection ────────────────────
+
+
+def test_detect_resource_fx_warnings_no_resources() -> None:
+    from app.modules.boq.service import _detect_resource_fx_warnings
+
+    assert _detect_resource_fx_warnings(None, {"USD": "1.10"}, "EUR") == []
+    assert _detect_resource_fx_warnings([], {"USD": "1.10"}, "EUR") == []
+
+
+def test_detect_resource_fx_warnings_base_currency_only() -> None:
+    """All resources priced in base currency — no warning, regardless of fx_rates_map."""
+    from app.modules.boq.service import _detect_resource_fx_warnings
+
+    resources = [
+        {"quantity": 1, "unit_rate": 10, "currency": "EUR"},
+        {"quantity": 2, "unit_rate": 20},  # no currency = base
+        {"quantity": 3, "unit_rate": 30, "currency": ""},  # empty = base
+    ]
+    assert _detect_resource_fx_warnings(resources, {"USD": "1.10"}, "EUR") == []
+
+
+def test_detect_resource_fx_warnings_foreign_with_rate() -> None:
+    """Foreign currencies that have a project FX rate — no warning."""
+    from app.modules.boq.service import _detect_resource_fx_warnings
+
+    resources = [
+        {"quantity": 1, "unit_rate": 10, "currency": "USD"},
+        {"quantity": 2, "unit_rate": 20, "currency": "ARS"},
+    ]
+    fx_map = {"USD": "1.10", "ARS": "1415.0"}
+    assert _detect_resource_fx_warnings(resources, fx_map, "EUR") == []
+
+
+def test_detect_resource_fx_warnings_missing_rate() -> None:
+    """skolodi's exact scenario — EUR base, resource in USD with no USD rate.
+
+    The asymmetry from the video repro: project has ARS rate, doesn't have
+    USD rate. Changing a resource from EUR → ARS updates the section
+    (conversion applied). Changing from EUR → USD does NOT change the sum
+    (silent no-op in _resource_total_in_base). This helper surfaces the
+    "no USD rate" gap so the UI can render an amber badge.
+    """
+    from app.modules.boq.service import _detect_resource_fx_warnings
+
+    resources = [
+        {"quantity": 1, "unit_rate": 10, "currency": "USD"},
+        {"quantity": 2, "unit_rate": 20, "currency": "ARS"},
+    ]
+    fx_map = {"ARS": "1415.0"}  # USD missing
+    assert _detect_resource_fx_warnings(resources, fx_map, "EUR") == ["USD"]
+
+
+def test_detect_resource_fx_warnings_multiple_missing_dedup_sorted() -> None:
+    """Multiple resources in different unconfigured foreign currencies."""
+    from app.modules.boq.service import _detect_resource_fx_warnings
+
+    resources = [
+        {"quantity": 1, "unit_rate": 10, "currency": "USD"},
+        {"quantity": 1, "unit_rate": 10, "currency": "GBP"},
+        {"quantity": 1, "unit_rate": 10, "currency": "USD"},  # duplicate
+        {"quantity": 1, "unit_rate": 10, "currency": "CHF"},
+        {"quantity": 1, "unit_rate": 10, "currency": "EUR"},  # base, ignored
+    ]
+    fx_map: dict[str, str] = {}  # no rates configured
+    result = _detect_resource_fx_warnings(resources, fx_map, "EUR")
+    # Deduplicated; order doesn't matter for the test contract but the impl
+    # returns insertion-order. Compare as sets to keep the test robust.
+    assert set(result) == {"USD", "GBP", "CHF"}
+
+
+def test_detect_resource_fx_warnings_case_insensitive() -> None:
+    """Currency codes normalised to uppercase before comparison."""
+    from app.modules.boq.service import _detect_resource_fx_warnings
+
+    resources = [{"quantity": 1, "unit_rate": 10, "currency": "usd"}]
+    fx_map = {"USD": "1.10"}  # rate exists in canonical form
+    assert _detect_resource_fx_warnings(resources, fx_map, "eur") == []
+
+
+def test_detect_resource_fx_warnings_handles_malformed_rows() -> None:
+    """Non-dict rows, missing currency, weird types — never raise."""
+    from app.modules.boq.service import _detect_resource_fx_warnings
+
+    resources = [
+        None,  # type: ignore[list-item]
+        "not a dict",  # type: ignore[list-item]
+        {"quantity": 1, "unit_rate": 10},  # no currency
+        {"currency": 123},  # int currency
+        {"currency": "USD"},  # valid foreign without rate
+    ]
+    fx_map: dict[str, str] = {}
+    assert _detect_resource_fx_warnings(resources, fx_map, "EUR") == ["USD"]

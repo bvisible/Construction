@@ -8,14 +8,14 @@
  *
  * Login uses the demo-login endpoint (no password) since this is the
  * documented path on hosted demos:
- *   POST /api/v1/users/auth/demo-login  { email: "demo@openestimator.io" }
+ *   POST /api/v1/users/auth/demo-login  { email: "demo@openconstructionerp.com" }
  */
 
 import { test, expect, type Page } from '@playwright/test';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DEMO_EMAIL = 'demo@openestimator.io';
+const DEMO_EMAIL = 'demo@openconstructionerp.com';
 // __dirname is not defined under "type": "module" — derive from import.meta.url.
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCREENSHOT_DIR = path.resolve(HERE, '..', '..', '..', 'screenshots');

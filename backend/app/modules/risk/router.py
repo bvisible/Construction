@@ -30,7 +30,7 @@ from app.modules.risk.schemas import (
 )
 from app.modules.risk.service import RiskService
 
-router = APIRouter()
+router = APIRouter(tags=["risk"])
 logger = logging.getLogger(__name__)
 
 
@@ -53,7 +53,22 @@ def _as_float(value: object, default: float = 0.0) -> float:
 
 
 def _risk_to_response(item: object) -> RiskResponse:
-    """‌⁠‍Build a RiskResponse from a RiskItem ORM object."""
+    """‌⁠‍Build a RiskResponse from a RiskItem ORM object.
+
+    ``risk_score`` is ALWAYS recomputed on the single canonical 0-5 scale
+    (probability x severity_numeric) rather than echoing the stored column,
+    which is heterogeneous: seeded rows carry a cost-scaled value (e.g.
+    ``probability * (impact_cost + days * 5000)``) while API-created rows
+    store the 0-5 product. Echoing the raw value made the list "Score"
+    column show enormous seed numbers next to 0-5 API numbers
+    (F-PFO-RISK-06). Recomputing here keeps the list, detail view and the
+    summary endpoint all on one comparable scale.
+    """
+    from app.modules.risk.service import _compute_risk_score
+
+    probability = _as_float(item.probability, 0.5)  # type: ignore[attr-defined]
+    severity = item.impact_severity or "medium"  # type: ignore[attr-defined]
+    canonical_score = _compute_risk_score(probability, severity)
     return RiskResponse(
         id=item.id,  # type: ignore[attr-defined]
         project_id=item.project_id,  # type: ignore[attr-defined]
@@ -61,11 +76,11 @@ def _risk_to_response(item: object) -> RiskResponse:
         title=item.title,  # type: ignore[attr-defined]
         description=item.description,  # type: ignore[attr-defined]
         category=item.category,  # type: ignore[attr-defined]
-        probability=_as_float(item.probability, 0.5),  # type: ignore[attr-defined]
+        probability=probability,
         impact_cost=_as_float(item.impact_cost),  # type: ignore[attr-defined]
         impact_schedule_days=item.impact_schedule_days,  # type: ignore[attr-defined]
         impact_severity=item.impact_severity,  # type: ignore[attr-defined]
-        risk_score=_as_float(item.risk_score),  # type: ignore[attr-defined]
+        risk_score=canonical_score,
         probability_score=getattr(item, "probability_score", None),
         impact_score_cost=getattr(item, "impact_score_cost", None),
         impact_score_time=getattr(item, "impact_score_time", None),
@@ -227,29 +242,64 @@ async def simulate_risks(
 # ── Bulk operations (must come BEFORE parametric /{risk_id}) ─────────
 
 
+async def _authorized_risk_ids(
+    session: SessionDep,
+    user_id: str,
+    requested_ids: list[uuid.UUID],
+) -> list[uuid.UUID]:
+    """Return the subset of ``requested_ids`` the caller may act on.
+
+    Authorization mirrors every other risk route — ``verify_project_access``
+    (owner **or** admin **or** project team member), not the bare
+    owner-only filter the batch handlers previously used. We resolve each
+    distinct project once, skip rows in projects the caller can't reach
+    (verify_project_access raises 404 on denial), and keep the rest.
+    """
+    from sqlalchemy import select as _select
+
+    from app.modules.risk.models import RiskItem
+
+    rows = (
+        await session.execute(
+            _select(RiskItem.id, RiskItem.project_id).where(RiskItem.id.in_(requested_ids))
+        )
+    ).all()
+
+    allowed_projects: dict[str, bool] = {}
+    allowed_ids: list[uuid.UUID] = []
+    for risk_id, project_id in rows:
+        key = str(project_id)
+        if key not in allowed_projects:
+            try:
+                await verify_project_access(project_id, user_id, session)
+                allowed_projects[key] = True
+            except HTTPException:
+                allowed_projects[key] = False
+        if allowed_projects[key]:
+            allowed_ids.append(risk_id)
+    return allowed_ids
+
+
 @router.post(
     "/batch/delete/",
     status_code=200,
+    dependencies=[Depends(RequirePermission("risk.delete"))],
 )
 async def batch_delete_risks(
     body: BulkDeleteRequest,
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> dict:
-    """Delete multiple risks in one request."""
-    from sqlalchemy import select as _select
+    """Delete multiple risks in one request.
 
+    Gated behind ``risk.delete`` (MANAGER) to match single-row delete, and
+    authorized per-project via ``verify_project_access`` so admins and team
+    members can bulk-delete the same rows they can delete individually.
+    """
     from app.core.bulk_ops import bulk_delete
-    from app.modules.projects.repository import ProjectRepository
     from app.modules.risk.models import RiskItem
 
-    proj_repo = ProjectRepository(session)
-    owned_projects, _ = await proj_repo.list_for_user(owner_id=user_id, offset=0, limit=10000, exclude_archived=False)
-    owned_project_ids = {str(p.id) for p in owned_projects}
-
-    rows = (await session.execute(_select(RiskItem.id, RiskItem.project_id).where(RiskItem.id.in_(body.ids)))).all()
-    allowed = [r[0] for r in rows if str(r[1]) in owned_project_ids]
-
+    allowed = await _authorized_risk_ids(session, str(user_id), body.ids)
     deleted = await bulk_delete(session, RiskItem, allowed)
     return {"requested": len(body.ids), "deleted": deleted}
 
@@ -257,17 +307,19 @@ async def batch_delete_risks(
 @router.patch(
     "/batch/status/",
     status_code=200,
+    dependencies=[Depends(RequirePermission("risk.update"))],
 )
 async def batch_update_risk_status(
     body: BulkStatusRequest,
     user_id: CurrentUserId,
     session: SessionDep,
 ) -> dict:
-    """Bulk-update status on multiple risks."""
-    from sqlalchemy import select as _select
+    """Bulk-update status on multiple risks.
 
+    Gated behind ``risk.update`` (EDITOR) to match single-row status edit,
+    and authorized per-project via ``verify_project_access``.
+    """
     from app.core.bulk_ops import bulk_update_status
-    from app.modules.projects.repository import ProjectRepository
     from app.modules.risk.models import RiskItem
     from app.modules.risk.schemas import STATUS_VALUES
 
@@ -281,13 +333,7 @@ async def batch_update_risk_status(
             detail=f"Invalid status. Allowed: {sorted(allowed_statuses)}",
         )
 
-    proj_repo = ProjectRepository(session)
-    owned_projects, _ = await proj_repo.list_for_user(owner_id=user_id, offset=0, limit=10000, exclude_archived=False)
-    owned_project_ids = {str(p.id) for p in owned_projects}
-
-    rows = (await session.execute(_select(RiskItem.id, RiskItem.project_id).where(RiskItem.id.in_(body.ids)))).all()
-    allowed_ids = [r[0] for r in rows if str(r[1]) in owned_project_ids]
-
+    allowed_ids = await _authorized_risk_ids(session, str(user_id), body.ids)
     updated = await bulk_update_status(session, RiskItem, allowed_ids, body.status, allowed_statuses=allowed_statuses)
     return {"requested": len(body.ids), "updated": updated, "status": body.status}
 
@@ -295,7 +341,11 @@ async def batch_update_risk_status(
 # ── Get ──────────────────────────────────────────────────────────────────────
 
 
-@router.get("/{risk_id}", response_model=RiskResponse)
+@router.get(
+    "/{risk_id}",
+    response_model=RiskResponse,
+    dependencies=[Depends(RequirePermission("risk.read"))],
+)
 async def get_risk(
     risk_id: uuid.UUID,
     session: SessionDep,

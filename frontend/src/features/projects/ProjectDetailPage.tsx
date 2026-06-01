@@ -57,9 +57,10 @@ import {
   BudgetBurnWidget,
   ComplianceSummaryWidget,
   ScheduleStripWidget,
+  ProjectWidgetsRollupProvider,
 } from './components/ProjectWidgets';
 import { useWidgetSettingsStore } from '@/stores/useWidgetSettingsStore';
-import { apiGet, apiPatch, ApiError } from '@/shared/lib/api';
+import { apiGet, apiPatch, ApiError, extractErrorMessageFromBody } from '@/shared/lib/api';
 import clsx from 'clsx';
 import { projectsApi, type Project } from './api';
 import { PhotosTab } from './PhotosTab';
@@ -183,23 +184,29 @@ async function smartImportFile(boqId: string, file: File): Promise<ImportResult>
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(body.detail || 'Import failed');
+    throw new Error(extractErrorMessageFromBody(body) ?? 'Import failed');
   }
   return res.json();
 }
 
-function formatCurrency(value: number, currency = 'EUR'): string {
-  // Validate currency code — must be 3 uppercase ASCII letters (ISO 4217)
-  const safeCurrency = /^[A-Z]{3}$/.test(currency) ? currency : 'EUR';
+function formatCurrency(value: number, currency?: string): string {
+  // Strict-currency policy (mirrors <MoneyDisplay>): never guess EUR when
+  // the project has no currency configured, which would silently mislabel
+  // a Saudi/UK/US project's money in Euros. Surface an em-dash instead so
+  // the configuration gap is visible.
+  const trimmed = typeof currency === 'string' ? currency.trim() : '';
+  if (!/^[A-Z]{3}$/.test(trimmed)) {
+    return '—';
+  }
   try {
     return new Intl.NumberFormat(i18n.language, {
       style: 'currency',
-      currency: safeCurrency,
+      currency: trimmed,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
   } catch {
-    return `${value.toFixed(2)} ${safeCurrency}`;
+    return `${value.toFixed(2)} ${trimmed}`;
   }
 }
 
@@ -682,7 +689,7 @@ function SummaryCard({
   const bgMap = {
     default: 'bg-surface-secondary text-content-tertiary',
     success: 'bg-semantic-success-bg text-semantic-success',
-    blue: 'bg-oe-blue-subtle text-oe-blue',
+    blue: 'bg-oe-blue-subtle text-oe-blue-text',
   };
 
   return (
@@ -849,7 +856,7 @@ function ImportDialog({
               <h2 className="text-lg font-semibold text-content-primary">
                 {t('import.import_document', { defaultValue: 'Import Document' })}
               </h2>
-              <span className="inline-flex items-center gap-1 rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue">
+              <span className="inline-flex items-center gap-1 rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue-text">
                 <Sparkles size={10} />
                 {t('import.ai_powered', { defaultValue: 'AI-powered' })}
               </span>
@@ -860,6 +867,7 @@ function ImportDialog({
           </div>
           <button
             onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
             className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:bg-surface-secondary transition-colors"
           >
             <X size={18} />
@@ -952,7 +960,7 @@ function ImportDialog({
                   </p>
                 </div>
                 {(result.method === 'ai' || result.method === 'cad_ai') && (
-                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue">
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-oe-blue-subtle px-2 py-0.5 text-2xs font-medium text-oe-blue-text">
                     <Sparkles size={10} />
                     {result.method === 'cad_ai'
                       ? `CAD + ${result.model_used ?? 'AI'}`
@@ -968,7 +976,7 @@ function ImportDialog({
 
               {/* CAD info banner */}
               {result.method === 'cad_ai' && result.cad_elements != null && (
-                <div className="flex items-center gap-2 rounded-lg bg-oe-blue-subtle/50 px-4 py-2.5 text-xs text-oe-blue">
+                <div className="flex items-center gap-2 rounded-lg bg-oe-blue-subtle/50 px-4 py-2.5 text-xs text-oe-blue-text">
                   <span className="font-medium">
                     {t('import.cad_elements_count', { defaultValue: '{{count}} CAD elements', count: result.cad_elements })}
                   </span>
@@ -1390,7 +1398,10 @@ export function ProjectDetailPage() {
     );
   }
 
-  const currency = project.currency || 'EUR';
+  // No silent EUR fallback — when the project has no currency configured
+  // formatCurrency() renders an em-dash so the gap is visible (the user
+  // can set the currency via the inline editor in the header).
+  const currency = project.currency || undefined;
 
   return (
     <div className="w-full animate-fade-in">
@@ -1523,7 +1534,11 @@ export function ProjectDetailPage() {
                         name: project.name,
                         description: project.description || '',
                         region: project.region || '',
-                        currency: project.currency || 'EUR',
+                        // Don't pre-fill a guessed EUR — leave blank when the
+                        // project has no currency so a click-Save doesn't
+                        // silently stamp EUR. The input placeholder hints the
+                        // ISO-4217 format.
+                        currency: project.currency || '',
                       });
                       setIsEditing(true);
                     }}
@@ -1552,7 +1567,7 @@ export function ProjectDetailPage() {
                       project.classification_standard}
                   </Badge>
                   <Badge variant="neutral" size="sm">
-                    {currency}
+                    {currency ?? t('projects.currency_not_set', { defaultValue: 'Currency not set' })}
                   </Badge>
                   <Badge variant="neutral" size="sm">
                     {project.region}
@@ -1586,71 +1601,70 @@ export function ProjectDetailPage() {
       )}
 
       {/* ── New widgets — interleaved between built-in sections ──────── */}
-      {!isWidgetHidden('rfi-inbox') && (
-        <div className="mb-4">
-          <RFIInboxWidget projectId={projectId!} />
+      {/* W23 P0: the provider fires ONE rollup request that feeds 8 of
+          the 13 widgets below. The 5 widgets whose endpoints don't yet
+          exist on the backend (photo strip, activity feed, schedule
+          strip, AI insights, recent files) keep their own
+          ``useGracefulQuery`` — adding them to the rollup would require
+          new backend endpoints. */}
+      <ProjectWidgetsRollupProvider projectId={projectId!}>
+        {/* Responsive widget grid: 1 col mobile, 2 cols sm, 3 cols lg,
+            4 cols xl. ``auto-rows-max`` keeps empty/short cards from
+            stretching to match a tall neighbour, so the block stays dense.
+            Wide widgets (schedule strip, budget burn, photo strip) span 2
+            cells on lg+ and the activity feed spans the full row, because
+            their content (timeline, history bars, photo carousel, log
+            feed) reads poorly cramped into a single column. */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mb-4 items-start auto-rows-max">
+          {!isWidgetHidden('rfi-inbox') && (
+            <RFIInboxWidget projectId={projectId!} />
+          )}
+          {!isWidgetHidden('change-orders') && (
+            <ChangeOrdersPulseWidget projectId={projectId!} currency={currency ?? 'EUR'} />
+          )}
+          {!isWidgetHidden('daily-diary') && (
+            <DailyDiaryWidget projectId={projectId!} />
+          )}
+          {!isWidgetHidden('hse-incidents') && (
+            <HSEIncidentsWidget projectId={projectId!} />
+          )}
+          {!isWidgetHidden('variations') && (
+            <VariationsWidget projectId={projectId!} currency={currency ?? 'EUR'} />
+          )}
+          {!isWidgetHidden('quality-ncr') && (
+            <QualityNCRWidget projectId={projectId!} />
+          )}
+          {!isWidgetHidden('compliance-summary') && (
+            <ComplianceSummaryWidget projectId={projectId!} />
+          )}
+          {!isWidgetHidden('schedule-strip') && (
+            <div className="lg:col-span-2 xl:col-span-2">
+              <ScheduleStripWidget projectId={projectId!} />
+            </div>
+          )}
+          {!isWidgetHidden('budget-burn') && (
+            <div className="lg:col-span-2 xl:col-span-2">
+              <BudgetBurnWidget projectId={projectId!} currency={currency ?? 'EUR'} />
+            </div>
+          )}
+          {!isWidgetHidden('recent-files') && (
+            <RecentFilesWidget projectId={projectId!} />
+          )}
+          {!isWidgetHidden('photo-strip') && (
+            <div className="lg:col-span-2 xl:col-span-2">
+              <PhotoStripWidget projectId={projectId!} />
+            </div>
+          )}
+          {!isWidgetHidden('ai-insights') && (
+            <AIInsightsWidget projectId={projectId!} />
+          )}
+          {!isWidgetHidden('activity-feed') && (
+            <div className="sm:col-span-2 lg:col-span-3 xl:col-span-4">
+              <ActivityFeedWidget projectId={projectId!} />
+            </div>
+          )}
         </div>
-      )}
-      {!isWidgetHidden('change-orders') && (
-        <div className="mb-4">
-          <ChangeOrdersPulseWidget projectId={projectId!} currency={currency} />
-        </div>
-      )}
-      {!isWidgetHidden('daily-diary') && (
-        <div className="mb-4">
-          <DailyDiaryWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('hse-incidents') && (
-        <div className="mb-4">
-          <HSEIncidentsWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('variations') && (
-        <div className="mb-4">
-          <VariationsWidget projectId={projectId!} currency={currency} />
-        </div>
-      )}
-      {!isWidgetHidden('schedule-strip') && (
-        <div className="mb-4">
-          <ScheduleStripWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('budget-burn') && (
-        <div className="mb-4">
-          <BudgetBurnWidget projectId={projectId!} currency={currency} />
-        </div>
-      )}
-      {!isWidgetHidden('quality-ncr') && (
-        <div className="mb-4">
-          <QualityNCRWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('compliance-summary') && (
-        <div className="mb-4">
-          <ComplianceSummaryWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('recent-files') && (
-        <div className="mb-4">
-          <RecentFilesWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('photo-strip') && (
-        <div className="mb-4">
-          <PhotoStripWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('ai-insights') && (
-        <div className="mb-4">
-          <AIInsightsWidget projectId={projectId!} />
-        </div>
-      )}
-      {!isWidgetHidden('activity-feed') && (
-        <div className="mb-4">
-          <ActivityFeedWidget projectId={projectId!} />
-        </div>
-      )}
+      </ProjectWidgetsRollupProvider>
       {/* ``weather-alerts`` is a thin pointer to ProjectWeather (already
           rendered inside the location panel) — no separate render needed
           here, but the manager still exposes the toggle for future use. */}
@@ -1813,7 +1827,7 @@ export function ProjectDetailPage() {
                         ? 'bg-semantic-error-bg text-semantic-error'
                         : dashboardData.budget.warning_level === 'warning'
                         ? 'bg-amber-100 text-amber-600'
-                        : 'bg-oe-blue-subtle text-oe-blue'
+                        : 'bg-oe-blue-subtle text-oe-blue-text'
                     }`}>
                       <DollarSign size={20} strokeWidth={1.75} />
                     </div>
@@ -2220,7 +2234,7 @@ export function ProjectDetailPage() {
                           field_report: t('projects.dash_field_report', { defaultValue: 'Field Report' }),
                         };
                         const typeColors: Record<string, string> = {
-                          rfi_created: 'bg-oe-blue-subtle text-oe-blue',
+                          rfi_created: 'bg-oe-blue-subtle text-oe-blue-text',
                           task_created: 'bg-[#0891b2]/10 text-[#0891b2]',
                           change_order: 'bg-amber-100 text-amber-600',
                           document_uploaded: 'bg-[#7c3aed]/10 text-[#7c3aed]',
@@ -2473,7 +2487,7 @@ export function ProjectDetailPage() {
                       {/* Icon */}
                       <button
                         onClick={() => navigate(`/boq/${boq.id}`)}
-                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue transition-transform group-hover:scale-105"
+                        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text transition-transform group-hover:scale-105"
                       >
                         <Table2 size={18} strokeWidth={1.75} />
                       </button>

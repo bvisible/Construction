@@ -25,6 +25,22 @@ class DwgDrawingCreate(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class DwgDrawingFromDocument(BaseModel):
+    """Create a DWG drawing from an existing Document on demand.
+
+    Used by the Documents / File Manager "Open in DWG Takeoff" action so a
+    CAD file uploaded outside the takeoff module still opens directly in the
+    viewer. ``document_id`` must reference a ``.dwg`` / ``.dxf`` document the
+    caller can access; the endpoint is idempotent per document.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    document_id: UUID
+    name: str | None = Field(default=None, max_length=500)
+    discipline: str | None = Field(default=None, max_length=100)
+
+
 class DwgDrawingResponse(BaseModel):
     """‌⁠‍DWG drawing returned from the API."""
 
@@ -218,6 +234,16 @@ class BoqLinkRequest(BaseModel):
     """Request body for linking an annotation to a BOQ position."""
 
     position_id: str = Field(..., min_length=1, max_length=255)
+    push_quantity: bool = Field(
+        default=False,
+        description=(
+            "When true, copy the annotation's measured value into the "
+            "target BOQ position's quantity and recompute the position "
+            "total. An annotation with no usable value is a no-op (the "
+            "existing quantity is left untouched). Default false keeps "
+            "existing callers backward-compatible."
+        ),
+    )
 
 
 # ── Measurement result ─────────────────────────────────────────────────
@@ -275,6 +301,14 @@ class DwgOfflineReadinessResponse(BaseModel):
     converter_available: bool
     version: str | None = None
     message: str
+    # True only when the request reached the backend over the loopback
+    # interface AND the server is not a hosted/production deployment — i.e.
+    # the browser and the server genuinely run on the same machine, so the
+    # "your files never leave your computer" claim is literally true. On a
+    # hosted demo this is False and the UI must show the honest "processed
+    # on your OpenConstructionERP server" copy instead. Defaults to False so
+    # the strong claim is never shown unless explicitly earned.
+    local_only: bool = False
 
 
 # Forward reference resolution

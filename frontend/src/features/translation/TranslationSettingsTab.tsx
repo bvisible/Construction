@@ -18,7 +18,7 @@
  * effect in that page (introduced for ``#fx-rates`` in Issue #105).
  *
  * Keep all user-facing strings in i18n with ``defaultValue`` per the
- * project convention (``CLAUDE.md`` → "i18n EVERYWHERE").
+ * project convention (``the architecture guide`` → "i18n EVERYWHERE").
  */
 
 import {

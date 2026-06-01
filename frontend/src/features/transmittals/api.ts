@@ -74,6 +74,12 @@ export interface CreateTransmittalPayload {
   cover_note?: string;
   response_due_date?: string;
   items?: CreateItemPayload[];
+  // dead_button fix: the create modal collected a free-text "Recipients" field
+  // (names/emails) that handleCreateSubmit silently dropped on submit. The
+  // backend has no free-text recipient column (only org/user UUIDs), so the
+  // typed names are preserved in the transmittal's free-form `metadata` dict
+  // (persisted server-side as metadata_ and echoed back in TransmittalResponse).
+  metadata?: Record<string, unknown>;
 }
 
 /* ── API Functions ─────────────────────────────────────────────────────── */

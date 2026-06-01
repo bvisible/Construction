@@ -32,7 +32,7 @@ import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useCreateShortcut } from '@/shared/hooks/useCreateShortcut';
-import { apiGet, triggerDownload } from '@/shared/lib/api';
+import { apiGet, extractErrorMessageFromBody, triggerDownload } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -1277,7 +1277,7 @@ export function TasksPage() {
         let detail = 'Import failed';
         try {
           const body = await response.json();
-          detail = body.detail || detail;
+          detail = extractErrorMessageFromBody(body) ?? detail;
         } catch { /* ignore */ }
         throw new Error(detail);
       }
@@ -1435,7 +1435,7 @@ export function TasksPage() {
           className={clsx(
             'rounded-lg px-3 py-1.5 text-sm font-medium transition-colors whitespace-nowrap',
             typeFilter === ''
-              ? 'bg-oe-blue-subtle text-oe-blue'
+              ? 'bg-oe-blue-subtle text-oe-blue-text'
               : 'text-content-tertiary hover:text-content-secondary hover:bg-surface-secondary',
           )}
         >

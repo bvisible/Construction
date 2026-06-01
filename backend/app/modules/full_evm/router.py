@@ -21,7 +21,7 @@ from app.modules.full_evm.schemas import (
 )
 from app.modules.full_evm.service import EVMService
 
-router = APIRouter()
+router = APIRouter(tags=["full_evm"])
 logger = logging.getLogger(__name__)
 
 

@@ -72,6 +72,33 @@ function safeScene(viewer: any): any | null {
 }
 
 /**
+ * Resolve the viewer's imagery-layer collection without ever throwing.
+ *
+ * ``Viewer.imageryLayers`` is the same flavour of getter as ``.scene`` —
+ * it dereferences ``_cesiumWidget`` internally, so reading it on a
+ * destroyed viewer THROWS rather than returning undefined. The imagery
+ * sync runs synchronously inside a ``useEffect`` body, so an unguarded
+ * throw here would propagate straight to the React ErrorBoundary on the
+ * post-navigation teardown race. We prefer ``scene.imageryLayers`` and
+ * fall back to the viewer getter, swallowing throws on both.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function safeImageryLayers(viewer: any, scene: any): any | null {
+  if (scene) {
+    try {
+      if (scene.imageryLayers) return scene.imageryLayers;
+    } catch {
+      /* scene disposed mid-read — fall through to the viewer getter */
+    }
+  }
+  try {
+    return viewer?.imageryLayers ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Validate that an overlay's four corners can produce a non-degenerate
  * Cesium ``Rectangle``. Exposed so OverlayPanel can surface a soft
  * "Needs corners" badge without trying to render the layer.
@@ -196,8 +223,7 @@ export function OverlayLayer({
     // ``safeScene`` so an unmount/teardown race during navigation never
     // blows up into the React ErrorBoundary.
     const scene = safeScene(v);
-    if (!scene && !v.imageryLayers) return;
-    const imageryLayers = scene?.imageryLayers ?? v.imageryLayers;
+    const imageryLayers = safeImageryLayers(v, scene);
     if (!imageryLayers) return;
 
     const seen = new Set<string>();
@@ -295,7 +321,7 @@ export function OverlayLayer({
       // viewer (typical when navigating away from /geo). Use ``safeScene``
       // so the cleanup never re-throws into React's commitHookEffectListUnmount.
       const scene = safeScene(v);
-      const imageryLayers = scene?.imageryLayers ?? v.imageryLayers;
+      const imageryLayers = safeImageryLayers(v, scene);
       if (!imageryLayers) {
         layerMapRef.current.clear();
         return;
@@ -370,28 +396,35 @@ export function OverlayLayer({
     // ScreenSpaceEventHandler.
     let dragIndex: number | null = null;
     let handler: any = null;
+    // A live scene always exposes a canvas; bail if it doesn't so the
+    // ScreenSpaceEventHandler ctor never gets an undefined arg.
+    const canvas = scene.canvas;
+    if (!canvas) return;
     try {
-      handler = new c.ScreenSpaceEventHandler(v.scene.canvas);
+      handler = new c.ScreenSpaceEventHandler(canvas);
       const screenToCartographic = (pos: any) => {
         // Viewer may have been destroyed between handler creation and
-        // a deferred event firing — every ``v.scene`` access inside the
-        // closure has to be defensive.
-        if (!v.scene) return null;
+        // a deferred event firing — every scene access inside the closure
+        // has to be defensive. ``v.scene`` is a getter that THROWS (not
+        // returns undefined) once Cesium nulls ``_cesiumWidget`` in
+        // ``destroy()``, so a bare ``if (!v.scene)`` would itself throw.
+        // Route through ``safeScene`` which swallows that.
+        const s = safeScene(v);
+        if (!s) return null;
         const ray = v.camera?.getPickRay?.(pos);
-        const hit = ray
-          ? v.scene.globe?.pick?.(ray, v.scene)
-          : v.scene.pickPosition?.(pos);
+        const hit = ray ? s.globe?.pick?.(ray, s) : s.pickPosition?.(pos);
         if (!hit) return null;
         return c.Cartographic.fromCartesian(hit);
       };
 
       handler.setInputAction((m: any) => {
-        if (!v.scene) return;
-        const picked = v.scene.pick?.(m.position);
+        const s = safeScene(v);
+        if (!s) return;
+        const picked = s.pick?.(m.position);
         const idx = picked?.id?.properties?._oeCornerIndex?.getValue?.();
         if (typeof idx === 'number') {
           dragIndex = idx;
-          const ssc = v.scene.screenSpaceCameraController;
+          const ssc = s.screenSpaceCameraController;
           if (ssc) ssc.enableInputs = false;
         }
       }, c.ScreenSpaceEventType.LEFT_DOWN);
@@ -424,7 +457,7 @@ export function OverlayLayer({
           },
         );
         dragIndex = null;
-        const ssc = v.scene?.screenSpaceCameraController;
+        const ssc = safeScene(v)?.screenSpaceCameraController;
         if (ssc) ssc.enableInputs = true;
         patchMutation.mutate({
           id: active.id,
@@ -526,13 +559,21 @@ export function OverlayLayer({
     };
 
     try {
-      handler = new c.ScreenSpaceEventHandler(v.scene.canvas);
-      handler.setInputAction((m: any) => {
-        if (!v.scene) return;
+      // A live scene always exposes a canvas; guard so the
+      // ScreenSpaceEventHandler ctor never receives an undefined arg. The
+      // keydown listener below is still wired so Esc/Enter work regardless.
+      const canvas = scene.canvas;
+      if (canvas) handler = new c.ScreenSpaceEventHandler(canvas);
+      handler?.setInputAction((m: any) => {
+        // ``v.scene`` THROWS (not returns undefined) on a destroyed viewer
+        // — a deferred click can fire after navigation tore the viewer
+        // down. ``safeScene`` swallows the getter throw.
+        const s = safeScene(v);
+        if (!s) return;
         const ray = v.camera?.getPickRay?.(m.position);
         const hit = ray
-          ? v.scene.globe?.pick?.(ray, v.scene)
-          : v.scene.pickPosition?.(m.position);
+          ? s.globe?.pick?.(ray, s)
+          : s.pickPosition?.(m.position);
         if (!hit) return;
         const cart = c.Cartographic.fromCartesian(hit);
         const lon = c.Math.toDegrees(cart.longitude);

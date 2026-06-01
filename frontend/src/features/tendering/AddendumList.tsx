@@ -8,7 +8,15 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileText, Megaphone, Plus, Send, CheckCircle2, Clock } from 'lucide-react';
+import {
+  FileText,
+  Megaphone,
+  Plus,
+  Send,
+  CheckCircle2,
+  Clock,
+  Check,
+} from 'lucide-react';
 import { Badge, Button, Card, EmptyState, Skeleton } from '@/shared/ui';
 import {
   WideModal,
@@ -19,8 +27,11 @@ import { useToastStore } from '@/stores/useToastStore';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import {
   type Addendum,
+  type BidderSummary,
+  acknowledgeAddendum,
   createAddendum,
   listAddenda,
+  listPackageBidders,
   publishAddendum,
 } from './api';
 
@@ -142,19 +153,32 @@ function AddendumRow({
   addendum,
   onPublish,
   publishing,
+  bidders,
+  onAcknowledge,
+  acknowledging,
 }: {
   addendum: Addendum;
   onPublish: () => void;
   publishing: boolean;
+  bidders: BidderSummary[];
+  onAcknowledge: (bidderId: string) => void;
+  acknowledging: boolean;
 }) {
   const { t } = useTranslation();
   const isPublished = addendum.published_at !== null;
   const ackCount = addendum.acknowledged_by.length;
 
+  // Bidders who have NOT yet acknowledged this addendum — the acknowledge
+  // control is only meaningful for those (and only once the addendum is
+  // published; a draft cannot be acknowledged, mirroring the backend guard).
+  const ackedIds = new Set(addendum.acknowledged_by.map((a) => a.bidder_id));
+  const pendingBidders = bidders.filter((b) => !ackedIds.has(b.id));
+  const [picking, setPicking] = useState(false);
+
   return (
     <Card padding="none" className="overflow-hidden">
       <div className="flex items-start gap-3 px-4 py-3">
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
           <Megaphone size={16} />
         </div>
         <div className="min-w-0 flex-1">
@@ -208,15 +232,70 @@ function AddendumRow({
           </div>
           {ackCount > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {addendum.acknowledged_by.map((entry) => (
-                <span
-                  key={`${entry.bidder_id}-${entry.acknowledged_at}`}
-                  className="inline-flex items-center gap-1 rounded-full bg-semantic-success-bg/40 px-2 py-0.5 text-[10px] font-medium text-semantic-success"
+              {addendum.acknowledged_by.map((entry) => {
+                const company = bidders.find(
+                  (b) => b.id === entry.bidder_id,
+                )?.company_name;
+                return (
+                  <span
+                    key={`${entry.bidder_id}-${entry.acknowledged_at}`}
+                    className="inline-flex items-center gap-1 rounded-full bg-semantic-success-bg/40 px-2 py-0.5 text-[10px] font-medium text-semantic-success"
+                  >
+                    <CheckCircle2 size={10} />
+                    {company || entry.bidder_id.slice(0, 8)}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Acknowledge control — only for a published addendum that still has
+              bidders who have not acknowledged it. Records the ack on behalf of
+              the chosen bidder via POST /addenda/{id}/acknowledge/. */}
+          {isPublished && pendingBidders.length > 0 && (
+            <div className="mt-2">
+              {!picking ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={<Check size={13} />}
+                  onClick={() => setPicking(true)}
                 >
-                  <CheckCircle2 size={10} />
-                  {entry.bidder_id.slice(0, 8)}
-                </span>
-              ))}
+                  {t('tendering.addendum.acknowledge', {
+                    defaultValue: 'Acknowledge',
+                  })}
+                </Button>
+              ) : (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-content-tertiary">
+                    {t('tendering.addendum.acknowledge_as', {
+                      defaultValue: 'Acknowledge as:',
+                    })}
+                  </span>
+                  {pendingBidders.map((b) => (
+                    <Button
+                      key={b.id}
+                      variant="secondary"
+                      size="sm"
+                      icon={<Check size={12} />}
+                      loading={acknowledging}
+                      onClick={() => {
+                        onAcknowledge(b.id);
+                        setPicking(false);
+                      }}
+                    >
+                      {b.company_name}
+                    </Button>
+                  ))}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPicking(false)}
+                  >
+                    {t('common.cancel', 'Cancel')}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -250,6 +329,13 @@ export function AddendumList({ packageId }: Props) {
     queryFn: () => listAddenda(packageId),
   });
 
+  // Bidders for this package — needed to record an acknowledgement against a
+  // specific bidder and to label ack chips with company names.
+  const { data: bidders } = useQuery({
+    queryKey: ['tendering-package-bidders', packageId],
+    queryFn: () => listPackageBidders(packageId),
+  });
+
   const publishMutation = useMutation({
     mutationFn: (addendumId: string) => publishAddendum(addendumId),
     onSuccess: () => {
@@ -260,6 +346,34 @@ export function AddendumList({ packageId }: Props) {
         type: 'success',
         title: t('tendering.addendum.published_toast', {
           defaultValue: 'Addendum published',
+        }),
+      });
+    },
+    onError: (error: Error) => {
+      addToast({
+        type: 'error',
+        title: t('toasts.error', { defaultValue: 'Error' }),
+        message: error.message,
+      });
+    },
+  });
+
+  const acknowledgeMutation = useMutation({
+    mutationFn: ({
+      addendumId,
+      bidderId,
+    }: {
+      addendumId: string;
+      bidderId: string;
+    }) => acknowledgeAddendum(addendumId, bidderId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ['tendering-addenda', packageId],
+      });
+      addToast({
+        type: 'success',
+        title: t('tendering.addendum.acknowledged_toast', {
+          defaultValue: 'Acknowledgement recorded',
         }),
       });
     },
@@ -320,6 +434,17 @@ export function AddendumList({ packageId }: Props) {
               publishing={
                 publishMutation.isPending &&
                 publishMutation.variables === addendum.id
+              }
+              bidders={bidders ?? []}
+              onAcknowledge={(bidderId) =>
+                acknowledgeMutation.mutate({
+                  addendumId: addendum.id,
+                  bidderId,
+                })
+              }
+              acknowledging={
+                acknowledgeMutation.isPending &&
+                acknowledgeMutation.variables?.addendumId === addendum.id
               }
             />
           ))}

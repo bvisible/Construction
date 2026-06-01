@@ -417,6 +417,21 @@ export function listPipelineStages(): Promise<PipelineStage[]> {
   return safeGetList<PipelineStage>('/v1/crm/pipeline-stages/');
 }
 
+/* ── Win/loss reasons ─────────────────────────────────────────────────── */
+
+export interface WinLossReason {
+  id: string;
+  code: string;
+  label: string;
+  category: string;
+  is_win_reason: boolean;
+  is_loss_reason: boolean;
+}
+
+export function listWinLossReasons(): Promise<WinLossReason[]> {
+  return safeGetList<WinLossReason>('/v1/crm/win-loss-reasons/');
+}
+
 /* ── Activities ───────────────────────────────────────────────────────── */
 
 export function listActivities(params?: {

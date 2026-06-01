@@ -1,12 +1,12 @@
 /** Table view of files — alternative to FileGrid. */
 
 import { useTranslation } from 'react-i18next';
-import { ArrowDown, ArrowUp, ExternalLink, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag } from 'lucide-react';
+import { ArrowDown, ArrowUp, ExternalLink, FileText, Image as ImageIcon, Layout, Box, Pencil, File, PenTool, FileBarChart, Tag, Star } from 'lucide-react';
 import clsx from 'clsx';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { primaryModule } from '../kindModule';
 import { CDEBadge } from './CDEBadge';
-import type { FileRow, FileKind, FileFilters } from '../types';
+import { favoriteKey, type FileRow, type FileKind, type FileFilters } from '../types';
 
 const KIND_ICON: Record<FileKind, typeof FileText> = {
   document: FileText,
@@ -27,6 +27,10 @@ interface FileListProps {
   sort: NonNullable<FileFilters['sort']>;
   onSortChange: (sort: NonNullable<FileFilters['sort']>) => void;
   isLoading?: boolean;
+  /** ``favoriteKey(kind, id)`` membership set for the current user. */
+  favoriteKeys?: Set<string>;
+  /** Toggle a row's favourite state. Omit to hide the star column. */
+  onToggleFavorite?: (row: FileRow, isFavorite: boolean) => void;
 }
 
 function fmtBytes(bytes: number): string {
@@ -48,8 +52,11 @@ export function FileList({
   sort,
   onSortChange,
   isLoading,
+  favoriteKeys,
+  onToggleFavorite,
 }: FileListProps) {
   const { t } = useTranslation();
+  const showStar = Boolean(onToggleFavorite);
 
   const Header = ({ field, label, align = 'left' }: { field: SortKey; label: string; align?: 'left' | 'right' }) => {
     const active = sort === field;
@@ -76,6 +83,7 @@ export function FileList({
       <table className="w-full border-collapse text-sm">
         <thead className="sticky top-0 z-10 bg-surface-elevated border-b border-border-light">
           <tr>
+            {showStar && <th className="w-9 px-2 py-2" aria-hidden="true" />}
             <Header field="name" label={t('files.col.name', { defaultValue: 'Name' })} />
             <Header field="kind" label={t('files.col.kind', { defaultValue: 'Type' })} />
             <Header field="size" label={t('files.col.size', { defaultValue: 'Size' })} align="right" />
@@ -101,7 +109,7 @@ export function FileList({
             ))
           ) : items.length === 0 ? (
             <tr>
-              <td colSpan={6} className="px-3 py-12 text-center text-sm text-content-tertiary">
+              <td colSpan={showStar ? 7 : 6} className="px-3 py-12 text-center text-sm text-content-tertiary">
                 {t('files.empty', { defaultValue: 'No files match your filters.' })}
               </td>
             </tr>
@@ -112,6 +120,7 @@ export function FileList({
               const target = primaryModule(row.kind, row.extension);
               const TargetIcon = target.icon;
               const moduleLabel = t(target.i18nKey, { defaultValue: target.label });
+              const isFavorite = favoriteKeys?.has(favoriteKey(row.kind, row.id)) ?? false;
               return (
                 <tr
                   key={row.id}
@@ -124,6 +133,32 @@ export function FileList({
                   onClick={(e) => onSelect(row.id, e.metaKey || e.ctrlKey, e.shiftKey)}
                   onDoubleClick={() => onOpen(row)}
                 >
+                  {showStar && (
+                    <td className="px-2 py-2 text-center">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleFavorite?.(row, isFavorite);
+                        }}
+                        aria-pressed={isFavorite}
+                        className={clsx(
+                          'inline-flex items-center justify-center h-6 w-6 rounded-md transition-colors',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40',
+                          isFavorite
+                            ? 'text-amber-500 hover:text-amber-600'
+                            : 'text-content-tertiary/40 hover:text-amber-500',
+                        )}
+                        title={
+                          isFavorite
+                            ? t('files.favorites.remove', { defaultValue: 'Remove from favourites' })
+                            : t('files.favorites.add', { defaultValue: 'Add to favourites' })
+                        }
+                      >
+                        <Star size={13} strokeWidth={2} fill={isFavorite ? 'currentColor' : 'none'} />
+                      </button>
+                    </td>
+                  )}
                   <td className="px-3 py-2 max-w-0">
                     <div className="flex items-center gap-2 min-w-0">
                       <Icon size={14} strokeWidth={1.75} className="shrink-0 text-content-tertiary" />

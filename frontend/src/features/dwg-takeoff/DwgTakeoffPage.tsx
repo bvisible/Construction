@@ -52,6 +52,7 @@ import {
   ListChecks,
   Ruler,
   FileDown,
+  RotateCcw,
 } from 'lucide-react';
 import { Badge, ConfirmDialog, ElementInfoPopover, type DWGElementPayload } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
@@ -64,6 +65,7 @@ import { projectsApi } from '@/features/projects/api';
 import { installBIMConverter } from '@/features/bim/api';
 import { ConverterInstallProgressBar } from '@/features/bim/ConverterInstallProgressBar';
 import {
+  fetchDrawing,
   fetchDrawings,
   deleteDrawing,
   fetchEntities,
@@ -74,6 +76,7 @@ import {
   createEntityGroup,
   fetchOfflineReadiness,
   updateDrawingScale,
+  importDrawingFromDocument,
   USER_MARKUP_LAYER,
 } from './api';
 import { Undo2, Redo2, Target } from 'lucide-react';
@@ -467,6 +470,20 @@ function OfflineReadyBadge({
 
   const ready = readiness?.ready ?? false;
   const converterMissing = readiness && !readiness.converter_available;
+  // Only claim "runs on your machine" when the server is genuinely a
+  // same-machine, non-hosted deployment. On the hosted demo we tell the
+  // honest truth: processing happens on the user's OpenConstructionERP
+  // server and is never forwarded to a third party.
+  const localOnly = readiness?.local_only ?? false;
+  const readyTooltip = localOnly
+    ? t('dwg_takeoff.offline_ready_tooltip_local', {
+        defaultValue:
+          'This tool works fully offline — conversions run on your machine.',
+      })
+    : t('dwg_takeoff.offline_ready_tooltip_server', {
+        defaultValue:
+          'Conversions run on your OpenConstructionERP server and are never sent to third parties.',
+      });
 
   return (
     <div className="relative" data-testid={testId}>
@@ -481,10 +498,7 @@ function OfflineReadyBadge({
         )}
         title={
           ready
-            ? t('dwg_takeoff.offline_ready_tooltip', {
-                defaultValue:
-                  'This tool works fully offline — conversions run on your machine.',
-              })
+            ? readyTooltip
             : t('dwg_takeoff.offline_install_tooltip', {
                 defaultValue:
                   'Install the local DWG converter to enable offline .dwg conversion. DXF files already work.',
@@ -536,11 +550,7 @@ function OfflineReadyBadge({
             </button>
           </div>
           <p className="text-content-secondary leading-relaxed">
-            {readiness?.message ??
-              t('dwg_takeoff.offline_ready_tooltip', {
-                defaultValue:
-                  'This tool works fully offline — conversions run on your machine.',
-              })}
+            {readiness?.message ?? readyTooltip}
           </p>
           {converterMissing && (
             <>
@@ -634,11 +644,22 @@ export function DwgTakeoffPage() {
     }
   }, [activeProjectId, projectId, projects, setActiveProject]);
 
-  // Deep-link support: ?drawingId=xxx opens a specific drawing
-  // Also supports ?docName=xxx from the Documents page (matches by filename)
+  // Deep-link support: ?drawingId=xxx opens a specific drawing.
+  // From the Documents / File Manager "Open in DWG Takeoff" action we also
+  // accept ?docId=xxx (+ optional ?docName=xxx). When a document has no
+  // matching drawing yet we import one on demand (see the effect below) so
+  // the document opens immediately instead of showing a blank viewer.
   const [searchParams, setSearchParams] = useSearchParams();
   const deepLinkDrawingId = searchParams.get('drawingId');
+  const deepLinkDocId = searchParams.get('docId');
   const deepLinkDocName = searchParams.get('docName');
+  /** Tracks the in-flight on-demand import from a document deep-link so the
+   *  viewer shows an honest "Opening document…" card instead of the empty
+   *  upload hero while the drawing is being created server-side. Latched by
+   *  document id so a single deep-link is imported exactly once even under
+   *  StrictMode's double-effect-invoke in dev. */
+  const [importingDocId, setImportingDocId] = useState<string | null>(null);
+  const importedDocRef = useRef<string | null>(null);
 
   // State
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
@@ -732,9 +753,24 @@ export function DwgTakeoffPage() {
       if (!projectId) return;
       for (const [id, job] of state.jobs) {
         const prev = prevState.jobs.get(id);
+        // As soon as the upload POST returns and the backend's drawing
+        // row exists (drawingId is set), auto-select it so the user
+        // immediately sees the ConversionProgressCard bound to *their*
+        // specific drawing — instead of staring at the upload card with
+        // a vague corner dock. The card itself drives the 3-8 minute
+        // wait honestly, with elapsed time + step list.
+        if (
+          job.drawingId
+          && !prev?.drawingId
+          && job.projectId === projectId
+        ) {
+          queryClient.invalidateQueries({ queryKey: ['dwg-drawings', projectId] });
+          setSelectedDrawingId(job.drawingId);
+        }
         if (prev?.status !== 'ready' && job.status === 'ready' && job.projectId === projectId) {
           queryClient.invalidateQueries({ queryKey: ['dwg-drawings', projectId] });
           queryClient.invalidateQueries({ queryKey: ['documents'] });
+          queryClient.invalidateQueries({ queryKey: ['dwg-entities', job.drawingId] });
           if (job.drawingId) setSelectedDrawingId(job.drawingId);
           addToast({
             type: 'success',
@@ -754,6 +790,17 @@ export function DwgTakeoffPage() {
   }, [projectId, queryClient, addToast, t]);
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(new Set());
   const [visibleNames, setVisibleNames] = useState<Set<string>>(new Set());
+  /**
+   * Full layer roster for the drawing, accumulated across server-filtered
+   * entity fetches. The entities query only ships the layers the user has
+   * toggled on (perf — a medium DWG carries 50k+ entities), which means the
+   * `layers` list derived from those entities would otherwise lose every
+   * hidden layer's row and the user could never re-enable it. We remember
+   * the union of layer names + metadata ever seen so the LayerPanel keeps
+   * the complete, toggle-able roster regardless of what the last fetch
+   * filtered out. Reset whenever the selected drawing changes.
+   */
+  const [allLayers, setAllLayers] = useState<DxfLayer[]>([]);
   /**
    * Multi-entity selection (RFC 11). A single-click produces a one-item set;
    * Shift+click toggles membership; Escape clears. `primarySelectedEntityId`
@@ -801,6 +848,11 @@ export function DwgTakeoffPage() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  /** Visual drop-zone hover state — flips on `dragenter`/`dragover` and
+   *  back on `dragleave`/`drop`. The hero card and modal both bind to it
+   *  so the dashed border highlights while a real file is hovering, not
+   *  only on mouse-hover. */
+  const [isDragActive, setIsDragActive] = useState(false);
   const { confirm: confirmAnnotDelete, ...annotDeleteConfirmProps } = useConfirm();
   // filmstripExpanded removed in v1.8.3 — drawings are always visible
   // per UX feedback. No auto-hide, no collapse toggle.
@@ -840,9 +892,27 @@ export function DwgTakeoffPage() {
   }, [drawings, selectedDrawingId]);
   const effectiveScale = drawingScale * unitFactor;
 
+  /**
+   * Layers to request from the backend. While `visibleLayers` is empty the
+   * full roster is not yet known (it is reset on every drawing switch), so
+   * we fetch ALL layers unfiltered to discover them. Once the user has a
+   * concrete visible set the backend filters the entity payload before
+   * serialising — only the toggled-on layers come over the wire. Sorted so
+   * the array is a stable React Query cache key (toggling A then B yields
+   * the same key as B then A).
+   */
+  const requestedLayers = useMemo(
+    () => Array.from(visibleLayers).sort(),
+    [visibleLayers],
+  );
+
   const { data: entities = [], isLoading: loadingEntities } = useQuery({
-    queryKey: ['dwg-entities', selectedDrawingId],
-    queryFn: () => fetchEntities(selectedDrawingId!),
+    queryKey: ['dwg-entities', selectedDrawingId, requestedLayers],
+    queryFn: () =>
+      fetchEntities(
+        selectedDrawingId!,
+        requestedLayers.length > 0 ? requestedLayers : undefined,
+      ),
     enabled: !!selectedDrawingId,
   });
 
@@ -851,6 +921,77 @@ export function DwgTakeoffPage() {
     queryFn: () => fetchAnnotations(selectedDrawingId!),
     enabled: !!selectedDrawingId,
   });
+
+  /* ── Honest progress: backend status polling ────────────────────────
+   * The /drawings list reflects the row at first paint, but for .dwg
+   * uploads the backend dispatches conversion as an asyncio.create_task
+   * and immediately returns `status="processing"` — that row can stay
+   * "processing" for 3-8 minutes on a medium DWG. Without active
+   * polling the user previously saw the empty DxfViewer (entities=[])
+   * and assumed it was "loaded but broken". Poll every 3.5 s while the
+   * drawing is not yet ready so we can render an honest conversion
+   * card and invalidate the entities query when it flips to `ready`.
+   *
+   * The query reads its own dedicated `dwg-drawing` queryKey so we
+   * don't keep refetching the whole drawings list (which would also
+   * trash the SheetStrip thumbnails). */
+  const selectedDrawingFromList = useMemo(
+    () => drawings.find((d) => d.id === selectedDrawingId),
+    [drawings, selectedDrawingId],
+  );
+  const isStatusKnownReady = (selectedDrawingFromList?.status ?? null) === 'ready';
+  const { data: liveDrawing } = useQuery({
+    queryKey: ['dwg-drawing', selectedDrawingId],
+    queryFn: () => fetchDrawing(selectedDrawingId!),
+    enabled: !!selectedDrawingId && !isStatusKnownReady,
+    refetchInterval: (q) => {
+      const s = (q.state.data as { status?: string } | undefined)?.status;
+      // Stop polling once the backend has reached a terminal state.
+      if (s === 'ready' || s === 'error' || s === 'empty') return false;
+      return 3500;
+    },
+    // Keep polling even when the tab is backgrounded so a long DWG/IFC
+    // conversion that completes while the user is on another tab is reflected
+    // the moment they return, instead of staying pinned on "Converting your
+    // drawing…" until a manual reload.
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+    gcTime: 0,
+  });
+  /** Effective backend status. A terminal status (ready/error/empty) from
+   *  EITHER the live poll or the cached drawings list wins, so a stale
+   *  "processing" left over in one source after the other has already reached
+   *  "ready" can no longer pin the conversion card open until a manual reload.
+   *  Otherwise prefer the live-poll value, then the list value, so we don't
+   *  briefly drop back into "loading…" between first paint and first poll. */
+  const _listStatus = selectedDrawingFromList?.status;
+  const _pollStatus = liveDrawing?.status;
+  const _isTerminalStatus = (s: string | null | undefined) =>
+    s === 'ready' || s === 'error' || s === 'empty';
+  const drawingStatus =
+    (_isTerminalStatus(_listStatus) ? _listStatus : undefined) ??
+    (_isTerminalStatus(_pollStatus) ? _pollStatus : undefined) ??
+    _pollStatus ??
+    _listStatus ??
+    null;
+  const isConverting =
+    !!selectedDrawingId &&
+    (drawingStatus === 'processing' || drawingStatus === 'uploaded');
+  const isErrorStatus = drawingStatus === 'error';
+  const isEmptyStatus = drawingStatus === 'empty';
+  const drawingErrorMessage =
+    liveDrawing?.error_message ?? selectedDrawingFromList?.error_message ?? null;
+
+  // When the backend finishes conversion, invalidate the entities and
+  // drawings list queries so the canvas renders the freshly-parsed
+  // entities without waiting for the next stale-time cycle.
+  useEffect(() => {
+    if (drawingStatus === 'ready' && selectedDrawingId) {
+      queryClient.invalidateQueries({ queryKey: ['dwg-entities', selectedDrawingId] });
+      queryClient.invalidateQueries({ queryKey: ['dwg-drawings', projectId] });
+    }
+  }, [drawingStatus, selectedDrawingId, projectId, queryClient]);
 
   /**
    * Offline-readiness probe (R3 #9). 60 s staleTime — the binary either
@@ -865,38 +1006,108 @@ export function DwgTakeoffPage() {
     retry: 1,
   });
 
-  // Deep-link: auto-select drawing when ?drawingId= or ?docName= is in URL
-  useEffect(() => {
-    if (drawings.length === 0) return;
+  /** Strip the deep-link params off the URL after one shot so a refresh
+   *  doesn't re-trigger selection / import. */
+  const clearDeepLinkParams = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('drawingId');
+    next.delete('docId');
+    next.delete('docName');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
+  /* ── On-demand import from a Documents / File Manager deep-link ───────────
+   * The Documents page links here as ?docId=<uuid>&docName=<name> for a CAD
+   * file that lives only as a Document. Such a file has no drawing to render,
+   * so the viewer used to sit blank. We create (or reuse) a drawing from the
+   * document via POST /drawings/from-document/ — idempotent server-side — and
+   * select the result. Mirrors the BIM page's graceful fallback: on failure
+   * we open the upload panel rather than leaving the user on a blank page. */
+  const importFromDocumentMutation = useMutation({
+    mutationFn: (docId: string) => importDrawingFromDocument(docId, deepLinkDocName ?? undefined),
+    onSuccess: (drawing) => {
+      queryClient.invalidateQueries({ queryKey: ['dwg-drawings', projectId] });
+      setImportingDocId(null);
+      handleSelectDrawing(drawing.id);
+      clearDeepLinkParams();
+    },
+    onError: (err: Error) => {
+      setImportingDocId(null);
+      // Graceful fallback (BIM-page pattern): surface the reason and open the
+      // upload panel pre-filled with the document name so the user can still
+      // get the file into the viewer — never a silent blank page.
+      addToast({
+        type: 'error',
+        title: t('dwg_takeoff.import_doc_failed', {
+          defaultValue: 'Could not open this document in DWG Takeoff',
+        }),
+        message: err.message || undefined,
+      });
+      if (deepLinkDocName) setUploadName(decodeURIComponent(deepLinkDocName).replace(/\.[^.]+$/, ''));
+      setShowUpload(true);
+      clearDeepLinkParams();
+    },
+  });
+
+  // Deep-link: auto-select drawing when ?drawingId= / ?docName= is in URL, or
+  // import on demand when ?docId= points at a document with no drawing yet.
+  useEffect(() => {
     let target: typeof drawings[number] | undefined;
 
-    // 1. Try matching by exact drawing ID
+    // 1. Try matching by exact drawing ID.
     if (deepLinkDrawingId) {
       target = drawings.find((d) => d.id === deepLinkDrawingId);
     }
 
-    // 2. Fallback: match by document name from Documents page (?docName=)
+    // 2. Fallback: match by document name from the Documents page (?docName=).
+    //    Covers the case where the file was uploaded through the takeoff
+    //    module (so a drawing with the same name already exists).
     if (!target && deepLinkDocName) {
       const docNameLower = decodeURIComponent(deepLinkDocName).toLowerCase();
+      const docNameNoExt = docNameLower.replace(/\.[^.]+$/, '');
       target = drawings.find(
         (d) =>
           d.name.toLowerCase() === docNameLower ||
-          d.name.toLowerCase() === docNameLower.replace(/\.[^.]+$/, ''),
+          d.name.toLowerCase() === docNameNoExt ||
+          d.filename?.toLowerCase() === docNameLower,
       );
     }
 
-    if (target && selectedDrawingId !== target.id) {
-      handleSelectDrawing(target.id);
-      // Clean up the URL params
-      const next = new URLSearchParams(searchParams);
-      next.delete('drawingId');
-      next.delete('docId');
-      next.delete('docName');
-      setSearchParams(next, { replace: true });
+    if (target) {
+      if (selectedDrawingId !== target.id) {
+        handleSelectDrawing(target.id);
+        clearDeepLinkParams();
+      }
+      return;
+    }
+
+    // 3. No existing drawing matched. Materialise one on demand from the
+    //    source document. We import when either:
+    //      - ?docId= is present (the canonical Documents / File Manager
+    //        link), or
+    //      - ?drawingId= is present but matched nothing AND there's no
+    //        ?docId=. The Files page historically passed a Document id as
+    //        ?drawingId= (the blank-page bug), and stale bookmarks may
+    //        still carry it — treating it as a document id recovers them.
+    //    The backend is idempotent (returns the existing drawing if the
+    //    document already has one) and 404s a truly bogus id, where the
+    //    mutation's onError opens the upload panel instead of staying
+    //    blank. Wait for the drawings list to load first so we don't fire
+    //    an import for an id that simply hadn't arrived in the list yet.
+    const importCandidateId =
+      deepLinkDocId || (deepLinkDrawingId && !deepLinkDocName ? deepLinkDrawingId : null);
+    if (
+      importCandidateId &&
+      !loadingDrawings &&
+      importedDocRef.current !== importCandidateId &&
+      !importFromDocumentMutation.isPending
+    ) {
+      importedDocRef.current = importCandidateId;
+      setImportingDocId(importCandidateId);
+      importFromDocumentMutation.mutate(importCandidateId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deepLinkDrawingId, deepLinkDocName, drawings]);
+  }, [deepLinkDrawingId, deepLinkDocId, deepLinkDocName, drawings, loadingDrawings]);
 
   // Layout support
   const [selectedLayout, setSelectedLayout] = useState<string | null>(null);
@@ -1084,12 +1295,44 @@ export function DwgTakeoffPage() {
     return annotatedEntities.filter((e) => e.layout === selectedLayout);
   }, [annotatedEntities, selectedLayout, layouts]);
 
-  // Computed layers (from filtered entities + annotations so virtual
-  // USER_MARKUP layer gets a LayerPanel row once users start drawing).
-  const layers = useMemo(
+  // Layers present in THIS (possibly server-filtered) fetch + the virtual
+  // USER_MARKUP layer so it gets a LayerPanel row once users start drawing.
+  const fetchedLayers = useMemo(
     () => extractLayers(filteredEntities, annotations),
     [filteredEntities, annotations],
   );
+
+  // Merge the layers from the latest fetch into the persistent full roster.
+  // Because the entity fetch is filtered by `visibleLayers`, hidden layers
+  // are absent from `fetchedLayers` — the union preserves their rows so the
+  // user can re-enable them. Entity counts/colours are refreshed from the
+  // most recent fetch that included the layer.
+  useEffect(() => {
+    if (fetchedLayers.length === 0) return;
+    setAllLayers((prev) => {
+      const byName = new Map(prev.map((l) => [l.name, l]));
+      for (const l of fetchedLayers) byName.set(l.name, l);
+      const merged = Array.from(byName.values()).sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+      // Skip the state write when nothing changed to avoid a render loop.
+      if (
+        merged.length === prev.length &&
+        merged.every(
+          (l, i) =>
+            prev[i]?.name === l.name && prev[i]?.entity_count === l.entity_count,
+        )
+      ) {
+        return prev;
+      }
+      return merged;
+    });
+  }, [fetchedLayers]);
+
+  // Full, toggle-able layer roster shown in the LayerPanel and used by the
+  // summary/canvas. Falls back to the current fetch before the roster has
+  // been seeded on first paint.
+  const layers = allLayers.length > 0 ? allLayers : fetchedLayers;
 
   /**
    * Annotations filtered by the virtual layer toggle. If the annotation
@@ -1107,12 +1350,18 @@ export function DwgTakeoffPage() {
     });
   }, [annotations, visibleLayers, layers]);
 
-  // Initialize visible layers when entities/layout change
+  // Seed visible layers from the full roster the FIRST time it is known for
+  // the current drawing. A per-drawing latch (not a `visibleLayers.size === 0`
+  // check) so that a deliberate "Hide All" — which also empties the set — is
+  // never silently undone by this effect on the next render.
+  const seededLayersForDrawingRef = useRef<string | null>(null);
   useEffect(() => {
-    if (layers.length > 0) {
-      setVisibleLayers(new Set(layers.map((l) => l.name)));
-    }
-  }, [layers]);
+    if (!selectedDrawingId) return;
+    if (seededLayersForDrawingRef.current === selectedDrawingId) return;
+    if (layers.length === 0) return;
+    seededLayersForDrawingRef.current = selectedDrawingId;
+    setVisibleLayers(new Set(layers.map((l) => l.name)));
+  }, [layers, selectedDrawingId]);
 
   // Initialize visible entity names when entities/layout change
   useEffect(() => {
@@ -1586,6 +1835,8 @@ export function DwgTakeoffPage() {
     setSelectedDrawingId(id);
     setVisibleLayers(new Set());
     setVisibleNames(new Set());
+    setAllLayers([]);
+    seededLayersForDrawingRef.current = null;
     setSelectedEntityIds(new Set());
     setHiddenEntityIds(new Set());
     setSelectedAnnotationId(null);
@@ -2015,21 +2266,59 @@ export function DwgTakeoffPage() {
           linked_annotation_id: annotationId ?? undefined,
         },
       };
+
+      // Unit-safety: linking a measured entity to an EXISTING position must
+      // not silently change its unit of measure. An area measurement (m\u00b2)
+      // pushed onto a position priced per metre or per piece would corrupt
+      // the estimate. We only adopt the measurement's unit when the
+      // existing position has none or the two already agree; otherwise we
+      // keep the position's unit and push the quantity only, and tell the
+      // user about the kept unit so the mismatch is never invisible.
+      const existingUnit = (position.unit ?? '').trim();
+      const measuredUnit = measurement ? measurement.unit.trim() : '';
+      const unitsMatch =
+        !existingUnit || existingUnit.toLowerCase() === measuredUnit.toLowerCase();
+      let unitKept = false;
       if (measurement) {
         patch['quantity'] = measurement.value;
-        patch['unit'] = measurement.unit;
+        if (unitsMatch) {
+          patch['unit'] = measurement.unit;
+        } else {
+          // Keep position.unit; only the quantity is updated.
+          unitKept = true;
+        }
       }
       await boqApi.updatePosition(position.id, patch);
 
       queryClient.invalidateQueries({ queryKey: ['dwg-annotations', selectedDrawingId] });
       queryClient.invalidateQueries({ queryKey: ['boq', position.boq_id] });
 
+      let message: string;
+      if (!measurement) {
+        message = position.ordinal;
+      } else if (unitKept) {
+        // Surface the old\u2192new unit difference so the user knows we kept
+        // their unit and pushed only the quantity. Plain-template head
+        // (value \u2192 ordinal) plus a translated "kept unit" explanation with
+        // two interpolated units.
+        const note = t('dwg_takeoff.linked_unit_kept_note', {
+          defaultValue: 'kept unit {{kept}} (measured {{measured}})',
+          kept: existingUnit,
+          measured: measuredUnit,
+        });
+        message = `${measurement.value} \u2192 ${position.ordinal} \u00b7 ${note}`;
+      } else {
+        message = `${measurement.value} ${measurement.unit} \u2192 ${position.ordinal}`;
+      }
+
       addToast({
-        type: 'success',
-        title: t('dwg_takeoff.linked_to_boq', { defaultValue: 'Linked to BOQ' }),
-        message: measurement
-          ? `${measurement.value} ${measurement.unit} \u2192 ${position.ordinal}`
-          : position.ordinal,
+        type: unitKept ? 'warning' : 'success',
+        title: unitKept
+          ? t('dwg_takeoff.linked_unit_mismatch', {
+              defaultValue: 'Linked \u00b7 unit kept',
+            })
+          : t('dwg_takeoff.linked_to_boq', { defaultValue: 'Linked to BOQ' }),
+        message,
       });
       setLinkingEntityId(null);
       setEntityPopup(null);
@@ -2339,6 +2628,10 @@ export function DwgTakeoffPage() {
   }, [selectedEntityIds, selectedAnnotationId, contextMenu, handleUndo, handleRedo]);
 
   /* ── Render ──────────────────────────────────────────────────────── */
+  // WAVE-FOLLOWUP: BetaBanner cannot mount here because the page renders a
+  // full-screen drafting canvas (negative margins + 100vh-56px). A drafting
+  // surface absorbs the whole viewport; adding a banner row would crop the
+  // canvas. Surface beta status via the page header chip instead.
 
   return (
     <div className="flex flex-col -mx-4 sm:-mx-7 -mt-6 -mb-4 overflow-hidden" style={{ height: 'calc(100vh - 56px)' }}>
@@ -2349,7 +2642,36 @@ export function DwgTakeoffPage() {
       <div className="flex flex-1 overflow-hidden">
         {/* ── Center: DXF Viewer ──────────────────────────────────── */}
         <div className="flex flex-1 flex-col min-h-0 min-w-0">
-          {!selectedDrawingId ? (
+          {importingDocId && !selectedDrawingId ? (
+            // On-demand import from a Documents / File Manager deep-link is
+            // running. Show an honest progress card instead of the upload
+            // hero so the page is never blank while the drawing is created
+            // server-side (the BIM page's graceful-open analogue).
+            <div
+              className="oe-dwg-canvas relative flex flex-1 items-center justify-center overflow-hidden"
+              style={{ background: '#3f3f3f' }}
+            >
+              <GridBackground className="z-0" />
+              <div className="relative z-10 flex flex-col items-center gap-4 rounded-2xl bg-[#22252b]/90 backdrop-blur-sm border border-[#333842] shadow-2xl shadow-black/30 px-10 py-9 text-center">
+                <Loader2 size={36} className="text-blue-400 animate-spin" />
+                <div>
+                  <p className="text-base font-semibold text-gray-200">
+                    {t('dwg_takeoff.opening_document', { defaultValue: 'Opening document…' })}
+                  </p>
+                  <p className="text-sm text-gray-500 mt-1.5 max-w-xs">
+                    {t('dwg_takeoff.opening_document_hint', {
+                      defaultValue: 'Preparing this drawing for takeoff. This can take a few minutes for large DWG files.',
+                    })}
+                  </p>
+                  {deepLinkDocName && (
+                    <p className="text-xs font-mono text-gray-600 mt-3 truncate max-w-xs">
+                      {decodeURIComponent(deepLinkDocName)}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : !selectedDrawingId ? (
             <div
               className="oe-dwg-canvas relative flex flex-1 overflow-hidden overflow-y-auto"
               style={{ background: '#3f3f3f' }}
@@ -2378,13 +2700,22 @@ export function DwgTakeoffPage() {
                       <button
                         type="button"
                         aria-label={t('dwg_takeoff.upload_aria', { defaultValue: 'Upload DWG or DXF file' })}
+                        data-testid="dwg-hero-drop-zone"
                         onDrop={(e) => {
                           e.preventDefault();
+                          setIsDragActive(false);
                           const f = e.dataTransfer.files?.[0];
                           if (f) { setUploadFile(f); setUploadName(f.name.replace(/\.[^.]+$/, '')); setShowUpload(true); }
                         }}
-                        onDragOver={(e) => e.preventDefault()}
-                        className="group/drop flex flex-col items-center justify-center gap-7 rounded-xl p-20 text-center cursor-pointer transition-all flex-1 border-2 border-dashed border-[#444c5a] bg-[#1a1d23]/60 hover:border-blue-500/50 hover:bg-blue-500/5 hover:shadow-[0_0_30px_rgba(59,130,246,0.1)] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#22252b]"
+                        onDragOver={(e) => { e.preventDefault(); setIsDragActive(true); }}
+                        onDragEnter={(e) => { e.preventDefault(); setIsDragActive(true); }}
+                        onDragLeave={() => setIsDragActive(false)}
+                        className={clsx(
+                          'group/drop flex flex-col items-center justify-center gap-7 rounded-xl p-20 text-center cursor-pointer transition-all flex-1 border-2 border-dashed focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-[#22252b]',
+                          isDragActive
+                            ? 'border-blue-400 bg-blue-500/15 shadow-[0_0_40px_rgba(59,130,246,0.2)] scale-[1.01]'
+                            : 'border-[#444c5a] bg-[#1a1d23]/60 hover:border-blue-500/50 hover:bg-blue-500/5 hover:shadow-[0_0_30px_rgba(59,130,246,0.1)]',
+                        )}
                         onClick={() => setShowUpload(true)}
                       >
                         <div className="w-20 h-20 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center group-hover/drop:scale-110 group-hover/drop:shadow-[0_0_20px_rgba(59,130,246,0.2)] transition-all">
@@ -2399,7 +2730,9 @@ export function DwgTakeoffPage() {
                           <span className="text-xs font-mono px-2.5 py-1 rounded-md bg-orange-500/10 text-orange-400 border border-orange-500/20 font-semibold">.dxf</span>
                         </div>
                         <p className="text-[11px] text-gray-600 leading-relaxed mt-1 text-center">
-                          AutoCAD 2000–2025 &middot; DXF R12–R2025
+                          {t('dwg_takeoff.format_support', {
+                            defaultValue: 'AutoCAD 2000–2025 · DXF R12–R2025',
+                          })}
                         </p>
                       </button>
                     </div>
@@ -2422,7 +2755,9 @@ export function DwgTakeoffPage() {
                         {t('dwg_takeoff.hero_subtitle', { defaultValue: 'Open DWG/DXF drawings, measure areas and lengths, annotate directly on the drawing, and link measurements to your BOQ positions.' })}
                       </p>
                       <p className="text-xs text-gray-600 mt-3 leading-relaxed">
-                        AutoCAD DWG 2000–2025 &middot; DXF R12–R2025
+                        {t('dwg_takeoff.format_support_dwg', {
+                          defaultValue: 'AutoCAD DWG 2000–2025 · DXF R12–R2025',
+                        })}
                       </p>
                     </div>
                     <div className="grid grid-cols-2 gap-3 mt-2">
@@ -2440,12 +2775,18 @@ export function DwgTakeoffPage() {
                       ))}
                     </div>
 
-                    {/* Local processing badge — sits under the feature cards */}
+                    {/* Local processing badge — sits under the feature cards.
+                        The strong "files never leave your computer" claim is
+                        shown ONLY when the backend reports local_only (browser
+                        + server on the same machine). On the hosted demo we
+                        show honest "processed on your own server" copy. */}
                     <div className="mt-3 flex items-center justify-start">
                       <div className="inline-flex flex-wrap items-center gap-2 px-4 py-2 rounded-full bg-emerald-500/10 border border-emerald-500/20">
                         <ShieldCheck size={14} className="text-emerald-400 shrink-0" />
                         <span className="text-xs text-emerald-300/90 font-medium">
-                          {t('common.local_processing', { defaultValue: '100% Local Processing · Your files never leave your computer' })}
+                          {offlineReadiness?.local_only
+                            ? t('common.local_processing', { defaultValue: '100% Local Processing · Your files never leave your computer' })
+                            : t('dwg_takeoff.processed_on_your_server', { defaultValue: 'Processed on your OpenConstructionERP server · never sent to third parties' })}
                         </span>
                         <span className="text-[10px] text-emerald-500/30">|</span>
                         <a
@@ -2462,6 +2803,39 @@ export function DwgTakeoffPage() {
                 </div>
               </div>
             </div>
+          ) : isConverting ? (
+            <ConversionProgressCard
+              drawingName={selectedDrawingFromList?.name || selectedDrawingFromList?.filename || ''}
+              filename={selectedDrawingFromList?.filename || ''}
+              status={drawingStatus}
+              startedAt={
+                selectedDrawingFromList?.created_at
+                  ? new Date(selectedDrawingFromList.created_at).getTime()
+                  : Date.now()
+              }
+              onCancel={() => setConfirmDeleteId(selectedDrawingId)}
+            />
+          ) : isErrorStatus ? (
+            <ConversionErrorCard
+              drawingName={selectedDrawingFromList?.name || selectedDrawingFromList?.filename || ''}
+              message={drawingErrorMessage}
+              onRetry={() => {
+                // Backend has no reconvert endpoint; "retry" means
+                // delete the failed row and reopen the upload modal
+                // so the user can pick the file again (or pick a
+                // different one).
+                if (selectedDrawingId) deleteMutation.mutate(selectedDrawingId);
+                setShowUpload(true);
+              }}
+              onDelete={() => setConfirmDeleteId(selectedDrawingId)}
+            />
+          ) : isEmptyStatus ? (
+            <ConversionEmptyCard
+              drawingName={selectedDrawingFromList?.name || selectedDrawingFromList?.filename || ''}
+              message={drawingErrorMessage}
+              onDelete={() => setConfirmDeleteId(selectedDrawingId)}
+              onUploadAnother={() => setShowUpload(true)}
+            />
           ) : loadingEntities ? (
             <div className="flex flex-1 items-center justify-center">
               <div className="flex flex-col items-center gap-4 max-w-sm w-full px-6">
@@ -2550,7 +2924,7 @@ export function DwgTakeoffPage() {
                     disabled={!canUndoFn(undoState)}
                     data-testid="dwg-undo"
                     title={t('dwg_takeoff.undo', { defaultValue: 'Undo (Ctrl+Z)' })}
-                    aria-label="Undo"
+                    aria-label={t('dwg_takeoff.undo_aria', { defaultValue: 'Undo' })}
                     className={clsx(
                       'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
                       canUndoFn(undoState)
@@ -2568,7 +2942,7 @@ export function DwgTakeoffPage() {
                     title={t('dwg_takeoff.redo', {
                       defaultValue: 'Redo (Ctrl+Y / Ctrl+Shift+Z)',
                     })}
-                    aria-label="Redo"
+                    aria-label={t('dwg_takeoff.redo_aria', { defaultValue: 'Redo' })}
                     className={clsx(
                       'flex h-7 w-7 items-center justify-center rounded-md transition-colors',
                       canRedoFn(undoState)
@@ -2589,7 +2963,9 @@ export function DwgTakeoffPage() {
                       title={t('dwg_takeoff.snap_menu', {
                         defaultValue: 'Snap modes',
                       })}
-                      aria-label="Snap modes"
+                      aria-label={t('dwg_takeoff.snap_menu', {
+                        defaultValue: 'Snap modes',
+                      })}
                       className={clsx(
                         'flex h-7 items-center gap-1 rounded-md px-2 text-xs transition-colors',
                         snapModes.endpoint || snapModes.midpoint || snapModes.intersection
@@ -3627,6 +4003,7 @@ export function DwgTakeoffPage() {
               </div>
               <button
                 onClick={closeUploadModal}
+                aria-label={t('common.close', { defaultValue: 'Close' })}
                 className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-surface-secondary transition-colors"
               >
                 <X size={16} className="text-content-tertiary hover:text-content-primary transition-colors" />
@@ -3652,11 +4029,15 @@ export function DwgTakeoffPage() {
             <button
               type="button"
               aria-label={t('dwg_takeoff.upload_aria', { defaultValue: 'Upload DWG or DXF file' })}
+              data-testid="dwg-modal-drop-zone"
               onClick={() => fileInputRef.current?.click()}
-              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragActive(true); }}
+              onDragEnter={(e) => { e.preventDefault(); e.stopPropagation(); setIsDragActive(true); }}
+              onDragLeave={() => setIsDragActive(false)}
               onDrop={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                setIsDragActive(false);
                 const f = e.dataTransfer.files?.[0];
                 if (f) {
                   const ext = f.name.split('.').pop()?.toLowerCase();
@@ -3672,11 +4053,12 @@ export function DwgTakeoffPage() {
                   if (!uploadName) setUploadName(f.name.replace(/\.[^.]+$/, ''));
                 }
               }}
-              className={`w-full flex flex-col items-center gap-2 border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
-                uploadFile
-                  ? 'border-oe-blue bg-oe-blue/5'
-                  : 'border-border-medium hover:border-oe-blue hover:bg-blue-50/50 dark:hover:bg-blue-950/20'
-              }`}
+              className={clsx(
+                'w-full flex flex-col items-center gap-2 border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all',
+                isDragActive && !uploadFile && 'border-oe-blue bg-oe-blue/10 scale-[1.01] shadow-md',
+                uploadFile && !isDragActive && 'border-oe-blue bg-oe-blue/5',
+                !uploadFile && !isDragActive && 'border-border-medium hover:border-oe-blue hover:bg-blue-50/50 dark:hover:bg-blue-950/20',
+              )}
             >
               {uploadFile ? (
                 <>
@@ -4922,6 +5304,528 @@ function UploadProgressInline() {
       <p className="text-[10px] text-content-tertiary">
         {t(active.stage, { defaultValue: 'Processing upload…' })}
       </p>
+    </div>
+  );
+}
+
+/* ── Conversion progress / error / empty cards ──────────────────────────
+ *
+ * These render in place of the DxfViewer when the selected drawing has
+ * not yet reached `status="ready"`. Before P1 the page silently rendered
+ * an empty viewer for the entire 3-8 minute DDC conversion window — the
+ * user reported it as "показывает что проект загружен — но ничего не
+ * показывается и только потом через 5 минут происходит загрузка".
+ *
+ * ConversionProgressCard intentionally does NOT show a determinate
+ * percentage. The DDC pipeline does not expose granular progress, and a
+ * fake percentage that climbs to 95% and sits there for minutes is worse
+ * than honest indeterminate motion + a step list + a live elapsed-time
+ * counter.
+ *
+ * Cancel: the backend has no "abort conversion" endpoint (the asyncio
+ * task runs DwgExporter to completion), so "Cancel" here actually means
+ * "delete this drawing row" — the conversion continues server-side but
+ * the user gets back to the upload flow immediately. This matches user
+ * intent ("I changed my mind, get me out of here") without pretending
+ * to kill a subprocess we don't control. */
+function ConversionProgressCard({
+  drawingName,
+  filename,
+  status,
+  startedAt,
+  onCancel,
+}: {
+  drawingName: string;
+  filename: string;
+  status: string | null;
+  startedAt: number;
+  onCancel?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [, force] = useState(0);
+
+  // Refresh once a second so the elapsed-time pill stays honest.
+  useEffect(() => {
+    const iv = setInterval(() => force((n) => n + 1), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const elapsedSec = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+  const elapsedLabel =
+    elapsedSec < 60
+      ? `${elapsedSec}s`
+      : `${Math.floor(elapsedSec / 60)}m ${elapsedSec % 60}s`;
+
+  // Step machine — drives the highlighted "current step". When the
+  // backend says `uploaded` the file is on disk but conversion has not
+  // started yet (step 1). `processing` covers steps 2 and 3 — we can't
+  // distinguish them from the API, so step 2 is "current" until the
+  // status flips out of processing.
+  const currentStep = status === 'uploaded' ? 1 : status === 'processing' ? 2 : 4;
+
+  const steps: { id: number; label: string; hint: string }[] = [
+    {
+      id: 1,
+      label: t('dwg_takeoff.conv_step_upload', { defaultValue: 'Upload received' }),
+      hint: t('dwg_takeoff.conv_step_upload_hint', {
+        defaultValue: 'File saved on the server.',
+      }),
+    },
+    {
+      id: 2,
+      label: t('dwg_takeoff.conv_step_convert', {
+        defaultValue: 'Converting DWG to canonical JSON',
+      }),
+      hint: t('dwg_takeoff.conv_step_convert_hint', {
+        defaultValue:
+          'DDC cad2data is parsing your drawing. This is the slow step — usually 3-8 minutes for a medium DWG, longer for large architectural sets.',
+      }),
+    },
+    {
+      id: 3,
+      label: t('dwg_takeoff.conv_step_extract', {
+        defaultValue: 'Extracting entities and layers',
+      }),
+      hint: t('dwg_takeoff.conv_step_extract_hint', {
+        defaultValue: 'Building the entity list the viewer will render.',
+      }),
+    },
+    {
+      id: 4,
+      label: t('dwg_takeoff.conv_step_render', { defaultValue: 'Opening the viewer' }),
+      hint: t('dwg_takeoff.conv_step_render_hint', {
+        defaultValue: 'You will see the drawing here as soon as the entities arrive.',
+      }),
+    },
+  ];
+
+  // Live-region announcement: changes whenever the backend status flips
+  // (uploaded → processing → ready/error). Screen readers hear "Converting
+  // your drawing…" / "Step 2 of 4 — extracting entities" etc., instead of
+  // silently rendering a spinner. Kept terse so it doesn't drone on.
+  const liveAnnouncement = t('dwg_takeoff.conv_aria_live', {
+    defaultValue: 'Converting {{name}}, step {{step}} of 4, {{elapsed}} elapsed',
+    name: drawingName || filename,
+    step: currentStep,
+    elapsed: elapsedLabel,
+  });
+
+  return (
+    <div className="flex flex-1 items-center justify-center overflow-y-auto p-6">
+      <div
+        data-testid="dwg-conversion-progress-card"
+        className="w-full max-w-xl rounded-2xl border border-border-light bg-surface-elevated p-6 shadow-xl"
+        role="status"
+        aria-live="polite"
+      >
+        <span className="sr-only">{liveAnnouncement}</span>
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-oe-blue/10 border border-oe-blue/20 flex items-center justify-center shrink-0">
+            <Loader2 size={20} className="text-oe-blue animate-spin" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-content-primary leading-tight">
+              {t('dwg_takeoff.conv_title', { defaultValue: 'Converting your drawing…' })}
+            </h2>
+            <p className="text-xs text-content-tertiary mt-1 truncate" title={filename}>
+              {drawingName || filename}
+            </p>
+          </div>
+          <span
+            className="text-[11px] font-semibold tabular-nums text-content-secondary bg-surface-secondary px-2 py-1 rounded-md shrink-0"
+            aria-label={t('dwg_takeoff.conv_elapsed', { defaultValue: 'Elapsed time' })}
+          >
+            {elapsedLabel}
+          </span>
+        </div>
+
+        {/* Indeterminate progress bar — honest motion without a fake %.
+            role="progressbar" with no aria-valuenow signals
+            "indeterminate" to assistive tech (per ARIA 1.2). */}
+        <div
+          className="mt-5 h-1.5 rounded-full bg-surface-tertiary overflow-hidden relative"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={t('dwg_takeoff.conv_progress_label', {
+            defaultValue: 'Conversion progress (indeterminate)',
+          })}
+        >
+          <div
+            className="absolute inset-y-0 w-1/3 rounded-full bg-oe-blue"
+            style={{
+              animation: 'oe-dwg-indeterminate 1.6s ease-in-out infinite',
+            }}
+          />
+        </div>
+        <style>{`
+          @keyframes oe-dwg-indeterminate {
+            0%   { left: -33%; }
+            50%  { left: 50%; }
+            100% { left: 110%; }
+          }
+        `}</style>
+
+        {/* Step list — one row per pipeline phase, current step highlighted. */}
+        <ol className="mt-5 space-y-2">
+          {steps.map((step) => {
+            const isDone = step.id < currentStep;
+            const isCurrent = step.id === currentStep;
+            return (
+              <li
+                key={step.id}
+                className={clsx(
+                  'flex items-start gap-3 rounded-lg px-3 py-2 transition-colors',
+                  isCurrent && 'bg-oe-blue/5 border border-oe-blue/20',
+                  !isCurrent && 'border border-transparent',
+                )}
+              >
+                <div
+                  className={clsx(
+                    'mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-bold',
+                    isDone && 'bg-emerald-500/15 text-emerald-500',
+                    isCurrent && 'bg-oe-blue/15 text-oe-blue',
+                    !isDone && !isCurrent && 'bg-surface-secondary text-content-quaternary',
+                  )}
+                >
+                  {isDone ? '✓' : step.id}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p
+                    className={clsx(
+                      'text-xs font-medium leading-tight',
+                      isCurrent ? 'text-content-primary' : 'text-content-secondary',
+                    )}
+                  >
+                    {step.label}
+                    {isCurrent && (
+                      <Loader2
+                        size={11}
+                        className="inline-block ml-1.5 text-oe-blue animate-spin align-[-1px]"
+                      />
+                    )}
+                  </p>
+                  {isCurrent && (
+                    <p className="text-[11px] text-content-tertiary leading-snug mt-0.5">
+                      {step.hint}
+                    </p>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+
+        <div className="mt-5 rounded-lg bg-amber-500/5 border border-amber-500/20 px-3 py-2.5 text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
+          {t('dwg_takeoff.conv_note', {
+            defaultValue:
+              'You can safely navigate to other pages — conversion runs on the server. The drawing will be ready here when you come back.',
+          })}
+        </div>
+
+        {/* Cancel — only when the parent wired a handler. Note that this
+            removes the drawing row but does NOT abort the backend
+            asyncio task (no API for that); the microcopy is explicit. */}
+        {onCancel && (
+          <div className="mt-4 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={onCancel}
+              data-testid="dwg-conversion-cancel"
+              className="text-[11px] font-medium text-content-tertiary hover:text-red-500 transition-colors underline-offset-2 hover:underline"
+            >
+              {t('dwg_takeoff.conv_cancel', {
+                defaultValue: 'Cancel — remove this drawing',
+              })}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Sub-component: one-click DWG converter installer.
+ *
+ * Mounted by ConversionErrorCard when the backend signals "converter
+ * missing" via the stable substring `DDC DwgExporter`. Calls the same
+ * `POST /v1/takeoff/converters/dwg/install/` that /settings → Converters
+ * uses, with a live progress bar (downloads ~150 MB of Qt6 DLLs on
+ * Windows; Linux is unsupported and the response carries the apt-get
+ * commands the user has to run themselves).
+ *
+ * On successful install, the file the user already uploaded is
+ * pre-processed via `onInstalled` (delete-and-reupload, matching the
+ * existing Retry semantics — backend has no re-convert endpoint).
+ */
+function InstallDwgConverterCTA({
+  onInstalled,
+}: {
+  onInstalled?: () => void;
+}) {
+  const { t } = useTranslation();
+  const addToast = useToastStore((s) => s.addToast);
+  const [unsupportedMessage, setUnsupportedMessage] = useState<string | null>(null);
+
+  const installMutation = useMutation({
+    mutationFn: () => installBIMConverter('dwg'),
+    onSuccess: (result) => {
+      if (result.installed) {
+        addToast({
+          type: 'success',
+          title: t('dwg_takeoff.conv_install_ok_title', {
+            defaultValue: 'DWG converter installed',
+          }),
+          message: t('dwg_takeoff.conv_install_ok_message', {
+            defaultValue: 'Re-uploading your drawing now.',
+          }),
+        });
+        onInstalled?.();
+      } else if (result.platform_unsupported) {
+        setUnsupportedMessage(
+          result.message ||
+            t('dwg_takeoff.conv_install_unsupported', {
+              defaultValue:
+                'Automated install is only available on Windows. On Linux, install the DDC DwgExporter manually.',
+            }),
+        );
+      } else {
+        addToast({
+          type: 'error',
+          title: t('dwg_takeoff.conv_install_failed', {
+            defaultValue: 'Install failed',
+          }),
+          message: result.message,
+        });
+      }
+    },
+    onError: (err: unknown) => {
+      addToast({
+        type: 'error',
+        title: t('dwg_takeoff.conv_install_failed', {
+          defaultValue: 'Install failed',
+        }),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    },
+  });
+
+  if (unsupportedMessage) {
+    return (
+      <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-[11px] text-amber-700 dark:text-amber-200">
+        <p>{unsupportedMessage}</p>
+        <a
+          href="/settings?tab=converters"
+          className="mt-2 inline-flex items-center gap-1 text-amber-700 dark:text-amber-200 underline hover:no-underline"
+        >
+          {t('dwg_takeoff.conv_open_settings', {
+            defaultValue: 'Open Converters settings →',
+          })}
+        </a>
+      </div>
+    );
+  }
+
+  if (installMutation.isPending) {
+    return (
+      <div className="mt-4">
+        <ConverterInstallProgressBar
+          converterId="dwg"
+          installing={true}
+          sizeMb={150}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4">
+      <button
+        type="button"
+        onClick={() => installMutation.mutate()}
+        data-testid="dwg-install-converter-cta"
+        className="inline-flex items-center gap-1.5 rounded-md bg-emerald-600 text-white text-[11px] font-semibold px-3 py-1.5 hover:bg-emerald-700 transition-colors"
+      >
+        <Download size={12} />
+        {t('dwg_takeoff.conv_install_cta', {
+          defaultValue: 'Install DWG converter (1 click)',
+        })}
+      </button>
+      <p className="mt-1.5 text-[10px] text-content-tertiary">
+        {t('dwg_takeoff.conv_install_hint', {
+          defaultValue:
+            'Downloads ~150 MB to ~/.openestimator/converters/ — Windows only. Takes 30-90 seconds.',
+        })}
+      </p>
+    </div>
+  );
+}
+
+function ConversionErrorCard({
+  drawingName,
+  message,
+  onRetry,
+  onDelete,
+}: {
+  drawingName: string;
+  message: string | null;
+  onRetry?: () => void;
+  onDelete?: () => void;
+}) {
+  const { t } = useTranslation();
+  // Stable marker emitted by `_handle_dwg` when `find_converter('dwg')`
+  // returns None. Keeps the install CTA scoped — generic conversion
+  // failures (wrong version, corrupt file) should still show the
+  // "Retry / Delete" UX without an Install button that wouldn't help.
+  const isMissingConverter = !!message && message.includes('DDC DwgExporter');
+  return (
+    <div className="flex flex-1 items-center justify-center p-6">
+      <div
+        data-testid="dwg-conversion-error-card"
+        className="w-full max-w-xl rounded-2xl border border-red-500/30 bg-red-500/5 p-6 shadow-xl"
+        role="alert"
+        aria-live="assertive"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-red-500/15 border border-red-500/30 flex items-center justify-center shrink-0">
+            <X size={20} className="text-red-500" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-content-primary leading-tight">
+              {isMissingConverter
+                ? t('dwg_takeoff.conv_missing_title', {
+                    defaultValue: 'DWG converter not installed',
+                  })
+                : t('dwg_takeoff.conv_error_title', { defaultValue: 'Conversion failed' })}
+            </h2>
+            <p className="text-xs text-content-tertiary mt-1 truncate" title={drawingName}>
+              {drawingName}
+            </p>
+            <p className="text-xs text-content-secondary mt-3 leading-relaxed">
+              {isMissingConverter
+                ? t('dwg_takeoff.conv_missing_message', {
+                    defaultValue:
+                      'OpenConstructionERP needs the DDC DwgExporter to read DWG files. Install it once — works for every DWG you upload after.',
+                  })
+                : message ||
+                  t('dwg_takeoff.conv_error_default', {
+                    defaultValue:
+                      'The server could not parse this file. Try re-saving as a newer DWG/DXF version or upload a different file.',
+                  })}
+            </p>
+            {isMissingConverter && <InstallDwgConverterCTA onInstalled={onRetry} />}
+            {(onRetry || onDelete) && (
+              <div className="mt-4 flex items-center gap-2">
+                {onRetry && (
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    data-testid="dwg-conversion-retry"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-oe-blue text-white text-[11px] font-semibold px-3 py-1.5 hover:bg-oe-blue-dark transition-colors"
+                  >
+                    <RotateCcw size={12} />
+                    {isMissingConverter
+                      ? t('dwg_takeoff.conv_retry_after_install', {
+                          defaultValue: 'Re-upload after install',
+                        })
+                      : t('dwg_takeoff.conv_retry', {
+                          defaultValue: 'Retry — upload again',
+                        })}
+                  </button>
+                )}
+                {onDelete && (
+                  <button
+                    type="button"
+                    onClick={onDelete}
+                    data-testid="dwg-conversion-error-delete"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-red-500/30 text-red-500 text-[11px] font-medium px-3 py-1.5 hover:bg-red-500/10 transition-colors"
+                  >
+                    <Trash2 size={12} />
+                    {t('dwg_takeoff.conv_delete', {
+                      defaultValue: 'Delete drawing',
+                    })}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConversionEmptyCard({
+  drawingName,
+  message,
+  onDelete,
+  onUploadAnother,
+}: {
+  drawingName: string;
+  message: string | null;
+  onDelete?: () => void;
+  onUploadAnother?: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-1 items-center justify-center p-6">
+      <div
+        data-testid="dwg-conversion-empty-card"
+        className="w-full max-w-xl rounded-2xl border border-amber-500/30 bg-amber-500/5 p-6 shadow-xl"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+            <Info size={20} className="text-amber-500" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-content-primary leading-tight">
+              {t('dwg_takeoff.conv_empty_title', { defaultValue: 'No entities found' })}
+            </h2>
+            <p className="text-xs text-content-tertiary mt-1 truncate" title={drawingName}>
+              {drawingName}
+            </p>
+            <p className="text-xs text-content-secondary mt-3 leading-relaxed">
+              {message ||
+                t('dwg_takeoff.conv_empty_default', {
+                  defaultValue:
+                    'This DWG/DXF parsed successfully but contains no drawable entities. The file may contain only metadata or be a template.',
+                })}
+            </p>
+            {(onUploadAnother || onDelete) && (
+              <div className="mt-4 flex items-center gap-2">
+                {onUploadAnother && (
+                  <button
+                    type="button"
+                    onClick={onUploadAnother}
+                    data-testid="dwg-conversion-empty-upload"
+                    className="inline-flex items-center gap-1.5 rounded-md bg-oe-blue text-white text-[11px] font-semibold px-3 py-1.5 hover:bg-oe-blue-dark transition-colors"
+                  >
+                    <Upload size={12} />
+                    {t('dwg_takeoff.conv_upload_another', {
+                      defaultValue: 'Upload another drawing',
+                    })}
+                  </button>
+                )}
+                {onDelete && (
+                  <button
+                    type="button"
+                    onClick={onDelete}
+                    data-testid="dwg-conversion-empty-delete"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[11px] font-medium px-3 py-1.5 hover:bg-amber-500/10 transition-colors"
+                  >
+                    <Trash2 size={12} />
+                    {t('dwg_takeoff.conv_delete', {
+                      defaultValue: 'Delete drawing',
+                    })}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

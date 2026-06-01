@@ -498,7 +498,7 @@ export function ProjectSettingsPage() {
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
-    <div className="w-full space-y-5 animate-fade-in">
+    <div className="w-full space-y-4 animate-fade-in">
       <Breadcrumb
         items={[
           { label: t('nav.projects', { defaultValue: 'Projects' }), to: '/projects' },
@@ -562,33 +562,16 @@ export function ProjectSettingsPage() {
         editProjectId={project.id}
       />
 
-      {/* ── Base currency ───────────────────────────────────────────────── */}
-      <Card padding="lg">
-        <CardHeader
-          title={t('project.settings.base_currency.title', { defaultValue: 'Base currency' })}
-          subtitle={t('project.settings.base_currency.subtitle', {
-            defaultValue:
-              'Set when the project was created. All BOQ totals roll up to this currency.',
-          })}
-        />
-        <div className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border-light bg-surface-secondary/40 px-3 py-2">
-          <Coins size={16} className="text-oe-blue" />
-          <span className="text-sm font-medium text-content-primary tabular-nums">
-            {baseCurrency || t('project.settings.base_currency.unset', { defaultValue: 'Not set' })}
-          </span>
-        </div>
-      </Card>
-
-      {/* ── Additional currencies (#88, #105) ────────────────────────────── */}
+      {/* ── Currencies — base + additional rates merged (#88, #105) ──────── */}
       {/* The id="fx-rates" anchor is the deep-link target for the BOQ
           editor's "set FX" warning badge (Issue #105). Removing it would
           break that quick-access flow. */}
       <Card padding="lg" id="fx-rates">
         <CardHeader
-          title={t('project.settings.fx.title', { defaultValue: 'Additional currencies' })}
-          subtitle={t('project.settings.fx.subtitle', {
+          title={t('project.settings.currency.title', { defaultValue: 'Currencies' })}
+          subtitle={t('project.settings.currency.subtitle', {
             defaultValue:
-              'Currencies you can use on individual resources. Rates convert back to the base currency for rollup totals.',
+              'Base currency was set when the project was created. Add additional currencies to use on individual resources — rates convert back to the base for rollup totals.',
           })}
           action={
             <Button
@@ -602,77 +585,97 @@ export function ProjectSettingsPage() {
             </Button>
           }
         />
-        <div className="mt-4">
-          {fxRates.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-border-light bg-surface-secondary/30 px-4 py-6 text-center">
-              <p className="text-sm text-content-tertiary">
-                {t('project.settings.fx.empty', {
-                  defaultValue: 'No additional currencies. Click "Add currency" to set one up.',
-                })}
-              </p>
-            </div>
-          ) : (
-            <div className="overflow-hidden rounded-lg border border-border-light">
-              <table className="min-w-full text-sm">
-                <thead className="bg-surface-secondary/40">
-                  <tr className="text-left text-xs uppercase tracking-wide text-content-tertiary">
-                    <th className="px-4 py-2 font-medium">
-                      {t('project.settings.fx.col_code', { defaultValue: 'Code' })}
-                    </th>
-                    <th className="px-4 py-2 font-medium">
-                      {t('project.settings.fx.col_label', { defaultValue: 'Label' })}
-                    </th>
-                    <th className="px-4 py-2 font-medium text-right">
-                      {t('project.settings.fx.col_rate', {
-                        defaultValue: 'Rate to {{base}}',
-                        base: baseCurrency || '—',
-                      })}
-                    </th>
-                    <th className="px-4 py-2 w-24" />
+        <div className="mt-4 overflow-hidden rounded-lg border border-border-light">
+          <table className="min-w-full text-sm">
+            <thead className="bg-surface-secondary/40">
+              <tr className="text-left text-xs uppercase tracking-wide text-content-tertiary">
+                <th className="px-4 py-2 font-medium">
+                  {t('project.settings.fx.col_code', { defaultValue: 'Code' })}
+                </th>
+                <th className="px-4 py-2 font-medium">
+                  {t('project.settings.fx.col_label', { defaultValue: 'Label' })}
+                </th>
+                <th className="px-4 py-2 font-medium text-right">
+                  {t('project.settings.fx.col_rate', {
+                    defaultValue: 'Rate to {{base}}',
+                    base: baseCurrency || '—',
+                  })}
+                </th>
+                <th className="px-4 py-2 w-24" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border-light">
+              {/* Base currency row — locked, displayed first, shows rate 1.0000 */}
+              <tr className="bg-surface-secondary/30">
+                <td className="px-4 py-2.5 font-medium text-content-primary tabular-nums">
+                  <span className="inline-flex items-center gap-2">
+                    <Coins size={14} className="text-oe-blue" />
+                    {baseCurrency || (
+                      <span className="text-content-tertiary italic">
+                        {t('project.settings.base_currency.unset', { defaultValue: 'Not set' })}
+                      </span>
+                    )}
+                  </span>
+                </td>
+                <td className="px-4 py-2.5 text-content-secondary">
+                  <Badge variant="blue" size="sm">
+                    {t('project.settings.base_currency.label', { defaultValue: 'Base' })}
+                  </Badge>
+                </td>
+                <td className="px-4 py-2.5 text-right tabular-nums text-content-tertiary">
+                  1.0000
+                </td>
+                <td className="px-4 py-2.5" />
+              </tr>
+              {fxRates.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-4 py-4 text-center text-sm text-content-tertiary">
+                    {t('project.settings.fx.empty', {
+                      defaultValue: 'No additional currencies. Click "Add currency" to set one up.',
+                    })}
+                  </td>
+                </tr>
+              ) : (
+                fxRates.map((row) => (
+                  <tr key={row.code} className="hover:bg-surface-hover/40">
+                    <td className="px-4 py-2.5 font-medium text-content-primary tabular-nums">
+                      {row.code}
+                    </td>
+                    <td className="px-4 py-2.5 text-content-secondary">
+                      {row.label || (
+                        <span className="text-content-tertiary italic">
+                          {t('project.settings.fx.no_label', { defaultValue: '—' })}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-content-primary">
+                      {row.rate}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex justify-end gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setFxModal({ open: true, initial: row })}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-hover transition-colors"
+                          aria-label={t('common.edit', { defaultValue: 'Edit' })}
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleFxDelete(row.code)}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors"
+                          aria-label={t('common.delete', { defaultValue: 'Delete' })}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-border-light">
-                  {fxRates.map((row) => (
-                    <tr key={row.code} className="hover:bg-surface-hover/40">
-                      <td className="px-4 py-2.5 font-medium text-content-primary tabular-nums">
-                        {row.code}
-                      </td>
-                      <td className="px-4 py-2.5 text-content-secondary">
-                        {row.label || (
-                          <span className="text-content-tertiary italic">
-                            {t('project.settings.fx.no_label', { defaultValue: '—' })}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-right tabular-nums text-content-primary">
-                        {row.rate}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setFxModal({ open: true, initial: row })}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-hover transition-colors"
-                            aria-label={t('common.edit', { defaultValue: 'Edit' })}
-                          >
-                            <Pencil size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleFxDelete(row.code)}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-semantic-error hover:bg-semantic-error/10 transition-colors"
-                            aria-label={t('common.delete', { defaultValue: 'Delete' })}
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
       </Card>
 
@@ -692,7 +695,7 @@ export function ProjectSettingsPage() {
             </Badge>
           }
         />
-        <form onSubmit={handleVatSave} className="mt-4 flex flex-wrap items-end gap-3">
+        <form onSubmit={handleVatSave} className="mt-4 flex flex-col gap-3 md:flex-row md:flex-wrap md:items-end">
           <div className="flex flex-col gap-1.5">
             <label className="text-sm font-medium text-content-primary">
               {t('project.settings.vat.input_label', { defaultValue: 'VAT %' })}
@@ -721,7 +724,7 @@ export function ProjectSettingsPage() {
           >
             {t('common.save', { defaultValue: 'Save' })}
           </Button>
-          <p className="text-xs text-content-tertiary max-w-md">
+          <p className="text-xs text-content-tertiary md:basis-full md:max-w-md md:mt-0 mt-1">
             {t('project.settings.vat.helper', {
               defaultValue:
                 'Used when seeding markups for new BOQs. Leave blank to use the regional default ({{regional}}%).',
@@ -740,11 +743,11 @@ export function ProjectSettingsPage() {
               'Project-scoped units (in addition to standard m, m², m³, kg, pcs, lsum). Synced across browsers.',
           })}
         />
-        <div className="mt-4 space-y-3">
+        <div className="mt-3 space-y-3">
           {customUnits.length === 0 ? (
             <p className="text-sm text-content-tertiary italic">
               {t('project.settings.units.empty', {
-                defaultValue: 'No custom units yet.',
+                defaultValue: 'No custom units yet — add one below.',
               })}
             </p>
           ) : (

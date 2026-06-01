@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useAuthStore } from './useAuthStore';
 
 describe('useAuthStore', () => {
@@ -66,5 +66,70 @@ describe('useAuthStore', () => {
     useAuthStore.getState().loadFromStorage();
     const state = useAuthStore.getState();
     expect(state.isAuthenticated).toBe(false);
+  });
+
+  describe('refreshAccessToken', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('returns null and does not log out when no refresh token is stored', async () => {
+      const token = await useAuthStore.getState().refreshAccessToken();
+      expect(token).toBeNull();
+    });
+
+    it('rotates tokens on success and keeps the remember=true tier', async () => {
+      useAuthStore.getState().setTokens('old_access', 'old_refresh', true, 'user@example.com');
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ access_token: 'new_access', refresh_token: 'new_refresh' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const token = await useAuthStore.getState().refreshAccessToken();
+
+      expect(token).toBe('new_access');
+      expect(useAuthStore.getState().accessToken).toBe('new_access');
+      // remember=true → tokens live in localStorage, not sessionStorage.
+      expect(localStorage.getItem('oe_access_token')).toBe('new_access');
+      expect(localStorage.getItem('oe_refresh_token')).toBe('new_refresh');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/users/auth/refresh/',
+        expect.objectContaining({ method: 'POST' }),
+      );
+    });
+
+    it('returns null without mutating state when the refresh token is rejected (401)', async () => {
+      useAuthStore.getState().setTokens('old_access', 'bad_refresh', false, 'user@example.com');
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) }));
+
+      const token = await useAuthStore.getState().refreshAccessToken();
+
+      expect(token).toBeNull();
+      // Session is NOT torn down here — the API client decides to log out.
+      expect(useAuthStore.getState().accessToken).toBe('old_access');
+      expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    });
+
+    it('coalesces concurrent refreshes into a single network call', async () => {
+      useAuthStore.getState().setTokens('old_access', 'old_refresh', false, 'user@example.com');
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ access_token: 'new_access', refresh_token: 'new_refresh' }),
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const [a, b, c] = await Promise.all([
+        useAuthStore.getState().refreshAccessToken(),
+        useAuthStore.getState().refreshAccessToken(),
+        useAuthStore.getState().refreshAccessToken(),
+      ]);
+
+      expect(a).toBe('new_access');
+      expect(b).toBe('new_access');
+      expect(c).toBe('new_access');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
   });
 });

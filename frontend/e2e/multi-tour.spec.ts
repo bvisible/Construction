@@ -38,7 +38,7 @@ const SCREENSHOT_ROOT = path.resolve(
 );
 
 const DEMO_USER = {
-  email: process.env.E2E_USER_EMAIL ?? 'demo@openestimator.io',
+  email: process.env.E2E_USER_EMAIL ?? 'demo@openconstructionerp.com',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────

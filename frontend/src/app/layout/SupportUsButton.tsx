@@ -106,7 +106,7 @@ function writeSeenAt(): void {
   }
 }
 
-export function SupportUsButton() {
+export function SupportUsButton({ condensed = false }: { condensed?: boolean } = {}) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -159,7 +159,11 @@ export function SupportUsButton() {
         type="button"
         onClick={handleOpen}
         className={clsx(
-          'support-btn group hidden md:inline-flex relative items-center gap-1.5 h-8 px-3 rounded-lg overflow-hidden',
+          'support-btn group relative items-center gap-1.5 h-8 px-3 rounded-lg overflow-hidden',
+          // Partner mode condenses secondary actions to icons so the
+          // co-brand chip gets a clean central slot; otherwise show the
+          // full labelled pill from md up.
+          condensed ? 'hidden' : 'hidden md:inline-flex',
           'border border-amber-400/60 dark:border-amber-500/40',
           'bg-gradient-to-r from-amber-100/80 via-yellow-100/60 to-orange-100/80',
           'dark:from-amber-900/40 dark:via-yellow-900/30 dark:to-orange-900/40',
@@ -195,7 +199,8 @@ export function SupportUsButton() {
         type="button"
         onClick={handleOpen}
         className={clsx(
-          'md:hidden inline-flex h-8 w-8 items-center justify-center rounded-lg',
+          condensed ? 'inline-flex' : 'md:hidden inline-flex',
+          'h-8 w-8 items-center justify-center rounded-lg',
           'text-amber-500 hover:bg-surface-secondary transition-colors',
         )}
         title={t('support.button_tooltip', {

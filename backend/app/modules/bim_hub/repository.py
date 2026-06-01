@@ -22,6 +22,8 @@ from app.modules.bim_hub.models import (
 )
 
 
+from app.core.sql_json import json_path_text
+
 class BIMModelRepository:
     """‌⁠‍Data access for BIMModel."""
 
@@ -49,12 +51,7 @@ class BIMModelRepository:
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        stmt = (
-            base.options(noload(BIMModel.elements))
-            .order_by(BIMModel.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = base.options(noload(BIMModel.elements)).order_by(BIMModel.created_at.desc()).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         models = list(result.scalars().all())
         return models, total
@@ -140,12 +137,7 @@ class BIMElementRepository:
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        stmt = (
-            base.options(noload(BIMElement.boq_links))
-            .order_by(BIMElement.created_at)
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = base.options(noload(BIMElement.boq_links)).order_by(BIMElement.created_at).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         elements = list(result.scalars().all())
         return elements, total
@@ -158,10 +150,7 @@ class BIMElementRepository:
         """Get elements by their stable IDs within a model."""
         if not stable_ids:
             return []
-        stmt = (
-            select(BIMElement)
-            .where(BIMElement.model_id == model_id, BIMElement.stable_id.in_(stable_ids))
-        )
+        stmt = select(BIMElement).where(BIMElement.model_id == model_id, BIMElement.stable_id.in_(stable_ids))
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -232,10 +221,7 @@ class BIMElementRepository:
             base = base.where(BIMElement.element_type == element_type)
         if operational_status is not None:
             # Portable JSON extraction — works on SQLite + Postgres.
-            base = base.where(
-                func.json_extract(BIMElement.asset_info, "$.operational_status")
-                == operational_status
-            )
+            base = base.where(json_path_text(BIMElement.asset_info, "$.operational_status") == operational_status)
         if search is not None and search.strip():
             q = f"%{search.strip().lower()}%"
             base = base.where(
@@ -243,19 +229,19 @@ class BIMElementRepository:
                 | func.lower(func.coalesce(BIMElement.name, "")).like(q)
                 | func.lower(
                     func.coalesce(
-                        func.json_extract(BIMElement.asset_info, "$.serial_number"),
+                        json_path_text(BIMElement.asset_info, "$.serial_number"),
                         "",
                     )
                 ).like(q)
                 | func.lower(
                     func.coalesce(
-                        func.json_extract(BIMElement.asset_info, "$.asset_tag"),
+                        json_path_text(BIMElement.asset_info, "$.asset_tag"),
                         "",
                     )
                 ).like(q)
                 | func.lower(
                     func.coalesce(
-                        func.json_extract(BIMElement.asset_info, "$.manufacturer"),
+                        json_path_text(BIMElement.asset_info, "$.manufacturer"),
                         "",
                     )
                 ).like(q)
@@ -387,15 +373,9 @@ class BIMQuantityMapRepository:
         base = select(BIMQuantityMap).where(BIMQuantityMap.is_active.is_(True))
 
         if project_id is not None:
-            base = base.where(
-                (BIMQuantityMap.project_id == project_id)
-                | (BIMQuantityMap.project_id.is_(None))
-            )
+            base = base.where((BIMQuantityMap.project_id == project_id) | (BIMQuantityMap.project_id.is_(None)))
         if org_id is not None:
-            base = base.where(
-                (BIMQuantityMap.org_id == org_id)
-                | (BIMQuantityMap.org_id.is_(None))
-            )
+            base = base.where((BIMQuantityMap.org_id == org_id) | (BIMQuantityMap.org_id.is_(None)))
 
         stmt = base.order_by(BIMQuantityMap.created_at)
         result = await self.session.execute(stmt)
@@ -486,9 +466,7 @@ class BIMFederationRepository:
         from sqlalchemy.orm import selectinload
 
         stmt = (
-            select(BIMFederation)
-            .options(selectinload(BIMFederation.members))
-            .where(BIMFederation.id == federation_id)
+            select(BIMFederation).options(selectinload(BIMFederation.members)).where(BIMFederation.id == federation_id)
         )
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
@@ -522,16 +500,14 @@ class BIMFederationRepository:
         return federation
 
     async def update_fields(
-        self, federation_id: uuid.UUID, **fields: object,
+        self,
+        federation_id: uuid.UUID,
+        **fields: object,
     ) -> None:
         """Update specific fields on a federation."""
         if not fields:
             return
-        stmt = (
-            update(BIMFederation)
-            .where(BIMFederation.id == federation_id)
-            .values(**fields)
-        )
+        stmt = update(BIMFederation).where(BIMFederation.id == federation_id).values(**fields)
         await self.session.execute(stmt)
         await self.session.flush()
         self.session.expire_all()
@@ -542,7 +518,8 @@ class BIMFederationRepository:
         await self.session.execute(stmt)
 
     async def add_member(
-        self, member: BIMFederationModel,
+        self,
+        member: BIMFederationModel,
     ) -> BIMFederationModel:
         """Insert a new federation-model link row."""
         self.session.add(member)
@@ -550,14 +527,13 @@ class BIMFederationRepository:
         return member
 
     async def get_member(
-        self, member_id: uuid.UUID,
+        self,
+        member_id: uuid.UUID,
     ) -> BIMFederationModel | None:
         return await self.session.get(BIMFederationModel, member_id)
 
     async def remove_member(self, member_id: uuid.UUID) -> None:
-        stmt = delete(BIMFederationModel).where(
-            BIMFederationModel.id == member_id
-        )
+        stmt = delete(BIMFederationModel).where(BIMFederationModel.id == member_id)
         await self.session.execute(stmt)
 
     async def find_member(

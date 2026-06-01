@@ -35,9 +35,9 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { EmptyState, RecoveryCard } from '@/shared/ui';
-import { RequiresProject } from '@/shared/auth/RequiresProject';
+import { BetaBanner, EmptyState, RecoveryCard } from '@/shared/ui';
 import { useActiveProjectProfile } from '@/features/projects/useProjectProfile';
+import { projectsApi } from '@/features/projects/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import {
   fetchCoordinationDashboard,
@@ -115,17 +115,21 @@ function GlassPanel({
 
 /** Project-health banner shown directly above KPI cards. Reads the
  *  dashboard payload and decides traffic-light tone:
- *    • green   — no open clashes, no failing rules
- *    • amber   — some open clashes or failing rules but under threshold
- *    • rose    — open clashes ≥ 50 OR failing rules ≥ 5 (matches the
- *                default thresholds shipped by coordination_hub) */
+ *    • green   — no open clashes
+ *    • amber   — some open clashes but under threshold
+ *    • rose    — open clashes >= 50 (matches the default open-clash
+ *                threshold shipped by coordination_hub)
+ *
+ *  NOTE: the rule-pack "fail" count is the number of DISABLED rules
+ *  (an ``is_active`` configuration flag), not the result of a real
+ *  evaluation engine. We deliberately exclude it from the health
+ *  threshold so toggling a rule off never paints the banner red. */
 function HealthBanner({ data }: { data: CoordinationDashboard | undefined }) {
   const { t } = useTranslation();
   if (!data) return null;
   const open = data.clashes.open_count;
-  const failing = data.rule_packs.last_check_fail_count;
-  const isWarn = open >= 1 || failing >= 1;
-  const isError = open >= 50 || failing >= 5;
+  const isWarn = open >= 1;
+  const isError = open >= 50;
 
   const tone = isError ? 'rose' : isWarn ? 'amber' : 'emerald';
   const palette = {
@@ -135,8 +139,8 @@ function HealthBanner({ data }: { data: CoordinationDashboard | undefined }) {
       icon: 'text-emerald-600 dark:text-emerald-400',
       Icon: CheckCircle2,
       title: t('coordination.health_ok_title', { defaultValue: 'All clear' }),
-      msg: t('coordination.health_ok_msg', {
-        defaultValue: 'No open clashes, all rule packs passing.',
+      msg: t('coordination.health_ok_msg_v2', {
+        defaultValue: 'No open clashes on this project.',
       }),
     },
     amber: {
@@ -147,11 +151,10 @@ function HealthBanner({ data }: { data: CoordinationDashboard | undefined }) {
       title: t('coordination.health_attention_title', {
         defaultValue: 'Coordination in progress',
       }),
-      msg: t('coordination.health_attention_msg', {
+      msg: t('coordination.health_attention_msg_v2', {
         defaultValue:
-          '{{open}} open clash(es), {{fail}} failing rule(s). Within threshold — keep iterating.',
+          '{{open}} open clash(es). Within threshold - keep iterating.',
         open,
-        fail: failing,
       }),
     },
     rose: {
@@ -162,11 +165,10 @@ function HealthBanner({ data }: { data: CoordinationDashboard | undefined }) {
       title: t('coordination.health_alert_title', {
         defaultValue: 'Attention required',
       }),
-      msg: t('coordination.health_alert_msg', {
+      msg: t('coordination.health_alert_msg_v2', {
         defaultValue:
-          '{{open}} open clash(es), {{fail}} failing rule(s). Above standard threshold — schedule a coordination meeting.',
+          '{{open}} open clash(es). Above standard threshold - schedule a coordination meeting.',
         open,
-        fail: failing,
       }),
     },
   }[tone];
@@ -192,6 +194,53 @@ function HealthBanner({ data }: { data: CoordinationDashboard | undefined }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Inline project switcher rendered inside the empty / missing-project
+ *  states so the user can jump to a live project without leaving the
+ *  page (and without relying on the chrome switcher, which may still be
+ *  showing a dead id). Fetches the project list lazily — only mounted
+ *  on the empty branches — and writes the choice straight into the
+ *  global project-context store, which re-enables the dashboard queries. */
+function InlineProjectSwitcher({ excludeId }: { excludeId?: string | null }) {
+  const { t } = useTranslation();
+  const setActiveProject = useProjectContextStore((s) => s.setActiveProject);
+
+  const { data: projects } = useQuery({
+    queryKey: ['coordination-project-switcher'],
+    queryFn: () => projectsApi.list(),
+    staleTime: 60_000,
+    retry: false,
+  });
+
+  const options = (projects ?? []).filter((p) => p.id !== excludeId);
+  if (options.length === 0) return null;
+
+  return (
+    <select
+      data-testid="coordination-inline-switcher"
+      aria-label={t('coordination.switch_project_aria', {
+        defaultValue: 'Switch to a different project',
+      })}
+      defaultValue=""
+      onChange={(e) => {
+        const next = options.find((p) => p.id === e.target.value);
+        if (next) setActiveProject(next.id, next.name);
+      }}
+      className="inline-flex h-10 items-center justify-center rounded-md border border-border bg-surface px-3 text-sm font-medium text-content-primary transition-colors hover:border-oe-blue/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+    >
+      <option value="" disabled>
+        {t('coordination.switch_project', {
+          defaultValue: 'Switch project…',
+        })}
+      </option>
+      {options.map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.name}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -283,11 +332,26 @@ export function CoordinationHubPage() {
   if (!projectId) {
     return (
       <div data-testid="coordination-no-project" className="px-4 py-8">
-        <RequiresProject
-          emptyHint={t('coordination.no_project_desc', {
+        <EmptyState
+          icon={<FolderOpen size={28} strokeWidth={1.5} />}
+          title={t('requiresProject.title', {
+            defaultValue: 'No project selected',
+          })}
+          description={t('coordination.no_project_desc', {
             defaultValue: 'Pick a project to see its coordination dashboard.',
           })}
-        >{null}</RequiresProject>
+          action={
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <InlineProjectSwitcher />
+              <Link
+                to="/projects"
+                className="inline-flex h-10 items-center justify-center rounded-md bg-oe-blue px-4 text-sm font-medium text-white transition-colors hover:bg-oe-blue/90"
+              >
+                {t('requiresProject.cta', { defaultValue: 'Open Projects' })}
+              </Link>
+            </div>
+          }
+        />
       </div>
     );
   }
@@ -305,12 +369,15 @@ export function CoordinationHubPage() {
               'The previously selected project was removed or you no longer have access to it. Pick a different project to continue.',
           })}
           action={
-            <Link
-              to="/projects"
-              className="inline-flex h-10 items-center justify-center rounded-md bg-oe-blue px-4 text-sm font-medium text-white transition-colors hover:bg-oe-blue/90"
-            >
-              {t('coordination.open_projects', { defaultValue: 'Open Projects' })}
-            </Link>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <InlineProjectSwitcher excludeId={projectId} />
+              <Link
+                to="/projects"
+                className="inline-flex h-10 items-center justify-center rounded-md bg-oe-blue px-4 text-sm font-medium text-white transition-colors hover:bg-oe-blue/90"
+              >
+                {t('coordination.open_projects', { defaultValue: 'Open Projects' })}
+              </Link>
+            </div>
           }
         />
       </div>
@@ -337,6 +404,7 @@ export function CoordinationHubPage() {
       data-testid="coordination-hub-page"
       className="relative min-h-full overflow-hidden"
     >
+      <BetaBanner moduleKey="coordination-hub" className="mt-3" />
       {/* Page-level gradient backdrop. Layered so the glass cards
           above pick up a tint without us needing per-card gradients. */}
       <div
@@ -513,6 +581,7 @@ export function CoordinationHubPage() {
                   data={matrixQuery.data}
                   isLoading={matrixQuery.isLoading}
                   projectId={projectId}
+                  embedded
                 />
               )}
             </GlassPanel>
@@ -540,6 +609,7 @@ export function CoordinationHubPage() {
                 <CoordinationTimeline
                   data={timelineQuery.data}
                   isLoading={timelineQuery.isLoading}
+                  embedded
                 />
               )}
             </GlassPanel>

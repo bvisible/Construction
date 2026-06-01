@@ -39,7 +39,7 @@ class Meeting(Base):
     meeting_number: Mapped[str] = mapped_column(String(20), nullable=False)
     meeting_type: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    meeting_date: Mapped[str] = mapped_column(String(20), nullable=False)
+    meeting_date: Mapped[str] = mapped_column(String(40), nullable=False)
     location: Mapped[str | None] = mapped_column(String(500), nullable=True)
     chairperson_id: Mapped[str | None] = mapped_column(GUID(), nullable=True)
 
@@ -147,14 +147,17 @@ class MeetingAttendance(Base):
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     external_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     checked_in_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        DateTime(timezone=True),
+        nullable=True,
     )
     signature_image_path: Mapped[str | None] = mapped_column(
-        String(500), nullable=True,
+        String(500),
+        nullable=True,
     )
 
     meeting: Mapped[Meeting] = relationship(
-        "Meeting", back_populates="attendance_records",
+        "Meeting",
+        back_populates="attendance_records",
     )
 
     def __repr__(self) -> str:

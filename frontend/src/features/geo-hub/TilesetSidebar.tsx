@@ -54,6 +54,18 @@ interface TilesetSidebarProps {
   collapsed?: boolean;
   /** Toggles ``collapsed`` — required when ``collapsed`` is supplied. */
   onToggleCollapsed?: () => void;
+  /**
+   * Per-tileset opacity in [0, 1]. ``undefined`` resolves to ``1`` so
+   * legacy callers that don't pass it see fully-opaque tilesets as
+   * before — no slider rendered.
+   */
+  getOpacity?: (tilesetId: string) => number;
+  /**
+   * Called when the user drags the opacity slider on a card. The
+   * caller is expected to clamp + persist the value. Passing this
+   * prop enables the slider; omitting it hides it entirely.
+   */
+  onChangeOpacity?: (tilesetId: string, opacity: number) => void;
 }
 
 const SOURCE_ICON: Record<GeoSourceKind, LucideIcon> = {
@@ -69,14 +81,19 @@ function TilesetCard({
   tileset,
   hidden,
   focused,
+  opacity,
   onToggleVisibility,
   onFocus,
+  onChangeOpacity,
 }: {
   tileset: Tileset;
   hidden: boolean;
   focused: boolean;
+  /** ``undefined`` ↦ slider not rendered (legacy callers). */
+  opacity: number | undefined;
   onToggleVisibility: (id: string) => void;
   onFocus: (t: Tileset) => void;
+  onChangeOpacity?: (id: string, opacity: number) => void;
 }) {
   const { t } = useTranslation();
   const Icon = SOURCE_ICON[tileset.source_kind] ?? Layers;
@@ -147,6 +164,10 @@ function TilesetCard({
           </div>
         </div>
       </button>
+      {/* Top-right eye button — preserved for hover affordance + keyboard
+          parity. When the opacity slider is wired (onChangeOpacity given)
+          we ALSO render a persistent inline row below the card body so the
+          control is always visible and reachable without a hover gesture. */}
       <button
         type="button"
         onClick={(e) => {
@@ -157,6 +178,10 @@ function TilesetCard({
           'absolute right-1.5 top-1.5 inline-flex h-6 w-6 items-center justify-center',
           'rounded-sm text-content-tertiary opacity-0 transition',
           'hover:bg-surface-secondary hover:text-content-primary group-hover:opacity-100',
+          // Keyboard parity: reveal the button when it receives focus so
+          // users tabbing through the rail can toggle visibility without
+          // a mouse hover (the only previous way to see it).
+          'focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-oe-blue focus:outline-none',
           hidden ? 'opacity-100' : '',
         ].join(' ')}
         aria-pressed={!hidden}
@@ -168,6 +193,74 @@ function TilesetCard({
       >
         {hidden ? <EyeOff size={13} /> : <Eye size={13} />}
       </button>
+      {onChangeOpacity && (
+        <div
+          className="mt-2 flex items-center gap-2 border-t border-border/60 pt-2"
+          data-testid="geo-tileset-overlay-controls"
+          data-tileset-id={tileset.id}
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleVisibility(tileset.id);
+            }}
+            data-testid="geo-tileset-visibility-toggle"
+            aria-pressed={!hidden}
+            aria-label={
+              hidden
+                ? t('geo_hub.sidebar.show', { defaultValue: 'Show on map' })
+                : t('geo_hub.sidebar.hide', { defaultValue: 'Hide from map' })
+            }
+            title={
+              hidden
+                ? t('geo_hub.sidebar.show', { defaultValue: 'Show on map' })
+                : t('geo_hub.sidebar.hide', { defaultValue: 'Hide from map' })
+            }
+            className={[
+              'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm',
+              hidden
+                ? 'text-content-tertiary hover:bg-surface-secondary'
+                : 'text-oe-blue hover:bg-surface-secondary',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue',
+            ].join(' ')}
+          >
+            {hidden ? <EyeOff size={13} aria-hidden /> : <Eye size={13} aria-hidden />}
+          </button>
+          <label className="flex flex-1 items-center gap-2 text-2xs text-content-tertiary">
+            <span className="sr-only">
+              {t('geo_hub.sidebar.opacity', { defaultValue: 'Opacity' })}
+            </span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={opacity ?? 1}
+              disabled={hidden}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) onChangeOpacity(tileset.id, n);
+              }}
+              // Stop click from bubbling to the focus button — dragging
+              // the slider must never re-fly the camera.
+              onClick={(e) => e.stopPropagation()}
+              data-testid="geo-tileset-opacity-slider"
+              className={[
+                'flex-1 accent-oe-blue',
+                hidden ? 'opacity-40' : '',
+              ].join(' ')}
+              aria-label={t('geo_hub.sidebar.opacity', {
+                defaultValue: 'Opacity',
+              })}
+              aria-valuetext={`${Math.round((opacity ?? 1) * 100)}%`}
+            />
+            <span className="w-9 text-right tabular-nums text-content-secondary">
+              {Math.round((opacity ?? 1) * 100)}%
+            </span>
+          </label>
+        </div>
+      )}
     </div>
   );
 }
@@ -197,6 +290,8 @@ export function TilesetSidebar({
   variant = 'overlay',
   collapsed = false,
   onToggleCollapsed,
+  getOpacity,
+  onChangeOpacity,
 }: TilesetSidebarProps) {
   const { t } = useTranslation();
 
@@ -346,8 +441,10 @@ export function TilesetSidebar({
               tileset={ts}
               hidden={hiddenIds.has(ts.id)}
               focused={focusedId === ts.id}
+              opacity={getOpacity ? getOpacity(ts.id) : undefined}
               onToggleVisibility={onToggleVisibility}
               onFocus={onFocus}
+              onChangeOpacity={onChangeOpacity}
             />
           ))}
       </div>

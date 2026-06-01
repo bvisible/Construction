@@ -110,7 +110,7 @@ class Equipment(Base):
     )
 
     # Accounting
-    purchase_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    purchase_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     purchase_value: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     depreciation_method: Mapped[str] = mapped_column(
         String(30),
@@ -183,9 +183,7 @@ class MaintenanceSchedule(Base):
     """A recurring maintenance schedule for an equipment unit."""
 
     __tablename__ = "oe_equipment_maintenance_schedule"
-    __table_args__ = (
-        Index("ix_oe_equipment_maintenance_schedule_next_due_date", "next_due_date"),
-    )
+    __table_args__ = (Index("ix_oe_equipment_maintenance_schedule_next_due_date", "next_due_date"),)
 
     equipment_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -202,13 +200,13 @@ class MaintenanceSchedule(Base):
         server_default="0",
     )
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
-    last_completed_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_completed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     last_completed_meter: Mapped[Decimal | None] = mapped_column(
         Numeric(18, 4),
         nullable=True,
     )
     next_due_meter: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
-    next_due_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    next_due_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     def __repr__(self) -> str:
@@ -219,9 +217,7 @@ class MaintenanceWorkOrder(Base):
     """A maintenance work order generated or created for an equipment unit."""
 
     __tablename__ = "oe_equipment_work_order"
-    __table_args__ = (
-        Index("ix_oe_equipment_work_order_status", "status"),
-    )
+    __table_args__ = (Index("ix_oe_equipment_work_order_status", "status"),)
 
     equipment_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -235,7 +231,7 @@ class MaintenanceWorkOrder(Base):
         nullable=True,
     )
     scheduled_for: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    completed_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    completed_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
     status: Mapped[str] = mapped_column(
         String(30),
         nullable=False,
@@ -271,9 +267,7 @@ class Inspection(Base):
     """A periodic equipment inspection with validity window."""
 
     __tablename__ = "oe_equipment_inspection"
-    __table_args__ = (
-        Index("ix_oe_equipment_inspection_valid_until", "valid_until"),
-    )
+    __table_args__ = (Index("ix_oe_equipment_inspection_valid_until", "valid_until"),)
 
     equipment_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -282,7 +276,7 @@ class Inspection(Base):
         index=True,
     )
     inspection_type: Mapped[str] = mapped_column(String(40), nullable=False)
-    inspected_at: Mapped[str] = mapped_column(String(20), nullable=False)
+    inspected_at: Mapped[str] = mapped_column(String(40), nullable=False)
     valid_until: Mapped[str] = mapped_column(String(20), nullable=False)
     inspector_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     result: Mapped[str] = mapped_column(String(20), nullable=False, default="pass")
@@ -291,19 +285,14 @@ class Inspection(Base):
     approved_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     def __repr__(self) -> str:
-        return (
-            f"<Inspection equipment={self.equipment_id} {self.inspection_type} "
-            f"valid_until={self.valid_until}>"
-        )
+        return f"<Inspection equipment={self.equipment_id} {self.inspection_type} valid_until={self.valid_until}>"
 
 
 class EquipmentRental(Base):
     """Internal rental of equipment to a project with billing rates."""
 
     __tablename__ = "oe_equipment_rental"
-    __table_args__ = (
-        Index("ix_oe_equipment_rental_status", "status"),
-    )
+    __table_args__ = (Index("ix_oe_equipment_rental_status", "status"),)
 
     equipment_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -317,8 +306,8 @@ class EquipmentRental(Base):
         nullable=False,
         index=True,
     )
-    start_date: Mapped[str] = mapped_column(String(20), nullable=False)
-    end_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    start_date: Mapped[str] = mapped_column(String(40), nullable=False)
+    end_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     internal_rate_per_day: Mapped[Decimal] = mapped_column(
         Numeric(18, 4),
         nullable=False,
@@ -347,10 +336,7 @@ class EquipmentRental(Base):
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<EquipmentRental equipment={self.equipment_id} project={self.project_id} "
-            f"{self.status}>"
-        )
+        return f"<EquipmentRental equipment={self.equipment_id} project={self.project_id} {self.status}>"
 
 
 class FuelLog(Base):
@@ -364,7 +350,7 @@ class FuelLog(Base):
         nullable=False,
         index=True,
     )
-    logged_at: Mapped[str] = mapped_column(String(20), nullable=False)
+    logged_at: Mapped[str] = mapped_column(String(40), nullable=False)
     fuel_liters: Mapped[Decimal] = mapped_column(
         Numeric(18, 4),
         nullable=False,
@@ -434,7 +420,7 @@ class PartsLog(Base):
         default="",
         server_default="",
     )
-    logged_at: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    logged_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
 
     def __repr__(self) -> str:
         return f"<PartsLog equipment={self.equipment_id} part={self.part_number}>"
@@ -451,7 +437,7 @@ class DamageReport(Base):
         nullable=False,
         index=True,
     )
-    reported_at: Mapped[str] = mapped_column(String(20), nullable=False)
+    reported_at: Mapped[str] = mapped_column(String(40), nullable=False)
     reported_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
     severity: Mapped[str] = mapped_column(String(20), nullable=False, default="minor")
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")

@@ -73,38 +73,38 @@ _UNIT_TYPE: dict[str, str] = {
     "sft": "Area",
     "sqft": "Area",
     # Length → "Linear"
-    "m":   "Linear",
-    "lm":  "Linear",
-    "rm":  "Linear",
+    "m": "Linear",
+    "lm": "Linear",
+    "rm": "Linear",
     "lfm": "Linear",
-    "lf":  "Linear",
-    "ft":  "Linear",
-    "in":  "Linear",
+    "lf": "Linear",
+    "ft": "Linear",
+    "in": "Linear",
     # Mass → "Mass"
-    "kg":    "Mass",
-    "t":     "Mass",
-    "to":    "Mass",
-    "ton":   "Mass",
+    "kg": "Mass",
+    "t": "Mass",
+    "to": "Mass",
+    "ton": "Mass",
     "tonne": "Mass",
-    "lb":    "Mass",
-    "lbs":   "Mass",
+    "lb": "Mass",
+    "lbs": "Mass",
     # Count → "Count"
-    "pcs":   "Count",
-    "ea":    "Count",
-    "stk":   "Count",
-    "stck":  "Count",
-    "nr":    "Count",
-    "no":    "Count",
-    "u":     "Count",
+    "pcs": "Count",
+    "ea": "Count",
+    "stk": "Count",
+    "stck": "Count",
+    "nr": "Count",
+    "no": "Count",
+    "u": "Count",
     "piece": "Count",
     # Time → "Time"
-    "h":    "Time",
-    "hr":   "Time",
+    "h": "Time",
+    "hr": "Time",
     "hour": "Time",
-    "d":    "Time",
-    "day":  "Time",
+    "d": "Time",
+    "day": "Time",
     # Lump sum — never filter, drop instead
-    "ls":   "",
+    "ls": "",
     "psch": "",
     "lsum": "",
 }
@@ -142,29 +142,29 @@ _UNIT_DIM: dict[str, str] = {
     "sqm": "area",
     "sm": "area",
     # Length
-    "m":  "length",
+    "m": "length",
     "lm": "length",
     "rm": "length",
     "lfm": "length",
     # Mass
     "kg": "mass",
-    "t":  "mass",
+    "t": "mass",
     "to": "mass",
     "ton": "mass",
     # Count
-    "pcs":  "count",
-    "ea":   "count",
-    "stk":  "count",
+    "pcs": "count",
+    "ea": "count",
+    "stk": "count",
     "stck": "count",
-    "nr":   "count",
-    "no":   "count",
-    "u":    "count",
+    "nr": "count",
+    "no": "count",
+    "u": "count",
     # Time
-    "h":  "time",
+    "h": "time",
     "hr": "time",
-    "d":  "time",
+    "d": "time",
     # Lump sum — never filter, drop instead
-    "ls":   "",
+    "ls": "",
     "psch": "",
     "lsum": "",
 }
@@ -182,6 +182,69 @@ def unit_dim_for(unit_hint: str | None) -> str | None:
     key = unit_hint.strip().lower().replace(" ", "")
     dim = _UNIT_DIM.get(key)
     return dim or None
+
+
+# ── IFC class normalisation ──────────────────────────────────────────────
+#
+# Source IFC files emit per-IFC-version refinements that the CWICR
+# catalogue's ``ifc_class`` payload doesn't always carry. The most
+# common case: IFC2X3 emits ``IfcWallStandardCase`` while the v3
+# snapshot indexes only ``IfcWall``. Pinning ``IfcWallStandardCase``
+# as a hard filter under that snapshot causes every relax tier to
+# return zero hits — because ``ifc_class`` is bedrock and never gets
+# dropped — so the matcher falls through to the metadata-only path
+# and returns deterministic-but-wrong "Electrical equipment" rows.
+#
+# Collapsing the refinement onto the canonical parent class is
+# always semantically correct (StandardCase IS a Wall, ElementedCase
+# IS a Wall, etc.) so we fold here before the filter is pinned. The
+# upstream extractor's ``ifc_class`` (e.g. ``IfcWallStandardCase``)
+# is preserved on the envelope for other consumers; only the filter
+# value collapses.
+
+_IFC_CLASS_PARENT: dict[str, str] = {
+    # IFC2X3 ↔ IFC4 refinement folds (StandardCase / ElementedCase)
+    "IfcWallStandardCase": "IfcWall",
+    "IfcWallElementedCase": "IfcWall",
+    "IfcSlabStandardCase": "IfcSlab",
+    "IfcSlabElementedCase": "IfcSlab",
+    "IfcDoorStandardCase": "IfcDoor",
+    "IfcDoorStyle": "IfcDoor",
+    "IfcWindowStandardCase": "IfcWindow",
+    "IfcWindowStyle": "IfcWindow",
+    "IfcColumnStandardCase": "IfcColumn",
+    "IfcBeamStandardCase": "IfcBeam",
+    "IfcMemberStandardCase": "IfcMember",
+    "IfcPlateStandardCase": "IfcPlate",
+    "IfcStandardWallStandardCase": "IfcWall",  # noqa: E501 — synthetic from buggy exporters
+    # Generic MEP base classes → CWICR's concrete subclass.
+    # The catalogue indexes ``IfcPipeSegment`` / ``IfcDuctSegment`` /
+    # ``IfcCableSegment``; the source IFC often emits the generic
+    # ``IfcFlowSegment`` parent. Without this fold, pinning
+    # ``ifc_class=IfcFlowSegment`` matches zero catalogue rows because
+    # the catalogue never re-indexed under the abstract parent.
+    "IfcFlowSegment": "IfcPipeSegment",
+    "IfcFlowFitting": "IfcPipeFitting",
+    "IfcFlowController": "IfcValve",
+    "IfcFlowTerminal": "IfcSanitaryTerminal",
+    "IfcDistributionElement": "IfcPipeSegment",
+    "IfcDistributionControlElement": "IfcController",
+    "IfcDistributionFlowElement": "IfcPipeSegment",
+}
+
+
+def canonical_ifc_class(ifc_class: str | None) -> str | None:
+    """Collapse IFC entity-type refinements onto their parent class.
+
+    ``IfcWallStandardCase`` → ``IfcWall`` because the CWICR v3
+    snapshot indexes the parent class only. The fold is a no-op
+    for any class not in :data:`_IFC_CLASS_PARENT` (returns the
+    input verbatim) — that keeps the matcher honest when a
+    catalogue actually does carry the refinement separately.
+    """
+    if not ifc_class:
+        return None
+    return _IFC_CLASS_PARENT.get(ifc_class, ifc_class)
 
 
 # ── DIN 276 → department_code filter value ───────────────────────────────
@@ -219,14 +282,14 @@ def department_code_for(din276_hint: str | None) -> str | None:
 # either consumes that exact resource or doesn't.
 
 _RESOURCE_PATTERNS = (
-    re.compile(r"\bC\d{2,3}/\d{2,3}\b", re.IGNORECASE),    # concrete grades C30/37, C25/30
-    re.compile(r"\bB\d{3,4}[A-Z]?\b"),                       # rebar grades B500B, B500A, B420
-    re.compile(r"\bDN\s?\d{2,4}\b", re.IGNORECASE),          # pipe nominals DN200, DN 100
-    re.compile(r"\bM\d{1,3}(?:x\d{1,3})?\b"),                # bolt sizes M16, M16x60
-    re.compile(r"\b(?:HEB|IPE|HEA|UPN|HEM)\d{2,4}\b"),       # steel profiles
-    re.compile(r"\bF\s?\d{2,3}\b"),                          # fire ratings F30, F90
-    re.compile(r"\bS\d{3}[A-Z]?\b"),                         # steel grades S235, S355JR
-    re.compile(r"\bØ\s?\d{1,4}\b"),                          # diameter Ø14, Ø 25
+    re.compile(r"\bC\d{2,3}/\d{2,3}\b", re.IGNORECASE),  # concrete grades C30/37, C25/30
+    re.compile(r"\bB\d{3,4}[A-Z]?\b"),  # rebar grades B500B, B500A, B420
+    re.compile(r"\bDN\s?\d{2,4}\b", re.IGNORECASE),  # pipe nominals DN200, DN 100
+    re.compile(r"\bM\d{1,3}(?:x\d{1,3})?\b"),  # bolt sizes M16, M16x60
+    re.compile(r"\b(?:HEB|IPE|HEA|UPN|HEM)\d{2,4}\b"),  # steel profiles
+    re.compile(r"\bF\s?\d{2,3}\b"),  # fire ratings F30, F90
+    re.compile(r"\bS\d{3}[A-Z]?\b"),  # steel grades S235, S355JR
+    re.compile(r"\bØ\s?\d{1,4}\b"),  # diameter Ø14, Ø 25
 )
 
 
@@ -439,9 +502,7 @@ def build_search_plan(
     if drop_abstract:
         hard["is_abstract"] = False
 
-    if include_department_filter and _collection_carries(
-        catalog_id, "department_code"
-    ):
+    if include_department_filter and _collection_carries(catalog_id, "department_code"):
         din = (envelope.classifier_hint or {}).get("din276")
         dept = department_code_for(din)
         if dept:
@@ -484,14 +545,15 @@ def build_search_plan(
         and str(envelope.ifc_class).startswith("Ifc")
         and _collection_carries(catalog_id, "ifc_class")
     ):
-        hard["ifc_class"] = envelope.ifc_class
-    if envelope.ifc_predefined_type and _collection_carries(
-        catalog_id, "ifc_predefined_type"
-    ):
+        # Collapse IFC-version refinements onto their parent class so
+        # ``IfcWallStandardCase`` matches the catalogue's ``IfcWall``
+        # rows. Without this fold the relax ladder never drops
+        # ``ifc_class`` (bedrock) and the search returns zero hits,
+        # collapsing onto the metadata-only fallback.
+        hard["ifc_class"] = canonical_ifc_class(envelope.ifc_class)
+    if envelope.ifc_predefined_type and _collection_carries(catalog_id, "ifc_predefined_type"):
         hard["ifc_predefined_type"] = envelope.ifc_predefined_type
-    if envelope.construction_stage_hint and _collection_carries(
-        catalog_id, "construction_stage"
-    ):
+    if envelope.construction_stage_hint and _collection_carries(catalog_id, "construction_stage"):
         hard["construction_stage"] = envelope.construction_stage_hint
     # Trinary booleans — only forward when the source explicitly said
     # ``True``. ``False`` is rarely useful as a hard filter (most rates
@@ -587,6 +649,7 @@ __all__ = [
     "SearchPlan",
     "build_query",
     "build_search_plan",
+    "canonical_ifc_class",
     "department_code_for",
     "extract_resource_hints",
     "unit_dim_for",

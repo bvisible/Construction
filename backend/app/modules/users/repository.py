@@ -90,7 +90,7 @@ class UserRepository:
         admin is on record, subsequent self-registered users default to
         the configured viewer role.
 
-        The seeded demo account ``demo@openestimator.io`` is intentionally
+        The seeded demo account ``demo@openconstructionerp.com`` is intentionally
         excluded: a fresh ``pip install openconstructionerp`` ships with
         that admin already in the DB, and counting it would dead-lock the
         bootstrap path — every self-registered user would be created
@@ -101,7 +101,7 @@ class UserRepository:
         stmt = (
             select(User.id)
             .where(User.role == "admin", User.is_active.is_(True))
-            .where(~User.email.like("%@openestimator.io"))
+            .where(~User.email.ilike("%@openconstructionerp.com"))
             .limit(1)
         )
         return (await self.session.execute(stmt)).scalar_one_or_none() is not None

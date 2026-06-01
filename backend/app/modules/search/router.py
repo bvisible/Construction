@@ -22,7 +22,7 @@ from app.modules.search.service import (
     unified_search_service,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["search"])
 
 
 @router.get("/", response_model=UnifiedSearchResponse)

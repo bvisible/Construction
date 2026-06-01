@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -46,6 +47,7 @@ import { ContractStatusPipeline } from './ContractStatusPipeline';
 import { ContractExpiryBadge } from './ContractExpiryBadge';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { getErrorMessage } from '@/shared/lib/api';
 import { projectsApi, type Project } from '@/features/projects/api';
 import {
@@ -141,6 +143,45 @@ const CLAIM_STATUSES: ClaimStatus[] = [
   'paid',
   'rejected',
 ];
+
+/** Lifecycle statuses relevant to the Final Accounts tab (closed contracts). */
+const FINAL_ACCOUNT_CONTRACT_STATUSES: ContractStatus[] = ['completed', 'terminated'];
+
+/** Human-readable English fallbacks for raw enum tokens. */
+const CONTRACT_STATUS_LABELS: Record<ContractStatus, string> = {
+  draft: 'Draft',
+  active: 'Active',
+  suspended: 'Suspended',
+  completed: 'Completed',
+  terminated: 'Terminated',
+};
+
+const CLAIM_STATUS_LABELS: Record<ClaimStatus, string> = {
+  draft: 'Draft',
+  submitted: 'Submitted',
+  approved: 'Approved',
+  certified: 'Certified',
+  paid: 'Paid',
+  rejected: 'Rejected',
+};
+
+/**
+ * Translate a contract status via the established `module.status_*` i18n
+ * convention used across sibling modules (finance / changeorders / tendering).
+ * Falls back to a humanised English label so non-English locales never see a
+ * raw snake_case enum token.
+ */
+function contractStatusLabel(t: TFunction, status: ContractStatus): string {
+  return t(`contracts.status_${status}`, {
+    defaultValue: CONTRACT_STATUS_LABELS[status] ?? status,
+  });
+}
+
+function claimStatusLabel(t: TFunction, status: ClaimStatus): string {
+  return t(`contracts.claim_status_${status}`, {
+    defaultValue: CLAIM_STATUS_LABELS[status] ?? status,
+  });
+}
 
 const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
@@ -239,6 +280,21 @@ export function ContractsPage() {
       return c.claim_number.toLowerCase().includes(s);
     });
   }, [claimsQ.data, search, statusFilter]);
+
+  // Final accounts are opened for closed contracts (completed / terminated).
+  // The status filter and search box both narrow this list so the dropdown is
+  // a live control rather than dead UI.
+  const finalAccountContracts = useMemo(() => {
+    const s = search.toLowerCase();
+    return contracts.filter((c) => {
+      if (c.status !== 'completed' && c.status !== 'terminated') return false;
+      if (statusFilter && c.status !== statusFilter) return false;
+      if (!s) return true;
+      return (
+        c.code.toLowerCase().includes(s) || c.title.toLowerCase().includes(s)
+      );
+    });
+  }, [contracts, search, statusFilter]);
 
   const isLoading =
     (tab === 'contracts' && contractsQ.isLoading) ||
@@ -450,19 +506,19 @@ export function ContractsPage() {
           {tab === 'contracts' &&
             CONTRACT_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {contractStatusLabel(t, s)}
               </option>
             ))}
           {tab === 'claims' &&
             CLAIM_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {claimStatusLabel(t, s)}
               </option>
             ))}
           {tab === 'final_accounts' &&
-            ['draft', 'agreed', 'disputed', 'closed'].map((s) => (
+            FINAL_ACCOUNT_CONTRACT_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {contractStatusLabel(t, s)}
               </option>
             ))}
         </select>
@@ -496,9 +552,7 @@ export function ContractsPage() {
           />
         ) : (
           <FinalAccountsView
-            contracts={contracts.filter(
-              (c) => c.status === 'completed' || c.status === 'terminated',
-            )}
+            contracts={finalAccountContracts}
             onSelect={setSelectedContractId}
           />
         )}
@@ -647,7 +701,7 @@ function ContractTable({
               <td className="px-4 py-2">
                 <div className="flex items-center gap-2">
                   <Badge variant={CONTRACT_STATUS_VARIANT[r.status]} dot>
-                    {r.status}
+                    {contractStatusLabel(t, r.status)}
                   </Badge>
                   <ContractStatusPipeline status={r.status} />
                   <ContractExpiryBadge endDate={r.end_date} status={r.status} />
@@ -771,6 +825,11 @@ function ClaimRow({ claim }: { claim: ProgressClaimItem }) {
   const qc = useQueryClient();
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
+  // Certify and Mark-paid are MANAGER-gated on the backend
+  // (contracts.certify_claim / contracts.mark_paid). Hide the affordances for
+  // editors/viewers so they don't click a button that always 403s.
+  const userRole = useAuthStore((s) => s.userRole);
+  const canManageClaim = userRole === 'admin' || userRole === 'manager';
 
   const mut = (fn: (id: string) => Promise<ProgressClaimItem>, okMsg: string) =>
     useMutation({
@@ -820,7 +879,7 @@ function ClaimRow({ claim }: { claim: ProgressClaimItem }) {
       <td className="px-4 py-2">
         <div className="flex items-center gap-2">
           <Badge variant={CLAIM_STATUS_VARIANT[claim.status]} dot>
-            {claim.status}
+            {claimStatusLabel(t, claim.status)}
           </Badge>
           <div className="flex gap-1">
             {claim.status === 'draft' && (
@@ -856,7 +915,7 @@ function ClaimRow({ claim }: { claim: ProgressClaimItem }) {
                 </Button>
               </>
             )}
-            {claim.status === 'approved' && (
+            {claim.status === 'approved' && canManageClaim && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -866,7 +925,7 @@ function ClaimRow({ claim }: { claim: ProgressClaimItem }) {
                 {t('contracts.certify', { defaultValue: 'Certify' })}
               </Button>
             )}
-            {claim.status === 'certified' && (
+            {claim.status === 'certified' && canManageClaim && (
               <Button
                 size="sm"
                 variant="ghost"
@@ -946,7 +1005,7 @@ function FinalAccountsView({
               </td>
               <td className="px-4 py-2">
                 <Badge variant={CONTRACT_STATUS_VARIANT[c.status]} dot>
-                  {c.status}
+                  {contractStatusLabel(t, c.status)}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-right">
@@ -1124,7 +1183,7 @@ function ContractDetailDrawer({
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <ContractTypeChip type={contract.contract_type} />
               <Badge variant={CONTRACT_STATUS_VARIANT[contract.status]} dot>
-                {contract.status}
+                {contractStatusLabel(t, contract.status)}
               </Badge>
               <ContractStatusPipeline status={contract.status} />
               <ContractExpiryBadge endDate={contract.end_date} status={contract.status} />
@@ -1453,7 +1512,7 @@ function ContractDetailDrawer({
                       {c.claim_number}
                     </span>
                     <Badge variant={CLAIM_STATUS_VARIANT[c.status]} dot>
-                      {c.status}
+                      {claimStatusLabel(t, c.status)}
                     </Badge>
                     <span className="text-right">
                       <MoneyDisplay
@@ -1758,8 +1817,18 @@ function NewClaimModal({
   const addToast = useToastStore((s) => s.addToast);
   const [busy, setBusy] = useState(false);
 
+  // `defaultContractId` is the most-recent contract regardless of status, but
+  // claims can only be raised against an ACTIVE contract — and the <select>
+  // below only renders active contracts. Seed the form with the default only
+  // when it is actually one of the rendered options, otherwise fall back to the
+  // first active contract so the select never starts on a blank/mismatched id.
+  const initialContractId =
+    contracts.find((c) => c.id === defaultContractId)?.id ??
+    contracts[0]?.id ??
+    '';
+
   const [form, setForm] = useState({
-    contract_id: defaultContractId,
+    contract_id: initialContractId,
     claim_number: '',
     period_start: todayIso(),
     period_end: todayIso(),

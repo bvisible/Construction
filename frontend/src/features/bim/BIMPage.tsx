@@ -53,6 +53,9 @@ import {
   Maximize2,
   Package,
   GitCompare,
+  Zap,
+  Palette,
+  Footprints,
 } from 'lucide-react';
 import { Badge, EmptyState, Breadcrumb, ConfirmDialog, ModuleHelpButton } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
@@ -908,6 +911,10 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
   const { t } = useTranslation();
   const [isRetrying, setIsRetrying] = useState(false);
   const [isInstalling, setIsInstalling] = useState(false);
+  // Collapsed by default — the raw backend error (which can be a multi-line
+  // stderr excerpt) stays hidden behind an accessible toggle so the overlay
+  // leads with a calm, human one-liner instead of a wall of diagnostic text.
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
 
   // model is null while the models query is still hydrating after a fresh
   // upload / deep link — render a lightweight "loading" overlay so we don't
@@ -941,17 +948,70 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
   const converterId = typeof meta.converter_id === 'string' ? meta.converter_id : null;
   const backendMessage = (model.error_message || '').trim();
 
-  const configs = {
-    processing: { icon: <Loader2 size={32} className="text-blue-500 animate-spin" />, bg: 'bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800', title: t('bim.overlay_processing_title'), desc: t('bim.overlay_processing_desc', { format: fmt }) },
-    needs_converter: { icon: <AlertTriangle size={32} className="text-amber-500" />, bg: 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800', title: t('bim.overlay_needs_converter_title'), desc: t('bim.overlay_needs_converter_desc', { format: fmt }) },
-    error: { icon: <AlertCircle size={32} className="text-red-500" />, bg: 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800', title: t('bim.overlay_error_title'), desc: t('bim.overlay_error_desc') },
+  // Status → presentation map. Keyed by every status the backend
+  // bim_hub processor can emit (`processing` / `needs_converter` / `error`
+  // / `degraded`) plus defensive aliases for the broader conversion-status
+  // vocabulary used elsewhere in the pipeline (`failed`, `pending`,
+  // `queued`, `uploading`, `converting`, `no_geometry`, `converter_required`).
+  // Every entry carries a `bg` className — the lookup below NEVER reads
+  // `.bg` off an undefined value (see the belt-and-suspenders fallback),
+  // so an unknown status string can never crash the overlay again.
+  const processingConfig = {
+    icon: <Loader2 size={32} className="text-blue-500 animate-spin" />,
+    bg: 'bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-800',
+    title: t('bim.overlay_processing_title'),
+    desc: t('bim.overlay_processing_desc', { format: fmt }),
   };
-  const c = configs[model.status as keyof typeof configs] ?? configs.error;
+  const needsConverterConfig = {
+    icon: <AlertTriangle size={32} className="text-amber-500" />,
+    bg: 'bg-amber-50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800',
+    title: t('bim.overlay_needs_converter_title'),
+    desc: t('bim.overlay_needs_converter_desc', { format: fmt }),
+  };
+  const errorConfig = {
+    icon: <AlertCircle size={32} className="text-red-500" />,
+    bg: 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-800',
+    title: t('bim.overlay_error_title'),
+    desc: t('bim.overlay_error_desc'),
+  };
+  const configs: Record<string, typeof processingConfig> = {
+    processing: processingConfig,
+    pending: processingConfig,
+    queued: processingConfig,
+    uploading: processingConfig,
+    converting: processingConfig,
+    needs_converter: needsConverterConfig,
+    converter_required: needsConverterConfig,
+    no_geometry: needsConverterConfig,
+    degraded: needsConverterConfig,
+    error: errorConfig,
+    failed: errorConfig,
+  };
+  // Belt-and-suspenders: explicit entry → the generic `error` config →
+  // a hard-coded neutral fallback. The last clause guarantees `c` is
+  // always a defined object with a `bg` field even if `configs.error`
+  // were ever removed, so `c.bg` below can never read off `undefined`.
+  const c =
+    configs[model.status] ??
+    configs.error ?? {
+      icon: <AlertCircle size={32} className="text-content-tertiary" />,
+      bg: 'bg-surface-secondary border-border-light',
+      title: t('bim.overlay_error_title', { defaultValue: 'Could not load model' }),
+      desc: t('bim.overlay_error_desc', {
+        defaultValue: 'This model could not be opened. Try re-uploading the file.',
+      }),
+    };
 
   // Render the backend-supplied actionable message when present so users
   // see *why* their model didn't convert (DDC missing, RVT version
   // mismatch, etc.) instead of a generic "Error" placeholder.
-  const description = !isProcessing && backendMessage ? backendMessage : c.desc;
+  //
+  // For ``converter_outdated``, the backend message helpfully includes a
+  // stderr excerpt ("The following argument was not expected: …") so the
+  // user can paste it into a support ticket — but it's noise for the 95%
+  // case where the user just wants to click Reinstall. Below we replace
+  // it with a clean human sentence and surface the raw message via
+  // disclosure; see `cleanDescription` after `isOutdatedConverter`.
 
   const handleRetry = async () => {
     if (isRetrying) return;
@@ -973,6 +1033,43 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
   // *why* they should reinstall instead of the generic guidance.
   const isOutdatedConverter =
     !isProcessing && errorCode === 'converter_outdated' && !!converterId;
+
+  // Clean human-friendly description replaces the raw backend stderr for
+  // the "out of date" case (see comment above near `description`).
+  const cleanDescription =
+    isOutdatedConverter
+      ? t('bim.overlay_converter_outdated_clean', {
+          defaultValue:
+            "The installed {{format}} converter is older than this build expects. Click 'Reinstall converter' below — we'll pull the latest version and retry your upload automatically.",
+          format: fmt || 'BIM',
+        })
+      : null;
+
+  // We deliberately do NOT dump the raw backend error into the headline
+  // paragraph any more. A failed CAD conversion typically means the DDC
+  // cad2data converter is not installed in this environment (it is a
+  // separate, optional download and is legitimately absent on most local
+  // dev machines). We lead with that calm explanation and tuck the raw
+  // backend string — e.g. "CAD conversion failed for .rvt file. Ensure the
+  // converter is properly installed and the file is valid." — behind the
+  // collapsible "Show details" toggle below.
+  const calmFailureDescription =
+    !isProcessing && (errorCode === 'ddc_not_found' || !!backendMessage)
+      ? t('bim.overlay_converter_unavailable_calm', {
+          defaultValue:
+            "We couldn't convert this {{format}} file. The CAD converter (DDC cad2data) isn't available in this environment — it's an optional, separate install. Add it, then retry the conversion.",
+          format: fmt || 'CAD',
+        })
+      : null;
+
+  const description =
+    cleanDescription ?? calmFailureDescription ?? c.desc;
+  // The raw backend message is now ALWAYS surfaced through the collapsible
+  // disclosure (when present) rather than inline — both for the outdated
+  // case and the generic failure case.
+  const technicalDetails =
+    !isProcessing && backendMessage ? backendMessage : null;
+
   const showInstallButton =
     !isProcessing
     && (errorCode === 'ddc_not_found' || isOutdatedConverter)
@@ -1009,13 +1106,33 @@ function NonReadyOverlay({ model, onUploadConverted, onDelete, onRetry, onInstal
         <div className={`mx-auto w-20 h-20 rounded-2xl ${c.bg} border flex items-center justify-center mb-5`}>{c.icon}</div>
         <h2 className="text-lg font-bold text-content-primary mb-2">{headlineTitle}</h2>
         <p className="text-sm text-content-secondary mb-2 whitespace-pre-line">{description}</p>
-        {isOutdatedConverter && (
-          <p className="text-[11px] text-amber-700 dark:text-amber-300 mb-3 px-3 py-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 inline-block">
-            {t('bim.overlay_converter_outdated_hint', {
-              defaultValue:
-                'Reinstall fetches the latest converter from GitHub and retries your upload automatically.',
-            })}
-          </p>
+        {technicalDetails && (
+          <div className="mb-3 mx-auto max-w-sm">
+            {/* Collapsed by default: a short "Conversion failed" affordance.
+                Click reveals the full raw backend error below. Real <button>
+                with aria-expanded so it is keyboard- and screen-reader
+                accessible (the previous inline dump showed the stderr to
+                everyone, every time). */}
+            <button
+              type="button"
+              onClick={() => setDetailsExpanded((v) => !v)}
+              aria-expanded={detailsExpanded}
+              data-testid="bim-overlay-error-details-toggle"
+              className="inline-flex items-center gap-1 text-[11px] text-content-tertiary hover:text-content-secondary transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue/40 rounded"
+            >
+              {detailsExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+              {detailsExpanded
+                ? t('bim.overlay_hide_details', { defaultValue: 'Hide details' })
+                : t('bim.overlay_show_error_details', {
+                    defaultValue: 'Conversion failed · show details',
+                  })}
+            </button>
+            {detailsExpanded && (
+              <pre className="mt-2 p-2 text-left text-[10px] bg-surface-secondary border border-border-light rounded-md text-content-tertiary whitespace-pre-wrap font-mono">
+                {technicalDetails}
+              </pre>
+            )}
+          </div>
         )}
         <p className="text-[11px] text-content-quaternary mb-6">{model.name}{model.file_size ? ` · ${formatFileSize(model.file_size)}` : ''}</p>
 
@@ -1725,6 +1842,8 @@ export function BIMPage() {
   const setDimensionsVisible = useBIMViewerStore((s) => s.setDimensionsVisible);
   const assetCardEnabled = useBIMViewerStore((s) => s.assetCardEnabled);
   const setAssetCardEnabled = useBIMViewerStore((s) => s.setAssetCardEnabled);
+  const qualityMode = useBIMViewerStore((s) => s.qualityMode);
+  const setQualityMode = useBIMViewerStore((s) => s.setQualityMode);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [filterPredicate, setFilterPredicate] = useState<
     ((el: BIMElementData) => boolean) | null
@@ -2177,6 +2296,17 @@ export function BIMPage() {
         bridge.setViewpoint(state.camera.position, state.camera.target);
       }
       if (state.selection.length > 0) {
+        // ``?sel=<id>`` is a focus-and-select deep-link, NOT an isolate
+        // deep-link (the explicit isolate flow uses the dedicated
+        // ``?isolate=...`` param handled below). Defensively clear any
+        // residual isolation set so the user lands on the FULL geometry
+        // with just the requested element highlighted + camera framed.
+        // The dedicated colour-mode reset (line ~1946) already runs on
+        // ``activeModelId`` change, but we re-assert "default" here too so
+        // a stale localStorage-persisted mode from any future build can
+        // never override the deep-link's "show full model" intent.
+        setIsolatedIds(null);
+        setColorByMode('default');
         setMultiSelectedIds(state.selection);
         setSelectedElementId(state.selection[state.selection.length - 1] ?? null);
       }
@@ -2194,11 +2324,14 @@ export function BIMPage() {
     urlStateAppliedRef.current = false;
   }, [activeModelId]);
 
-  // Debounced writer: camera + selection -> URL. We read the camera on
-  // an interval rather than listening to OrbitControls directly to keep
-  // this scoped to the parent page (the bridge is the public contract
-  // BIMViewer exposes; wiring into SceneManager here would cross that
-  // boundary and force every consumer to learn three.js internals).
+  // Event-driven writer: camera + selection -> URL. Instead of polling the
+  // camera bridge on a timer (which burns CPU even when the viewer is idle),
+  // we subscribe to the bridge's ``onCameraChange`` (an OrbitControls
+  // 'change' relay) and flush a debounced URL write only when the camera is
+  // actually dirty. Selection changes flush immediately via the effect
+  // re-run. We still go through the public ``window.__oeBim`` bridge rather
+  // than reaching into SceneManager, so this stays scoped to the parent page
+  // and no consumer has to learn three.js internals.
   //
   // selectionSignature tracks whatever the current multi/single selection
   // resolves to — we derive it inside the effect so this hook doesn't
@@ -2209,26 +2342,34 @@ export function BIMPage() {
   useEffect(() => {
     if (!activeModelId) return;
     if (!urlStateAppliedRef.current) return;
+
     let lastSerialized = '';
-    const interval = window.setInterval(() => {
-      const bridge = (
-        window as unknown as {
-          __oeBim?: {
-            getViewpoint: () => {
-              position: { x: number; y: number; z: number };
-              target: { x: number; y: number; z: number };
-            } | null;
-          };
-        }
-      ).__oeBim;
+    let debounceTimer: number | null = null;
+    let unsubscribe: (() => void) | null = null;
+    let subscribeRaf = 0;
+    let cancelled = false;
+
+    type CameraBridge = {
+      getViewpoint: () => {
+        position: { x: number; y: number; z: number };
+        target: { x: number; y: number; z: number };
+      } | null;
+      onCameraChange?: (cb: () => void) => () => void;
+      sceneManager?: unknown;
+    };
+    const getBridge = (): CameraBridge | undefined =>
+      (window as unknown as { __oeBim?: CameraBridge }).__oeBim;
+
+    // Read the live camera + selection and write to the URL — only when the
+    // serialized payload actually changed, so an idle subscription never
+    // touches history.
+    const flush = () => {
+      const bridge = getBridge();
       const camera = bridge?.getViewpoint?.() ?? null;
       const selection: string[] = multiSelectedIds.length > 0
         ? multiSelectedIds
         : (selectedElementId ? [selectedElementId] : []);
-      const payload = serializeBIMUrlState({
-        camera,
-        selection,
-      });
+      const payload = serializeBIMUrlState({ camera, selection });
       const serialized = JSON.stringify(payload);
       if (serialized === lastSerialized) return;
       lastSerialized = serialized;
@@ -2239,11 +2380,48 @@ export function BIMPage() {
       for (const k of BIM_URL_STATE_KEYS) next.delete(k);
       for (const [k, v] of Object.entries(payload)) next.set(k, v);
       setSearchParams(next, { replace: true });
-    }, 500);
-    return () => window.clearInterval(interval);
-    // selectionSignature is intentional — we want to re-evaluate when the
-    // selection changes but keep the interval running across many URL
-    // writes, so the dep list stays minimal.
+    };
+
+    // Camera 'change' fires dozens of times per second during an orbit
+    // drag — coalesce them into one URL write 500ms after motion stops.
+    const scheduleFlush = () => {
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null;
+        flush();
+      }, 500);
+    };
+
+    // The bridge (and its SceneManager handle) publishes a frame or two
+    // after this effect runs; retry the subscription on rAF until the
+    // scene is alive, then attach the camera listener once.
+    const trySubscribe = () => {
+      if (cancelled) return;
+      const bridge = getBridge();
+      if (bridge?.onCameraChange && bridge.sceneManager) {
+        unsubscribe = bridge.onCameraChange(scheduleFlush);
+        // Capture the camera as left by the deep-link hydration / model
+        // load so a freshly opened view is reflected in the URL without
+        // requiring the user to nudge the camera first.
+        flush();
+        return;
+      }
+      subscribeRaf = requestAnimationFrame(trySubscribe);
+    };
+    trySubscribe();
+
+    // Selection changes (effect re-run via selectionSignature) write
+    // immediately — the camera may be idle, so we can't wait for a move.
+    flush();
+
+    return () => {
+      cancelled = true;
+      if (subscribeRaf) cancelAnimationFrame(subscribeRaf);
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+      unsubscribe?.();
+    };
+    // selectionSignature is intentional — re-running on selection change
+    // re-subscribes (cheap) and flushes the new selection immediately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeModelId, selectionSignature]);
 
@@ -2659,9 +2837,29 @@ export function BIMPage() {
   // (which would otherwise fire the elements query and surface an error).
   const isModelLoadingByUrl =
     !!urlModelId && !activeModel && (modelsQuery.isLoading || modelsQuery.isFetching);
+  // A model is "non-ready" when the viewer must show the inline empty /
+  // converting state instead of mounting BIMViewer (which would blind-fetch
+  // geometry). Only `ready` and `degraded` carry a 3D mesh on the server
+  // (`degraded` = geometry imported, quantities missing — still viewable),
+  // so every other status is non-ready. We enumerate the known no-geometry /
+  // pending / failed variants and add defensive aliases (pending/queued/
+  // uploading/converting/failed/no_geometry) so an unexpected status string
+  // never causes a 404 geometry fetch for a model that is known-absent (#168).
+  const NON_READY_STATUSES = new Set([
+    'processing',
+    'pending',
+    'queued',
+    'uploading',
+    'converting',
+    'needs_converter',
+    'converter_required',
+    'no_geometry',
+    'failed',
+    'error',
+  ]);
   const isModelNonReady =
     !!isModelLoadingByUrl ||
-    !!(activeModel && ['processing', 'needs_converter', 'error'].includes(activeModel.status));
+    !!(activeModel && NON_READY_STATUSES.has(activeModel.status));
 
   return (
     <div className="flex flex-col -mx-4 sm:-mx-7 -mt-6 -mb-6 border-s border-border-light" style={{ height: 'calc(100vh - 56px)' }}>
@@ -2725,6 +2923,30 @@ export function BIMPage() {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Primary CTA cluster — moved to the START of the toolbar so the
+              "Add Model" / "Tour" / "Rules" trio is always visible on row 1
+              regardless of how many toggles wrap below. The rest of the
+              toolbar (toggles, color-by, quality, …) stays right-aligned
+              via the parent `justify-end`. */}
+          <button
+            onClick={() => setUploadOpen((p) => !p)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-oe-blue text-white hover:bg-oe-blue-dark transition-colors shadow-sm"
+            data-testid="bim-add-model-top"
+          >
+            <Plus size={13} /> {t('bim.add_model', { defaultValue: 'Add Model' })}
+          </button>
+          <ModuleHelpButton tourId="bim" />
+          {elements.length > 0 && (
+            <a
+              href="/bim/rules?mode=requirements"
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="bim-rules-link-top"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-content-secondary bg-surface-secondary border border-border-light hover:bg-surface-tertiary transition-colors"
+            >
+              <SlidersHorizontal size={13} /> {t('bim.rules_button', { defaultValue: 'Rules' })}
+            </a>
+          )}
           {elements.length > 0 && (
             <>
               <button
@@ -3015,6 +3237,78 @@ export function BIMPage() {
                 </optgroup>
               </select>
 
+              {/* Render-quality segment — 4 presets controlling pixelRatio,
+                  lighting and per-material transparency. Persisted in
+                  localStorage via useBIMViewerStore. Fast/Walk strip
+                  alpha-blending; Visual keeps glass translucent but flips
+                  walls/slabs opaque (cleaner *and* faster than Default). */}
+              <div
+                role="radiogroup"
+                aria-label={t('bim.quality_mode', { defaultValue: 'Render quality' })}
+                className="inline-flex items-center rounded-lg border border-border-light bg-surface-secondary p-0.5 gap-0.5"
+                data-testid="bim-quality-mode"
+              >
+                {(
+                  [
+                    {
+                      mode: 'fast' as const,
+                      Icon: Zap,
+                      label: t('bim.quality_fast', { defaultValue: 'Fast' }),
+                      tooltip: t('bim.quality_fast_hint', {
+                        defaultValue: 'Fastest — opaque walls, low pixel ratio',
+                      }),
+                    },
+                    {
+                      mode: 'default' as const,
+                      Icon: Eye,
+                      label: t('bim.quality_default', { defaultValue: 'Default' }),
+                      tooltip: t('bim.quality_default_hint', {
+                        defaultValue: 'Translucent — full lighting',
+                      }),
+                    },
+                    {
+                      mode: 'visual' as const,
+                      Icon: Palette,
+                      label: t('bim.quality_visual', { defaultValue: 'Visual' }),
+                      tooltip: t('bim.quality_visual_hint', {
+                        defaultValue: 'Cleanest — opaque + glass transparency only',
+                      }),
+                    },
+                    {
+                      mode: 'walk' as const,
+                      Icon: Footprints,
+                      label: t('bim.quality_walk', { defaultValue: 'Walk' }),
+                      tooltip: t('bim.quality_walk_hint', {
+                        defaultValue: 'Smoothest for walk-mode navigation',
+                      }),
+                    },
+                  ]
+                ).map(({ mode, Icon, label, tooltip }) => {
+                  const isActive = qualityMode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={isActive}
+                      aria-label={label}
+                      title={tooltip}
+                      onClick={() => setQualityMode(mode)}
+                      data-testid={`bim-quality-${mode}`}
+                      className={clsx(
+                        'flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium transition-colors',
+                        isActive
+                          ? 'bg-oe-blue text-white shadow-sm'
+                          : 'text-content-secondary hover:bg-surface-tertiary',
+                      )}
+                    >
+                      <Icon size={12} />
+                      <span className="hidden lg:inline">{label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
               {/* Isolate toggle (when an element is selected) */}
               {selectedElementId && (
                 <button
@@ -3033,27 +3327,11 @@ export function BIMPage() {
                     : t('bim.isolate', { defaultValue: 'Isolate' })}
                 </button>
               )}
-              {/* Rules opens in a new tab so the user doesn't lose 3D state.
-                  Anchor (not button+navigate) so middle-click / Cmd+click work
-                  natively. RFC 19 §UX-2. */}
-              <a
-                href="/bim/rules?mode=requirements"
-                target="_blank"
-                rel="noopener noreferrer"
-                data-testid="bim-rules-link"
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium text-content-secondary bg-surface-secondary border border-border-light hover:bg-surface-tertiary transition-colors"
-              >
-                <SlidersHorizontal size={13} /> {t('bim.rules_button', { defaultValue: 'Rules' })}
-              </a>
+              {/* Rules / Add Model / Tour moved to the top of this same
+                  flex row — see the "Primary CTA cluster" comment at the
+                  start of the toolbar. */}
             </>
           )}
-          <button onClick={() => setUploadOpen((p) => !p)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-oe-blue text-white hover:bg-oe-blue-dark transition-colors shadow-sm">
-            <Plus size={13} /> {t('bim.add_model', { defaultValue: 'Add Model' })}
-          </button>
-          {/* Per-module Tour CTA — launches the BIM-specific guided tour
-              via the registered TOUR_REGISTRY entry, independent of any
-              global / first-login tour state. */}
-          <ModuleHelpButton tourId="bim" />
         </div>
       </div>
 

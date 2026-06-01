@@ -540,6 +540,7 @@ function InstallProgressPanel({
           {(result || error) && (
             <button
               onClick={onDismiss}
+              aria-label={t('common.dismiss', { defaultValue: 'Dismiss' })}
               className="text-content-quaternary hover:text-content-secondary transition-colors"
             >
               <XCircle size={18} />

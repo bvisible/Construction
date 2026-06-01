@@ -52,6 +52,7 @@ class AssemblyRepository:
         tag: str | None = None,
         project_id: uuid.UUID | None = None,
         is_template: bool | None = None,
+        owner_id: uuid.UUID | None = None,
     ) -> tuple[list[Assembly], int]:
         """List assemblies with pagination and optional filters.
 
@@ -64,11 +65,19 @@ class AssemblyRepository:
             tag: Filter by tag (stored in metadata.tags JSON array).
             project_id: Filter by project_id (null = global templates).
             is_template: Filter by template flag.
+            owner_id: When provided, restrict to the caller's own
+                assemblies (per-tenant isolation). Pass ``None`` for an
+                admin / unscoped listing. Legacy/global templates with no
+                owner are excluded for scoped callers — they are readable
+                only by admins, matching ``_verify_assembly_owner``.
 
         Returns:
             Tuple of (assemblies, total_count).
         """
         base = select(Assembly).where(Assembly.is_active.is_(True))
+
+        if owner_id is not None:
+            base = base.where(Assembly.owner_id == owner_id)
 
         if q:
             pattern = f"%{q}%"
@@ -86,9 +95,7 @@ class AssemblyRepository:
             # Filter by tag in metadata JSON — uses LIKE on the JSON string
             # which works for both SQLite and PostgreSQL
             tag_pattern = f"%{tag.strip().lower()}%"
-            base = base.where(
-                Assembly.metadata_.cast(String).ilike(tag_pattern)
-            )
+            base = base.where(Assembly.metadata_.cast(String).ilike(tag_pattern))
 
         if project_id is not None:
             base = base.where(Assembly.project_id == project_id)
@@ -101,12 +108,7 @@ class AssemblyRepository:
         total = (await self.session.execute(count_stmt)).scalar_one()
 
         # Fetch — skip eager loading of components for list queries
-        stmt = (
-            base.options(noload(Assembly.components))
-            .order_by(Assembly.code)
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = base.options(noload(Assembly.components)).order_by(Assembly.code).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         assemblies = list(result.scalars().all())
 
@@ -276,23 +278,15 @@ class AssemblyTemplateRepository:
         # avoids dialect-specific JSON path operators.
         if classification_din276:
             din_pattern = f'%"din276": "{classification_din276}"%'
-            base = base.where(
-                AssemblyTemplate.classification.cast(String).ilike(din_pattern)
-            )
+            base = base.where(AssemblyTemplate.classification.cast(String).ilike(din_pattern))
         if classification_masterformat:
             mf_pattern = f'%"masterformat": "{classification_masterformat}"%'
-            base = base.where(
-                AssemblyTemplate.classification.cast(String).ilike(mf_pattern)
-            )
+            base = base.where(AssemblyTemplate.classification.cast(String).ilike(mf_pattern))
 
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
 
-        stmt = (
-            base.order_by(AssemblyTemplate.category, AssemblyTemplate.name)
-            .offset(offset)
-            .limit(limit)
-        )
+        stmt = base.order_by(AssemblyTemplate.category, AssemblyTemplate.name).offset(offset).limit(limit)
         result = await self.session.execute(stmt)
         return list(result.scalars().all()), int(total)
 
@@ -329,9 +323,7 @@ class AssemblyTemplateRepository:
             await self.session.flush()
             return tpl
 
-        existing.name_translations = (
-            payload.get("name_translations", {}) or existing.name_translations
-        )
+        existing.name_translations = payload.get("name_translations", {}) or existing.name_translations
         existing.category = str(payload.get("category", existing.category))
         existing.unit = str(payload.get("unit", existing.unit))
         existing.components = payload.get("components", []) or []
@@ -342,9 +334,7 @@ class AssemblyTemplateRepository:
         return existing
 
 
-async def seed_assembly_templates(
-    session: AsyncSession, *, force: bool = False
-) -> int:
+async def seed_assembly_templates(session: AsyncSession, *, force: bool = False) -> int:
     """Bulk-upsert the canonical assembly templates from ``templates_seed``.
 
     Args:
@@ -368,9 +358,7 @@ async def seed_assembly_templates(
     try:
         existing_total = await repo.count()
     except (OperationalError, ProgrammingError) as exc:
-        logger.warning(
-            "Assembly templates table not present; skipping seed (%s)", exc
-        )
+        logger.warning("Assembly templates table not present; skipping seed (%s)", exc)
         return 0
 
     templates = get_seed_templates()
@@ -388,9 +376,7 @@ async def seed_assembly_templates(
             await repo.upsert_by_name(tpl)
             written += 1
         except (OperationalError, ProgrammingError) as exc:
-            logger.warning(
-                "Assembly template upsert failed for %r: %s", tpl.get("name"), exc
-            )
+            logger.warning("Assembly template upsert failed for %r: %s", tpl.get("name"), exc)
             continue
 
     if written:

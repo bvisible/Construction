@@ -37,7 +37,7 @@ from app.modules.changeorders.schemas import (
 )
 from app.modules.changeorders.service import ChangeOrderService
 
-router = APIRouter()
+router = APIRouter(tags=["changeorders"])
 logger = logging.getLogger(__name__)
 
 
@@ -55,9 +55,8 @@ def _order_to_response(order: object) -> ChangeOrderResponse:
         items = list(order.items)  # type: ignore[attr-defined]
     except Exception as exc:
         import logging
-        logging.getLogger(__name__).debug(
-            "ChangeOrder items not loaded for response: %s", exc
-        )
+
+        logging.getLogger(__name__).debug("ChangeOrder items not loaded for response: %s", exc)
         items = []
     return ChangeOrderResponse(
         id=order.id,  # type: ignore[attr-defined]
@@ -78,12 +77,8 @@ def _order_to_response(order: object) -> ChangeOrderResponse:
         created_at=order.created_at,  # type: ignore[attr-defined]
         updated_at=order.updated_at,  # type: ignore[attr-defined]
         item_count=len(items),
-        linked_po_ids=[
-            str(x) for x in (getattr(order, "linked_po_ids", None) or [])
-        ],
-        linked_rfi_ids=[
-            str(x) for x in (getattr(order, "linked_rfi_ids", None) or [])
-        ],
+        linked_po_ids=[str(x) for x in (getattr(order, "linked_po_ids", None) or [])],
+        linked_rfi_ids=[str(x) for x in (getattr(order, "linked_rfi_ids", None) or [])],
         current_approval_step=getattr(order, "current_approval_step", None),
     )
 
@@ -113,12 +108,8 @@ def _order_to_with_items(order: object) -> ChangeOrderWithItems:
         created_at=order.created_at,  # type: ignore[attr-defined]
         updated_at=order.updated_at,  # type: ignore[attr-defined]
         item_count=len(items),
-        linked_po_ids=[
-            str(x) for x in (getattr(order, "linked_po_ids", None) or [])
-        ],
-        linked_rfi_ids=[
-            str(x) for x in (getattr(order, "linked_rfi_ids", None) or [])
-        ],
+        linked_po_ids=[str(x) for x in (getattr(order, "linked_po_ids", None) or [])],
+        linked_rfi_ids=[str(x) for x in (getattr(order, "linked_rfi_ids", None) or [])],
         current_approval_step=getattr(order, "current_approval_step", None),
         items=[
             ChangeOrderItemResponse(
@@ -250,9 +241,7 @@ async def list_change_orders(
         )
     else:
         await verify_project_access(project_id, str(user_id), session)
-        orders, _ = await service.list_orders(
-            project_id, offset=offset, limit=limit, status_filter=status_filter
-        )
+        orders, _ = await service.list_orders(project_id, offset=offset, limit=limit, status_filter=status_filter)
     return [_order_to_response(o) for o in orders]
 
 
@@ -264,9 +253,17 @@ async def get_change_order(
     order_id: uuid.UUID,
     session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("changeorders.read")),
     service: ChangeOrderService = Depends(_get_service),
 ) -> ChangeOrderWithItems:
-    """Get change order with all items."""
+    """Get change order with all items.
+
+    R8 audit: the legacy GET /{order_id} lacked a RequirePermission gate —
+    only verify_project_access ran, meaning any authenticated user could
+    read a CO on a project they owned regardless of their CO-module role.
+    Now gated on ``changeorders.read`` (viewer+) for consistency with the
+    list endpoint.
+    """
     order = await service.get_order(order_id)
     await verify_project_access(order.project_id, str(user_id), session)
     return _order_to_with_items(order)
@@ -411,6 +408,29 @@ async def reject_order(
     return _order_to_response(order)
 
 
+@router.post("/{order_id}/execute/", response_model=ChangeOrderResponse)
+async def execute_order(
+    order_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("changeorders.update")),
+    service: ChangeOrderService = Depends(_get_service),
+) -> ChangeOrderResponse:
+    """Mark an approved change order as executed (work completed on site).
+
+    R8 audit: the ``executed`` terminal state existed in the service FSM
+    (``approved`` → ``executed``) but had no router endpoint — leaving
+    approved COs permanently stuck at that status and making the
+    ``executed`` distinction invisible to project controllers. Callers
+    need ``changeorders.update`` (editor-level) because execution is an
+    operational milestone, not an approval decision.
+    """
+    existing = await service.get_order(order_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
+    order = await service.execute_order(order_id, user_id)
+    return _order_to_response(order)
+
+
 # ── T3: Procore-style multi-step approval chain ─────────────────────────────
 
 
@@ -451,9 +471,7 @@ async def start_approval_chain(
     """
     existing = await service.get_order(order_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    rows = await service.start_approval_chain(
-        order_id, list(data.approver_user_ids)
-    )
+    rows = await service.start_approval_chain(order_id, list(data.approver_user_ids))
     return [_approval_to_response(r) for r in rows]
 
 
@@ -478,9 +496,7 @@ async def advance_approval(
     """
     existing = await service.get_order(order_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    row = await service.advance_approval(
-        order_id, str(user_id), data.decision, data.comments
-    )
+    row = await service.advance_approval(order_id, str(user_id), data.decision, data.comments)
     return _approval_to_response(row)
 
 

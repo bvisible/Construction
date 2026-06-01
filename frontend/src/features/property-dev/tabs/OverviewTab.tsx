@@ -40,7 +40,6 @@ import {
   Card,
   EmptyState,
 } from '@/shared/ui';
-import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { getDevelopmentDashboard, type Development } from '../api';
 import { type Tab, toNumber } from './_shared';
@@ -269,6 +268,7 @@ function OverviewDevRow({
   dev: Development;
   onSelect: () => void;
 }) {
+  const { t } = useTranslation();
   const dashQ = useQuery({
     queryKey: ['propdev', 'dashboard', dev.id],
     queryFn: () => getDevelopmentDashboard(dev.id),
@@ -291,7 +291,7 @@ function OverviewDevRow({
         <div className="font-medium">{dev.name || dev.code}</div>
         <div className="text-xs font-mono text-content-tertiary">{dev.code}</div>
       </td>
-      <td className="px-4 py-2 text-xs uppercase">
+      <td className="px-4 py-2 text-xs">
         <Badge
           variant={
             dev.status === 'active'
@@ -301,7 +301,9 @@ function OverviewDevRow({
                 : 'neutral'
           }
         >
-          {dev.sales_phase}
+          {t(`propdev.development.sales_phase.${dev.sales_phase}`, {
+            defaultValue: dev.sales_phase,
+          })}
         </Badge>
       </td>
       <td className="px-4 py-2 text-right">
@@ -319,9 +321,16 @@ function OverviewDevRow({
         {dashQ.isLoading ? (
           <span className="inline-block h-3 w-16 rounded bg-surface-secondary animate-pulse" />
         ) : dash ? (
-          <MoneyDisplay
-            amount={toNumber(dash.contracted_value)}
-            currency={dev.currency || 'EUR'}
+          // Buyers in a development may contract in different currencies,
+          // so render the honest per-currency breakdown rather than
+          // summing into one figure stamped with the dev currency.
+          <MultiCurrencyTotal
+            variant="inline"
+            compact
+            className="justify-end"
+            items={Object.entries(dash.contracted_value_by_currency ?? {}).map(
+              ([currency, amount]) => ({ amount, currency }),
+            )}
           />
         ) : (
           '—'
@@ -365,11 +374,14 @@ function OverviewKpiRow({
     let openSnags = 0;
     let openWarranty = 0;
     let scheduledHandovers = 0;
-    // Wave-10 fix: track contracted value as {amount, currency} pairs
-    // per development so the KPI tile can split rather than collapsing
-    // mixed currencies to a misleading first-seen-code total.
+    // Wave-10 fix: track contracted value as {amount, currency} pairs so
+    // the KPI tile can split rather than collapsing mixed currencies to a
+    // misleading first-seen-code total. The backend now reports a
+    // per-currency breakdown (buyers within one development may contract
+    // in different currencies), so we expand every code rather than
+    // pairing one blended figure with the development currency.
     const contractedItems: { amount: number; currency: string | null }[] = [];
-    dashQs.forEach((q, idx) => {
+    dashQs.forEach((q) => {
       const d = q.data;
       if (!d) return;
       availablePlots +=
@@ -381,10 +393,11 @@ function OverviewKpiRow({
       openSnags += d.open_snags ?? 0;
       openWarranty += d.open_warranty_claims ?? 0;
       scheduledHandovers += d.scheduled_handovers ?? 0;
-      contractedItems.push({
-        amount: toNumber(d.contracted_value),
-        currency: developments[idx]?.currency || null,
-      });
+      for (const [currency, amount] of Object.entries(
+        d.contracted_value_by_currency ?? {},
+      )) {
+        contractedItems.push({ amount: toNumber(amount), currency });
+      }
     });
     return {
       availablePlots,

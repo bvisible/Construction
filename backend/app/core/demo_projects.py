@@ -2236,6 +2236,15 @@ _VILLA_LAUSANNE = DemoTemplate(
 
 DEMO_TEMPLATES: dict[str, DemoTemplate] = {t.demo_id: t for t in [_BERLIN, _LONDON, _US_MEDICAL, _DUBAI, _PARIS, _VILLA_LAUSANNE]}
 
+# Partner-pack flagship demo projects (one realistic country/company project
+# per pack) are authored as standalone DemoTemplate files under ``demo_packs/``
+# and merged into ``DEMO_TEMPLATES`` + ``DEMO_CATALOG`` via
+# ``register_pack_templates`` (defined below). The merge is driven by
+# ``demo_packs`` pushing into this module at the bottom of the file, which
+# keeps it order-independent: importing either module first yields the full
+# registry without a circular-import race (the pack files only need
+# ``DemoTemplate`` from here, never ``PACK_TEMPLATES``).
+
 # Fresh-install seed: four demo projects covering the broadest spread of
 # archetypes (residential, industrial, healthcare/intl, education/fit-out)
 # without leaning on a single very large UK example. The London/One Canary
@@ -2244,9 +2253,9 @@ DEMO_TEMPLATES: dict[str, DemoTemplate] = {t.demo_id: t for t in [_BERLIN, _LOND
 # operators consistently asked us to drop it from the default workspace.
 DEFAULT_DEMO_IDS: tuple[str, ...] = (
     "residential-berlin",  # residential — DACH DIN 276, EUR
-    "warehouse-dubai",     # industrial / infrastructure — AED
-    "school-paris",        # small renovation / education fit-out — FR EUR
-    "medical-us",          # international healthcare — US MasterFormat, USD
+    "warehouse-dubai",  # industrial / infrastructure — AED
+    "school-paris",  # small renovation / education fit-out — FR EUR
+    "medical-us",  # international healthcare — US MasterFormat, USD
 )
 
 # Catalog info for the marketplace / frontend
@@ -2328,6 +2337,194 @@ DEMO_CATALOG: list[dict] = [
 
 
 # ---------------------------------------------------------------------------
+# Partner-pack flagship country projects
+# ---------------------------------------------------------------------------
+
+# Pack slug → flagship demo project id. When a partner pack is active
+# (``OE_PARTNER_PACK``) its country project is auto-installed alongside the
+# default demo workspace so the pack lands with a representative, fully
+# worked-out project in its own currency / classification / locale.
+PACK_DEMO_PROJECT: dict[str, str] = {
+    "aus": "mixed-use-sydney",
+    "nzs": "commercial-auckland",
+    "batimatech-ca": "office-montreal",
+    "bimhessen-de": "office-frankfurt",
+    "brazil-sinapi": "residential-saopaulo",
+    "doker-formwork": "rc-structure-formwork",
+    "india-cpwd": "govt-building-delhi",
+    "modular-prefab": "modular-housing",
+    "renewables-epc": "solar-bess-epc",
+    "saudi-vision2030": "mixed-use-riyadh",
+    "uk-jct": "commercial-london",
+    "us-rsmeans": "commercial-denver",
+}
+
+# Country-name → ISO 3166-1 alpha-2, for catalog rows auto-derived from a
+# pack template's structured address.
+_COUNTRY_ISO2: dict[str, str] = {
+    "Australia": "AU",
+    "New Zealand": "NZ",
+    "Canada": "CA",
+    "Germany": "DE",
+    "Brazil": "BR",
+    "India": "IN",
+    "Netherlands": "NL",
+    "Saudi Arabia": "SA",
+    "United Kingdom": "GB",
+    "United States": "US",
+    "France": "FR",
+    "United Arab Emirates": "AE",
+}
+
+# Friendly project archetype label per pack demo project.
+_PACK_DEMO_TYPE: dict[str, str] = {
+    "mixed-use-sydney": "Mixed-use",
+    "commercial-auckland": "Commercial",
+    "office-montreal": "Commercial",
+    "office-frankfurt": "Commercial",
+    "residential-saopaulo": "Residential",
+    "rc-structure-formwork": "Structural",
+    "govt-building-delhi": "Public",
+    "modular-housing": "Residential",
+    "solar-bess-epc": "Energy",
+    "mixed-use-riyadh": "Mixed-use",
+    "commercial-london": "Commercial",
+    "commercial-denver": "Commercial",
+    "hospital-lyon": "Healthcare",
+    "tower-abudhabi": "Mixed-use",
+    "condo-toronto": "Residential",
+    "data-center-melbourne": "Industrial",
+    "school-christchurch": "Education",
+    "office-rio": "Commercial",
+    "it-park-bangalore": "Commercial",
+    "hospital-jeddah": "Healthcare",
+}
+
+
+# ISO-4217 → display symbol for the handful of currencies the pack templates
+# actually use. Anything not listed falls back to the bare ISO code (e.g.
+# "BRL 38.4M"), which matches the mixed style of the hand-authored built-in
+# catalog rows ("€12M", "$25M", "15M AED").
+_CURRENCY_SYMBOL: dict[str, str] = {
+    "EUR": "€",
+    "GBP": "£",
+    "USD": "$",
+    "AUD": "A$",
+    "NZD": "NZ$",
+    "CAD": "C$",
+}
+
+
+def _compact_budget_label(total: float, currency: str) -> str:
+    """Format a numeric total as a compact catalog budget label.
+
+    Mirrors the hand-authored built-in rows ("€12M", "15M AED"): millions for
+    anything >= 1M, thousands for smaller jobs, with the currency symbol when
+    known and a trailing ISO code otherwise. Returns "" for a non-positive or
+    unknown total so the caller stays defensive.
+    """
+    if not total or total <= 0:
+        return ""
+    code = (currency or "").strip().upper()
+    symbol = _CURRENCY_SYMBOL.get(code)
+    if total >= 1_000_000:
+        magnitude = total / 1_000_000
+        # Drop the trailing ".0" for round figures (12.0M -> 12M).
+        num = f"{magnitude:.1f}".rstrip("0").rstrip(".")
+        amount = f"{num}M"
+    elif total >= 1_000:
+        amount = f"{round(total / 1_000):d}K"
+    else:
+        amount = f"{round(total):d}"
+    if symbol:
+        return f"{symbol}{amount}"
+    if code:
+        return f"{amount} {code}"
+    return amount
+
+
+def _template_total(template: DemoTemplate) -> float:
+    """Sum the direct-cost total (qty * rate) across all section items.
+
+    Each section item is ``(code, title, unit, qty, rate, classification)`` per
+    :data:`SectionDef`; we sum ``qty * rate``. This intentionally ignores
+    markups so the catalog headline matches the direct construction cost the
+    way the built-in rows ("Baukosten ca. 12 Mio EUR") are quoted.
+    """
+    total = 0.0
+    for section in template.sections:
+        items = section[3] if len(section) > 3 else []
+        for item in items:
+            try:
+                qty = float(item[3])
+                rate = float(item[4])
+            except (IndexError, TypeError, ValueError):  # pragma: no cover - defensive
+                continue
+            total += qty * rate
+    return total
+
+
+def _catalog_entry_from_template(template: DemoTemplate) -> dict:
+    """Build a marketplace catalog row from a pack ``DemoTemplate``."""
+    sections = len(template.sections)
+    positions = sum(len(section[3]) for section in template.sections)
+    addr = template.address or {}
+    country = _COUNTRY_ISO2.get(str(addr.get("country", "")), "")
+    desc = " ".join(template.project_description.split())
+    if len(desc) > 160:
+        desc = desc[:157].rstrip() + "..."
+    # The pack templates carry no pre-formatted "budget" string in
+    # project_metadata (unlike the hand-authored built-in rows), so derive the
+    # real headline figure from the priced section items. Honour an explicit
+    # metadata override if a pack ever supplies one; otherwise compute it.
+    meta_budget = (
+        str(template.project_metadata.get("budget", "")).strip()
+        if template.project_metadata
+        else ""
+    )
+    budget = meta_budget or _compact_budget_label(
+        _template_total(template), template.currency
+    )
+    return {
+        "demo_id": template.demo_id,
+        "name": template.project_name,
+        "description": desc,
+        "country": country,
+        "currency": template.currency,
+        "budget": budget,
+        "type": _PACK_DEMO_TYPE.get(template.demo_id, "Commercial"),
+        "sections": sections,
+        "positions": positions,
+    }
+
+
+def register_pack_templates(templates: "list[DemoTemplate]") -> None:
+    """Merge partner-pack demo templates into the registry and catalog.
+
+    Called by :mod:`app.core.demo_packs` once it has loaded its ``TEMPLATE``
+    files. Idempotent: ``setdefault`` keeps the built-ins authoritative on any
+    id clash, and catalog rows are appended only for ids not already present,
+    so a repeat call (either import order) never duplicates. A broken pack
+    never breaks the registry.
+    """
+    import logging as _logging
+
+    catalog_ids = {c["demo_id"] for c in DEMO_CATALOG}
+    for template in sorted(templates, key=lambda x: x.demo_id):
+        try:
+            DEMO_TEMPLATES.setdefault(template.demo_id, template)
+            if template.demo_id not in catalog_ids:
+                DEMO_CATALOG.append(_catalog_entry_from_template(template))
+                catalog_ids.add(template.demo_id)
+        except Exception:  # pragma: no cover - one bad pack must not break the rest
+            _logging.getLogger(__name__).warning(
+                "failed to register pack template %s",
+                getattr(template, "demo_id", "?"),
+                exc_info=True,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Installation logic
 # ---------------------------------------------------------------------------
 
@@ -2342,7 +2539,7 @@ async def _get_or_create_owner(session: AsyncSession) -> uuid.UUID:
     if user is None:
         user = User(
             id=_id(),
-            email="demo@openestimator.io",
+            email="demo@openconstructionerp.com",
             hashed_password="$2b$12$DEMO_HASH_NOT_FOR_PRODUCTION_USE_ONLY",
             full_name="Demo User",
             role="admin",
@@ -3596,6 +3793,786 @@ def _enrich_position_metadata(description: str, unit: str, unit_rate: float, cla
 
 
 # ---------------------------------------------------------------------------
+# Derived module-data generator
+# ---------------------------------------------------------------------------
+# Hand-authoring 14+ module blocks for ~20 demos is unmaintainable, so any demo
+# without a hand-authored block gets realistic rows derived from the template's
+# own content (real sections / trades / firms / currency / locale). The output
+# of every list matches the EXACT dict shape the corresponding hand block in
+# ``_seed_module_data`` consumes, so it drops straight into the existing
+# ``for row in list: session.add(Model(...))`` loops.
+
+
+def _clean_trade(section_title: str) -> str:
+    """Extract a short, human trade label from a section title.
+
+    Section titles look like ``"KG 330 — Aussenwande"`` or
+    ``"Division 03 - Concrete"`` or ``"2.1 Structural Steel"``. Strip a
+    leading code token + separator so we keep the readable trade name.
+    """
+    title = " ".join(str(section_title or "").split())
+    # Drop a parenthetical English gloss like "(External Walls)" -> keep core.
+    for sep in (" — ", " - ", " – ", ": "):
+        if sep in title:
+            head, _, tail = title.partition(sep)
+            # If the head is a pure code (KG 330 / Division 03 / 2.1), use tail.
+            head_token = head.replace("KG", "").replace("Division", "").replace("KP", "").strip()
+            if head_token and all(c.isdigit() or c in ". " for c in head_token):
+                title = tail.strip() or title
+                break
+    return title[:120] if title else "General works"
+
+
+def _section_trades(template: DemoTemplate) -> list[tuple[str, str, str]]:
+    """Return ``(code, trade_label, first_item_title)`` per section.
+
+    ``first_item_title`` is a representative priced item so derived records can
+    cite something concrete (an RFI question, an NCR subject, a submittal).
+    """
+    out: list[tuple[str, str, str]] = []
+    for section in template.sections:
+        code = str(section[0]) if len(section) > 0 else ""
+        trade = _clean_trade(section[1] if len(section) > 1 else "")
+        items = section[3] if len(section) > 3 else []
+        item_title = ""
+        if items:
+            raw = str(items[0][1]) if len(items[0]) > 1 else ""
+            # Strip the parenthetical English gloss for a cleaner citation.
+            item_title = raw.split("(")[0].strip() or raw.strip()
+        out.append((code, trade, item_title))
+    return out
+
+
+def _firms(template: DemoTemplate) -> list[tuple[str, str]]:
+    """Return ``(company, email)`` from the template's real tender companies.
+
+    Falls back to a single generic contractor so derived data never empties out
+    when a template ships no tender companies.
+    """
+    firms: list[tuple[str, str]] = []
+    for entry in template.tender_companies or []:
+        name = str(entry[0]) if len(entry) > 0 else ""
+        email = str(entry[1]) if len(entry) > 1 else ""
+        if name:
+            firms.append((name, email))
+    if not firms:
+        firms = [("Main Contractor", "")]
+    return firms
+
+
+def _country_code_for(template: DemoTemplate) -> str:
+    """Best-effort ISO-3166 alpha-2 from the template address country name."""
+    addr = template.address or {}
+    return _COUNTRY_ISO2.get(str(addr.get("country", "")), "")
+
+
+def _generate_module_data(
+    template: DemoTemplate,
+    project_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    demo_id: str,
+    base: datetime,
+) -> dict[str, list[dict]]:
+    """Generate realistic per-module demo rows derived from ``template``.
+
+    Returns a dict keyed by the same result keys ``_seed_module_data`` uses, so
+    each list can be used as the fallback for its hand block, e.g.
+    ``rows = _HAND.get(demo_id) or generated["contacts"]``.
+    """
+    cur = template.currency or ""
+    cc = _country_code_for(template)
+    trades = _section_trades(template)
+    firms = _firms(template)
+    proj = template.project_name
+    months = max(int(template.total_months or 12), 1)
+
+    def _d(days: int) -> str:
+        return (base + timedelta(days=days)).strftime("%Y-%m-%d")
+
+    def _email_local(company: str, idx: int) -> str:
+        slug = "".join(ch.lower() for ch in company if ch.isalnum())[:18] or f"firm{idx}"
+        return f"contact@{slug}.example"
+
+    # ── Contacts (client + architect + structural eng + 2-3 subs) ────────
+    contacts: list[dict] = [
+        {
+            "contact_type": "client",
+            "company_name": template.project_metadata.get("client") or f"{proj} Client",
+            "first_name": "Project",
+            "last_name": "Owner",
+            "primary_email": "owner@client.example",
+            "primary_phone": "",
+            "country_code": cc,
+            "notes": "Client / employer representative",
+        },
+        {
+            "contact_type": "consultant",
+            "company_name": template.project_metadata.get("architect") or "Lead Architects",
+            "first_name": "Lead",
+            "last_name": "Architect",
+            "primary_email": "architect@design.example",
+            "primary_phone": "",
+            "country_code": cc,
+            "notes": "Architect of record",
+        },
+        {
+            "contact_type": "consultant",
+            "company_name": "Structural Engineering Partners",
+            "first_name": "Structural",
+            "last_name": "Engineer",
+            "primary_email": "structures@engineer.example",
+            "primary_phone": "",
+            "country_code": cc,
+            "notes": "Structural engineer",
+        },
+    ]
+    for i, (company, email) in enumerate(firms[:3]):
+        contacts.append(
+            {
+                "contact_type": "subcontractor",
+                "company_name": company,
+                "first_name": "Site",
+                "last_name": "Manager",
+                "primary_email": email or _email_local(company, i),
+                "primary_phone": "",
+                "country_code": cc,
+                "notes": f"{trades[i][1] if i < len(trades) else 'Works'} subcontractor",
+            }
+        )
+
+    # ── Tasks (8-12 across the timeline) ─────────────────────────────────
+    task_seeds = [
+        ("task", "Mobilise site and establish welfare facilities", "open", "high", 7),
+        ("task", "Confirm building permit / authority approvals", "in_progress", "high", 14),
+        ("task", "Issue procurement schedule for long-lead items", "in_progress", "high", 21),
+        ("task", "Set up document control and CDE structure", "completed", "normal", 5),
+        ("task", "Baseline programme review with main contractor", "open", "normal", 28),
+        ("topic", "Health & safety induction plan", "in_progress", "high", 10),
+        ("task", "Quality control plan and inspection hold-points", "open", "normal", 35),
+        ("task", "Coordinate temporary works design", "open", "normal", 42),
+        ("task", "Submit insurance and bonds to client", "completed", "high", 12),
+        ("task", "Agree progress claim / valuation cycle", "open", "normal", 30),
+    ]
+    tasks: list[dict] = []
+    for i, (ttype, title, status, prio, day) in enumerate(task_seeds):
+        # Anchor a few tasks to a real trade for project flavour.
+        if i < len(trades) and trades[i][1]:
+            title = f"{title} ({trades[i][1]})"
+        tasks.append(
+            {
+                "task_type": ttype,
+                "title": title,
+                "description": f"{title} for {proj}.",
+                "status": status,
+                "priority": prio,
+                "due_date": _d(day),
+            }
+        )
+
+    # ── RFIs (each cites a real section title, directed at a real firm) ──
+    rfis: list[dict] = []
+    rfi_n = min(max(len(trades), 6), 8)
+    for i in range(rfi_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        firm = firms[i % len(firms)][0]
+        answered = i % 2 == 0
+        rfis.append(
+            {
+                "rfi_number": f"RFI-{i + 1:03d}",
+                "subject": f"{trade} — clarification on {item or 'scope'}",
+                "question": (
+                    f"Please clarify the detail for '{item or trade}' in section {code or trade}. "
+                    f"Coordination required with {firm} before procurement."
+                ),
+                "status": "answered" if answered else "open",
+                "official_response": (
+                    f"Confirmed approach for {trade}. Revised detail issued to {firm}." if answered else None
+                ),
+                "cost_impact": i % 3 == 0,
+                "cost_impact_value": "12000" if i % 3 == 0 else None,
+                "schedule_impact": i % 4 == 0,
+                "schedule_impact_days": 3 if i % 4 == 0 else None,
+            }
+        )
+
+    # ── Meetings (4-5) ───────────────────────────────────────────────────
+    firm_attendees = [{"name": f"{c} rep", "company": c, "status": "present"} for c, _ in firms[:3]]
+    meeting_titles = [
+        ("site", "Project kick-off meeting", "completed", 0),
+        ("site", "Weekly progress meeting #1", "completed", 7),
+        ("design", "Design coordination workshop", "completed", 14),
+        ("site", "Weekly progress meeting #2", "scheduled", 21),
+        ("commercial", "Commercial / cost review", "scheduled", 35),
+    ]
+    meetings: list[dict] = []
+    for i, (mtype, title, status, day) in enumerate(meeting_titles):
+        agenda = [
+            {"number": "1", "topic": "Programme and progress review"},
+            {"number": "2", "topic": f"{trades[i % len(trades)][1] if trades else 'Works'} update"},
+            {"number": "3", "topic": "HSE and quality status"},
+        ]
+        meetings.append(
+            {
+                "meeting_number": f"MTG-{i + 1:03d}",
+                "meeting_type": mtype,
+                "title": title,
+                "meeting_date": _d(day),
+                "location": "Site office",
+                "status": status,
+                "attendees": firm_attendees,
+                "agenda_items": agenda,
+                "action_items": [
+                    {
+                        "description": "Distribute minutes and update action log",
+                        "due_date": _d(day + 3),
+                        "status": "open" if status != "completed" else "completed",
+                    }
+                ],
+                "minutes": "Progress on track; actions assigned." if status == "completed" else None,
+            }
+        )
+
+    # ── Safety incidents (3-4) ───────────────────────────────────────────
+    incident_seeds = [
+        ("near_miss", "moderate", "Near miss — material fell from height", "Edge protection gap"),
+        ("first_aid", "minor", "Minor hand laceration during handling", "Cut-resistant gloves not worn"),
+        ("near_miss", "moderate", "Plant / pedestrian near miss in laydown area", "Segregation not enforced"),
+        ("property_damage", "minor", "Temporary services strike during excavation", "Service scan not refreshed"),
+    ]
+    safety_incidents: list[dict] = []
+    for i, (itype, sev, title, cause) in enumerate(incident_seeds):
+        safety_incidents.append(
+            {
+                "incident_number": f"INC-{i + 1:03d}",
+                "title": title,
+                "incident_date": _d(10 + i * 9),
+                "location": f"{trades[i % len(trades)][1] if trades else 'Site'} area",
+                "incident_type": itype,
+                "severity": sev,
+                "description": f"{title} during {trades[i % len(trades)][1].lower() if trades else 'works'}.",
+                "root_cause": cause,
+                "corrective_actions": [
+                    {
+                        "description": "Toolbox talk and re-brief affected crew",
+                        "due_date": _d(13 + i * 9),
+                        "status": "completed",
+                    }
+                ],
+                "status": "closed",
+            }
+        )
+
+    # ── Safety observations (6) ──────────────────────────────────────────
+    obs_seeds = [
+        ("unsafe_condition", 4, 3, "Scaffold handrail incomplete on working platform"),
+        ("unsafe_behavior", 3, 4, "Operative without eye protection during cutting"),
+        ("housekeeping", 3, 2, "Access route partially blocked by stored materials"),
+        ("unsafe_condition", 4, 3, "Unprotected slab edge at leading edge of works"),
+        ("environmental", 2, 3, "Dust generation during dry cutting"),
+        ("positive", 1, 1, "Good practice — full PPE and clean work area observed"),
+    ]
+    safety_observations: list[dict] = []
+    for i, (otype, sev, lik, desc) in enumerate(obs_seeds):
+        positive = otype == "positive"
+        safety_observations.append(
+            {
+                "observation_number": f"OBS-{i + 1:03d}",
+                "observation_type": otype,
+                "description": desc,
+                "location": f"{trades[i % len(trades)][1] if trades else 'Site'} zone",
+                "severity": sev,
+                "likelihood": lik,
+                "immediate_action": None if positive else "Corrected on the spot",
+                "corrective_action": None if positive else "Re-brief crew and add to inspection checklist",
+                "status": "closed" if positive else "resolved",
+            }
+        )
+
+    # ── Quality inspections (8-10 across real trades) ────────────────────
+    inspections: list[dict] = []
+    insp_n = min(max(len(trades), 8), 10)
+    for i in range(insp_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        done = i % 3 != 2
+        inspections.append(
+            {
+                "inspection_number": f"INS-{i + 1:03d}",
+                "inspection_type": "quality",
+                "title": f"{trade} inspection",
+                "description": f"Hold-point inspection for {item or trade} (section {code or trade}).",
+                "location": f"{trade} area",
+                "status": "completed" if done else "scheduled",
+                "result": "pass" if done else None,
+                "inspection_date": _d(20 + i * 7),
+                "checklist_data": [
+                    {"id": "1", "category": "Pre-work", "question": "Approved materials on site?", "response": "yes"},
+                    {"id": "2", "category": "Workmanship", "question": "Work to specification?", "response": "yes"},
+                    {"id": "3", "category": "Records", "question": "Test records complete?", "response": "yes"},
+                ],
+            }
+        )
+
+    # ── Invoices (6-8 from subcontractors, in template.currency) ─────────
+    invoices: list[dict] = []
+    inv_n = min(max(len(trades), 6), 8)
+    for i in range(inv_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        firm = firms[i % len(firms)][0]
+        # Derive a plausible amount from the section's priced items.
+        amount = 0.0
+        if trades and (i % len(trades)) < len(template.sections):
+            sec_items = template.sections[i % len(trades)][3]
+            for it in sec_items[:3]:
+                try:
+                    amount += float(it[3]) * float(it[4]) * 0.3
+                except (IndexError, TypeError, ValueError):
+                    continue
+        if amount <= 0:
+            amount = 25000.0 + i * 5000.0
+        amount = round(amount, 2)
+        status = ("paid", "approved", "submitted")[i % 3]
+        invoices.append(
+            {
+                "invoice_number": f"INV-{base.year}-{i + 1:03d}",
+                "invoice_direction": "payable",
+                "invoice_date": _d(30 + i * 25),
+                "due_date": _d(60 + i * 25),
+                "currency_code": cur,
+                "status": status,
+                "notes": f"{firm} — interim valuation, {trade}",
+                "line_items": [
+                    {
+                        "description": f"{item or trade} — works to date",
+                        "quantity": "1",
+                        "unit": "lsum",
+                        "unit_rate": f"{amount:.2f}",
+                        "amount": f"{amount:.2f}",
+                    }
+                ],
+            }
+        )
+
+    # ── Finance budgets (match the BOQ section groups) ───────────────────
+    finance_budgets: list[dict] = []
+    for i, section in enumerate(template.sections):
+        trade = _clean_trade(section[1] if len(section) > 1 else "")
+        sec_items = section[3] if len(section) > 3 else []
+        original = 0.0
+        for it in sec_items:
+            try:
+                original += float(it[3]) * float(it[4])
+            except (IndexError, TypeError, ValueError):
+                continue
+        if original <= 0:
+            continue
+        revised = round(original * 1.02, 2)
+        committed = round(original * 0.7, 2)
+        actual = round(original * (0.5 if i < len(template.sections) // 2 else 0.0), 2)
+        finance_budgets.append(
+            {
+                "category": trade,
+                "original_budget": f"{round(original, 2)}",
+                "revised_budget": f"{revised}",
+                "committed": f"{committed}",
+                "actual": f"{actual}",
+                "forecast_final": f"{round(original * 1.015, 2)}",
+            }
+        )
+
+    # ── Punch list (10-15) ───────────────────────────────────────────────
+    punch_templates = [
+        ("Touch-up required to finished surface", "low", "finishes"),
+        ("Sealant defect at junction to be redone", "medium", "facade"),
+        ("Minor crack to be monitored / filled", "medium", "structural"),
+        ("Service penetration not fully sealed", "high", "fire_protection"),
+        ("Fixing/bracket missing — to be installed", "medium", "mep"),
+        ("Damaged finish to be replaced", "low", "finishes"),
+        ("Snag — door/ironmongery adjustment", "low", "joinery"),
+        ("Leak at connection — retighten and test", "medium", "mep"),
+        ("Alignment/level out of tolerance", "medium", "structural"),
+        ("Cleaning required before handover", "low", "general"),
+        ("Paint defect on wall surface", "low", "finishes"),
+        ("Missing label / signage", "low", "general"),
+        ("Tile lippage exceeds tolerance", "medium", "finishes"),
+        ("Loose handrail fixing", "high", "safety"),
+        ("Incomplete grout to wet area", "medium", "finishes"),
+    ]
+    punchlist: list[dict] = []
+    for i, (title, prio, cat) in enumerate(punch_templates):
+        trade = trades[i % len(trades)][1] if trades else "General"
+        status = ("open", "in_progress", "resolved")[i % 3]
+        punchlist.append(
+            {
+                "title": title,
+                "description": f"{title} — {trade}.",
+                "priority": prio,
+                "status": status,
+                "category": cat,
+                "trade": trade,
+                "location_x": round(0.1 + (i % 9) * 0.1, 2),
+                "location_y": round(0.15 + (i % 7) * 0.1, 2),
+                "resolution_notes": "Rectified and re-checked" if status == "resolved" else None,
+            }
+        )
+
+    # ── Field reports (8-12 spread across the schedule months) ───────────
+    field_reports: list[dict] = []
+    fr_n = min(max(months, 8), 12)
+    conditions = ["clear", "partly_cloudy", "overcast", "rain"]
+    for i in range(fr_n):
+        trade = trades[i % len(trades)][1] if trades else "General works"
+        day = round(i * (months * 30) / fr_n) + 3
+        delay = i % 5 == 4
+        field_reports.append(
+            {
+                "report_date": (base + timedelta(days=day)).date(),
+                "report_type": "daily",
+                "weather_condition": conditions[i % len(conditions)],
+                "temperature_c": float(12 + (i % 12)),
+                "work_performed": f"{trade} progressing as planned. Materials delivered and inspected.",
+                "workforce": [
+                    {"trade": trade, "headcount": 6 + (i % 6), "hours": "9"},
+                    {"trade": "General labor", "headcount": 4, "hours": "8"},
+                ],
+                "equipment_on_site": ["Tower crane", "Telehandler", "Excavator"],
+                "delays": "Weather delay — works paused" if delay else None,
+                "delay_hours": 3.0 if delay else 0.0,
+                "status": "approved",
+            }
+        )
+
+    # ── Submittals (6-10, naming real subs / products) ───────────────────
+    submittals: list[dict] = []
+    sub_n = min(max(len(trades), 6), 10)
+    sub_types = ["product_data", "shop_drawing", "sample", "method_statement"]
+    for i in range(sub_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        firm = firms[i % len(firms)][0]
+        approved = i % 3 != 2
+        submittals.append(
+            {
+                "submittal_number": f"SUB-{i + 1:03d}",
+                "title": f"{item or trade} — {firm}",
+                "spec_section": code or trade,
+                "submittal_type": sub_types[i % len(sub_types)],
+                "status": "approved" if approved else "under_review",
+                "date_submitted": _d(15 + i * 10),
+                "date_returned": _d(29 + i * 10) if approved else None,
+            }
+        )
+
+    # ── NCRs (4-6, raised against real trades) ───────────────────────────
+    ncrs: list[dict] = []
+    ncr_n = min(max(len(trades), 4), 6)
+    ncr_causes = [
+        ("workmanship", "workmanship", "Work not executed to specification"),
+        ("material", "material_defect", "Non-conforming material delivered to site"),
+        ("design", "design_error", "Detail clash identified on site"),
+        ("workmanship", "supervision", "Inadequate supervision of subcontracted works"),
+        ("material", "handling", "Damage during handling/storage"),
+        ("workmanship", "workmanship", "Tolerance exceeded at interface"),
+    ]
+    for i in range(ncr_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        ntype, ncat, desc = ncr_causes[i % len(ncr_causes)]
+        sev = ("minor", "major", "minor", "major")[i % 4]
+        ncrs.append(
+            {
+                "ncr_number": f"NCR-{i + 1:03d}",
+                "title": f"{trade} non-conformance — {item or 'workmanship'}",
+                "description": f"{desc} for {item or trade} (section {code or trade}).",
+                "ncr_type": ntype,
+                "severity": sev,
+                "root_cause": desc,
+                "root_cause_category": ncat,
+                "corrective_action": "Rework affected area and re-inspect",
+                "preventive_action": "Add to hold-point checklist and brief crew",
+                "status": "corrective_action",
+                "cost_impact": f"{2500 + i * 1500}",
+                "schedule_impact_days": 2 + (i % 3),
+            }
+        )
+
+    # ── Correspondence (6-10) ────────────────────────────────────────────
+    corr_seeds = [
+        ("outgoing", "Notice of commencement to authority", "letter", 0),
+        ("incoming", "Authority acknowledgement of commencement", "letter", 7),
+        ("outgoing", "Submission of insurance and bonds", "letter", 12),
+        ("incoming", "Client instruction on scope clarification", "letter", 20),
+        ("outgoing", "Monthly progress report to client", "report", 30),
+        ("incoming", "Consultant design clarification", "email", 24),
+        ("outgoing", "Request for information log update", "email", 28),
+        ("incoming", "Subcontractor early-warning notice", "letter", 35),
+        ("outgoing", "Interim valuation cover letter", "letter", 31),
+        ("incoming", "Authority inspection report", "report", 45),
+    ]
+    correspondence: list[dict] = []
+    out_i = in_i = 0
+    for i, (direction, subject, ctype, day) in enumerate(corr_seeds):
+        if direction == "outgoing":
+            out_i += 1
+            ref = f"OUT-{base.year}-{out_i:03d}"
+        else:
+            in_i += 1
+            ref = f"IN-{base.year}-{in_i:03d}"
+        correspondence.append(
+            {
+                "reference_number": ref,
+                "direction": direction,
+                "subject": subject,
+                "correspondence_type": ctype,
+                "date_sent": _d(day) if direction == "outgoing" else None,
+                "date_received": _d(day) if direction == "incoming" else None,
+                "notes": f"{subject} — {proj}.",
+            }
+        )
+
+    # ── GAP MODULES (no hand data anywhere today) ────────────────────────
+    # variations — issued variation orders derived from the first trades.
+    variations: list[dict] = []
+    var_n = min(max(len(trades), 3), 5)
+    for i in range(var_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        amount = round(8000.0 + i * 6500.0, 2)
+        variations.append(
+            {
+                "code": f"VO-{i + 1:03d}",
+                "title": f"Variation — {trade}: {item or 'additional works'}",
+                "final_cost_impact": f"{amount}",
+                "final_schedule_days": 2 + (i % 4),
+                "currency": cur,
+                "status": ("issued", "agreed", "implemented")[i % 3],
+                "agreed_at": _d(40 + i * 12),
+            }
+        )
+
+    # daily_diary — one diary header per spread day across the timeline.
+    daily_diary: list[dict] = []
+    dd_n = min(max(months, 6), 10)
+    for i in range(dd_n):
+        trade = trades[i % len(trades)][1] if trades else "General works"
+        day = round(i * (months * 30) / dd_n) + 2
+        daily_diary.append(
+            {
+                "diary_date": (base + timedelta(days=day)).strftime("%Y-%m-%d"),
+                "labour_count": 12 + (i % 10),
+                "equipment_count": 3 + (i % 4),
+                "status": "closed" if i % 2 == 0 else "open",
+                "notes": f"{trade} works ongoing. Site operating normally.",
+                "weather_summary": {"condition": conditions[i % len(conditions)], "temp_c": 12 + (i % 12)},
+            }
+        )
+
+    # compliance (compliance_docs) — insurance / permit / bond tracker.
+    compliance: list[dict] = []
+    comp_seeds = [
+        ("insurance", "Contractor all-risk insurance (CAR)", "Insurer", 5_000_000),
+        ("insurance", "Public liability insurance", "Insurer", 10_000_000),
+        ("bond", "Performance bond", "Surety", 1_000_000),
+        ("permit", "Building / construction permit", "Local authority", None),
+        ("certification", "ISO 9001 quality certification", "Certification body", None),
+        ("permit", "Site environmental permit", "Environmental authority", None),
+    ]
+    for i, (dtype, name, issuer, cov) in enumerate(comp_seeds):
+        compliance.append(
+            {
+                "doc_type": dtype,
+                "name": name,
+                "issuer": issuer,
+                "policy_number": f"{dtype.upper()[:3]}-{base.year}-{i + 1:03d}",
+                "coverage_amount": cov,
+                "currency": cur[:3],
+                "effective_date": (base - timedelta(days=15)).date(),
+                "expires_at": (base + timedelta(days=365 + i * 10)).date(),
+                "notify_days_before": 30,
+                "notes": f"{name} for {proj}.",
+            }
+        )
+
+    # procurement — purchase orders to real subs in template currency.
+    procurement: list[dict] = []
+    po_n = min(max(len(trades), 4), 8)
+    for i in range(po_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        firm, _ = firms[i % len(firms)]
+        amount = 0.0
+        if trades and (i % len(trades)) < len(template.sections):
+            for it in template.sections[i % len(trades)][3][:2]:
+                try:
+                    amount += float(it[3]) * float(it[4]) * 0.5
+                except (IndexError, TypeError, ValueError):
+                    continue
+        if amount <= 0:
+            amount = 18000.0 + i * 4000.0
+        amount = round(amount, 2)
+        procurement.append(
+            {
+                "po_number": f"PO-{base.year}-{i + 1:03d}",
+                "po_type": "standard",
+                "issue_date": _d(18 + i * 14),
+                "delivery_date": _d(48 + i * 14),
+                "currency_code": cur,
+                "status": ("issued", "approved", "draft")[i % 3],
+                "notes": f"{firm} — supply for {trade}",
+                "items": [
+                    {
+                        "description": f"{item or trade} — supply",
+                        "quantity": "1",
+                        "unit": "lsum",
+                        "unit_rate": f"{amount:.2f}",
+                        "amount": f"{amount:.2f}",
+                        "cost_category": trade,
+                    }
+                ],
+            }
+        )
+
+    # contracts — main + a couple of trade subcontracts.
+    contracts: list[dict] = []
+    contract_total = _template_total(template)
+    contracts.append(
+        {
+            "code": f"{demo_id}-MAIN",
+            "title": f"Main construction contract — {proj}",
+            "contract_type": "lump_sum",
+            "counterparty_type": "contractor",
+            "total_value": f"{round(contract_total, 2)}",
+            "currency": cur[:3],
+            "status": "active",
+            "start_date": _d(0),
+            "end_date": _d(months * 30),
+        }
+    )
+    for i, (company, _) in enumerate(firms[:3]):
+        trade = trades[i % len(trades)][1] if trades else "Works"
+        sub_value = round((contract_total * 0.15) + i * 50000.0, 2)
+        contracts.append(
+            {
+                "code": f"{demo_id}-SUB-{i + 1:02d}",
+                "title": f"Subcontract — {trade} ({company})",
+                "contract_type": "remeasurement",
+                "counterparty_type": "subcontractor",
+                "total_value": f"{sub_value}",
+                "currency": cur[:3],
+                "status": "active",
+                "start_date": _d(14),
+                "end_date": _d(months * 30 - 14),
+            }
+        )
+
+    # transmittals — document issues to real recipients.
+    transmittals: list[dict] = []
+    tr_n = min(max(len(trades), 4), 6)
+    purposes = ["for_construction", "for_review", "for_approval", "for_information"]
+    for i in range(tr_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        transmittals.append(
+            {
+                "transmittal_number": f"TR-{base.year}-{i + 1:03d}",
+                "subject": f"{trade} drawings and specifications",
+                "purpose_code": purposes[i % len(purposes)],
+                "issued_date": _d(16 + i * 12),
+                "response_due_date": _d(30 + i * 12),
+                "status": ("issued", "acknowledged", "draft")[i % 3],
+                "cover_note": f"Issue of {item or trade} information for {proj}.",
+                "items": [
+                    {"item_number": 1, "description": f"{trade} general arrangement"},
+                    {"item_number": 2, "description": f"{item or trade} detail"},
+                ],
+            }
+        )
+
+    # resources — people / crews / equipment / subcontractors.
+    resources: list[dict] = [
+        {"code": f"{demo_id}-PM", "name": "Project Manager", "resource_type": "person", "rate": 95.0},
+        {"code": f"{demo_id}-SM", "name": "Site Manager", "resource_type": "person", "rate": 75.0},
+        {"code": f"{demo_id}-QS", "name": "Quantity Surveyor", "resource_type": "person", "rate": 70.0},
+        {"code": f"{demo_id}-CRANE", "name": "Tower crane", "resource_type": "equipment", "rate": 120.0},
+        {"code": f"{demo_id}-EXC", "name": "Excavator", "resource_type": "equipment", "rate": 85.0},
+    ]
+    for i, (company, _) in enumerate(firms[:3]):
+        resources.append(
+            {
+                "code": f"{demo_id}-SUBR-{i + 1:02d}",
+                "name": company,
+                "resource_type": "subcontractor",
+                "rate": 0.0,
+            }
+        )
+
+    # requirements — a requirement set with EAC triplets from real trades.
+    req_items: list[dict] = []
+    for i, (code, trade, item) in enumerate(trades[:8]):
+        req_items.append(
+            {
+                "entity": (item or trade).lower().replace(" ", "_")[:120] or "element",
+                "attribute": ("fire_rating", "u_value", "strength_class", "finish")[i % 4],
+                "constraint_type": "equals",
+                "constraint_value": ("F90", "0.24 W/m2K", "C30/37", "as specification")[i % 4],
+                "unit": ("min", "W/m2K", "MPa", "")[i % 4],
+                "category": trade[:100] or "general",
+                "priority": "must",
+                "source_ref": f"Section {code or trade}",
+            }
+        )
+    requirements: list[dict] = [
+        {
+            "name": f"{template.classification_standard.upper() or 'Project'} requirements — {proj}",
+            "description": f"Employer information and technical requirements for {proj}.",
+            "source_type": "manual",
+            "status": "active",
+            "items": req_items,
+        }
+    ]
+
+    # progress — percent-complete observations + planned S-curve per month.
+    progress_entries: list[dict] = []
+    progress_plan: list[dict] = []
+    for m in range(1, months + 1):
+        period = f"{base.year}-{(base.month + m - 1 - 1) % 12 + 1:02d}"
+        planned = round(min(100.0, m / months * 100.0), 3)
+        actual = round(min(100.0, max(0.0, planned - 5.0)), 3)
+        progress_plan.append({"period_label": period, "planned_pct": planned, "notes": "Planned S-curve"})
+        if m <= max(months - 2, 1):  # actuals only up to "today-ish"
+            progress_entries.append(
+                {
+                    "period_label": period,
+                    "percent_complete": actual,
+                    "notes": f"Cumulative progress at {period}.",
+                }
+            )
+    progress: list[dict] = progress_entries  # primary key the block consumes
+
+    return {
+        "contacts": contacts,
+        "tasks": tasks,
+        "rfis": rfis,
+        "meetings": meetings,
+        "safety_incidents": safety_incidents,
+        "safety_observations": safety_observations,
+        "inspections": inspections,
+        "invoices": invoices,
+        "finance_budgets": finance_budgets,
+        "punchlist": punchlist,
+        "field_reports": field_reports,
+        "submittals": submittals,
+        "ncrs": ncrs,
+        "correspondence": correspondence,
+        # Gap modules
+        "variations": variations,
+        "daily_diary": daily_diary,
+        "compliance": compliance,
+        "procurement": procurement,
+        "contracts": contracts,
+        "transmittals": transmittals,
+        "resources": resources,
+        "requirements": requirements,
+        "progress": progress,
+        "progress_plan": progress_plan,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Module-wide demo data seeder  (Contacts, Tasks, RFIs, Meetings, Safety,
 # Inspections, Finance, Punchlist, Field Reports, NCRs, Submittals, Correspondence)
 # ---------------------------------------------------------------------------
@@ -3617,6 +4594,16 @@ async def _seed_module_data(
     results: dict[str, int] = {}
     owner_str = str(owner_id)
     base = datetime(2026, 4, 1)  # project start
+
+    # Template-derived rows for EVERY module key. The 5 built-ins keep their
+    # hand-authored dicts (they win on demo_id match); every other demo (the
+    # partner packs + bespoke 2nds) falls back to this generated data, so each
+    # block reads ``rows = _HAND.get(demo_id) or generated["<key>"]``.
+    try:
+        generated = _generate_module_data(template, project_id, owner_id, demo_id, base)
+    except Exception:  # pragma: no cover - defensive; never break the seeder
+        logger.debug("Derived module-data generation failed for %s", demo_id, exc_info=True)
+        generated = {}
 
     # ── Contacts ─────────────────────────────────────────────────────
     _CONTACTS: dict[str, list[dict]] = {
@@ -3933,7 +4920,7 @@ async def _seed_module_data(
     }
 
     try:
-        contact_list = _CONTACTS.get(demo_id, [])
+        contact_list = _CONTACTS.get(demo_id) or generated.get("contacts", [])
         for c in contact_list:
             session.add(
                 Contact(
@@ -4232,7 +5219,7 @@ async def _seed_module_data(
     }
 
     try:
-        task_list = _TASKS.get(demo_id, [])
+        task_list = _TASKS.get(demo_id) or generated.get("tasks", [])
         for t in task_list:
             session.add(
                 Task(
@@ -4454,7 +5441,7 @@ async def _seed_module_data(
     }
 
     try:
-        rfi_list = _RFIS.get(demo_id, [])
+        rfi_list = _RFIS.get(demo_id) or generated.get("rfis", [])
         for r in rfi_list:
             session.add(
                 RFI(
@@ -4780,7 +5767,7 @@ async def _seed_module_data(
     }
 
     try:
-        meeting_list = _MEETINGS.get(demo_id, [])
+        meeting_list = _MEETINGS.get(demo_id) or generated.get("meetings", [])
         for m in meeting_list:
             session.add(
                 Meeting(
@@ -5021,7 +6008,7 @@ async def _seed_module_data(
     }
 
     try:
-        incident_list = _SAFETY_INCIDENTS.get(demo_id, [])
+        incident_list = _SAFETY_INCIDENTS.get(demo_id) or generated.get("safety_incidents", [])
         for inc in incident_list:
             session.add(
                 SafetyIncident(
@@ -5251,7 +6238,7 @@ async def _seed_module_data(
     }
 
     try:
-        obs_list = _OBSERVATIONS.get(demo_id, [])
+        obs_list = _OBSERVATIONS.get(demo_id) or generated.get("safety_observations", [])
         for obs in obs_list:
             sev = obs.get("severity", 1)
             lik = obs.get("likelihood", 1)
@@ -5738,7 +6725,7 @@ async def _seed_module_data(
     }
 
     try:
-        insp_list = _INSPECTIONS.get(demo_id, [])
+        insp_list = _INSPECTIONS.get(demo_id) or generated.get("inspections", [])
         for insp in insp_list:
             session.add(
                 QualityInspection(
@@ -6077,7 +7064,7 @@ async def _seed_module_data(
     }
 
     try:
-        inv_list = _INVOICES.get(demo_id, [])
+        inv_list = _INVOICES.get(demo_id) or generated.get("invoices", [])
         for inv in inv_list:
             items_data = inv.pop("line_items", [])
             subtotal = sum(float(li["amount"]) for li in items_data)
@@ -6322,7 +7309,7 @@ async def _seed_module_data(
     }
 
     try:
-        budget_list = _BUDGETS.get(demo_id, [])
+        budget_list = _BUDGETS.get(demo_id) or generated.get("finance_budgets", [])
         for bl in budget_list:
             session.add(
                 ProjectBudget(
@@ -6387,8 +7374,7 @@ async def _seed_module_data(
             {
                 "title": "Curtain wall water ingress — Level 5 transom",
                 "description": (
-                    "Water staining at transom-mullion junction Level 5,"
-                    " south elevation (per INS-003 mock-up failure)."
+                    "Water staining at transom-mullion junction Level 5, south elevation (per INS-003 mock-up failure)."
                 ),
                 "priority": "high",
                 "status": "open",
@@ -6520,8 +7506,7 @@ async def _seed_module_data(
             {
                 "title": "Dock leveller hydraulic leak — Dock 5",
                 "description": (
-                    "Hydraulic fluid leak on dock leveller 5."
-                    " Leveller operational but needs seal replacement."
+                    "Hydraulic fluid leak on dock leveller 5. Leveller operational but needs seal replacement."
                 ),
                 "priority": "low",
                 "status": "resolved",
@@ -6533,7 +7518,7 @@ async def _seed_module_data(
     }
 
     try:
-        punch_list = _PUNCHLIST.get(demo_id, [])
+        punch_list = _PUNCHLIST.get(demo_id) or generated.get("punchlist", [])
         for p in punch_list:
             session.add(
                 PunchItem(
@@ -6675,7 +7660,7 @@ async def _seed_module_data(
     }
 
     try:
-        fr_list = _FIELD_REPORTS.get(demo_id, [])
+        fr_list = _FIELD_REPORTS.get(demo_id) or generated.get("field_reports", [])
         for fr in fr_list:
             session.add(
                 FieldReport(
@@ -6838,7 +7823,7 @@ async def _seed_module_data(
     }
 
     try:
-        sub_list = _SUBMITTALS.get(demo_id, [])
+        sub_list = _SUBMITTALS.get(demo_id) or generated.get("submittals", [])
         for s in sub_list:
             session.add(
                 Submittal(
@@ -6943,7 +7928,7 @@ async def _seed_module_data(
     }
 
     try:
-        ncr_list = _NCRS.get(demo_id, [])
+        ncr_list = _NCRS.get(demo_id) or generated.get("ncrs", [])
         for n in ncr_list:
             session.add(
                 NCR(
@@ -7056,7 +8041,7 @@ async def _seed_module_data(
     }
 
     try:
-        corr_list = _CORRESPONDENCE.get(demo_id, [])
+        corr_list = _CORRESPONDENCE.get(demo_id) or generated.get("correspondence", [])
         for c in corr_list:
             session.add(
                 Correspondence(
@@ -7076,6 +8061,291 @@ async def _seed_module_data(
         results["correspondence"] = len(corr_list)
     except Exception:
         logger.debug("Correspondence module not loaded, skipping")
+
+    # ──────────────────────────────────────────────────────────────────
+    # GAP MODULES — no hand-authored data anywhere today. Content comes
+    # straight from the generated dict so built-ins get them too. Each
+    # block is fully fail-soft: a missing/disabled module or a column
+    # mismatch only skips that block, never breaks the others.
+    # ──────────────────────────────────────────────────────────────────
+
+    # ── Variations (issued variation orders) — dashboard card ─────────
+    try:
+        from app.modules.variations.models import VariationOrder
+
+        var_list = generated.get("variations", [])
+        for v in var_list:
+            session.add(
+                VariationOrder(
+                    id=_id(),
+                    project_id=project_id,
+                    code=v["code"],
+                    title=v.get("title", ""),
+                    final_cost_impact=Decimal(str(v.get("final_cost_impact", "0"))),
+                    final_schedule_days=v.get("final_schedule_days", 0),
+                    currency=v.get("currency", ""),
+                    status=v.get("status", "issued"),
+                    agreed_at=v.get("agreed_at"),
+                    metadata_={"project_id": str(project_id), "demo_id": demo_id},
+                )
+            )
+        results["variations"] = len(var_list)
+    except Exception:
+        logger.debug("Variations module not loaded, skipping demo variations")
+
+    # ── Daily diary (diary headers) — dashboard card ──────────────────
+    try:
+        from app.modules.daily_diary.models import DailyDiary
+
+        dd_list = generated.get("daily_diary", [])
+        for d in dd_list:
+            session.add(
+                DailyDiary(
+                    id=_id(),
+                    project_id=project_id,
+                    diary_date=d["diary_date"],
+                    labour_count=d.get("labour_count", 0),
+                    equipment_count=d.get("equipment_count", 0),
+                    status=d.get("status", "open"),
+                    notes=d.get("notes"),
+                    weather_summary=d.get("weather_summary", {}),
+                    metadata_={"project_id": str(project_id), "demo_id": demo_id},
+                )
+            )
+        results["daily_diary"] = len(dd_list)
+    except Exception:
+        logger.debug("Daily diary module not loaded, skipping demo diaries")
+
+    # ── Compliance docs (insurance/permits/bonds) — dashboard card ────
+    try:
+        from app.modules.compliance_docs.models import ComplianceDoc
+
+        comp_list = generated.get("compliance", [])
+        for cd in comp_list:
+            cov = cd.get("coverage_amount")
+            session.add(
+                ComplianceDoc(
+                    id=_id(),
+                    project_id=project_id,
+                    doc_type=cd["doc_type"],
+                    name=cd["name"],
+                    issuer=cd.get("issuer"),
+                    policy_number=cd.get("policy_number"),
+                    coverage_amount=Decimal(str(cov)) if cov is not None else None,
+                    currency=cd.get("currency", ""),
+                    effective_date=cd["effective_date"],
+                    expires_at=cd["expires_at"],
+                    notify_days_before=cd.get("notify_days_before", 30),
+                    status="active",
+                    notes=cd.get("notes", ""),
+                    created_by=owner_str,
+                    metadata_={"project_id": str(project_id), "demo_id": demo_id},
+                )
+            )
+        results["compliance"] = len(comp_list)
+    except Exception:
+        logger.debug("Compliance docs module not loaded, skipping demo compliance")
+
+    # ── Procurement (purchase orders + items) ─────────────────────────
+    try:
+        from app.modules.procurement.models import PurchaseOrder, PurchaseOrderItem
+
+        po_list = generated.get("procurement", [])
+        for po in po_list:
+            po_items = po.get("items", [])
+            subtotal = sum(float(li.get("amount", 0)) for li in po_items)
+            po_obj = PurchaseOrder(
+                id=_id(),
+                project_id=project_id,
+                po_number=po["po_number"],
+                po_type=po.get("po_type", "standard"),
+                issue_date=po.get("issue_date"),
+                delivery_date=po.get("delivery_date"),
+                currency_code=po.get("currency_code", template.currency),
+                amount_subtotal=f"{round(subtotal, 2)}",
+                tax_amount="0",
+                amount_total=f"{round(subtotal, 2)}",
+                status=po.get("status", "draft"),
+                notes=po.get("notes"),
+                created_by=owner_id,
+                metadata_={"project_id": str(project_id), "demo_id": demo_id},
+            )
+            session.add(po_obj)
+            await session.flush()
+            for li_idx, li in enumerate(po_items):
+                session.add(
+                    PurchaseOrderItem(
+                        id=_id(),
+                        po_id=po_obj.id,
+                        description=li["description"],
+                        quantity=li.get("quantity", "1"),
+                        unit=li.get("unit"),
+                        unit_rate=li.get("unit_rate", "0"),
+                        amount=li.get("amount", "0"),
+                        cost_category=li.get("cost_category"),
+                        sort_order=li_idx + 1,
+                    )
+                )
+        results["procurement"] = len(po_list)
+    except Exception:
+        logger.debug("Procurement module not loaded, skipping demo POs")
+
+    # ── Contracts (main + trade subcontracts) ─────────────────────────
+    try:
+        from app.modules.contracts.models import Contract
+
+        contract_list = generated.get("contracts", [])
+        for ct in contract_list:
+            session.add(
+                Contract(
+                    id=_id(),
+                    project_id=project_id,
+                    code=ct["code"],
+                    title=ct.get("title", ""),
+                    contract_type=ct.get("contract_type", "lump_sum"),
+                    counterparty_type=ct.get("counterparty_type", "client"),
+                    total_value=Decimal(str(ct.get("total_value", "0"))),
+                    currency=ct.get("currency", ""),
+                    status=ct.get("status", "draft"),
+                    start_date=ct.get("start_date"),
+                    end_date=ct.get("end_date"),
+                    created_by=owner_str,
+                    metadata_={"project_id": str(project_id), "demo_id": demo_id},
+                )
+            )
+        results["contracts"] = len(contract_list)
+    except Exception:
+        logger.debug("Contracts module not loaded, skipping demo contracts")
+
+    # ── Transmittals (document issues + items) ────────────────────────
+    try:
+        from app.modules.transmittals.models import Transmittal, TransmittalItem
+
+        tr_list = generated.get("transmittals", [])
+        for tr in tr_list:
+            tr_obj = Transmittal(
+                id=_id(),
+                project_id=project_id,
+                transmittal_number=tr["transmittal_number"],
+                subject=tr["subject"],
+                purpose_code=tr.get("purpose_code", "for_information"),
+                issued_date=tr.get("issued_date"),
+                response_due_date=tr.get("response_due_date"),
+                status=tr.get("status", "draft"),
+                cover_note=tr.get("cover_note"),
+                created_by=owner_id,
+                metadata_={"project_id": str(project_id), "demo_id": demo_id},
+            )
+            session.add(tr_obj)
+            await session.flush()
+            for item in tr.get("items", []):
+                session.add(
+                    TransmittalItem(
+                        id=_id(),
+                        transmittal_id=tr_obj.id,
+                        item_number=item["item_number"],
+                        description=item.get("description"),
+                    )
+                )
+        results["transmittals"] = len(tr_list)
+    except Exception:
+        logger.debug("Transmittals module not loaded, skipping demo transmittals")
+
+    # ── Resources (people / crews / equipment / subcontractors) ───────
+    try:
+        from app.modules.resources.models import Resource
+
+        res_list = generated.get("resources", [])
+        for r in res_list:
+            session.add(
+                Resource(
+                    id=_id(),
+                    code=r["code"],
+                    name=r["name"],
+                    resource_type=r.get("resource_type", "person"),
+                    home_project_id=project_id,
+                    default_cost_rate=Decimal(str(r.get("rate", 0))),
+                    currency=(template.currency or "")[:3],
+                    status="active",
+                    metadata_={"project_id": str(project_id), "demo_id": demo_id},
+                )
+            )
+        results["resources"] = len(res_list)
+    except Exception:
+        logger.debug("Resources module not loaded, skipping demo resources")
+
+    # ── Requirements (a requirement set + EAC items) ──────────────────
+    try:
+        from app.modules.requirements.models import Requirement, RequirementSet
+
+        req_sets = generated.get("requirements", [])
+        req_total = 0
+        for rs in req_sets:
+            rs_obj = RequirementSet(
+                id=_id(),
+                project_id=project_id,
+                name=rs["name"],
+                description=rs.get("description", ""),
+                source_type=rs.get("source_type", "manual"),
+                status=rs.get("status", "draft"),
+                created_by=owner_str,
+                metadata_={"project_id": str(project_id), "demo_id": demo_id},
+            )
+            session.add(rs_obj)
+            await session.flush()
+            for item in rs.get("items", []):
+                session.add(
+                    Requirement(
+                        id=_id(),
+                        requirement_set_id=rs_obj.id,
+                        entity=item["entity"],
+                        attribute=item["attribute"],
+                        constraint_type=item.get("constraint_type", "equals"),
+                        constraint_value=item["constraint_value"],
+                        unit=item.get("unit", ""),
+                        category=item.get("category", "general"),
+                        priority=item.get("priority", "must"),
+                        source_ref=item.get("source_ref", ""),
+                        created_by=owner_str,
+                        metadata_={"demo_id": demo_id},
+                    )
+                )
+                req_total += 1
+        results["requirements"] = req_total
+    except Exception:
+        logger.debug("Requirements module not loaded, skipping demo requirements")
+
+    # ── Progress (planned S-curve + actual percent-complete) ──────────
+    try:
+        from app.modules.progress.models import ProgressEntry, ProgressPlan
+
+        plan_list = generated.get("progress_plan", [])
+        for pp in plan_list:
+            session.add(
+                ProgressPlan(
+                    id=_id(),
+                    project_id=project_id,
+                    period_label=pp["period_label"],
+                    planned_pct=Decimal(str(pp.get("planned_pct", 0))),
+                    notes=pp.get("notes"),
+                )
+            )
+        entry_list = generated.get("progress", [])
+        for pe in entry_list:
+            session.add(
+                ProgressEntry(
+                    id=_id(),
+                    project_id=project_id,
+                    period_label=pe["period_label"],
+                    percent_complete=Decimal(str(pe.get("percent_complete", 0))),
+                    notes=pe.get("notes"),
+                    recorded_by=owner_str,
+                    metadata_={"demo_id": demo_id},
+                )
+            )
+        results["progress"] = len(entry_list) + len(plan_list)
+    except Exception:
+        logger.debug("Progress module not loaded, skipping demo progress")
 
     await session.flush()
     return results
@@ -7104,9 +8374,7 @@ async def install_demo_project(
     # ── 0. Duplicate check ────────────────────────────────────────────
     existing_rows = (await session.execute(select(Project))).scalars().all()
     existing_demo = [
-        p
-        for p in existing_rows
-        if isinstance(p.metadata_, dict) and p.metadata_.get("demo_id") == demo_id
+        p for p in existing_rows if isinstance(p.metadata_, dict) and p.metadata_.get("demo_id") == demo_id
     ]
 
     if existing_demo and not force_reinstall:
@@ -8195,3 +9463,19 @@ async def install_demo_project(
         "documents": doc_count,
         **module_data,
     }
+
+
+# ---------------------------------------------------------------------------
+# Load partner-pack demo templates (order-independent merge)
+# ---------------------------------------------------------------------------
+# Importing ``demo_packs`` runs its loader, which calls
+# ``register_pack_templates`` above to merge each pack's flagship project into
+# DEMO_TEMPLATES + DEMO_CATALOG. Done at the very bottom so this module is
+# fully defined before the packs push into it; wrapped so a packaging issue
+# never breaks core boot.
+try:
+    import app.core.demo_packs  # noqa: F401  (import side-effect: registers pack templates)
+except Exception:  # pragma: no cover - partner packs are optional
+    import logging as _logging
+
+    _logging.getLogger(__name__).warning("partner-pack demo templates not loaded", exc_info=True)

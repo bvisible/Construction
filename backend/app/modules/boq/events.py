@@ -160,16 +160,18 @@ async def _log_boq_activity(event: Event) -> None:
 
     data = event.data or {}
 
-    # We need a user_id for the log entry.  If the event doesn't carry one,
-    # use a system placeholder (all-zeros UUID).
+    # A system-generated event (no acting user) logs ``user_id = None`` →
+    # rendered as "System" in the feed. We previously wrote an all-zeros UUID
+    # sentinel, but ``user_id`` is a FK to oe_users_user: SQLite ignored the
+    # dangling reference (FK enforcement off), PostgreSQL rejects it with a
+    # ForeignKeyViolationError. NULL is the portable, correct representation.
     user_id_raw = data.get("user_id")
+    user_id: uuid.UUID | None = None
     if user_id_raw:
         try:
             user_id = uuid.UUID(str(user_id_raw))
         except (ValueError, AttributeError):
-            user_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
-    else:
-        user_id = uuid.UUID("00000000-0000-0000-0000-000000000000")
+            user_id = None
 
     entry = BOQActivityLog(
         project_id=_extract_project_id(data),

@@ -57,6 +57,7 @@ async def _safe_publish(name: str, data: dict[str, Any]) -> None:
     except Exception:
         logger.debug("Failed to publish requirements event '%s'", name, exc_info=True)
 
+
 # Gate definitions
 GATE_NAMES: dict[int, str] = {
     1: "Completeness",
@@ -106,6 +107,22 @@ class RequirementsService:
                 detail="Requirement set not found",
             )
         return item
+
+    async def get_requirement_project_id(self, req_id: uuid.UUID) -> uuid.UUID:
+        """Return the project_id owning a requirement (via its set). 404 if missing.
+
+        Lets the router verify_project_access on the requirement's REAL project,
+        so a caller can't mutate a requirement in a project they cannot access
+        by pairing it with a set_id they do own (IDOR defence).
+        """
+        item = await self.req_repo.get_by_id(req_id)
+        if item is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Requirement not found",
+            )
+        req_set = await self.get_set(item.requirement_set_id)
+        return req_set.project_id
 
     async def list_sets(
         self,
@@ -519,11 +536,7 @@ class RequirementsService:
             from sqlalchemy import cast
             from sqlalchemy.dialects.postgresql import JSONB
 
-            stmt = select(Requirement).where(
-                cast(Requirement.metadata_, JSONB).contains(
-                    {"bim_element_ids": [target]}
-                )
-            )
+            stmt = select(Requirement).where(cast(Requirement.metadata_, JSONB).contains({"bim_element_ids": [target]}))
             if project_id is not None:
                 from app.modules.requirements.models import RequirementSet
 
@@ -622,7 +635,7 @@ class RequirementsService:
         elif gate_number == 3:
             gate_status, score, findings = await self._run_gate_coverage(req_set, requirements)
         elif gate_number == 4:
-            gate_status, score, findings = self._run_gate_compliance(req_set, requirements)
+            gate_status, score, findings = await self._run_gate_compliance(req_set, requirements)
         else:
             gate_status, score, findings = "skipped", 0.0, []
 
@@ -821,20 +834,50 @@ class RequirementsService:
 
         return gate_status, score, findings
 
-    def _run_gate_compliance(
+    async def _run_gate_compliance(
         self,
         req_set: RequirementSet,
         requirements: list[Requirement],
     ) -> tuple[str, float, list[dict[str, Any]]]:
         """Gate 4: Check requirements against project standard (DIN 276, NRM, etc.).
 
-        This is a placeholder that checks basic structural compliance.
-        Full standard-specific checks should be added per standard.
+        Combines two layers of checks:
+
+        1. **Structural** — must-priority requirements have a unit,
+           ``range`` values match ``min-max``, ``min``/``max`` values
+           are numeric. Cheap and standard-agnostic.
+        2. **Standard-specific** — when a requirement has a
+           ``classification`` entry under its ``metadata_`` (DIN 276
+           Kostengruppe, MasterFormat division, NRM element), it is
+           cross-checked against the rule registry's known cost-group /
+           element / division codes for the project's standard. A code
+           that exists locally but is not in the standard's allowlist
+           is flagged as an *unknown_code* finding (not an error — the
+           project may legitimately use a custom local code).
         """
         findings: list[dict[str, Any]] = []
 
         if not requirements:
             return "warning", 0.0, [{"type": "empty", "message": "No requirements to check compliance"}]
+
+        # Pull the standard set on the project so we know which
+        # classification namespace to validate against. Falls back to
+        # ``boq_quality`` (universal) when the project has no standard.
+        project_standard = ""
+        try:
+            from app.modules.projects.models import Project  # local import
+
+            project_row = self.session.sync_session.get(Project, req_set.project_id)  # type: ignore[attr-defined]
+            project_standard = (getattr(project_row, "classification_standard", "") or "").lower()
+        except Exception:  # noqa: BLE001 — best-effort lookup
+            project_standard = ""
+
+        # Reasonable allow-lists per standard (subset that covers the
+        # 80% common case — the validation engine has the exhaustive
+        # registry; here we only need a sanity check at gate time).
+        _DIN276_PREFIXES = {"1", "2", "3", "4", "5", "6", "7", "8"}
+        _NRM_PREFIXES = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+        _MF_DIVISIONS = {f"{n:02d}" for n in range(0, 50)}  # MasterFormat 00-49
 
         issues_count = 0
         total = len(requirements)
@@ -891,6 +934,50 @@ class RequirementsService:
                                 f"'{req.entity}.{req.attribute}' has non-numeric "
                                 f"value '{req.constraint_value}'"
                             ),
+                        }
+                    )
+
+            # Standard-specific classification sanity check. The code
+            # lives under ``metadata_["classification"][<standard>]`` —
+            # an unknown prefix is reported as INFO so the gate doesn't
+            # fail a legitimately custom code; the issue is still
+            # surfaced so reviewers can choose to map it.
+            try:
+                classification = (req.metadata_ or {}).get("classification") or {}
+            except AttributeError:
+                classification = {}
+            if project_standard == "din276" and "din276" in classification:
+                code = str(classification["din276"]).strip()
+                if code and code[0] not in _DIN276_PREFIXES:
+                    findings.append(
+                        {
+                            "type": "unknown_din276_code",
+                            "requirement_id": str(req.id),
+                            "code": code,
+                            "message": f"DIN 276 code '{code}' does not start with a known cost-group digit (1-8)",
+                        }
+                    )
+            elif project_standard == "masterformat" and "masterformat" in classification:
+                code = str(classification["masterformat"]).strip()
+                division = code[:2] if len(code) >= 2 else ""
+                if division and division not in _MF_DIVISIONS:
+                    findings.append(
+                        {
+                            "type": "unknown_masterformat_division",
+                            "requirement_id": str(req.id),
+                            "code": code,
+                            "message": f"MasterFormat division '{division}' is outside the 00-49 range",
+                        }
+                    )
+            elif project_standard == "nrm" and "nrm" in classification:
+                code = str(classification["nrm"]).strip()
+                if code and code[0] not in _NRM_PREFIXES:
+                    findings.append(
+                        {
+                            "type": "unknown_nrm_code",
+                            "requirement_id": str(req.id),
+                            "code": code,
+                            "message": f"NRM code '{code}' does not start with a digit",
                         }
                     )
 
@@ -993,7 +1080,10 @@ class RequirementsService:
         logger.info(
             "Imported %d requirements from text into set %s (errors: %d)",
             len(items),
-            req_set.id,
+            # Use the captured local, not req_set.id: update_fields() above issues
+            # a Core UPDATE that expires req_set, so reading req_set.id here would
+            # emit a sync lazy reload (MissingGreenlet on asyncpg).
+            set_id_val,
             len(parse_errors),
         )
 
@@ -1083,9 +1173,7 @@ class RequirementsService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Requirement not found",
             )
-        return await self.deliverable_repo.list_for_requirement(
-            requirement_id, deliverable_type=deliverable_type
-        )
+        return await self.deliverable_repo.list_for_requirement(requirement_id, deliverable_type=deliverable_type)
 
     async def update_deliverable(
         self,
@@ -1122,7 +1210,8 @@ class RequirementsService:
         await self.session.commit()
 
     async def get_deliverable_coverage(
-        self, requirement_id: uuid.UUID,
+        self,
+        requirement_id: uuid.UUID,
     ) -> dict[str, Any]:
         """Roll up coverage % for one requirement's deliverables."""
         req = await self.req_repo.get_by_id(requirement_id)
@@ -1148,9 +1237,7 @@ class RequirementsService:
         else any missing one). When ``deliverable_type`` is supplied
         only that column is materialised.
         """
-        requirements = await self.deliverable_repo.all_requirements_for_project(
-            project_id
-        )
+        requirements = await self.deliverable_repo.all_requirements_for_project(project_id)
 
         # Collect deliverable types present in the project so the UI can
         # render dynamic columns. Always include the canonical set so the
@@ -1165,7 +1252,7 @@ class RequirementsService:
         ]
         seen_types: set[str] = set()
         for req in requirements:
-            for d in (req.deliverables or []):
+            for d in req.deliverables or []:
                 seen_types.add(d.deliverable_type)
         all_types = list(canonical_types) + sorted(seen_types - set(canonical_types))
         if deliverable_type is not None:
@@ -1178,9 +1265,7 @@ class RequirementsService:
         for req in requirements:
             deliverables = list(req.deliverables or [])
             if deliverable_type is not None:
-                deliverables = [
-                    d for d in deliverables if d.deliverable_type == deliverable_type
-                ]
+                deliverables = [d for d in deliverables if d.deliverable_type == deliverable_type]
 
             cells: dict[str, dict[str, Any]] = {}
 
@@ -1203,13 +1288,7 @@ class RequirementsService:
                     }
                     continue
                 # Status priority: accepted > submitted > missing.
-                bucket.sort(
-                    key=lambda d: (
-                        0 if d.accepted_at is not None
-                        else 1 if d.submitted_at is not None
-                        else 2
-                    )
-                )
+                bucket.sort(key=lambda d: 0 if d.accepted_at is not None else 1 if d.submitted_at is not None else 2)
                 cell = bucket[0]
                 cells[col] = {
                     "deliverable_id": cell.id,
@@ -1221,9 +1300,7 @@ class RequirementsService:
                     "accepted_at": cell.accepted_at,
                 }
 
-            coverage = compute_deliverable_coverage(
-                deliverables, requirement_id=req.id
-            )
+            coverage = compute_deliverable_coverage(deliverables, requirement_id=req.id)
             project_total += coverage["total"]
             project_accepted += coverage["accepted"]
 
@@ -1239,11 +1316,7 @@ class RequirementsService:
                 }
             )
 
-        project_pct = (
-            round((project_accepted / project_total) * 100.0, 2)
-            if project_total
-            else 0.0
-        )
+        project_pct = round((project_accepted / project_total) * 100.0, 2) if project_total else 0.0
 
         return {
             "project_id": project_id,

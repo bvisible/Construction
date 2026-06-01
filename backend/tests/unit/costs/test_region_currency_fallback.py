@@ -2,17 +2,25 @@
 
 Audit fix #1 (2026-05-21): ``_resolve_currency`` previously fell through
 silently to ``EUR`` on unknown/malformed regions, and the ``PT_SAOPAULO``
-key was a mislabel (São Paulo is Brazil → ``BR_SAOPAULO``). These tests
-lock in the new behaviour:
+key was a mislabel (São Paulo is Brazil → ``BR_SAOPAULO``).
 
-    1. Malformed regions log a warning and append the message to the
-       caller-supplied ``warnings`` list (then fall back to EUR).
-    2. Unknown but well-formed regions log a warning AND fall back.
+Currency-correctness fix (2026-05-31): the silent ``EUR`` fallback for a
+genuinely-unknown region was itself a bug — labelling a Kenyan/Thai/Korean
+rate as EUR corrupts every downstream cross-currency conversion. The helper
+now returns ``""`` (unset, honestly "unknown") instead of a wrong "EUR", and
+``_REGION_CURRENCY`` is derived from the v3 catalogue registry so every
+shipped region resolves to its true ISO code. These tests lock in:
+
+    1. Malformed regions log a warning, append the message to the
+       caller-supplied ``warnings`` list, and resolve to "" (unset).
+    2. Unknown but well-formed regions log a warning AND resolve to "".
     3. The bogus ``PT_SAOPAULO`` key is no longer in the registry —
        canonical ``BR_SAOPAULO`` is.
     4. The well-known regions (PT_LISBON, DE_BERLIN, ...) still resolve
        correctly and emit NO warning.
     5. Duplicate warnings are de-duplicated within a single request.
+    6. Every available v3 catalogue region resolves to its declared
+       currency — never a wrong fallback.
 """
 
 from __future__ import annotations
@@ -21,6 +29,7 @@ import logging
 
 import pytest
 
+from app.modules.costs.cwicr_v3_catalogue import CWICR_V3_CATALOGUES
 from app.modules.costs.router import (
     _REGION_CURRENCY,
     _is_valid_region_format,
@@ -59,13 +68,10 @@ def test_resolve_currency_malformed_region_logs_warning_and_appends(
     warnings: list[str] = []
     with caplog.at_level(logging.WARNING, logger="app.modules.costs.router"):
         result = _resolve_currency(None, "!@#$", warnings=warnings)
-    assert result == "EUR"  # fallback
+    assert result == ""  # unset, not a wrong "EUR"
     assert len(warnings) == 1
     assert "non-canonical" in warnings[0]
-    assert any(
-        r.levelno == logging.WARNING and "non-canonical" in r.getMessage()
-        for r in caplog.records
-    )
+    assert any(r.levelno == logging.WARNING and "non-canonical" in r.getMessage() for r in caplog.records)
 
 
 def test_resolve_currency_unknown_but_valid_format_warns(
@@ -73,11 +79,12 @@ def test_resolve_currency_unknown_but_valid_format_warns(
 ) -> None:
     """A well-formed but unregistered region (``DK_COPENHAGEN``) is the
     most likely real-world miss — log a warning identifying the missing
-    entry so ops can extend the registry."""
+    entry so ops can extend the registry, and resolve to "" (never a
+    wrong "EUR")."""
     warnings: list[str] = []
     with caplog.at_level(logging.WARNING, logger="app.modules.costs.router"):
         result = _resolve_currency(None, "DK_COPENHAGEN", warnings=warnings)
-    assert result == "EUR"
+    assert result == ""
     assert len(warnings) == 1
     assert "Unknown region" in warnings[0]
     assert "DK_COPENHAGEN" in warnings[0]
@@ -102,6 +109,26 @@ def test_resolve_currency_explicit_currency_short_circuits(
     with caplog.at_level(logging.WARNING, logger="app.modules.costs.router"):
         result = _resolve_currency("CHF", "not-a-region", warnings=warnings)
     assert result == "CHF"
+    assert warnings == []
+
+
+@pytest.mark.parametrize(
+    ("region", "expected_currency"),
+    [(cat.region, cat.currency) for cat in CWICR_V3_CATALOGUES if cat.available and cat.currency],
+)
+def test_every_available_v3_region_resolves_to_declared_currency(
+    region: str,
+    expected_currency: str,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every shipped v3 catalogue region must resolve to its OWN declared ISO
+    currency — never the wrong fallback. This is the regression guard for the
+    ~18 regions (KES/GHS/KRW/THB/VND/…) the hand-kept map used to mislabel as
+    EUR. ``_REGION_CURRENCY`` is now derived from ``CWICR_V3_CATALOGUES`` so
+    the two can never drift."""
+    warnings: list[str] = []
+    with caplog.at_level(logging.WARNING, logger="app.modules.costs.router"):
+        assert _resolve_currency(None, region, warnings=warnings) == expected_currency
     assert warnings == []
 
 

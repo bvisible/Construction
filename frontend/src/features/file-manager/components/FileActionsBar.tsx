@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Search, X, ChevronDown, LayoutGrid, List, Download, Upload, MoreHorizontal } from 'lucide-react';
+import { Search, X, ChevronDown, LayoutGrid, List, Download, Upload, MoreHorizontal, Star } from 'lucide-react';
 import clsx from 'clsx';
 import type { FileFilters } from '../types';
 import { SaveViewButton } from '@/features/file-saved-views';
@@ -32,6 +32,11 @@ interface FileActionsBarProps {
    *  round-trip (saved views + bookmarkable filters) stays loss-less. */
   selectedTagIds?: string[];
   onSelectedTagsChange?: (tagIds: string[]) => void;
+  /** "Favourites only" filter — keeps just the rows the user has starred. */
+  favoritesOnly?: boolean;
+  onFavoritesOnlyChange?: (on: boolean) => void;
+  /** Number of favourites in this project — shown on the chip. */
+  favoritesCount?: number;
 }
 
 /* Always-visible type pills — the high-traffic AECO formats. Each maps to one
@@ -74,6 +79,9 @@ export function FileActionsBar({
   category,
   selectedTagIds,
   onSelectedTagsChange,
+  favoritesOnly = false,
+  onFavoritesOnlyChange,
+  favoritesCount,
 }: FileActionsBarProps) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState(query);
@@ -218,6 +226,26 @@ export function FileActionsBar({
       )}
 
       <div className="ms-auto flex items-center gap-2">
+        {onFavoritesOnlyChange && (
+          <button
+            type="button"
+            onClick={() => onFavoritesOnlyChange(!favoritesOnly)}
+            aria-pressed={favoritesOnly}
+            className={clsx(
+              'inline-flex items-center gap-1.5 h-9 px-3 text-xs font-medium rounded-lg border transition-colors',
+              favoritesOnly
+                ? 'border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 dark:border-amber-500/40'
+                : 'border-border-light text-content-secondary hover:bg-surface-secondary',
+            )}
+            title={t('files.favorites.filter', { defaultValue: 'Show favourites only' })}
+          >
+            <Star size={13} strokeWidth={2} fill={favoritesOnly ? 'currentColor' : 'none'} />
+            <span>{t('files.favorites.label', { defaultValue: 'Favourites' })}</span>
+            {typeof favoritesCount === 'number' && favoritesCount > 0 && (
+              <span className="tabular-nums opacity-70">{favoritesCount}</span>
+            )}
+          </button>
+        )}
         {projectId && onSelectedTagsChange && (
           <TagFilterFacet
             projectId={projectId}

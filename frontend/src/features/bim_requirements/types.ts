@@ -1,7 +1,7 @@
 /**
  * Types mirroring the backend `bim_requirements` Rules-as-Code endpoints
- * (`POST /api/v1/bim/requirements/preview-yaml/` and
- *  `POST /api/v1/bim/requirements/install-from-yaml/`).
+ * (`POST /api/v1/bim_requirements/preview-yaml/` and
+ *  `POST /api/v1/bim_requirements/install-from-yaml/`).
  *
  * The backend ships RulePack objects loaded from YAML; the preview endpoint
  * returns the parsed pack plus optional dry-run validation results when a
@@ -56,19 +56,27 @@ export interface ParsedRulePack {
   rules?: ParsedRule[];
 }
 
-export interface DryRunRuleResult {
+/**
+ * One row of the dry-run report — the outcome of a single (rule, element)
+ * pair. The backend emits a FLAT list of these (one per evaluated element
+ * per rule); per-rule pass/fail aggregates are computed on the client by
+ * grouping on `rule_id`. See `bim_requirements/rule_runtime.py:RuleResult`.
+ */
+export interface DryRunElementResult {
   rule_id: string;
-  pass_count: number;
-  fail_count: number;
-  total_count?: number;
-  severity?: RuleSeverity;
+  element_id: string;
+  passed: boolean;
+  message?: string | null;
+  evidence?: Record<string, unknown> | null;
 }
 
 export interface DryRunReport {
-  total_rules?: number;
-  total_pass?: number;
-  total_fail?: number;
-  results?: DryRunRuleResult[];
+  pack_id?: string;
+  total_elements?: number;
+  passed?: number;
+  failed?: number;
+  not_applicable?: number;
+  results?: DryRunElementResult[];
 }
 
 export interface PreviewYamlResponse {
@@ -78,6 +86,8 @@ export interface PreviewYamlResponse {
 }
 
 export interface InstallYamlResponse {
-  pack_id: string;
-  installed_rule_count: number;
+  requirement_set_id: string;
+  pack_id: string | null;
+  rules_installed: number;
+  rule_ids?: string[];
 }

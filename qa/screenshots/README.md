@@ -37,7 +37,7 @@ All overrides via env vars:
 |-----|---------|---------|
 | `QA_BASE_URL` | `http://localhost:5180` | Frontend dev server. Use `5173` if that's where Vite ended up. |
 | `QA_API_URL`  | `http://localhost:8000` | Backend FastAPI server. |
-| `QA_DEMO_EMAIL` | `demo@openestimator.io` | Demo account (note the **r** in *openestimator*). |
+| `QA_DEMO_EMAIL` | `demo@openconstructionerp.com` | Demo account (note the **r** in *openestimator*). |
 | `QA_PROJECT_ID` | first project from `/api/v1/projects/` | Project id substituted into `:projectId` routes. |
 | `QA_BIM_MODEL_ID` | first model from `/api/v1/bim-hub/?project_id=…` | Model id substituted into `:modelId` routes. |
 | `QA_SCREENSHOT_DIR` | `qa-report/screenshots/<YYYY-MM-DD>/` | Override output dir. |

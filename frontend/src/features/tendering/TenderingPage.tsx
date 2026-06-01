@@ -27,7 +27,7 @@ import {
   WideModalField,
 } from '@/shared/ui/WideModal';
 import { useConfirm } from '@/shared/hooks/useConfirm';
-import { apiGet, apiPost, apiPatch } from '@/shared/lib/api';
+import { apiGet, apiPost, apiPatch, getAuthToken, triggerDownload } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { BidComparisonChart } from './BidComparisonChart';
@@ -523,7 +523,7 @@ function PackageCard({
       onClick={onClick}
     >
       <div className="flex items-center gap-3 px-5 py-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text">
           <Package size={18} />
         </div>
         <div className="min-w-0 flex-1">
@@ -647,14 +647,14 @@ function BidComparisonTable({
               <th className="whitespace-nowrap px-3 py-2.5 text-right font-semibold text-content-primary">
                 {t('tendering.budget', 'Budget')}
               </th>
-              {comparison.bid_companies.map((company) => (
+              {comparison.bid_totals.map((bt) => (
                 <th
-                  key={company}
+                  key={bt.bid_id}
                   className="whitespace-nowrap px-3 py-2.5 text-right font-semibold text-content-primary"
                 >
                   <span className="flex items-center justify-end gap-1.5">
                     <Building2 size={12} className="text-content-tertiary" />
-                    {company}
+                    {bt.company_name}
                   </span>
                 </th>
               ))}
@@ -673,7 +673,7 @@ function BidComparisonTable({
                 <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-content-secondary">
                   {formatNumber(row.budget_rate)}
                 </td>
-                {row.bids.map((bid, bi) => {
+                {row.bids.map((bid) => {
                   const rates = row.bids.map((b) => b.unit_rate);
                   const flag = classifyCell(bid.unit_rate, rates);
                   const flagCls =
@@ -690,7 +690,7 @@ function BidComparisonTable({
                         : undefined;
                   return (
                     <td
-                      key={`bid-${comparison.bid_companies[bi]}`}
+                      key={`bid-${bid.bid_id}`}
                       className={`whitespace-nowrap px-3 py-2.5 text-right tabular-nums ${flagCls}`}
                       title={flagLabel}
                       aria-label={flagLabel}
@@ -722,9 +722,9 @@ function BidComparisonTable({
               <td className="whitespace-nowrap px-3 py-3 text-right font-bold tabular-nums text-content-primary">
                 {formatCurrency(comparison.budget_total, currency)}
               </td>
-              {comparison.bid_totals.map((bt, i) => (
+              {comparison.bid_totals.map((bt) => (
                 <td
-                  key={`total-${comparison.bid_companies[i]}`}
+                  key={`total-${bt.bid_id}`}
                   className="whitespace-nowrap px-3 py-3 text-right tabular-nums"
                 >
                   <span className="font-bold text-content-primary">
@@ -826,15 +826,33 @@ function PackageDetail({
 
   const handleExport = useCallback(() => {
     if (!comparison) return;
-    const headers = ['Position', 'Unit', 'Budget Rate', ...comparison.bid_companies.map(c => `${c} Rate`)];
+    // RFC-4180 escaping: wrap fields containing comma/quote/newline in
+    // double quotes and double any embedded quotes, so company names or
+    // descriptions with commas don't shift the columns.
+    const esc = (v: string | number) => {
+      const s = String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rateSuffix = t('tendering.export_rate_suffix', { defaultValue: 'Rate' });
+    const headers = [
+      t('tendering.position', 'Position'),
+      t('tendering.export_unit', { defaultValue: 'Unit' }),
+      t('tendering.export_budget_rate', { defaultValue: 'Budget Rate' }),
+      ...comparison.bid_totals.map((bt) => `${bt.company_name} ${rateSuffix}`),
+    ];
     const rows = comparison.rows.map(row => [
       row.description,
       row.unit,
       row.budget_rate.toFixed(2),
       ...row.bids.map(b => b.unit_rate.toFixed(2)),
     ]);
-    const footer = ['TOTAL', '', comparison.budget_total.toFixed(0), ...comparison.bid_totals.map(bt => bt.total.toFixed(0))];
-    const csv = [headers, ...rows, footer].map(r => r.join(',')).join('\n');
+    const footer = [
+      t('tendering.total', 'TOTAL'),
+      '',
+      comparison.budget_total.toFixed(0),
+      ...comparison.bid_totals.map(bt => bt.total.toFixed(0)),
+    ];
+    const csv = [headers, ...rows, footer].map(r => r.map(esc).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -854,16 +872,47 @@ function PackageDetail({
     return recommend(comparison.bid_totals);
   }, [comparison]);
 
-  const handleDownloadPdf = useCallback(() => {
-    // Open the protected endpoint in a new tab — apiGet is JSON-only,
-    // so a plain link works (browser carries the auth cookie / Bearer).
-    window.open(`/api/v1/tendering/packages/${packageId}/export/pdf/`, '_blank');
-  }, [packageId]);
+  // Authenticated file download — ``window.open`` would lose the Bearer
+  // token (JWT lives in localStorage, not a cookie) and silently 401 in a
+  // blank tab. We fetch with the auth header, then trigger a regular
+  // anchor-based download (Wave 12 audit fix).
+  const handleDownloadPdf = useCallback(async () => {
+    try {
+      const token = getAuthToken();
+      const r = await fetch(
+        `/api/v1/tendering/packages/${packageId}/export/pdf/`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!r.ok) {
+        addToast({ type: 'error', title: t('tendering.export_failed', { defaultValue: 'Export failed' }) });
+        return;
+      }
+      const blob = await r.blob();
+      const name = pkg?.name?.replace(/[^a-z0-9_-]+/gi, '_') || 'tender';
+      triggerDownload(blob, `${name}.pdf`);
+    } catch {
+      addToast({ type: 'error', title: t('tendering.export_failed', { defaultValue: 'Export failed' }) });
+    }
+  }, [packageId, pkg?.name, addToast, t]);
 
-  const handleDownloadGaeb = useCallback(() => {
+  const handleDownloadGaeb = useCallback(async () => {
     if (!pkg?.boq_id) return;
-    window.open(`/api/v1/boq/boqs/${pkg.boq_id}/export/gaeb`, '_blank');
-  }, [pkg?.boq_id]);
+    try {
+      const token = getAuthToken();
+      const r = await fetch(`/api/v1/boq/boqs/${pkg.boq_id}/export/gaeb/`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!r.ok) {
+        addToast({ type: 'error', title: t('tendering.export_failed', { defaultValue: 'Export failed' }) });
+        return;
+      }
+      const blob = await r.blob();
+      const name = pkg?.name?.replace(/[^a-z0-9_-]+/gi, '_') || 'tender';
+      triggerDownload(blob, `${name}.xml`);
+    } catch {
+      addToast({ type: 'error', title: t('tendering.export_failed', { defaultValue: 'Export failed' }) });
+    }
+  }, [pkg?.boq_id, pkg?.name, addToast, t]);
 
   if (pkgLoading || (!pkg && !pkgError)) {
     return (
@@ -1001,13 +1050,17 @@ function PackageDetail({
         </div>
       </Card>
 
-      {/* Sub-tab strip — RIB iTWO-style: bids ↔ addenda ↔ leveling */}
+      {/* Sub-tab strip — RIB iTWO-style: bids ↔ addenda ↔ leveling.
+          Addenda (``/packages/{id}/addenda/``) and Leveling
+          (``/packages/{id}/leveling-matrix/`` + ``/level-bids/``) are now
+          backed by real endpoints on tendering/router.py, so the tabs are
+          always shown. */}
       <div className="flex items-center gap-1 border-b border-border-light">
         {([
-          { id: 'bids', label: t('tendering.tab_bids', 'Bids & Comparison') },
-          { id: 'addenda', label: t('tendering.tab_addenda', 'Addenda') },
-          { id: 'leveling', label: t('tendering.tab_leveling', 'Leveling') },
-        ] as const).map((tab) => (
+          { id: 'bids' as const, label: t('tendering.tab_bids', 'Bids & Comparison') },
+          { id: 'addenda' as const, label: t('tendering.tab_addenda', 'Addenda') },
+          { id: 'leveling' as const, label: t('tendering.tab_leveling', 'Leveling') },
+        ]).map((tab) => (
           <button
             key={tab.id}
             type="button"

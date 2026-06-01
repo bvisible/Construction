@@ -61,6 +61,10 @@ export interface LevelingMatrixRow {
 export interface LevelingMatrix {
   package_id: string;
   package_name: string;
+  /** ISO currency the matrix is computed in (the package currency). */
+  currency: string;
+  /** Bids excluded because they were quoted in a different currency. */
+  excluded_off_currency: number;
   bid_summaries: BidLevelingSummary[];
   rows: LevelingMatrixRow[];
 }
@@ -68,6 +72,10 @@ export interface LevelingMatrix {
 export interface LevelBidsResponse {
   package_id: string;
   package_name: string;
+  /** ISO currency the leveling was computed in (the package currency). */
+  currency: string;
+  /** Bids excluded because they were quoted in a different currency. */
+  excluded_off_currency: number;
   bid_count: number;
   reference_line_count: number;
   bid_summaries: BidLevelingSummary[];
@@ -88,6 +96,20 @@ export function createAddendum(
 
 export function publishAddendum(addendumId: string): Promise<Addendum> {
   return apiPost<Addendum>(`/v1/tendering/addenda/${addendumId}/publish/`, {});
+}
+
+/** Minimal bidder shape needed to record an addendum acknowledgement. */
+export interface BidderSummary {
+  id: string;
+  company_name: string;
+}
+
+export function listPackageBidders(
+  packageId: string,
+): Promise<BidderSummary[]> {
+  return apiGet<BidderSummary[]>(
+    `/v1/tendering/packages/${packageId}/bids/`,
+  );
 }
 
 export function acknowledgeAddendum(

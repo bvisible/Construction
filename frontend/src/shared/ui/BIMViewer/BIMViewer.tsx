@@ -69,7 +69,6 @@ import { ClipManager } from './ClipManager';
 import { SectionBox } from './SectionBox';
 import { WalkMode } from './WalkMode';
 import { MeasureTool } from './MeasureTool';
-import { ViewerToolbar } from './ViewerToolbar';
 import { deriveGeometry, deriveRelations } from './canonicalElementDetails';
 import { BIMContextMenu } from './BIMContextMenu';
 import type { BIMContextMenuState } from './BIMContextMenu';
@@ -461,6 +460,80 @@ function QuantitiesTable({ quantities }: { quantities: Record<string, number> })
   );
 }
 
+/* ── Model-wide quantity rollup (synonym-aware) ────────────────────────── */
+
+/**
+ * Sum the volume / area / length of a single element using the same
+ * synonym-aware key resolution the BOQ link flow (`suggestQuantityFromBIM`)
+ * relies on, so real DDC / Revit exports (`NetVolume`, `NetSideArea`,
+ * `volume_m3`, …) roll up just like the canonical bare keys.
+ *
+ * Resolution mirrors `suggestQuantityFromBIM`'s candidate lists, scanning
+ * `quantities` first then `properties`, and falls back to any key whose
+ * lowercased name *includes* volume/area/length or *ends with*
+ * `_m3` / `_m2` / `_m`. One value per dimension per element (first hit
+ * wins) so the same magnitude is never double-counted when a model carries
+ * both `volume` and `NetVolume`.
+ */
+type QuantityDimension = 'volume' | 'area' | 'length';
+
+function resolveElementQuantity(el: BIMElementData, dim: QuantityDimension): number {
+  const bags: Array<Record<string, unknown> | undefined> = [el.quantities, el.properties];
+
+  // Explicit candidate keys (priority order, first hit wins) — kept in sync
+  // with the field-priority tables in suggestQuantityFromBIM.
+  const explicit: Record<QuantityDimension, string[]> = {
+    volume: ['volume_m3', 'volume', 'NetVolume', 'GrossVolume', 'Volume'],
+    area: ['area_m2', 'area', 'NetArea', 'GrossArea', 'NetSideArea', 'GrossSideArea', 'Area'],
+    length: ['length_m', 'length', 'Length'],
+  };
+
+  const toNum = (raw: unknown): number | null => {
+    const n = typeof raw === 'number' ? raw : Number.parseFloat(String(raw));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  for (const bag of bags) {
+    if (!bag) continue;
+    for (const key of explicit[dim]) {
+      let raw = bag[key];
+      if (raw === undefined) {
+        const lc = key.toLowerCase();
+        for (const [k, v] of Object.entries(bag)) {
+          if (k.toLowerCase() === lc) {
+            raw = v;
+            break;
+          }
+        }
+      }
+      const n = toNum(raw);
+      if (n !== null) return n;
+    }
+  }
+
+  // Heuristic fallback: any key whose lowercased name includes the dimension
+  // word or ends with the matching SI-unit suffix. Skips area/volume keys
+  // when resolving "length" so e.g. "SideArea" isn't mistaken for length.
+  const suffix = dim === 'volume' ? '_m3' : dim === 'area' ? '_m2' : '_m';
+  for (const bag of bags) {
+    if (!bag) continue;
+    for (const [k, v] of Object.entries(bag)) {
+      const lk = k.toLowerCase();
+      const matches =
+        lk.includes(dim) ||
+        (dim === 'length' ? lk.endsWith('_m') && !lk.endsWith('_m2') && !lk.endsWith('_m3') : lk.endsWith(suffix));
+      // Guard length against area/volume false positives ("net_area" includes
+      // neither "length" nor "_m", but "perimeter_m" should still count).
+      if (dim === 'length' && (lk.includes('area') || lk.includes('volume'))) continue;
+      if (!matches) continue;
+      const n = toNum(v);
+      if (n !== null && n !== 0) return n;
+    }
+  }
+
+  return 0;
+}
+
 /* ── BIM Viewer Component ──────────────────────────────────────────────── */
 
 export function BIMViewer({
@@ -522,8 +595,22 @@ export function BIMViewer({
   /** True while WalkMode currently owns the pointer lock — drives the
    *  on-screen "Mouse: look · WASD: move" hint overlay. */
   const [walkLocked, setWalkLocked] = useState(false);
+  /** True while the top-toolbar Walk button is toggled on. Mirrors
+   *  ``walkModeRef.current.isEnabled()`` so the button gets a pressed
+   *  state. Decoupled from ``walkLocked`` because pointer lock can drop
+   *  (browser releases via Esc) while the toolbar button stays armed
+   *  until the user explicitly disables it. */
+  const [walkActive, setWalkActive] = useState(false);
+  /** True only when walk mode is running in true pointer-lock (FPS) mode —
+   *  the only mode that hides the cursor. Gates the centred crosshair so the
+   *  default drag-to-look (cursor visible) doesn't show a redundant reticle. */
+  const [walkPointerLockMode, setWalkPointerLockMode] = useState(false);
+  /** True while the WebGL context is lost and recovering (pdf11). Drives a
+   *  non-fatal banner so a transient GPU reset no longer reads as a crash. */
+  const [contextLost, setContextLost] = useState(false);
   const categoryOpacity = useBIMViewerStore((s) => s.categoryOpacity);
   const hiddenCategories = useBIMViewerStore((s) => s.hiddenCategories);
+  const resetHiddenCategories = useBIMViewerStore((s) => s.resetHiddenCategories);
   const measureActive = useBIMViewerStore((s) => s.measureActive);
   const setMeasureActive = useBIMViewerStore((s) => s.setMeasureActive);
   const measureKind = useBIMViewerStore((s) => s.measureKind);
@@ -538,6 +625,7 @@ export function BIMViewer({
   const setGhostActive = useBIMViewerStore((s) => s.setGhostActive);
   const summaryPanelOpen = useBIMViewerStore((s) => s.summaryPanelOpen);
   const setSummaryPanelOpen = useBIMViewerStore((s) => s.setSummaryPanelOpen);
+  const qualityMode = useBIMViewerStore((s) => s.qualityMode);
   const [measureCount, setMeasureCount] = useState(0);
   /** Local mirror of the live section-box / plane state for the popover. */
   const [clipBox, setClipBox] = useState({
@@ -804,6 +892,13 @@ export function BIMViewer({
     // the scene initialises.
     setSceneManagerReady(scene);
 
+    // pdf11 — surface a non-fatal banner when the GPU drops the WebGL
+    // context (large models / driver reset) so the recovering viewer no
+    // longer looks like a hard crash. Cleared automatically on restore.
+    scene.onContextStateChange((lost) => {
+      setContextLost(lost);
+    });
+
     const elementMgr = new ElementManager(scene);
     elementMgrRef.current = elementMgr;
     // W6.6 Stream C — subscribe to hidden-count changes so the floating
@@ -967,12 +1062,39 @@ export function BIMViewer({
       scene: scene.scene,
       camera: scene.camera,
       renderer: scene.renderer,
+      // SceneManager renders on-demand. SectionBox mutates material
+      // clippingPlanes + the renderer.localClippingEnabled flag, but no
+      // existing event invalidates the frame — without this hook the
+      // clip would only become visible the next time the user happened
+      // to move the camera.
+      onChange: () => scene.requestRender(),
     });
     const walkModeHelper = new WalkMode({
       camera: scene.camera,
       renderer: scene.renderer,
       domElement: canvas,
       orbitControls: scene.controls,
+      // Drag-to-look is the DEFAULT: the OS cursor stays visible and the
+      // browser never shows its "site has taken control of your cursor"
+      // banner (pdf07). The user holds the primary mouse button and drags
+      // to look. Pointer-lock FPS mode stays available behind
+      // ``lockCursor: true`` but is not the default.
+      lockCursor: false,
+      // OrbitControls is disabled while walk mode is active, so its
+      // `change` listener (the only thing that normally invalidates the
+      // on-demand render loop) never fires. WalkMode pings us every
+      // frame the camera moved or (in FPS mode) the cursor is pointer-locked.
+      onChange: () => scene.requestRender(),
+      // Pointer-lock lost unexpectedly (alt-tab / browser Esc) while still
+      // in walk mode → gracefully fall back to orbit so the user is never
+      // stranded without a cursor AND without camera control. Mirrors the
+      // explicit toolbar/Esc teardown below.
+      onExitRequest: () => {
+        walkModeHelper.disable();
+        scene.controls.enabled = true;
+        setWalkActive(false);
+        scene.requestRender();
+      },
     });
     const measureToolHelper = new MeasureTool({
       scene: scene.scene,
@@ -983,10 +1105,14 @@ export function BIMViewer({
     sectionBoxRef.current = sectionBox;
     walkModeRef.current = walkModeHelper;
     measureToolRef.current = measureToolHelper;
-    // Drive the on-screen Walk hint from the actual pointer-lock state —
-    // the user sees the overlay only while the cursor is captured.
+    // Drive the on-screen Walk chrome from the actual lock state. In FPS
+    // (pointer-lock) mode this tracks the captured cursor; in the default
+    // drag-to-look mode the helper also flips this true while a look-drag is
+    // in progress. The crosshair is gated on FPS mode (below) so it never
+    // appears in drag mode regardless.
     const unsubWalkLock = walkModeHelper.onLockChange((locked) => {
       setWalkLocked(locked);
+      setWalkPointerLockMode(walkModeHelper.isPointerLockMode());
     });
     setViewerToolsReady(true);
 
@@ -1606,19 +1732,37 @@ export function BIMViewer({
     }
   }, [categoryOpacity, elements]);
 
+  // Apply the selected render-quality preset whenever the store value
+  // changes — or whenever the scene/element managers are (re)created so
+  // a freshly loaded model picks up the persisted localStorage choice
+  // without the user having to re-toggle the segment.
+  useEffect(() => {
+    sceneManagerReady?.applyQualityMode(qualityMode);
+    elementMgrRef.current?.applyQualityMode(qualityMode);
+  }, [qualityMode, sceneManagerReady, elements]);
+
   // Sync hidden-category toggles from the Layers tab.
+  //
+  // Iterate EVERY distinct category (keyed the same way the Layers panel
+  // buckets them — `element_type || 'Unknown'`) and drive each one both
+  // ways: hide when the store flags it, reveal otherwise. Reveal goes
+  // through ElementManager.setCategoryVisible, which is BatchedMesh-aware
+  // and refuses to un-hide elements the user hid individually or that are
+  // masked by an active isolate — so toggling a category off then on (or
+  // hitting Reset, which clears the whole `hiddenCategories` map) correctly
+  // restores visibility without stomping context-menu Hide / isolation.
   useEffect(() => {
     const mgr = elementMgrRef.current;
     if (!mgr) return;
+    const categories = new Set<string>();
     for (const el of mgr.getAllElements()) {
-      const mesh = mgr.getMesh(el.id);
-      if (!mesh) continue;
-      if (hiddenCategories[el.element_type] === true) {
-        mesh.visible = false;
-      }
+      categories.add(el.element_type || 'Unknown');
+    }
+    for (const cat of categories) {
+      mgr.setCategoryVisible(cat, hiddenCategories[cat] !== true);
     }
     sceneRef.current?.requestRender();
-  }, [hiddenCategories, elements]);
+  }, [hiddenCategories, elements, hiddenIds]);
 
   // Toggle the measure tool in response to the Zustand flag. Selection is
   // suspended while measure is active so clicks land only on the ruler and
@@ -1670,6 +1814,27 @@ export function BIMViewer({
     }
   }, [ghostActive, selectedElementIds, elements]);
 
+  // Escape exits walk mode — replaces the listener the removed
+  // ``ViewerToolbar`` used to install. Browser-driven Escape only
+  // releases pointer lock; the helper's ``_enabled`` flag stays true
+  // until disable() is called, so without this the user would be
+  // stranded with no cursor capture and no easy way to flip back to
+  // OrbitControls.
+  useEffect(() => {
+    if (!walkActive) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return;
+      const helper = walkModeRef.current;
+      if (!helper) return;
+      helper.disable();
+      const ctrl = sceneRef.current?.controls;
+      if (ctrl) ctrl.enabled = true;
+      setWalkActive(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [walkActive]);
+
   // Expose a tiny camera bridge on `window.__oeBim` so sibling right-panel
   // tabs can snapshot/restore the camera without a direct SceneManager handle.
   // Also surfaces measure-tool actions (remove / clear / setVisible / focus)
@@ -1688,6 +1853,12 @@ export function BIMViewer({
           pos: { x: number; y: number; z: number },
           target: { x: number; y: number; z: number },
         ) => void;
+        /** Subscribe to camera-orientation changes (OrbitControls 'change').
+         *  Returns an unsubscribe fn. Lets sibling pages react to camera
+         *  motion event-driven instead of polling — an idle viewer fires
+         *  nothing. Returns a no-op unsubscribe until the scene is mounted;
+         *  re-subscribe once ``sceneManager`` is non-null to capture it. */
+        onCameraChange: (cb: () => void) => () => void;
         /** W6.6 Stream B — tween the camera to ``target`` over ``durationMs``
          *  (default 600). Resolves when the tween completes and rejects with
          *  ``Error('flyTo cancelled')`` if a newer tween overtakes it. */
@@ -1738,6 +1909,7 @@ export function BIMViewer({
     w.__oeBim = {
       getViewpoint: () => sceneRef.current?.getViewpoint() ?? null,
       setViewpoint: (pos, target) => sceneRef.current?.setViewpoint(pos, target),
+      onCameraChange: (cb) => sceneRef.current?.onCameraChange(cb) ?? (() => undefined),
       flyTo: (target, durationMs) => {
         const scene = sceneRef.current;
         if (!scene) return Promise.resolve();
@@ -2162,9 +2334,13 @@ export function BIMViewer({
     elementMgrRef.current.showAll();
     setHiddenIds(new Set());
     setIsIsolated(false);
+    // Clear Layers-tab category hides too so "Show all" really shows
+    // everything (the eye toggles flip back on and the sync effect leaves
+    // every category visible). Opacity tuning is preserved.
+    resetHiddenCategories();
     onIsolationChange?.(null);
     sceneRef.current?.zoomToFit();
-  }, [onIsolationChange]);
+  }, [onIsolationChange, resetHiddenCategories]);
 
   const handleClearSelection = useCallback(() => {
     selectionMgrRef.current?.clearSelection();
@@ -2431,22 +2607,21 @@ export function BIMViewer({
       byCat.set(cat, (byCat.get(cat) ?? 0) + 1);
       const st = el.storey || 'Unassigned';
       byStorey.set(st, (byStorey.get(st) ?? 0) + 1);
-      if (el.quantities) {
-        totalVolume += el.quantities['volume'] ?? el.quantities['Volume'] ?? 0;
-        totalArea += el.quantities['area'] ?? el.quantities['Area'] ?? 0;
-        totalLength += el.quantities['length'] ?? el.quantities['Length'] ?? 0;
-      }
+      // Synonym-aware rollup so real DDC / Revit exports (NetVolume,
+      // NetSideArea, volume_m3, …) sum just like the canonical bare keys.
+      totalVolume += resolveElementQuantity(el, 'volume');
+      totalArea += resolveElementQuantity(el, 'area');
+      totalLength += resolveElementQuantity(el, 'length');
     }
     const categories = [...byCat.entries()].sort((a, b) => b[1] - a[1]);
     const storeys = [...byStorey.entries()].sort((a, b) => b[1] - a[1]);
-    // Per-key aggregation (SUM / AVG / DISTINCT) — replaces the
-    // hard-coded Volume/Area/Length triplet with a deep, classifier-
+    // Per-key aggregation (SUM / AVG / DISTINCT) — a deep, classifier-
     // driven roll-up that handles thickness as average, mark numbers
     // as distinct counts, etc.  Computed for any narrowed scope —
     // selection, filter, isolation — because each of these answers
     // "what are the totals for THIS subset?". Skipped only for the
-    // unscoped "all" view, where the basic Volume/Area/Length triplet
-    // above already covers the model-wide rollup at lower cost.
+    // unscoped "all" view, where the synonym-aware Volume/Area/Length
+    // triplet above already covers the model-wide rollup at lower cost.
     const aggregations: AggResult[] =
       scope !== 'all' ? aggregateBIMQuantities(subset) : [];
     return {
@@ -2490,7 +2665,14 @@ export function BIMViewer({
 
   return (
     <div ref={containerRef} className={clsx('relative w-full h-full min-h-[400px] bg-surface-secondary rounded-lg overflow-hidden', className)}>
-      <canvas ref={canvasRef} className="w-full h-full block" />
+      <canvas
+        ref={canvasRef}
+        className="w-full h-full block"
+        role="img"
+        aria-label={t('bim.viewer.canvas_aria_label', {
+          defaultValue: '3D BIM model viewer — use mouse or touch to orbit, zoom, and pan',
+        })}
+      />
 
       {/* W6.6 Stream B — Site Compass. Mounts only after the SceneManager
           is alive so the cube never tries to read from a null ref. The
@@ -2581,6 +2763,32 @@ export function BIMViewer({
             >
               <X size={14} />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* WebGL context-loss banner (pdf11) — the GPU can drop the rendering
+          context on large models / driver resets. The browser can restore
+          it, so rather than letting the viewer look crashed we show a
+          non-blocking "recovering" notice and clear it on
+          ``webglcontextrestored``. Non-fatal: pointer-events disabled on the
+          wrapper so the rest of the UI stays interactive. */}
+      {contextLost && (
+        <div
+          data-testid="bim-context-lost-banner"
+          className="absolute top-3 left-1/2 -translate-x-1/2 z-30 pointer-events-none flex justify-center px-2 max-w-[90%]"
+        >
+          <div
+            className="pointer-events-auto flex items-center gap-2.5 rounded-lg border border-sky-300/80 bg-sky-50/95 px-4 py-2.5 text-sky-900 shadow-md backdrop-blur-sm dark:border-sky-500/60 dark:bg-sky-950/90 dark:text-sky-100"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 size={18} className="shrink-0 animate-spin text-sky-600 dark:text-sky-400" />
+            <span className="text-xs leading-relaxed">
+              {t('bim.context_lost_banner', {
+                defaultValue: '3D view was interrupted and is recovering…',
+              })}
+            </span>
           </div>
         </div>
       )}
@@ -3112,6 +3320,44 @@ export function BIMViewer({
           variant="group"
           testId="bim-clip-toggle"
         />
+        {/* Begehung / walk-mode toggle — moved up from the previous
+            bottom-left ``ViewerToolbar`` cluster (2026-05-28) so all
+            view controls live in one row. ``WalkMode.enable()`` throws
+            unless OrbitControls is already off, so we flip the control
+            flag here before/after toggling the helper. The on-screen
+            "Mouse: look · WASD: move" hint is driven separately by
+            ``walkLocked`` (pointer-lock change). */}
+        {viewerToolsReady && walkModeRef.current && (
+          <ToolbarButton
+            icon={Move3d}
+            label={t('viewerTools.walk', { defaultValue: 'Walk' })}
+            onClick={() => {
+              const helper = walkModeRef.current;
+              if (!helper) return;
+              const ctrl = sceneRef.current?.controls;
+              if (helper.isEnabled()) {
+                helper.disable();
+                if (ctrl) ctrl.enabled = true;
+                setWalkActive(false);
+              } else {
+                if (ctrl) ctrl.enabled = false;
+                try {
+                  helper.enable();
+                  setWalkActive(true);
+                } catch (err) {
+                  // Defensive: restore controls if WalkMode's own
+                  // OrbitControls guard rejected our enable() call.
+                  if (ctrl) ctrl.enabled = true;
+                  // eslint-disable-next-line no-console
+                  console.warn('Walk mode enable failed:', err);
+                }
+              }
+            }}
+            active={walkActive}
+            variant="group"
+            testId="bim-walk-toggle"
+          />
+        )}
         <ToolbarButton
           icon={EyeOffIcon}
           label={t('bim.ghost_toggle', {
@@ -3124,99 +3370,21 @@ export function BIMViewer({
         />
       </div>
 
-      {/* BIMcollab-style additive viewer tools — Section Box / Walk /
-          Measure. Anchored bottom-left, immediately to the right of the
-          Site Compass ViewCube so the cube + tools form a single floating
-          control cluster (per UX request 2026-05-23). Renders only once
-          the scene-init effect has built the helper trio.
+      {/* (Removed 2026-05-28) — The bottom-left ``ViewerToolbar`` cluster
+          previously hosted Section Box / Walk / Measure buttons, but
+          Ruler (measure) and Scissors (section/clip) already live in the
+          top toolbar above and Walk was just hoisted up next to them.
+          The ``ViewerToolbar`` component itself is kept around for
+          FederatedViewer / future re-use, and the SectionBox / WalkMode /
+          MeasureTool helpers stay wired so the top-toolbar Walk button
+          and any future re-introduction can grab them. */}
 
-          Cluster math:
-            - ViewCube origin: left = leftPanelOpen ? leftPanelWidth + 16 : 12
-            - ViewCube width:  112 px (BIMViewCube size prop)
-            - Gap to toolbar:  10 px
-          → toolbar leftOffset = cube_origin + 112 + 10 */}
-      {viewerToolsReady &&
-        sectionBoxRef.current &&
-        walkModeRef.current &&
-        measureToolRef.current && (
-          <ViewerToolbar
-            sectionBox={sectionBoxRef.current}
-            walkMode={walkModeRef.current}
-            measureTool={measureToolRef.current}
-            position="bottom-left"
-            leftOffset={(leftPanelOpen ? leftPanelWidth + 16 : 12) + 112 + 10}
-            onBeforeToolEnable={(next) => {
-              // Walk mode CANNOT coexist with OrbitControls — the helper's
-              // own guard throws if controls.enabled is still true. We
-              // disable them here BEFORE the toolbar calls walkMode.enable(),
-              // and re-enable them on the matching `onAfterToolDisable`.
-              if (next === 'walk') {
-                const ctrl = sceneRef.current?.controls;
-                if (ctrl) ctrl.enabled = false;
-              }
-              return true;
-            }}
-            onAfterToolDisable={(prev) => {
-              if (prev === 'walk') {
-                const ctrl = sceneRef.current?.controls;
-                if (ctrl) ctrl.enabled = true;
-              }
-            }}
-            onSectionAction={(action) => {
-              // Wire section actions to the live selection + element
-              // manager when available. The helper itself enforces the
-              // INWARD-facing planes; we just feed it the right AABB.
-              const sb = sectionBoxRef.current;
-              const elementMgr = elementMgrRef.current;
-              const selectionMgr = selectionMgrRef.current;
-              if (!sb) return;
-              if (action === 'reset') {
-                sb.disable();
-                return;
-              }
-              if (action === 'fit_selection' && elementMgr && selectionMgr) {
-                const ids = selectionMgr.getSelectedIds();
-                const meshes = ids
-                  .map((id) => elementMgr.getMesh(id))
-                  .filter((m): m is NonNullable<typeof m> => m != null);
-                if (meshes.length > 0) {
-                  sb.setBoundsToSelection(meshes);
-                  sb.enable();
-                }
-                return;
-              }
-              if (action === 'fit_all' && sceneRef.current) {
-                const scene = sceneRef.current.scene;
-                const allMeshes: Array<{ isObject3D: true } & object> = [];
-                scene.traverse((obj) => {
-                  // Re-use the helper's own filter: anything not the
-                  // overlay + meshes only.
-                  if (
-                    (obj as { isMesh?: boolean }).isMesh &&
-                    !obj.userData?.isSectionBoxOverlay &&
-                    !obj.userData?.isMeasureLine &&
-                    !obj.userData?.isMeasureMarker &&
-                    !obj.userData?.isClipCap
-                  ) {
-                    allMeshes.push(obj as unknown as { isObject3D: true } & object);
-                  }
-                });
-                if (allMeshes.length > 0) {
-                  sb.setBoundsToSelection(
-                    allMeshes as unknown as import('three').Object3D[],
-                  );
-                  sb.enable();
-                }
-              }
-            }}
-          />
-        )}
-
-      {/* Walk mode on-screen hint — only visible while the pointer is
-          actually locked (i.e. WASD/mouse actively control the camera).
-          Anchored top-center so the user notices it; auto-disappears when
-          the browser releases pointer lock. */}
-      {walkLocked && (
+      {/* Walk mode on-screen hint — visible the whole time walk mode is
+          armed so the drag-to-look instruction is always discoverable
+          (drag-look has no persistent pointer-lock state to gate on).
+          Anchored top-center so the user notices it; disappears when the
+          user exits walk mode. */}
+      {walkActive && (
         <div
           className="absolute top-3 start-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/85 backdrop-blur text-white text-[11px] font-medium shadow-lg pointer-events-none select-none"
           data-testid="bim-walk-hint"
@@ -3227,9 +3395,28 @@ export function BIMViewer({
           <span>
             {t('viewerTools.walk_hint_overlay', {
               defaultValue:
-                'Mouse: look · WASD: move · Space/Q: up/down · Shift: sprint · Esc: exit',
+                'Drag to look · WASD/arrows move · Space/Shift up/down · Esc exit',
             })}
           </span>
+        </div>
+      )}
+
+      {/* Walk-mode crosshair — a thin centred reticle so the user has a
+          fixed aim point while free-looking with the cursor hidden. Only
+          shown in pointer-lock (FPS) mode, which is the only mode that hides
+          the cursor; drag-to-look keeps the cursor visible so a reticle would
+          be redundant. Purely decorative (no pointer events, hidden from the
+          a11y tree). */}
+      {walkLocked && walkPointerLockMode && (
+        <div
+          className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+          data-testid="bim-walk-crosshair"
+          aria-hidden="true"
+        >
+          <div className="relative h-4 w-4">
+            <span className="absolute left-1/2 top-0 h-4 w-px -translate-x-1/2 bg-white/80 shadow-[0_0_2px_rgba(0,0,0,0.6)]" />
+            <span className="absolute top-1/2 left-0 w-4 h-px -translate-y-1/2 bg-white/80 shadow-[0_0_2px_rgba(0,0,0,0.6)]" />
+          </div>
         </div>
       )}
 
@@ -3835,7 +4022,9 @@ export function BIMViewer({
                 <div className="grid grid-cols-1 gap-1.5">
                   {modelSummary.totalVolume > 0 && (
                     <div className="flex items-center justify-between rounded-md bg-surface-secondary px-2.5 py-1.5">
-                      <span className="text-xs font-medium text-content-secondary">Volume</span>
+                      <span className="text-xs font-medium text-content-secondary">
+                        {t('bim.qty_volume', { defaultValue: 'Volume' })}
+                      </span>
                       <span className="text-xs font-semibold text-content-primary tabular-nums">
                         {modelSummary.totalVolume.toLocaleString(undefined, { maximumFractionDigits: 1 })} m&sup3;
                       </span>
@@ -3843,7 +4032,9 @@ export function BIMViewer({
                   )}
                   {modelSummary.totalArea > 0 && (
                     <div className="flex items-center justify-between rounded-md bg-surface-secondary px-2.5 py-1.5">
-                      <span className="text-xs font-medium text-content-secondary">Area</span>
+                      <span className="text-xs font-medium text-content-secondary">
+                        {t('bim.qty_area', { defaultValue: 'Area' })}
+                      </span>
                       <span className="text-xs font-semibold text-content-primary tabular-nums">
                         {modelSummary.totalArea.toLocaleString(undefined, { maximumFractionDigits: 1 })} m&sup2;
                       </span>
@@ -3851,7 +4042,9 @@ export function BIMViewer({
                   )}
                   {modelSummary.totalLength > 0 && (
                     <div className="flex items-center justify-between rounded-md bg-surface-secondary px-2.5 py-1.5">
-                      <span className="text-xs font-medium text-content-secondary">Length</span>
+                      <span className="text-xs font-medium text-content-secondary">
+                        {t('bim.qty_length', { defaultValue: 'Length' })}
+                      </span>
                       <span className="text-xs font-semibold text-content-primary tabular-nums">
                         {modelSummary.totalLength.toLocaleString(undefined, { maximumFractionDigits: 1 })} m
                       </span>

@@ -10,17 +10,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Database, FileText, HardDrive, Layers } from 'lucide-react';
 import type { FileKind, FileTreeNode, StorageLocations } from '../types';
-
-const KIND_COLORS: Record<FileKind, string> = {
-  document: 'bg-oe-blue',
-  photo: 'bg-emerald-500',
-  sheet: 'bg-indigo-500',
-  bim_model: 'bg-purple-500',
-  dwg_drawing: 'bg-amber-500',
-  takeoff: 'bg-cyan-500',
-  report: 'bg-rose-500',
-  markup: 'bg-fuchsia-500',
-};
+import { ALL_KINDS, KIND_COLORS } from '../kindModule';
 
 function fmtBytes(bytes: number): string {
   if (bytes === 0 || !Number.isFinite(bytes)) return '0 B';
@@ -81,7 +71,7 @@ export function FilesStatsStrip({ tree, locations }: FilesStatsStripProps) {
         <Metric
           icon={<Layers size={14} />}
           label={t('files.stats_categories', { defaultValue: 'Categories' })}
-          value={`${stats.populated} / ${tree?.length ?? 8}`}
+          value={`${stats.populated} / ${ALL_KINDS.length}`}
         />
         <Metric
           icon={<Database size={14} />}

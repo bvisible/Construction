@@ -2,8 +2,9 @@ import { useState, useCallback, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { useLocation } from 'react-router-dom';
 import clsx from 'clsx';
+import { useTranslation } from 'react-i18next';
 import { Sidebar, FloatingRecentButton } from './Sidebar';
-import { Header } from './Header';
+import { Header, resolvePageTitleKey } from './Header';
 import { FeedbackDialog } from '@/shared/ui';
 import { FloatingQueuePanel } from './FloatingQueuePanel';
 import { GlobalProgress } from '@/shared/ui/GlobalProgress';
@@ -33,13 +34,19 @@ export function AppLayout({ title, children }: AppLayoutProps) {
   const isRTL = useIsRTL();
   const location = useLocation();
   const backdropVariant = backdropVariantForPath(location.pathname);
+  const { t, i18n } = useTranslation();
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
   const openSidebar = useCallback(() => setSidebarOpen(true), []);
 
   useEffect(() => {
-    document.title = title ? `${title} | OpenConstructionERP` : 'OpenConstructionERP';
-  }, [title]);
+    // Translate the browser-tab title through the same map the on-screen
+    // page heading uses, so the tab also follows the active language.
+    const key = resolvePageTitleKey(title);
+    const translated = title ? (key ? t(key, { defaultValue: title }) : title) : null;
+    document.title = translated ? `${translated} | OpenConstructionERP` : 'OpenConstructionERP';
+    // i18n.language in deps so the tab re-translates on a language switch.
+  }, [title, t, i18n.language]);
 
   // Lock body scroll when mobile sidebar is open
   useEffect(() => {

@@ -54,7 +54,7 @@ import {
   deleteFieldReport,
   submitFieldReport,
   approveFieldReport,
-  getFieldReportPdfUrl,
+  exportFieldReportPdf,
   importFieldReportsFile,
   exportFieldReports,
   downloadFieldReportsTemplate,
@@ -303,6 +303,17 @@ export function FieldReportsPage() {
       }),
   });
 
+  // Per-report PDF download (bearer-authenticated; not a plain link)
+  const pdfMut = useMutation({
+    mutationFn: (id: string) => exportFieldReportPdf(id),
+    onError: (e: Error) =>
+      addToast({
+        type: 'error',
+        title: t('fieldreports.export_failed', { defaultValue: 'Export failed' }),
+        message: e.message,
+      }),
+  });
+
   // ── Calendar navigation ──────────────────────────────────────────────
 
   const prevMonth = useCallback(() => {
@@ -433,7 +444,7 @@ export function FieldReportsPage() {
               className={clsx(
                 'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                 view === 'calendar'
-                  ? 'bg-oe-blue-subtle text-oe-blue'
+                  ? 'bg-oe-blue-subtle text-oe-blue-text'
                   : 'text-content-tertiary hover:text-content-primary',
               )}
             >
@@ -447,7 +458,7 @@ export function FieldReportsPage() {
               className={clsx(
                 'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                 view === 'list'
-                  ? 'bg-oe-blue-subtle text-oe-blue'
+                  ? 'bg-oe-blue-subtle text-oe-blue-text'
                   : 'text-content-tertiary hover:text-content-primary',
               )}
             >
@@ -817,16 +828,15 @@ export function FieldReportsPage() {
                                 <CheckCircle2 size={15} />
                               </button>
                             )}
-                            <a
-                              href={getFieldReportPdfUrl(report.id)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="rounded p-1.5 text-content-tertiary hover:bg-surface-secondary hover:text-content-primary"
+                            <button
+                              onClick={() => pdfMut.mutate(report.id)}
+                              disabled={pdfMut.isPending}
+                              className="rounded p-1.5 text-content-tertiary hover:bg-surface-secondary hover:text-content-primary disabled:opacity-50"
                               title={t('fieldreports.export_pdf', { defaultValue: 'Export PDF' })}
                               aria-label={t('fieldreports.export_pdf', { defaultValue: 'Export PDF' })}
                             >
                               <Download size={15} />
-                            </a>
+                            </button>
                             {report.status !== 'approved' && (
                               <button
                                 onClick={() => handleDelete(report.id)}

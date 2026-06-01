@@ -24,17 +24,17 @@ IntegrationType = Literal["teams", "slack", "telegram", "discord", "whatsapp", "
 # validate output-only redaction on input).
 _SECRET_CONFIG_KEYS: frozenset[str] = frozenset(
     {
-        "webhook_url",       # Teams / Slack / Discord — full URL is the bearer credential
-        "bot_token",         # Telegram bot token (BotFather-issued)
-        "access_token",      # WhatsApp / generic OAuth bearer
-        "api_key",           # Generic third-party API key
-        "api_token",         # Synonym
-        "secret",            # Generic shared-secret
-        "client_secret",     # OAuth2 client secret
-        "smtp_password",     # Email connector password
-        "password",          # Generic password field
-        "phone_number_id",   # WhatsApp Cloud API tenant identifier (sensitive)
-        "auth_token",        # Twilio-style
+        "webhook_url",  # Teams / Slack / Discord — full URL is the bearer credential
+        "bot_token",  # Telegram bot token (BotFather-issued)
+        "access_token",  # WhatsApp / generic OAuth bearer
+        "api_key",  # Generic third-party API key
+        "api_token",  # Synonym
+        "secret",  # Generic shared-secret
+        "client_secret",  # OAuth2 client secret
+        "smtp_password",  # Email connector password
+        "password",  # Generic password field
+        "phone_number_id",  # WhatsApp Cloud API tenant identifier (sensitive)
+        "auth_token",  # Twilio-style
     }
 )
 
@@ -186,6 +186,13 @@ class TestNotificationResponse(BaseModel):
 
     success: bool
     message: str
+
+
+class TestConnectionRequest(BaseModel):
+    """Ad-hoc test of an integration before it is saved (Connect modal)."""
+
+    integration_type: str = Field(min_length=1, max_length=40)
+    config: dict = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

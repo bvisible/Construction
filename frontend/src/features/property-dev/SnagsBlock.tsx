@@ -216,13 +216,19 @@ export function SnagsBlock({
                 >
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant={SNAG_STATUS_VARIANT[s.status]} dot>
-                      {s.status}
+                      {t(`propdev.snag.status_${s.status}`, {
+                        defaultValue: s.status,
+                      })}
                     </Badge>
                     <Badge variant={SNAG_SEVERITY_VARIANT[s.severity]}>
-                      {s.severity}
+                      {t(`propdev.snag.severity_${s.severity}`, {
+                        defaultValue: s.severity,
+                      })}
                     </Badge>
-                    <span className="uppercase text-content-tertiary text-[10px]">
-                      {s.category}
+                    <span className="text-content-tertiary text-[10px]">
+                      {t(`propdev.snag.category_${s.category}`, {
+                        defaultValue: s.category,
+                      })}
                     </span>
                     {s.location_in_plot && (
                       <span className="text-content-tertiary">
@@ -341,6 +347,7 @@ export function SnagsBlock({
           handoverId={handover.id}
           buyerId={buyer?.id ?? null}
           plotId={plotId}
+          costCurrency={buyer?.currency || null}
           onClose={() => setAddOpen(false)}
         />
       )}
@@ -411,11 +418,19 @@ function CreateSnagModal({
   handoverId,
   buyerId,
   plotId,
+  costCurrency,
   onClose,
 }: {
   handoverId: string;
   buyerId: string | null;
   plotId: string;
+  /**
+   * ISO currency the cost-impact estimate is denominated in. The Snag
+   * model stores cost_impact as a bare Decimal in the buyer's /
+   * development's base currency, so we surface the code on the input
+   * label rather than letting the figure float currency-less.
+   */
+  costCurrency: string | null;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -493,16 +508,16 @@ function CreateSnagModal({
             }
             className={inputCls}
           >
-            <option value="cosmetic">Cosmetic</option>
-            <option value="functional">Functional</option>
-            <option value="structural">Structural</option>
-            <option value="mechanical">Mechanical</option>
-            <option value="electrical">Electrical</option>
-            <option value="plumbing">Plumbing</option>
-            <option value="finishing">Finishing</option>
-            <option value="exterior">Exterior</option>
-            <option value="general">General</option>
-            <option value="safety">Safety</option>
+            <option value="cosmetic">{t('propdev.snag.category_cosmetic', { defaultValue: 'Cosmetic' })}</option>
+            <option value="functional">{t('propdev.snag.category_functional', { defaultValue: 'Functional' })}</option>
+            <option value="structural">{t('propdev.snag.category_structural', { defaultValue: 'Structural' })}</option>
+            <option value="mechanical">{t('propdev.snag.category_mechanical', { defaultValue: 'Mechanical' })}</option>
+            <option value="electrical">{t('propdev.snag.category_electrical', { defaultValue: 'Electrical' })}</option>
+            <option value="plumbing">{t('propdev.snag.category_plumbing', { defaultValue: 'Plumbing' })}</option>
+            <option value="finishing">{t('propdev.snag.category_finishing', { defaultValue: 'Finishing' })}</option>
+            <option value="exterior">{t('propdev.snag.category_exterior', { defaultValue: 'Exterior' })}</option>
+            <option value="general">{t('propdev.snag.category_general', { defaultValue: 'General' })}</option>
+            <option value="safety">{t('propdev.snag.category_safety', { defaultValue: 'Safety' })}</option>
           </select>
         </WideModalField>
         <WideModalField
@@ -515,10 +530,10 @@ function CreateSnagModal({
             }
             className={inputCls}
           >
-            <option value="cosmetic">Cosmetic</option>
-            <option value="minor">Minor</option>
-            <option value="major">Major</option>
-            <option value="safety">Safety</option>
+            <option value="cosmetic">{t('propdev.snag.severity_cosmetic', { defaultValue: 'Cosmetic' })}</option>
+            <option value="minor">{t('propdev.snag.severity_minor', { defaultValue: 'Minor' })}</option>
+            <option value="major">{t('propdev.snag.severity_major', { defaultValue: 'Major' })}</option>
+            <option value="safety">{t('propdev.snag.severity_safety', { defaultValue: 'Safety' })}</option>
           </select>
         </WideModalField>
         <WideModalField
@@ -555,9 +570,16 @@ function CreateSnagModal({
           />
         </WideModalField>
         <WideModalField
-          label={t('propdev.snag.cost_impact', {
-            defaultValue: 'Cost impact (estimate)',
-          })}
+          label={
+            costCurrency
+              ? t('propdev.snag.cost_impact_ccy', {
+                  defaultValue: 'Cost impact (estimate, {{ccy}})',
+                  ccy: costCurrency,
+                })
+              : t('propdev.snag.cost_impact', {
+                  defaultValue: 'Cost impact (estimate)',
+                })
+          }
         >
           <input
             type="number"

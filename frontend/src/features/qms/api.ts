@@ -232,7 +232,12 @@ export interface CreateInspectionPayload {
 }
 
 export interface SignInspectionPayload {
-  signer_user_id: string;
+  /**
+   * Omit to sign as the authenticated caller (the backend fills it from
+   * the auth context). Supply a real member UUID only to record a sign-off
+   * on behalf of someone else.
+   */
+  signer_user_id?: string;
   signer_role: InspectionSignature['signer_role'];
   signature_method?: InspectionSignature['signature_method'];
   comments?: string;
@@ -323,6 +328,10 @@ export function createITPPlan(data: CreateITPPlanPayload): Promise<ITPPlan> {
   return apiPost<ITPPlan>('/v1/qms/itp-plans', data);
 }
 
+export function listITPItems(planId: string): Promise<ITPItem[]> {
+  return apiGet<ITPItem[]>(`/v1/qms/itp-plans/${planId}/items`);
+}
+
 export function addITPItem(
   planId: string,
   data: CreateITPItemPayload,
@@ -349,6 +358,21 @@ export function createInspection(
   data: CreateInspectionPayload,
 ): Promise<Inspection> {
   return apiPost<Inspection>('/v1/qms/inspections', data);
+}
+
+export interface InspectionSignaturesEnvelope {
+  inspection_id: string;
+  required: number;
+  collected: number;
+  signatures: InspectionSignature[];
+}
+
+export function listInspectionSignatures(
+  inspectionId: string,
+): Promise<InspectionSignaturesEnvelope> {
+  return apiGet<InspectionSignaturesEnvelope>(
+    `/v1/qms/inspections/${inspectionId}/signatures`,
+  );
 }
 
 export function signInspection(
@@ -404,6 +428,20 @@ export function addNCRAction(
   data: CreateNCRActionPayload,
 ): Promise<NCRAction> {
   return apiPost<NCRAction>(`/v1/qms/ncrs/${ncrId}/actions`, data);
+}
+
+export function listNCRActions(ncrId: string): Promise<NCRAction[]> {
+  return apiGet<NCRAction[]>(`/v1/qms/ncrs/${ncrId}/actions`);
+}
+
+export function verifyNCRAction(
+  ncrId: string,
+  actionId: string,
+): Promise<NCRAction> {
+  return apiPost<NCRAction>(
+    `/v1/qms/ncrs/${ncrId}/actions/${actionId}/verify`,
+    {},
+  );
 }
 
 export function escalateNCRToVariation(

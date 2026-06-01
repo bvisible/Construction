@@ -7,12 +7,15 @@ and run in parallel via asyncio.gather().
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import async_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -261,10 +264,7 @@ async def _collect_boq(
         # Count BOQs and positions
         boq_rows = (
             await session.execute(
-                text(
-                    "SELECT b.id, b.updated_at FROM oe_boq_boq b "
-                    "WHERE b.project_id = :pid"
-                ),
+                text("SELECT b.id, b.updated_at FROM oe_boq_boq b WHERE b.project_id = :pid"),
                 {"pid": project_id},
             )
         ).fetchall()
@@ -317,9 +317,7 @@ async def _collect_boq(
             state.completion_pct = 0.3  # Has structure but no items
 
         state.export_ready = (
-            state.total_items > 0
-            and state.items_with_zero_price == 0
-            and state.items_with_zero_quantity == 0
+            state.total_items > 0 and state.items_with_zero_price == 0 and state.items_with_zero_quantity == 0
         )
 
     except Exception:
@@ -336,10 +334,7 @@ async def _collect_schedule(
     try:
         sched_row = (
             await session.execute(
-                text(
-                    "SELECT id, start_date, end_date "
-                    "FROM oe_schedule_schedule WHERE project_id = :pid LIMIT 1"
-                ),
+                text("SELECT id, start_date, end_date FROM oe_schedule_schedule WHERE project_id = :pid LIMIT 1"),
                 {"pid": project_id},
             )
         ).first()
@@ -372,10 +367,7 @@ async def _collect_schedule(
         # Check baseline
         baseline_row = (
             await session.execute(
-                text(
-                    "SELECT COUNT(*) FROM oe_schedule_baseline "
-                    "WHERE schedule_id = :sid"
-                ),
+                text("SELECT COUNT(*) FROM oe_schedule_baseline WHERE schedule_id = :sid"),
                 {"sid": schedule_id},
             )
         ).first()
@@ -417,10 +409,7 @@ async def _collect_takeoff(
     try:
         doc_rows = (
             await session.execute(
-                text(
-                    "SELECT file_type, status FROM oe_takeoff_document "
-                    "WHERE project_id = :pid"
-                ),
+                text("SELECT content_type, status FROM oe_takeoff_document WHERE project_id = :pid"),
                 {"pid": project_id},
             )
         ).fetchall()
@@ -443,10 +432,7 @@ async def _collect_takeoff(
         # Count measurements
         meas_row = (
             await session.execute(
-                text(
-                    "SELECT COUNT(*) FROM oe_takeoff_measurement "
-                    "WHERE project_id = :pid"
-                ),
+                text("SELECT COUNT(*) FROM oe_takeoff_measurement WHERE project_id = :pid"),
                 {"pid": project_id},
             )
         ).first()
@@ -567,10 +553,7 @@ async def _collect_tendering(
     try:
         pkg_row = (
             await session.execute(
-                text(
-                    "SELECT COUNT(*) FROM oe_tendering_package "
-                    "WHERE project_id = :pid"
-                ),
+                text("SELECT COUNT(*) FROM oe_tendering_package WHERE project_id = :pid"),
                 {"pid": project_id},
             )
         ).first()
@@ -611,10 +594,22 @@ async def _collect_documents(
     """Collect documents domain state."""
     state = DocumentsState()
     try:
+        # GROUP_CONCAT is SQLite-only; PostgreSQL spells the same aggregate
+        # ``string_agg(category, ',')``. Without this branch the query raises
+        # "function group_concat does not exist" on PG, which the bare except
+        # below swallows — silently returning 0 files / no categories. Detect
+        # the dialect from this session's bind (not the global engine, which can
+        # differ from the session under test).
+        dialect_name = session.bind.dialect.name if session.bind else "sqlite"
+        concat = (
+            "GROUP_CONCAT(DISTINCT category)"
+            if dialect_name == "sqlite"
+            else "string_agg(DISTINCT category, ',')"
+        )
         doc_row = (
             await session.execute(
                 text(
-                    "SELECT COUNT(*), GROUP_CONCAT(DISTINCT category) "
+                    f"SELECT COUNT(*), {concat} "  # noqa: S608 - concat is a fixed literal, not user input
                     "FROM oe_documents_document WHERE project_id = :pid"
                 ),
                 {"pid": project_id},
@@ -624,9 +619,7 @@ async def _collect_documents(
         if doc_row:
             state.total_files = doc_row[0] or 0
             if doc_row[1]:
-                state.categories_covered = [
-                    c.strip() for c in str(doc_row[1]).split(",") if c.strip()
-                ]
+                state.categories_covered = [c.strip() for c in str(doc_row[1]).split(",") if c.strip()]
 
         if state.total_files > 0:
             state.completion_pct = min(1.0, 0.3 + 0.1 * len(state.categories_covered))
@@ -645,10 +638,7 @@ async def _collect_reports(
     try:
         rep_row = (
             await session.execute(
-                text(
-                    "SELECT COUNT(*), MAX(created_at) "
-                    "FROM oe_reporting_generated WHERE project_id = :pid"
-                ),
+                text("SELECT COUNT(*), MAX(created_at) FROM oe_reporting_generated WHERE project_id = :pid"),
                 {"pid": project_id},
             )
         ).first()
@@ -675,10 +665,7 @@ async def _collect_cost_model(
         # Check budget lines
         budget_row = (
             await session.execute(
-                text(
-                    "SELECT COUNT(*) FROM oe_costmodel_budget_line "
-                    "WHERE project_id = :pid"
-                ),
+                text("SELECT COUNT(*) FROM oe_costmodel_budget_line WHERE project_id = :pid"),
                 {"pid": project_id},
             )
         ).first()
@@ -807,9 +794,7 @@ async def _collect_requirements(
             if state.gate_pass_rate >= 80.0:
                 state.completion_pct += 25.0
     except Exception:
-        logger.warning(
-            "Could not collect requirements state for %s", project_id, exc_info=True
-        )
+        logger.warning("Could not collect requirements state for %s", project_id, exc_info=True)
     return state
 
 
@@ -871,9 +856,7 @@ async def _collect_bim(
                 state.completion_pct += 40.0
             state.completion_pct = round(min(100.0, state.completion_pct), 1)
     except Exception:
-        logger.warning(
-            "Could not collect bim state for %s", project_id, exc_info=True
-        )
+        logger.warning("Could not collect bim state for %s", project_id, exc_info=True)
     return state
 
 
@@ -924,9 +907,7 @@ async def _collect_tasks(
             closed = state.total_tasks - state.open_tasks
             state.completion_pct = round((closed / state.total_tasks) * 100.0, 1)
     except Exception:
-        logger.warning(
-            "Could not collect tasks state for %s", project_id, exc_info=True
-        )
+        logger.warning("Could not collect tasks state for %s", project_id, exc_info=True)
     return state
 
 
@@ -979,13 +960,27 @@ async def _collect_assemblies(
             if state.components_total > 0:
                 state.completion_pct += 50.0
     except Exception:
-        logger.warning(
-            "Could not collect assemblies state for %s", project_id, exc_info=True
-        )
+        logger.warning("Could not collect assemblies state for %s", project_id, exc_info=True)
     return state
 
 
 # ── Main collector function ────────────────────────────────────────────────
+
+
+async def _with_own_session(
+    collector: Callable[[AsyncSession, str], Awaitable[Any]],
+    project_id: str,
+) -> Any:
+    """Run a ``_collect_*`` coroutine on its own short-lived session.
+
+    Each collector issues several SELECTs; on PostgreSQL one failing
+    statement aborts the whole transaction. Sharing a single session
+    across the concurrent ``asyncio.gather`` fan-out therefore lets one
+    collector's failure poison every sibling. Giving each collector an
+    isolated session contains failures and is concurrency-safe.
+    """
+    async with async_session_factory() as own_session:
+        return await collector(own_session, project_id)
 
 
 async def collect_project_state(
@@ -995,12 +990,16 @@ async def collect_project_state(
     """Collect complete project state across all modules in parallel.
 
     Args:
-        session: Async database session.
+        session: Async database session. Retained for API compatibility
+            with the router; the per-domain collectors each open their
+            own isolated session (see :func:`_with_own_session`) so a
+            failing query in one cannot abort the others on PostgreSQL.
         project_id: UUID of the project.
 
     Returns:
         ProjectState with all domain states populated.
     """
+    del session  # collectors use isolated sessions; see _with_own_session
     now = datetime.now(UTC).isoformat()
 
     # Run all collectors in parallel.  v1.4.6 added the last 4
@@ -1008,21 +1007,31 @@ async def collect_project_state(
     # collector was previously blind to these domains so the score
     # was a partial picture and the advisor could not surface gaps
     # like "no requirements defined" or "BIM elements not linked".
+    #
+    # Each collector gets its OWN short-lived AsyncSession rather than
+    # sharing the request-scoped ``session``. An AsyncSession is not
+    # safe for concurrent use, and on PostgreSQL (the v6 default) a
+    # single failing query inside one collector aborts the shared
+    # transaction — every concurrent sibling then dies with
+    # InFailedSQLTransactionError, gets swallowed by its broad except,
+    # and silently returns an empty default. Isolated sessions keep the
+    # parallel fan-out (each session used by exactly one coroutine) and
+    # contain any failure to the one collector that hit it.
     results = await asyncio.gather(
-        _collect_project_info(session, project_id),
-        _collect_boq(session, project_id),
-        _collect_schedule(session, project_id),
-        _collect_takeoff(session, project_id),
-        _collect_validation(session, project_id),
-        _collect_risk(session, project_id),
-        _collect_tendering(session, project_id),
-        _collect_documents(session, project_id),
-        _collect_reports(session, project_id),
-        _collect_cost_model(session, project_id),
-        _collect_requirements(session, project_id),
-        _collect_bim(session, project_id),
-        _collect_tasks(session, project_id),
-        _collect_assemblies(session, project_id),
+        _with_own_session(_collect_project_info, project_id),
+        _with_own_session(_collect_boq, project_id),
+        _with_own_session(_collect_schedule, project_id),
+        _with_own_session(_collect_takeoff, project_id),
+        _with_own_session(_collect_validation, project_id),
+        _with_own_session(_collect_risk, project_id),
+        _with_own_session(_collect_tendering, project_id),
+        _with_own_session(_collect_documents, project_id),
+        _with_own_session(_collect_reports, project_id),
+        _with_own_session(_collect_cost_model, project_id),
+        _with_own_session(_collect_requirements, project_id),
+        _with_own_session(_collect_bim, project_id),
+        _with_own_session(_collect_tasks, project_id),
+        _with_own_session(_collect_assemblies, project_id),
         return_exceptions=True,
     )
 
@@ -1037,14 +1046,10 @@ async def collect_project_state(
     documents = results[7] if not isinstance(results[7], Exception) else DocumentsState()
     reports = results[8] if not isinstance(results[8], Exception) else ReportsState()
     cost_model = results[9] if not isinstance(results[9], Exception) else CostModelState()
-    requirements = (
-        results[10] if not isinstance(results[10], Exception) else RequirementsState()
-    )
+    requirements = results[10] if not isinstance(results[10], Exception) else RequirementsState()
     bim = results[11] if not isinstance(results[11], Exception) else BIMState()
     tasks_state = results[12] if not isinstance(results[12], Exception) else TasksState()
-    assemblies = (
-        results[13] if not isinstance(results[13], Exception) else AssembliesState()
-    )
+    assemblies = results[13] if not isinstance(results[13], Exception) else AssembliesState()
 
     return ProjectState(
         project_id=project_id,

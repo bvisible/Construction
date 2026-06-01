@@ -65,7 +65,15 @@ export function OperationsSnapshotCard({ projects }: { projects?: ProjectRef[] }
   const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
   const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? (v as T[]) : []);
 
-  const boq = byWidget('boq_summary') as { total_boqs?: number; total_value_eur?: string | number } | null;
+  const boq = byWidget('boq_summary') as {
+    total_boqs?: number;
+    total_value_eur?: string | number;
+    // Per-currency subtotals + multi-currency flag added by the backend
+    // rollup (dashboard/service.py). The shared rollup type does not yet
+    // declare them, so we read them through this narrow inline shape.
+    by_currency?: { currency: string; total_value: string }[];
+    multi_currency?: boolean;
+  } | null;
   const validation = byWidget('validation_score') as { passed?: number; warnings?: number; errors?: number } | null;
   const clash = byWidget('clash_health') as { total?: number; high?: number } | null;
   const schedule = byWidget('schedule_critical') as { top?: unknown[] } | null;
@@ -76,6 +84,28 @@ export function OperationsSnapshotCard({ projects }: { projects?: ProjectRef[] }
   const co = byWidget('change_orders') as { open_count?: number; total_impact?: string | number; currency?: string } | null;
 
   const boqTotal = num(boq?.total_boqs);
+  // Currency-correct BOQ value: when every project shares one currency we
+  // show "{count} · {value CUR}"; across mixed currencies there is no
+  // blended rate, so we render the BOQ count only (a wrong-currency total
+  // would be financially meaningless). Falls back to the legacy scalar only
+  // when an older backend omits ``by_currency``.
+  const boqCurrencies = boq?.by_currency ?? [];
+  const boqMultiCurrency = boq?.multi_currency ?? boqCurrencies.length > 1;
+  const boqValueLabel = (() => {
+    if (boqTotal === 0) return dash;
+    if (boqMultiCurrency) {
+      return t('dashboard.snapshot_boq_count', {
+        defaultValue: '{{n}} BOQs · multi-currency',
+        n: boqTotal,
+      });
+    }
+    const onlyCur = boqCurrencies[0];
+    if (boqCurrencies.length === 1 && onlyCur) {
+      return `${boqTotal} · ${fmtMoney(onlyCur.total_value, onlyCur.currency)}`;
+    }
+    // No per-currency buckets at all (e.g. nothing priced yet) — show count.
+    return `${boqTotal}`;
+  })();
   const valSum = num(validation?.passed) + num(validation?.warnings) + num(validation?.errors);
   const clashTotal = num(clash?.total);
   const scheduleTop = arr<unknown>(schedule?.top);
@@ -90,7 +120,7 @@ export function OperationsSnapshotCard({ projects }: { projects?: ProjectRef[] }
       key: 'boq',
       icon: <FileSpreadsheet size={14} className={iconCls} />,
       title: t('dashboard.layout.w_boq_summary', { defaultValue: 'BOQ Summary' }),
-      value: boqTotal === 0 ? dash : `${boqTotal} · ${fmtMoney(boq?.total_value_eur, fallbackCurrency)}`,
+      value: boqValueLabel,
       href: '/boq',
       empty: boqTotal === 0,
     },

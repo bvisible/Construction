@@ -67,7 +67,7 @@ function formatPrice(value: number, currency: string): string {
   // Currency-style formatting requires an ISO code — when the caller passes
   // an empty string (no project currency context, no per-row currency in the
   // CWICR row), skip the currency style entirely and render the bare number.
-  // Never substitute USD/EUR — see CLAUDE.md "no hardcoded currency fallbacks".
+  // Never substitute USD/EUR — see the architecture guide "no hardcoded currency fallbacks".
   if (!currency) {
     return new Intl.NumberFormat(getIntlLocale(), {
       minimumFractionDigits: 2,

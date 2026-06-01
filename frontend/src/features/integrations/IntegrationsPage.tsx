@@ -606,7 +606,7 @@ function ConnectModal({
     setTestResult(null);
     try {
       const result = await apiPost<{ success: boolean; message: string }>(
-        '/v1/integrations/configs/test-connection',
+        '/v1/integrations/configs/test-connection/',
         {
           integration_type: connector.type,
           config: fieldValues,
@@ -697,7 +697,11 @@ function ConnectModal({
               })}
             </h2>
           </div>
-          <button onClick={onClose} className="text-secondary hover:text-primary">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="text-secondary hover:text-primary"
+          >
             <X size={20} />
           </button>
         </div>

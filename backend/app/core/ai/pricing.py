@@ -31,10 +31,12 @@ MODEL_COSTS: dict[str, Decimal] = {
     "claude-haiku-4-5-20251001": Decimal("0.0024"),
     "claude-haiku-4-5": Decimal("0.0024"),
     # Sonnet is roughly 5x — opt-in for sensitive workloads.
+    "claude-sonnet-4-6": Decimal("0.0090"),
     "claude-sonnet-4-20250514": Decimal("0.0090"),
     "claude-sonnet-4": Decimal("0.0090"),
     "claude-sonnet": Decimal("0.0090"),
     # Opus — top tier reasoning, ~3x Sonnet.
+    "claude-opus-4-8": Decimal("0.0300"),
     "claude-opus-4": Decimal("0.0300"),
     "claude-opus": Decimal("0.0300"),
     # OpenAI — gpt-4.1-mini comparable to Haiku.

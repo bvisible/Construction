@@ -62,16 +62,15 @@ async def _force_set_role(email: str, role: str) -> None:
     from app.modules.users.models import User
 
     async with async_session_factory() as session:
-        await session.execute(
-            update(User)
-            .where(User.email == email.lower())
-            .values(role=role, is_active=True)
-        )
+        await session.execute(update(User).where(User.email == email.lower()).values(role=role, is_active=True))
         await session.commit()
 
 
 async def _register_user(
-    client: AsyncClient, *, role: str = "admin", tag: str | None = None,
+    client: AsyncClient,
+    *,
+    role: str = "admin",
+    tag: str | None = None,
 ) -> tuple[str, str, dict[str, str]]:
     tag = tag or uuid.uuid4().hex[:8]
     email = f"dashroll-{tag}@test.io"
@@ -106,7 +105,8 @@ async def alice_auth(client: AsyncClient) -> tuple[str, dict[str, str]]:
 
 @pytest_asyncio.fixture(scope="module")
 async def alice_project(
-    client: AsyncClient, alice_auth: tuple[str, dict[str, str]],
+    client: AsyncClient,
+    alice_auth: tuple[str, dict[str, str]],
 ) -> str:
     _, header = alice_auth
     resp = await client.post(
@@ -130,7 +130,8 @@ async def bob_auth(client: AsyncClient) -> tuple[str, dict[str, str]]:
 
 @pytest_asyncio.fixture(scope="module")
 async def bob_project(
-    client: AsyncClient, bob_auth: tuple[str, dict[str, str]],
+    client: AsyncClient,
+    bob_auth: tuple[str, dict[str, str]],
 ) -> str:
     _, header = bob_auth
     resp = await client.post(
@@ -157,6 +158,11 @@ async def test_rollup_returns_all_widgets_by_default(
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
+    # The 10 wave-2 dashboard widgets — frozen contract, can grow but
+    # never shrink. W23 P0 added 8 more project-detail widget ids
+    # (project_rfi_inbox, project_change_orders_pulse, …) which are
+    # also surfaced by the same rollup endpoint, so we check for
+    # *subset* containment rather than exact equality.
     expected = {
         "boq_summary",
         "validation_score",
@@ -169,13 +175,13 @@ async def test_rollup_returns_all_widgets_by_default(
         "change_orders",
         "weather_site",
     }
-    assert expected.issubset(body.keys()), (
-        f"Missing widgets: {expected - body.keys()}"
-    )
+    assert expected.issubset(body.keys()), f"Missing widgets: {expected - body.keys()}"
     # Envelope metadata
     assert "generated_at" in body
     assert body["project_count"] >= 1
-    assert set(body["widgets_requested"]) == expected
+    assert expected.issubset(set(body["widgets_requested"])), (
+        "widgets_requested must include every wave-2 dashboard widget id"
+    )
 
     # ETag + Cache-Control headers ship.
     assert "etag" in {k.lower() for k in resp.headers.keys()}
@@ -205,9 +211,14 @@ async def test_rollup_widget_filter(
     assert "clash_health" in body
     # ...and the eight others are NOT.
     for widget in (
-        "validation_score", "schedule_critical", "risk_top",
-        "hse_scorecard", "procurement_pipeline", "budget_variance",
-        "change_orders", "weather_site",
+        "validation_score",
+        "schedule_critical",
+        "risk_top",
+        "hse_scorecard",
+        "procurement_pipeline",
+        "budget_variance",
+        "change_orders",
+        "weather_site",
     ):
         assert widget not in body, f"Unrequested widget leaked: {widget}"
 
@@ -243,9 +254,7 @@ async def test_rollup_idor_silently_drops_unaccessible_project(
         widget = body.get(widget_id) or {}
         by_project = widget.get("by_project") or []
         ids = {row.get("project_id") for row in by_project}
-        assert alice_project not in ids, (
-            f"Widget {widget_id} leaked alice's project_id"
-        )
+        assert alice_project not in ids, f"Widget {widget_id} leaked alice's project_id"
         if by_project:
             assert ids == {bob_project}
 

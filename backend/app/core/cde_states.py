@@ -18,13 +18,13 @@ Usage:
 from __future__ import annotations
 
 import logging
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class CDEState(str, Enum):
+class CDEState(StrEnum):
     """‌⁠‍ISO 19650 CDE document states."""
 
     WIP = "wip"
@@ -124,8 +124,7 @@ class CDEStateMachine:
         min_role = gate["min_role"]
         if _role_rank(user_role) < _role_rank(min_role):
             return False, (
-                f"Insufficient role: {user_role!r} cannot pass gate {gate['gate']}. "
-                f"Minimum required: {min_role!r}"
+                f"Insufficient role: {user_role!r} cannot pass gate {gate['gate']}. Minimum required: {min_role!r}"
             )
 
         return True, "ok"

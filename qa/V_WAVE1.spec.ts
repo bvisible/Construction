@@ -17,7 +17,7 @@ import * as path from 'node:path';
 
 const API = process.env.QA_API_URL ?? 'http://127.0.0.1:8000';
 const SHOTS = '../qa-screenshots/INITIATIVE_WAVE1';
-const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 
 if (!fs.existsSync(SHOTS)) {
   fs.mkdirSync(SHOTS, { recursive: true });

@@ -30,7 +30,7 @@ from app.modules.enterprise_workflows.schemas import (
 )
 from app.modules.enterprise_workflows.service import WorkflowService
 
-router = APIRouter()
+router = APIRouter(tags=["enterprise_workflows"])
 
 
 def _get_service(session: SessionDep) -> WorkflowService:

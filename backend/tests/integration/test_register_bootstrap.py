@@ -56,12 +56,14 @@ async def session():
 
 def _payload(email: str):
     from app.modules.users.schemas import UserCreate
+
     return UserCreate(email=email, password="BootstrapTest99", full_name="Bootstrap")
 
 
 def _service(session: AsyncSession):
     from app.config import get_settings
     from app.modules.users.service import UserService
+
     return UserService(session, get_settings())
 
 
@@ -86,15 +88,11 @@ async def test_second_registrant_is_viewer(session):
     """After an admin exists, the next registrant defaults to viewer."""
     svc = _service(session)
 
-    first = await svc.register(
-        _payload(f"first-{uuid.uuid4().hex[:6]}@bootstrap.io")
-    )
+    first = await svc.register(_payload(f"first-{uuid.uuid4().hex[:6]}@bootstrap.io"))
     await session.commit()
     assert first.role == "admin"
 
-    second = await svc.register(
-        _payload(f"second-{uuid.uuid4().hex[:6]}@bootstrap.io")
-    )
+    second = await svc.register(_payload(f"second-{uuid.uuid4().hex[:6]}@bootstrap.io"))
     await session.commit()
     assert second.role == "viewer"
 
@@ -128,22 +126,16 @@ async def test_non_admin_seed_does_not_block_bootstrap(session):
     await session.commit()
 
     repo = UserRepository(session)
-    assert await repo.has_admin() is False, (
-        "has_admin must ignore non-admin seed rows"
-    )
+    assert await repo.has_admin() is False, "has_admin must ignore non-admin seed rows"
 
-    first = await _service(session).register(
-        _payload(f"first-{_uuid.uuid4().hex[:6]}@bootstrap.io")
-    )
+    first = await _service(session).register(_payload(f"first-{_uuid.uuid4().hex[:6]}@bootstrap.io"))
     await session.commit()
-    assert first.role == "admin", (
-        "Pre-seeded viewer must not block first real user from becoming admin"
-    )
+    assert first.role == "admin", "Pre-seeded viewer must not block first real user from becoming admin"
 
 
 @pytest.mark.asyncio
 async def test_demo_admin_seed_does_not_block_bootstrap(session):
-    """The seeded demo admin (demo@openestimator.io) must not block the
+    """The seeded demo admin (demo@openconstructionerp.com) must not block the
     first real registrant from claiming admin.
 
     Without this carve-out, every fresh ``pip install openconstructionerp``
@@ -160,7 +152,7 @@ async def test_demo_admin_seed_does_not_block_bootstrap(session):
 
     demo = User(
         id=_uuid.uuid4(),
-        email="demo@openestimator.io",
+        email="demo@openconstructionerp.com",
         hashed_password=hash_password("DemoPass1234!"),
         full_name="Demo User",
         role="admin",
@@ -172,17 +164,9 @@ async def test_demo_admin_seed_does_not_block_bootstrap(session):
     await session.commit()
 
     repo = UserRepository(session)
-    assert await repo.has_admin() is False, (
-        "has_admin must ignore the seeded demo@openestimator.io admin"
-    )
+    assert await repo.has_admin() is False, "has_admin must ignore the seeded demo@openconstructionerp.com admin"
 
-    first = await _service(session).register(
-        _payload(f"first-{_uuid.uuid4().hex[:6]}@bootstrap.io")
-    )
+    first = await _service(session).register(_payload(f"first-{_uuid.uuid4().hex[:6]}@bootstrap.io"))
     await session.commit()
-    assert first.role == "admin", (
-        "First real user must claim admin even when demo seed is present"
-    )
-    assert first.is_active is True, (
-        "Bootstrap admin must be is_active=True regardless of registration_mode"
-    )
+    assert first.role == "admin", "First real user must claim admin even when demo seed is present"
+    assert first.is_active is True, "Bootstrap admin must be is_active=True regardless of registration_mode"

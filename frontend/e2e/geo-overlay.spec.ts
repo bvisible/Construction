@@ -29,7 +29,7 @@ const PDF_FIXTURE = path.resolve(
   '../tests/fixtures/sample-site-plan.pdf',
 );
 const DEMO_EMAIL =
-  process.env.E2E_DEMO_EMAIL ?? 'demo@openestimator.io';
+  process.env.E2E_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 const BACKEND_BASE = process.env.E2E_BACKEND_BASE ?? 'http://localhost:8000';
 const FRONTEND_BASE = process.env.E2E_FRONTEND_BASE ?? 'http://localhost:5181';
 

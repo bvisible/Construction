@@ -262,7 +262,7 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
 
       {ordinal && (
         <span className="shrink-0 inline-flex items-center h-4 px-1.5 rounded
-                         bg-oe-blue-subtle text-oe-blue text-[10px] font-mono font-semibold
+                         bg-oe-blue-subtle text-oe-blue-text text-[10px] font-mono font-semibold
                          tabular-nums">
           {ordinal}
         </span>
@@ -346,7 +346,7 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
           }}
           className="shrink-0 h-5 flex items-center gap-1 px-2 rounded ring-1 ring-oe-blue
                      text-[10px] font-semibold
-                     bg-oe-blue-subtle text-oe-blue
+                     bg-oe-blue-subtle text-oe-blue-text
                      hover:bg-oe-blue hover:text-white
                      transition-colors"
           title={t('boq.add_sub_section', { defaultValue: 'Add sub-section nested under this section' })}
@@ -401,6 +401,49 @@ export function SectionFullWidthRenderer(params: ICellRendererParams) {
           <Trash2 size={10} />
         </button>
       )}
+
+      {/* Issue #157 (skolodi) — FX-missing warning at the section level.
+          Bubbled up by BOQGrid's collectFxWarnings: when any descendant
+          resource is priced in a currency the project has no FX rate for,
+          the section subtotal silently sums it in raw units, so a
+          currency change appears not to update. Surface this as an amber
+          badge next to the subtotal with a click target that opens
+          Project Settings → FX Rates (same handler the resource-row "set
+          FX" button uses). */}
+      {Array.isArray((data as { _fxWarnings?: unknown })._fxWarnings) &&
+        ((data as { _fxWarnings: string[] })._fxWarnings.length > 0) && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              ctx.onOpenFxRateSettings?.();
+            }}
+            className="shrink-0 inline-flex items-center gap-1 h-5 px-2 rounded
+                       text-[10px] font-semibold
+                       bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-200
+                       hover:bg-amber-200 dark:hover:bg-amber-800/70
+                       ring-1 ring-amber-300 dark:ring-amber-700/60
+                       transition-colors"
+            title={t('boq.section_fx_missing_tooltip', {
+              defaultValue:
+                'Section total may be incorrect — no FX rate for: {{codes}}. Click to set rates.',
+              codes: (data as { _fxWarnings: string[] })._fxWarnings.join(', '),
+            })}
+            aria-label={t('boq.section_fx_missing_tooltip', {
+              defaultValue:
+                'Section total may be incorrect — no FX rate for: {{codes}}. Click to set rates.',
+              codes: (data as { _fxWarnings: string[] })._fxWarnings.join(', '),
+            })}
+          >
+            <AlertTriangle size={11} strokeWidth={2.2} />
+            <span>
+              {t('boq.section_fx_missing_short', {
+                defaultValue: 'set FX: {{codes}}',
+                codes: (data as { _fxWarnings: string[] })._fxWarnings.join(', '),
+              })}
+            </span>
+          </button>
+        )}
 
       <span className="shrink-0 text-xs font-bold text-content-primary tabular-nums pl-2">
         {formattedSubtotal}
@@ -517,6 +560,15 @@ export type FullGridContext = ActionsContext & ResourceGridContext & SectionGrou
    */
   fxRates?: { currency: string; rate: number; label?: string }[];
   /**
+   * Issue #157 (skolodi) — persist an FX rate the estimator types in the
+   * resource currency popover straight into the PROJECT ``fx_rates`` so the
+   * section subtotal (which converts only via project rates), the backend
+   * rollup, and every export agree. ``code`` is the foreign currency,
+   * ``rate`` is "1 unit of code = rate units of base". When omitted the
+   * popover edit only updates the device-local global FX store.
+   */
+  onUpsertProjectFxRate?: (code: string, rate: number) => void;
+  /**
    * Live BOQ positions — used by full-width resource rows to render
    * per-resource custom-field values (read-only) without a separate
    * round-trip. Optional; when omitted, custom-column slots on resource
@@ -627,8 +679,8 @@ export function ExpandCellRenderer(params: ICellRendererParams) {
         style={{ width: 22, height: 22 }}
         className={`shrink-0 flex items-center justify-center rounded-md ring-1 transition-colors cursor-pointer hover:bg-oe-blue hover:text-white hover:ring-oe-blue ${
           isExpanded
-            ? 'bg-oe-blue-subtle text-oe-blue-dark ring-oe-blue'
-            : 'bg-oe-blue-subtle text-oe-blue ring-oe-blue-subtle'
+            ? 'bg-oe-blue-subtle text-oe-blue-text ring-oe-blue'
+            : 'bg-oe-blue-subtle text-oe-blue-text ring-oe-blue-subtle'
         }`}
         title={expandTitle}
         aria-label={expandTitle}
@@ -1655,6 +1707,7 @@ const BimLinkPopover = forwardRef<
           </button>
           <button
             onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
             className="h-6 w-6 flex items-center justify-center rounded text-content-tertiary
                        hover:text-content-primary hover:bg-surface-tertiary transition-colors"
           >
@@ -2996,7 +3049,18 @@ function ResourceCurrencyCombobox({
     const next = raw.trim().toUpperCase().slice(0, 6);
     if (next === '' || next === value) { setOpen(false); return; }
     onCommit(next);
-    setOpen(false);
+    // Issue #157 — when the user picks a foreign currency, keep the popover
+    // open so the inline FX-rate row (which persists into the project) is
+    // the next thing they touch. Only auto-close when they pick the base
+    // currency (no rate needed). The previous check read the PREVIOUS
+    // currency's ``fxRate`` (a stale prop — the parent hasn't re-rendered
+    // with the new currency's rate yet), so it closed on some foreign picks
+    // that actually still needed a project rate, hiding the input and
+    // leaving the section subtotal looking "stuck".
+    const nextIsForeign = !!baseCode && next !== baseCode;
+    if (!nextIsForeign) {
+      setOpen(false);
+    }
   };
 
   // Filter both groups by the search prefix (case-insensitive); when the
@@ -3089,14 +3153,18 @@ function ResourceCurrencyCombobox({
               <div className="mt-2 pt-2 border-t border-border-light/60">
                 <div className="text-[9px] uppercase tracking-wider text-content-tertiary mb-1">
                   {t('boq.fx_rate_label', { defaultValue: 'FX rate' })}
-                  {fxSource === 'project' && (
-                    <span className="ml-1 px-1 rounded bg-oe-blue-subtle text-oe-blue text-[8px] font-bold">
+                  {fxSource === 'project' ? (
+                    <span className="ml-1 px-1 rounded bg-oe-blue-subtle text-oe-blue-text text-[8px] font-bold">
                       {t('boq.fx_rate_project_badge', { defaultValue: 'PROJECT' })}
                     </span>
-                  )}
-                  {fxSource === 'global' && (
-                    <span className="ml-1 px-1 rounded bg-surface-secondary text-content-tertiary text-[8px] font-bold">
-                      {t('boq.fx_rate_global_badge', { defaultValue: 'GLOBAL' })}
+                  ) : (
+                    // Issue #157 — a 'global' (device/seed) rate converts the
+                    // resource ROW but NOT the section subtotal, which only
+                    // reads project rates. So anything that isn't a project
+                    // rate must prompt the estimator to set one, otherwise the
+                    // section sum silently stays unconverted.
+                    <span className="ml-1 px-1 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 text-[8px] font-bold">
+                      {t('boq.fx_rate_missing_badge', { defaultValue: 'SET RATE' })}
                     </span>
                   )}
                 </div>
@@ -3105,9 +3173,24 @@ function ResourceCurrencyCombobox({
                   baseCode={baseCode}
                   rate={fxRate}
                   readOnly={fxSource === 'project'}
+                  isProjectRate={fxSource === 'project'}
                   onCommit={onCommitFxRate}
                   t={t}
+                  autoFocus={fxSource !== 'project'}
                 />
+                {fxSource !== 'project' && (
+                  <p className="mt-1 text-[9px] text-amber-700 dark:text-amber-300 leading-tight">
+                    {fxSource === 'global'
+                      ? t('boq.fx_rate_confirm_hint', {
+                          defaultValue:
+                            'Default rate filled in — press Enter to apply it to this project so the section subtotal converts, or type your own.',
+                        })
+                      : t('boq.fx_rate_required_hint', {
+                          defaultValue:
+                            'Enter the exchange rate so the section subtotal recomputes.',
+                        })}
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -3180,39 +3263,82 @@ function PopoverFxRateRow({
   baseCode,
   rate,
   readOnly,
+  isProjectRate,
   onCommit,
   t,
+  autoFocus,
 }: {
   foreignCode: string;
   baseCode: string;
   rate: number | undefined;
   readOnly: boolean;
+  /** True when ``rate`` is already a PROJECT fx_rate (vs a device/seed
+   *  suggestion). When false, committing the pre-filled value — even
+   *  unchanged — persists it to the project so the section subtotal
+   *  converts (Issue #157). */
+  isProjectRate?: boolean;
   onCommit: (next: number) => void;
   t: (key: string, opts?: Record<string, string>) => string;
+  /** Focus the input when the popover opens with a foreign currency that
+   *  has no project FX rate yet — issue #157 follow-up so the section
+   *  subtotal recompute is visibly tied to the rate the user must confirm. */
+  autoFocus?: boolean;
 }) {
   const [draft, setDraft] = useState(rate != null ? String(Number(rate.toFixed(6))) : '');
+  const inputRef = useRef<HTMLInputElement>(null);
+  // Only commit on blur when the field was actually edited, so navigating
+  // away from a pre-filled seed rate doesn't silently persist it. An
+  // explicit Enter forces the commit (the "press Enter to apply" flow).
+  const dirtyRef = useRef(false);
+  const lastCommittedRef = useRef<number | null>(null);
   useEffect(() => {
     setDraft(rate != null ? String(Number(rate.toFixed(6))) : '');
   }, [rate]);
+  useEffect(() => {
+    if (autoFocus && !readOnly && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [autoFocus, readOnly]);
 
-  const commit = () => {
+  const reset = () => setDraft(rate != null ? String(Number(rate.toFixed(6))) : '');
+
+  const commit = (force: boolean) => {
+    if (readOnly) return;
     const n = parseFloat(draft.replace(',', '.'));
-    if (Number.isFinite(n) && n > 0 && rate !== n) onCommit(n);
-    else setDraft(rate != null ? String(Number(rate.toFixed(6))) : '');
+    if (!Number.isFinite(n) || n <= 0) {
+      reset();
+      dirtyRef.current = false;
+      return;
+    }
+    // Commit when: the user edited the value (dirty), OR an explicit Enter
+    // forced it. Skip a value we just committed to avoid a double write
+    // from the Enter→blur sequence. For a non-project (seed) rate the
+    // committed value can equal ``rate`` — that's the whole point: it
+    // promotes the seed into the project so the section converts.
+    const changedVsRate = n !== rate;
+    const alreadyCommitted = lastCommittedRef.current === n;
+    if ((force || dirtyRef.current || (!isProjectRate && changedVsRate)) && !alreadyCommitted) {
+      lastCommittedRef.current = n;
+      onCommit(n);
+    }
+    dirtyRef.current = false;
   };
 
   return (
     <div className="flex items-center gap-1 text-[10px] font-mono">
       <span className="text-content-secondary">1 {foreignCode} =</span>
       <input
+        ref={inputRef}
         type="text"
         value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        onChange={(e) => { setDraft(e.target.value); dirtyRef.current = true; }}
+        onBlur={() => commit(false)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+          if (e.key === 'Enter') { e.preventDefault(); commit(true); (e.target as HTMLInputElement).blur(); }
           if (e.key === 'Escape') {
-            setDraft(rate != null ? String(Number(rate.toFixed(6))) : '');
+            reset();
+            dirtyRef.current = false;
             (e.target as HTMLInputElement).blur();
           }
         }}
@@ -3458,13 +3584,22 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
   // When the user edits the global rate inline, we store "1 unit of <foreign> = X <USD>".
   // Math: rate(foreign→base) = rateVsUsd(foreign) / rateVsUsd(base)
   //   ⇒ rateVsUsd(foreign) = rate(foreign→base) * rateVsUsd(base)
-  const handleGlobalFxRateChange = useCallback(
+  const handleFxRateChange = useCallback(
     (newRateForeignToBase: number) => {
       if (!Number.isFinite(newRateForeignToBase) || newRateForeignToBase <= 0) return;
+      // Device-local mirror — keeps the row's fallback display instant and
+      // survives a rejected project save (read-only viewers still see it).
       const baseVsUsd = ratesVsUsd[baseCurrency] ?? 1;
       setGlobalRate(resourceCurrency, newRateForeignToBase * baseVsUsd);
+      // Issue #157 (skolodi) — persist into the PROJECT fx_rates so the
+      // SECTION subtotal (which converts ONLY through project rates), the
+      // backend rollup and every export pick it up. This is the link that
+      // was missing: the rate used to live only in the global store, which
+      // the section sum ignores, so the total looked "stuck" after a
+      // currency change to a currency the project had no rate for.
+      ctx.onUpsertProjectFxRate?.(resourceCurrency, newRateForeignToBase);
     },
-    [resourceCurrency, baseCurrency, ratesVsUsd, setGlobalRate],
+    [resourceCurrency, baseCurrency, ratesVsUsd, setGlobalRate, ctx],
   );
 
   const formattedTotal = fmtWithCurrency(total, ctx.locale ?? 'de-DE', resourceCurrency);
@@ -3789,7 +3924,7 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
           fxRate={fxRate}
           fxSource={fxSource}
           baseCode={baseCurrency}
-          onCommitFxRate={handleGlobalFxRateChange}
+          onCommitFxRate={handleFxRateChange}
           isForeign={isForeign}
           t={ctx.t}
         />
@@ -3912,7 +4047,7 @@ export function EditableResourceRow({ data, ctx, slots, leftPad }: { data: Recor
           ctx.onSaveResourceToCatalog?.(posId, resIdx);
         }}
         className="shrink-0 h-4 w-4 flex items-center justify-center rounded
-                   text-content-tertiary hover:text-oe-blue hover:bg-oe-blue-subtle
+                   text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle
                    opacity-0 group-hover/res:opacity-100 transition-all"
         title={ctx.t('boq.save_to_catalog', { defaultValue: 'Save to My Catalog' })}
       >
@@ -4324,7 +4459,7 @@ function VariantHeaderResourceRow({
           }}
           onMouseDown={(e) => e.stopPropagation()}
           className="shrink-0 h-4 w-4 flex items-center justify-center rounded
-                     text-content-tertiary hover:text-oe-blue hover:bg-oe-blue-subtle
+                     text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle
                      transition-all"
           title={ctx.t('boq.rs_save_variant_to_catalog', {
             defaultValue: 'Save as a regular article in your catalog',
@@ -4483,7 +4618,7 @@ export function ResourceFullWidthRenderer(params: ICellRendererParams) {
             ctx.onAddManualResource?.(data._parentPositionId);
           }}
           className="flex items-center gap-1.5 h-5 px-2 rounded text-[10px] font-medium
-                     text-content-tertiary hover:text-oe-blue hover:bg-oe-blue-subtle transition-all"
+                     text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle transition-all"
         >
           <Plus size={10} />
           {ctx.t('boq.add_resource_manual', { defaultValue: 'Add Resource' })}

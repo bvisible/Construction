@@ -60,9 +60,7 @@ def _validate_multiplier(raw: str | None) -> str | None:
     try:
         value = Decimal(text)
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(
-            f"multiplier must be a finite positive number, got {raw!r}"
-        ) from exc
+        raise ValueError(f"multiplier must be a finite positive number, got {raw!r}") from exc
     if not value.is_finite():
         raise ValueError(f"multiplier must be finite, got {raw!r}")
     if value <= 0:
@@ -75,9 +73,7 @@ def _validate_multiplier(raw: str | None) -> str | None:
     # keeping well under float-overflow territory means the apply-time
     # float() can never yield inf even after the waste multiplier.
     if value > Decimal("1e15"):
-        raise ValueError(
-            f"multiplier {raw!r} is implausibly large (max 1e15)"
-        )
+        raise ValueError(f"multiplier {raw!r} is implausibly large (max 1e15)")
     return text
 
 
@@ -100,16 +96,13 @@ def _validate_waste_pct(raw: str | None) -> str | None:
     try:
         value = Decimal(text)
     except (InvalidOperation, ValueError) as exc:
-        raise ValueError(
-            f"waste_factor_pct must be a number 0-100, got {raw!r}"
-        ) from exc
+        raise ValueError(f"waste_factor_pct must be a number 0-100, got {raw!r}") from exc
     if not value.is_finite():
         raise ValueError(f"waste_factor_pct must be finite, got {raw!r}")
     if value < 0 or value > 100:
-        raise ValueError(
-            f"waste_factor_pct must be between 0 and 100, got {raw!r}"
-        )
+        raise ValueError(f"waste_factor_pct must be between 0 and 100, got {raw!r}")
     return text
+
 
 # ── BIMModel schemas ─────────────────────────────────────────────────────────
 
@@ -305,9 +298,7 @@ class BOQElementLinkBrief(BaseModel):
     link_type: str
     confidence: str | None = None
 
-    @field_serializer(
-        "boq_position_unit_rate", "boq_position_total", when_used="json"
-    )
+    @field_serializer("boq_position_unit_rate", "boq_position_total", when_used="json")
     def _ser_money(self, v: Decimal | None) -> str | None:
         return _serialise_money(v)
 
@@ -600,9 +591,7 @@ class BIMModelBOQLinkAggregate(BaseModel):
     confidence: str | None = None
     element_ids: list[UUID] = Field(default_factory=list)
 
-    @field_serializer(
-        "boq_position_unit_rate", "boq_position_total", when_used="json"
-    )
+    @field_serializer("boq_position_unit_rate", "boq_position_total", when_used="json")
     def _ser_money(self, v: Decimal | None) -> str | None:
         return _serialise_money(v)
 
@@ -823,6 +812,71 @@ class BIMElementGroupResponse(BaseModel):
     member_element_ids: list[UUID] = Field(default_factory=list)
 
 
+# ── Smart Views — canonical-format rule builder (Phase 2.A) ─────────────────
+
+
+class SmartViewPropertyEntry(BaseModel):
+    """One row in the Property Catalog returned to the Smart View builder.
+
+    The catalog is the union of every queryable field exposed by the
+    canonical element format, grouped by Identity / Geometry / Quantities
+    / Properties and stamped with the source-format badge ("RVT" / "IFC"
+    / "DWG" / "DGN" / "PDF").  ``sample_values`` is the alphabetically
+    sorted prefix of the distinct values observed in the model — feeds
+    enum dropdowns in the UI without an extra fetch.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    field: str
+    label: str
+    group: Literal["identity", "geometry", "quantities", "properties"]
+    data_type: Literal["string", "number", "enum", "boolean"]
+    source_formats: list[str] = Field(default_factory=list)
+    sample_values: list[str] = Field(default_factory=list)
+    distinct_count: int = 0
+    truncated: bool = False
+
+
+class SmartViewPropertyCatalogResponse(BaseModel):
+    """Property catalog payload returned by ``GET /smart-views/properties``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: UUID | None = None
+    source_format: str = "other"
+    element_count: int = 0
+    entries: list[SmartViewPropertyEntry] = Field(default_factory=list)
+
+
+class SmartViewPreviewRequest(BaseModel):
+    """Body of ``POST /smart-views/preview``.
+
+    ``rule_tree`` is the validated rule tree (see ``smart_views.py``);
+    callers may also send the legacy ``filter_criteria`` shape and the
+    server will up-convert it on the fly.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: UUID | None = None
+    project_id: UUID | None = None
+    rule_tree: dict[str, Any] | None = None
+    filter_criteria: dict[str, Any] | None = None
+    sample_limit: int = Field(default=20, ge=0, le=200)
+
+
+class SmartViewPreviewResponse(BaseModel):
+    """Element count + sample id list for a Smart View rule tree."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    matched_count: int = 0
+    sample_element_ids: list[UUID] = Field(default_factory=list)
+    truncated: bool = False
+    normalised_rule_tree: dict[str, Any] = Field(default_factory=dict)
+
+
 # ── Model schema introspection (RFC 24 — Quantity Rules editor) ──────────────
 
 
@@ -875,9 +929,7 @@ class FederationCreate(BaseModel):
     project_id: UUID
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
-    origin_offset: FederationOriginOffset = Field(
-        default_factory=FederationOriginOffset
-    )
+    origin_offset: FederationOriginOffset = Field(default_factory=FederationOriginOffset)
     shared_units: str = Field(default="m", min_length=1, max_length=20)
 
 

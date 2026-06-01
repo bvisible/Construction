@@ -4,6 +4,7 @@ Endpoints:
     GET    /                    — List invoices with filters
     POST   /                    — Create invoice (auth required)
     GET    /invoices/export      — Export invoices as Excel
+    GET    /invoices/{id}/br-pdf — Brazilian-styled invoice PDF (RPS layout)
     GET    /payments             — List payments
     POST   /payments             — Create payment (auth required)
     GET    /budgets              — List budgets
@@ -36,8 +37,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.file_signature import (
-    FileSignatureMismatch,
     SIGNATURE_BYTES_REQUIRED,
+    FileSignatureMismatch,
+)
+from app.core.file_signature import (
     require as require_signature,
 )
 from app.core.rate_limiter import approval_limiter
@@ -63,7 +66,7 @@ from app.modules.finance.schemas import (
 )
 from app.modules.finance.service import FinanceService
 
-router = APIRouter()
+router = APIRouter(tags=["finance"])
 logger = logging.getLogger(__name__)
 
 
@@ -82,16 +85,12 @@ def _contact_display_name(c: Contact) -> str:
     return full or c.email or ""
 
 
-async def _fetch_counterparty_names(
-    session: AsyncSession, contact_ids: Iterable[str | None]
-) -> dict[str, str]:
+async def _fetch_counterparty_names(session: AsyncSession, contact_ids: Iterable[str | None]) -> dict[str, str]:
     """‌⁠‍Resolve Invoice.contact_id → display name in one round trip."""
     ids = {cid for cid in contact_ids if cid}
     if not ids:
         return {}
-    rows = (
-        await session.execute(select(Contact).where(Contact.id.in_(ids)))
-    ).scalars().all()
+    rows = (await session.execute(select(Contact).where(Contact.id.in_(ids)))).scalars().all()
     return {str(c.id): _contact_display_name(c) for c in rows}
 
 
@@ -444,6 +443,108 @@ async def export_invoices(
     )
 
 
+# ── Brazilian-styled invoice PDF (Tier-1 — pre-NF-e bridge) ─────────────────
+#
+# Path lives under ``/invoices/{invoice_id}/br-pdf/`` so FastAPI's static
+# prefix ``/invoices/`` wins over the bare ``/{invoice_id}`` parametric
+# route. See ``br_invoice_pdf.py`` for the rendering logic and the
+# disclaimer text explaining why this PDF is NOT a fiscal document
+# (NF-e / NFS-e SEFAZ integration is Tier-2 — see
+# ``__brazil_tier2_followups.md``).
+
+
+@router.get(
+    "/invoices/{invoice_id}/br-pdf/",
+    summary="Export invoice as Brazil-styled PDF (RPS layout)",
+    description=(
+        "Render the invoice as a one-page PDF in the Brazilian RPS "
+        "(Recibo Provisório de Serviços) layout, with CNPJ / IE / Razão "
+        "Social / código de serviço / retenções fields. NOT a fiscal "
+        "document — for full NF-e / NFS-e SEFAZ output see Tier-2 roadmap."
+    ),
+    response_description="application/pdf stream",
+)
+async def export_invoice_br_pdf(
+    invoice_id: uuid.UUID,
+    session: SessionDep,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("finance.read")),
+    service: FinanceService = Depends(_get_service),
+) -> StreamingResponse:
+    """Render a Brazilian-styled invoice PDF and stream it back."""
+    from app.modules.finance.br_invoice_pdf import render_br_invoice_pdf
+
+    invoice = await _require_invoice_access(session, invoice_id, user_id)
+    fresh = await service.get_invoice(invoice_id)
+
+    # Project context (best-effort — never block the PDF on project lookup)
+    project_dict: dict[str, Any] = {}
+    try:
+        from app.modules.projects.repository import ProjectRepository
+
+        proj = await ProjectRepository(session).get_by_id(fresh.project_id)
+        if proj is not None:
+            project_dict = {
+                "name": getattr(proj, "name", "") or "",
+                "code": getattr(proj, "code", "") or "",
+            }
+    except Exception:  # noqa: BLE001 — header is decorative
+        logger.debug("BR invoice PDF: project lookup failed", exc_info=True)
+
+    invoice_dict: dict[str, Any] = {
+        "invoice_number": fresh.invoice_number,
+        "invoice_direction": fresh.invoice_direction,
+        "invoice_date": fresh.invoice_date,
+        "due_date": fresh.due_date,
+        "amount_subtotal": fresh.amount_subtotal,
+        "tax_amount": fresh.tax_amount,
+        "retention_amount": fresh.retention_amount,
+        "amount_total": fresh.amount_total,
+        "notes": fresh.notes,
+        "metadata": dict(fresh.metadata_ or {}),
+    }
+    line_items: list[dict[str, Any]] = [
+        {
+            "description": li.description,
+            "unit": li.unit,
+            "quantity": li.quantity,
+            "unit_rate": li.unit_rate,
+            "amount": li.amount,
+        }
+        for li in (fresh.line_items or [])
+    ]
+
+    pdf_bytes = render_br_invoice_pdf(
+        invoice=invoice_dict,
+        line_items=line_items,
+        project=project_dict or None,
+    )
+
+    # Sanitise invoice_number before embedding in a quoted Content-Disposition
+    # header.  invoice_number is a user-controlled DB value — it can contain
+    # characters that would break the RFC 6266 quoted-string or inject
+    # additional headers (CRLF injection).  Strip every character that is not
+    # ASCII printable, remove double-quotes (which terminate the quoted-string
+    # token) and forward-slashes (already done historically), and cap length.
+    _raw_num = (invoice.invoice_number or "invoice")
+    _safe_num = (
+        _raw_num
+        .encode("ascii", errors="replace")  # non-ASCII → b'?'
+        .decode("ascii")
+        .replace("\r", "")
+        .replace("\n", "")
+        .replace('"', "'")
+        .replace("/", "-")
+        .strip()
+    )[:80] or "invoice"
+    filename = f"RPS_{_safe_num}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 # ── Payments (MUST be before /{invoice_id}) ─────────────────────────────────
 
 
@@ -457,21 +558,54 @@ async def list_payments(
     session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     invoice_id: uuid.UUID | None = Query(default=None),
+    project_id: uuid.UUID | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     _perm: None = Depends(RequirePermission("finance.read")),
     service: FinanceService = Depends(_get_service),
 ) -> PaymentListResponse:
-    """List payments with optional invoice filter."""
+    """List payments scoped to a single invoice or project.
+
+    Either ``invoice_id`` or ``project_id`` MUST be supplied — an unscoped
+    call would return payments across every tenant. Access to the referenced
+    invoice/project is verified before any rows are read.
+    """
     if invoice_id is not None:
         await _require_invoice_access(session, invoice_id, user_id)
+    elif project_id is not None:
+        await _require_project_access(session, project_id, user_id)
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either invoice_id or project_id is required to list payments.",
+        )
     items, total = await service.list_payments(
-        invoice_id=invoice_id, limit=limit, offset=offset
+        invoice_id=invoice_id,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
     )
-    return PaymentListResponse(
-        items=[PaymentResponse.model_validate(p) for p in items],
-        total=total,
-    )
+
+    # Enrich each payment with its parent invoice number (one round trip)
+    # so the UI can show a readable reference rather than a raw UUID.
+    invoice_ids = {p.invoice_id for p in items}
+    numbers: dict[uuid.UUID, str] = {}
+    if invoice_ids:
+        rows = (
+            await session.execute(
+                select(Invoice.id, Invoice.invoice_number).where(Invoice.id.in_(invoice_ids))
+            )
+        ).all()
+        numbers = {row[0]: row[1] for row in rows}
+
+    responses: list[PaymentResponse] = []
+    for p in items:
+        resp = PaymentResponse.model_validate(p)
+        resp.invoice_number = numbers.get(p.invoice_id)
+        resp.status = "refunded" if p.is_refund else "completed"
+        responses.append(resp)
+
+    return PaymentListResponse(items=responses, total=total)
 
 
 @router.post(
@@ -809,14 +943,15 @@ async def import_budgets_file(
             # Parse category
             category = str(row.get("category", "")).strip().lower() or None
             if category and category not in _ALLOWED_BUDGET_CATEGORIES:
-                errors.append({
-                    "row": row_idx,
-                    "error": (
-                        f"Invalid category: '{category}'. "
-                        f"Allowed: {', '.join(sorted(_ALLOWED_BUDGET_CATEGORIES))}"
-                    ),
-                    "data": {k: str(v)[:100] for k, v in row.items()},
-                })
+                errors.append(
+                    {
+                        "row": row_idx,
+                        "error": (
+                            f"Invalid category: '{category}'. Allowed: {', '.join(sorted(_ALLOWED_BUDGET_CATEGORIES))}"
+                        ),
+                        "data": {k: str(v)[:100] for k, v in row.items()},
+                    }
+                )
                 continue
 
             # Parse amount
@@ -826,11 +961,13 @@ async def import_budgets_file(
             try:
                 float(original_budget)
             except (ValueError, TypeError):
-                errors.append({
-                    "row": row_idx,
-                    "error": f"Invalid budget amount: {row.get('original_budget')}",
-                    "data": {k: str(v)[:100] for k, v in row.items()},
-                })
+                errors.append(
+                    {
+                        "row": row_idx,
+                        "error": f"Invalid budget amount: {row.get('original_budget')}",
+                        "data": {k: str(v)[:100] for k, v in row.items()},
+                    }
+                )
                 continue
 
             # Skip rows with no data
@@ -849,11 +986,13 @@ async def import_budgets_file(
             imported_count += 1
 
         except Exception as exc:
-            errors.append({
-                "row": row_idx,
-                "error": str(exc),
-                "data": {k: str(v)[:100] for k, v in row.items()},
-            })
+            errors.append(
+                {
+                    "row": row_idx,
+                    "error": str(exc),
+                    "data": {k: str(v)[:100] for k, v in row.items()},
+                }
+            )
             logger.warning("Budget import error at row %d: %s", row_idx, exc)
 
     logger.info(
@@ -893,9 +1032,7 @@ async def export_budgets(
 
     await _require_project_access(session, project_id, _user_id)
 
-    result = await session.execute(
-        select(ProjectBudget).where(ProjectBudget.project_id == project_id).limit(50000)
-    )
+    result = await session.execute(select(ProjectBudget).where(ProjectBudget.project_id == project_id).limit(50000))
     items = result.scalars().all()
 
     wb = Workbook()
@@ -919,26 +1056,25 @@ async def export_budgets(
     for row_idx, b in enumerate(items, 2):
         ws.cell(row=row_idx, column=1, value=b.wbs_id or "")
         ws.cell(row=row_idx, column=2, value=b.category or "")
-        try:
-            original = float(b.original_budget)
-        except (ValueError, TypeError):
-            original = 0.0
-        try:
-            revised = float(b.revised_budget)
-        except (ValueError, TypeError):
-            revised = 0.0
-        try:
-            committed = float(b.committed)
-        except (ValueError, TypeError):
-            committed = 0.0
-        try:
-            actual = float(b.actual)
-        except (ValueError, TypeError):
-            actual = 0.0
-        try:
-            forecast = float(b.forecast_final)
-        except (ValueError, TypeError):
-            forecast = 0.0
+        # BUG-069: use Decimal (not float) so large construction-budget values
+        # (e.g. 123456789.99) don't suffer IEEE-754 rounding when Excel reads
+        # them back — openpyxl stores Decimal natively as a NUMERIC cell.
+        from decimal import Decimal as _Dec, InvalidOperation as _IOp
+
+        def _bd(raw: Any) -> _Dec:
+            if raw is None or raw == "":
+                return _Dec("0")
+            try:
+                d = _Dec(str(raw).strip())
+            except (_IOp, ValueError, TypeError):
+                return _Dec("0")
+            return d if d.is_finite() else _Dec("0")
+
+        original = _bd(b.original_budget)
+        revised = _bd(b.revised_budget)
+        committed = _bd(b.committed)
+        actual = _bd(b.actual)
+        forecast = _bd(b.forecast_final)
         variance = revised - actual
 
         ws.cell(row=row_idx, column=3, value=original)
@@ -1123,7 +1259,8 @@ async def approve_invoice(
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later.")
     await _require_invoice_access(session, invoice_id, user_id)
     invoice = await service.approve_invoice(
-        invoice_id, actor_id=str(user_id) if user_id else None,
+        invoice_id,
+        actor_id=str(user_id) if user_id else None,
     )
     names = await _fetch_counterparty_names(session, [invoice.contact_id])
     return _invoice_to_response(invoice, names)
@@ -1158,7 +1295,8 @@ async def pay_invoice(
         raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Rate limit exceeded. Try again later.")
     await _require_invoice_access(session, invoice_id, user_id)
     invoice = await service.pay_invoice(
-        invoice_id, actor_id=str(user_id) if user_id else None,
+        invoice_id,
+        actor_id=str(user_id) if user_id else None,
     )
     names = await _fetch_counterparty_names(session, [invoice.contact_id])
     return _invoice_to_response(invoice, names)

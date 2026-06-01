@@ -10,11 +10,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 # Regex patterns shared across create + update + response shapes.
-_SOURCE_KIND_PATTERN = (
-    r"^(bim_model|federation|development|upload|point_cloud|photogrammetry)$"
-)
+_SOURCE_KIND_PATTERN = r"^(bim_model|federation|development|upload|point_cloud|photogrammetry)$"
 _TILESET_STATUS_PATTERN = r"^(draft|generating|ready|failed|obsolete)$"
 _TILE_FORMAT_PATTERN = r"^(b3dm|i3dm|pnts|cmpt)$"
 _JOB_STATE_PATTERN = r"^(queued|running|completed|failed|cancelled)$"
@@ -62,7 +59,12 @@ class GeoAnchorCreate(BaseModel):
     epsg_code: int = Field(default=4326, gt=0, le=999999)
     region_code: str | None = Field(default=None, pattern=_REGION_CODE_PATTERN)
     address: str | None = Field(default=None, max_length=500)
-    accuracy_m: Decimal | None = Field(default=None, ge=0)
+    # Horizontal accuracy in metres. Hard upper bound at 10 km — anything
+    # coarser than that is "country-level" precision and should be
+    # represented via the precision metadata on the GeoAnchor, not a
+    # numeric uncertainty disc on the map (which Cesium would draw as
+    # the size of a small country).
+    accuracy_m: Decimal | None = Field(default=None, ge=0, le=10_000)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     _v_lat = field_validator("lat")(lambda cls, v: _check_lat(v))  # type: ignore[arg-type, misc]
@@ -80,7 +82,12 @@ class GeoAnchorUpdate(BaseModel):
     epsg_code: int | None = Field(default=None, gt=0, le=999999)
     region_code: str | None = Field(default=None, pattern=_REGION_CODE_PATTERN)
     address: str | None = Field(default=None, max_length=500)
-    accuracy_m: Decimal | None = Field(default=None, ge=0)
+    # Horizontal accuracy in metres. Hard upper bound at 10 km — anything
+    # coarser than that is "country-level" precision and should be
+    # represented via the precision metadata on the GeoAnchor, not a
+    # numeric uncertainty disc on the map (which Cesium would draw as
+    # the size of a small country).
+    accuracy_m: Decimal | None = Field(default=None, ge=0, le=10_000)
     metadata: dict[str, Any] | None = None
 
     @field_validator("lat")
@@ -420,9 +427,7 @@ def _check_corners(v: list[Any]) -> list[Any]:
         raise ValueError("corners_geojson must contain exactly 4 points")
     for point in v:
         if not isinstance(point, (list, tuple)) or len(point) != 2:
-            raise ValueError(
-                "each corner must be a 2-element [lon, lat] array"
-            )
+            raise ValueError("each corner must be a 2-element [lon, lat] array")
         lon, lat = point
         try:
             lon_d = Decimal(str(lon))
@@ -464,7 +469,8 @@ class GeoRasterOverlayCreate(BaseModel):
     project_id: UUID
     name: str = Field(default="", max_length=255)
     source_kind: str = Field(
-        default="image", pattern=_RASTER_OVERLAY_KIND_PATTERN,
+        default="image",
+        pattern=_RASTER_OVERLAY_KIND_PATTERN,
     )
     source_blob_url: str | None = Field(default=None, max_length=500)
     source_page: int = Field(default=1, ge=1, le=10_000)
@@ -509,7 +515,8 @@ class GeoRasterOverlayUpdate(BaseModel):
     @field_validator("crop_polygon_geojson")
     @classmethod
     def _v_crop(
-        cls, v: dict[str, Any] | None,
+        cls,
+        v: dict[str, Any] | None,
     ) -> dict[str, Any] | None:
         return _check_crop_polygon(v)
 
@@ -621,12 +628,16 @@ class PunchlistPinResponse(BaseModel):
 
 
 class AnchoredProjectResponse(BaseModel):
-    """A single anchored project for the Global map's project-pin layer.
+    """A single locatable project for the Global map's project-pin layer.
 
-    Returned by ``GET /api/v1/geo-hub/projects`` — only projects the
-    caller can access AND that have a registered ``GeoAnchor`` are
-    included. Used by the global Geo Hub to drop a pin per project on
-    the earth-scale view (no tilesets at this LOD).
+    Returned by ``GET /api/v1/geo-hub/projects`` — projects the caller can
+    access that have a location, either a registered ``GeoAnchor`` OR
+    ``lat``/``lng`` coordinates on their address. Used by the global Geo
+    Hub to drop a pin per project on the earth-scale view (no tilesets at
+    this LOD).
+
+    ``anchor_id`` is ``None`` for projects pinned purely from their address
+    coordinates (no GeoAnchor row yet).
 
     ``project_type`` and ``status`` let the viewer pick the right pin
     icon (residential / commercial / civil) and tint by lifecycle
@@ -637,7 +648,7 @@ class AnchoredProjectResponse(BaseModel):
 
     project_id: UUID
     project_name: str
-    anchor_id: UUID
+    anchor_id: UUID | None = None
     lat: Decimal
     lon: Decimal
     alt: Decimal

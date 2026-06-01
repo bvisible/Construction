@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import (
 
 from app.database import Base
 from app.modules.qms.models import (
+    QMSNCR,
     ITPItem,
     ITPPlan,
     ITPTemplate,
@@ -42,7 +43,6 @@ from app.modules.qms.models import (
     QMSCalibration,
     QMSInspection,
     QMSInspectionSignature,
-    QMSNCR,
     QMSNCRAction,
     QMSPunchItem,
 )
@@ -60,6 +60,13 @@ from app.modules.qms.schemas import (
     PunchItemUpdate,
 )
 from app.modules.qms.service import QMSService
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from app.modules.variations.models import (
+    Notice,
+    VariationOrder,
+    VariationRequest,
+)
 
 PROJECT_ID = uuid.uuid4()
 
@@ -76,6 +83,16 @@ _QMS_TABLES = [
     QMSAuditFinding.__table__,
     QMSAuditLog.__table__,
     QMSCalibration.__table__,
+    # Escalation links an NCR to an existing VariationOrder, so the order
+    # table (plus the request/notice tables it FK-references, and the
+    # user/project tables those reference) must exist for the escalate
+    # happy-path test. The process-wide SQLite engine listener turns
+    # ``PRAGMA foreign_keys=ON``, so a real Project row is required.
+    User.__table__,
+    Project.__table__,
+    Notice.__table__,
+    VariationRequest.__table__,
+    VariationOrder.__table__,
 ]
 
 
@@ -104,7 +121,9 @@ async def svc(session: AsyncSession) -> QMSService:
 async def test_create_itp_plan(svc: QMSService) -> None:
     plan = await svc.create_itp_plan(
         ITPPlanCreate(
-            project_id=PROJECT_ID, name="Concrete pour", work_type="concrete",
+            project_id=PROJECT_ID,
+            name="Concrete pour",
+            work_type="concrete",
         ),
         user_id="u-1",
     )
@@ -117,7 +136,9 @@ async def test_create_itp_plan(svc: QMSService) -> None:
 async def test_add_itp_item_to_draft_plan(svc: QMSService) -> None:
     plan = await svc.create_itp_plan(
         ITPPlanCreate(
-            project_id=PROJECT_ID, name="ITP", work_type="concrete",
+            project_id=PROJECT_ID,
+            name="ITP",
+            work_type="concrete",
         ),
     )
     item = await svc.add_itp_item(
@@ -137,7 +158,9 @@ async def test_add_itp_item_to_draft_plan(svc: QMSService) -> None:
 async def test_activate_empty_itp_plan_rejected(svc: QMSService) -> None:
     plan = await svc.create_itp_plan(
         ITPPlanCreate(
-            project_id=PROJECT_ID, name="Empty", work_type="concrete",
+            project_id=PROJECT_ID,
+            name="Empty",
+            work_type="concrete",
         ),
     )
     with pytest.raises(ValueError, match="no items"):
@@ -148,7 +171,9 @@ async def test_activate_empty_itp_plan_rejected(svc: QMSService) -> None:
 async def test_activate_itp_plan_publishes_event(svc: QMSService) -> None:
     plan = await svc.create_itp_plan(
         ITPPlanCreate(
-            project_id=PROJECT_ID, name="P", work_type="concrete",
+            project_id=PROJECT_ID,
+            name="P",
+            work_type="concrete",
         ),
     )
     await svc.add_itp_item(
@@ -173,7 +198,9 @@ async def test_activate_itp_plan_publishes_event(svc: QMSService) -> None:
 async def test_itp_illegal_transition(svc: QMSService) -> None:
     plan = await svc.create_itp_plan(
         ITPPlanCreate(
-            project_id=PROJECT_ID, name="P", work_type="concrete",
+            project_id=PROJECT_ID,
+            name="P",
+            work_type="concrete",
         ),
     )
     # draft → superseded is illegal (must go through active)
@@ -199,7 +226,9 @@ async def test_inspection_complete_requires_signatures(svc: QMSService) -> None:
     """Cannot complete an inspection if fewer than required signatures are present."""
     plan = await svc.create_itp_plan(
         ITPPlanCreate(
-            project_id=PROJECT_ID, name="P", work_type="concrete",
+            project_id=PROJECT_ID,
+            name="P",
+            work_type="concrete",
         ),
     )
     item = await svc.add_itp_item(
@@ -234,7 +263,9 @@ async def test_inspection_complete_requires_signatures(svc: QMSService) -> None:
 async def test_inspection_complete_with_required_signatures(svc: QMSService) -> None:
     plan = await svc.create_itp_plan(
         ITPPlanCreate(
-            project_id=PROJECT_ID, name="P", work_type="concrete",
+            project_id=PROJECT_ID,
+            name="P",
+            work_type="concrete",
         ),
     )
     item = await svc.add_itp_item(
@@ -274,7 +305,8 @@ async def test_inspection_failed_emits_failed_event(svc: QMSService) -> None:
     await svc.add_signature(
         insp.id,
         InspectionSignatureCreate(
-            signer_user_id=uuid.uuid4(), signer_role="GC",
+            signer_user_id=uuid.uuid4(),
+            signer_role="GC",
         ),
     )
     with patch(
@@ -287,6 +319,54 @@ async def test_inspection_failed_emits_failed_event(svc: QMSService) -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_signature_defaults_to_caller_when_omitted(svc: QMSService) -> None:
+    """Omitting ``signer_user_id`` signs as the authenticated caller.
+
+    This is the "sign as me" flow the UI relies on so a normal user never
+    has to hand-type a UUID.
+    """
+    insp = await svc.schedule_inspection(
+        InspectionCreate(project_id=PROJECT_ID),
+    )
+    caller = uuid.uuid4()
+    sig = await svc.add_signature(
+        insp.id,
+        InspectionSignatureCreate(signer_role="inspector"),
+        default_signer_user_id=caller,
+    )
+    assert sig.signer_user_id == caller
+
+
+@pytest.mark.asyncio
+async def test_add_signature_explicit_id_overrides_default(svc: QMSService) -> None:
+    """An explicit ``signer_user_id`` records a sign-off for another member."""
+    insp = await svc.schedule_inspection(
+        InspectionCreate(project_id=PROJECT_ID),
+    )
+    caller = uuid.uuid4()
+    on_behalf_of = uuid.uuid4()
+    sig = await svc.add_signature(
+        insp.id,
+        InspectionSignatureCreate(signer_user_id=on_behalf_of, signer_role="GC"),
+        default_signer_user_id=caller,
+    )
+    assert sig.signer_user_id == on_behalf_of
+
+
+@pytest.mark.asyncio
+async def test_add_signature_requires_a_signer(svc: QMSService) -> None:
+    """With neither an explicit id nor a caller default, signing is rejected."""
+    insp = await svc.schedule_inspection(
+        InspectionCreate(project_id=PROJECT_ID),
+    )
+    with pytest.raises(ValueError, match="signer_user_id"):
+        await svc.add_signature(
+            insp.id,
+            InspectionSignatureCreate(signer_role="inspector"),
+        )
+
+
+@pytest.mark.asyncio
 async def test_complete_already_completed_inspection(svc: QMSService) -> None:
     insp = await svc.schedule_inspection(
         InspectionCreate(project_id=PROJECT_ID),
@@ -294,7 +374,8 @@ async def test_complete_already_completed_inspection(svc: QMSService) -> None:
     await svc.add_signature(
         insp.id,
         InspectionSignatureCreate(
-            signer_user_id=uuid.uuid4(), signer_role="GC",
+            signer_user_id=uuid.uuid4(),
+            signer_role="GC",
         ),
     )
     await svc.complete_inspection(insp.id, result="passed")
@@ -338,7 +419,9 @@ async def test_ncr_action_auto_progresses_status(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="major",
+            title="t",
+            description="d",
+            severity="major",
         ),
     )
     await svc.assign_ncr_action(
@@ -356,14 +439,18 @@ async def test_ncr_verify_action_advances_to_verifying(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="major",
+            title="t",
+            description="d",
+            severity="major",
         ),
     )
     a1 = await svc.assign_ncr_action(
-        ncr.id, NCRActionCreate(description="Fix"),
+        ncr.id,
+        NCRActionCreate(description="Fix"),
     )
     a2 = await svc.assign_ncr_action(
-        ncr.id, NCRActionCreate(description="Verify"),
+        ncr.id,
+        NCRActionCreate(description="Verify"),
     )
     await svc.verify_action(a1.id)
     # Still action_pending — second action outstanding
@@ -379,11 +466,14 @@ async def test_close_ncr_requires_all_actions_done(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="major",
+            title="t",
+            description="d",
+            severity="major",
         ),
     )
     a1 = await svc.assign_ncr_action(
-        ncr.id, NCRActionCreate(description="Fix"),
+        ncr.id,
+        NCRActionCreate(description="Fix"),
     )
     # No verify → cannot close
     with pytest.raises(ValueError, match="every corrective action"):
@@ -403,7 +493,9 @@ async def test_close_ncr_with_no_actions_blocked(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="minor",
+            title="t",
+            description="d",
+            severity="minor",
         ),
     )
     with pytest.raises(ValueError, match="every corrective action"):
@@ -412,7 +504,21 @@ async def test_close_ncr_with_no_actions_blocked(svc: QMSService) -> None:
 
 @pytest.mark.asyncio
 async def test_escalate_ncr_publishes_event(svc: QMSService) -> None:
-    """NCR escalation publishes ``qms.ncr.escalated_to_variation`` event."""
+    """NCR escalation publishes ``qms.ncr.escalated_to_variation`` event.
+
+    Mirrors the product flow: the caller supplies an existing
+    :class:`VariationOrder` in the same project; the QMS module does not
+    fabricate one. The escalation links the NCR to that variation.
+    """
+    # A real owner + project so the VariationOrder FK is satisfied
+    # (the process-wide SQLite listener enables foreign_keys=ON).
+    owner = User(email=f"u{uuid.uuid4().hex[:6]}@test.com", hashed_password="x")
+    svc.session.add(owner)
+    await svc.session.flush()
+    project = Project(id=PROJECT_ID, name="Escalation Test", owner_id=owner.id)
+    svc.session.add(project)
+    await svc.session.flush()
+
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
@@ -424,11 +530,19 @@ async def test_escalate_ncr_publishes_event(svc: QMSService) -> None:
         ),
     )
 
+    # An existing variation order in the same project to escalate into.
+    variation = VariationOrder(project_id=PROJECT_ID, code="VO-0001")
+    svc.session.add(variation)
+    await svc.session.flush()
+
     spy = MagicMock()
     with patch("app.modules.qms.service.event_bus.publish_detached", spy):
-        ncr_after = await svc.escalate_ncr_to_variation(ncr.id)
+        ncr_after = await svc.escalate_ncr_to_variation(
+            ncr.id,
+            variation_id=variation.id,
+        )
 
-    assert ncr_after.linked_variation_id is not None
+    assert ncr_after.linked_variation_id == variation.id
     assert spy.call_count == 1
     event_name = spy.call_args.args[0]
     payload = spy.call_args.args[1]
@@ -443,7 +557,9 @@ async def test_escalate_ncr_without_cost_impact_rejected(svc: QMSService) -> Non
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="major",
+            title="t",
+            description="d",
+            severity="major",
         ),
     )
     with pytest.raises(ValueError, match="cost_impact"):
@@ -455,7 +571,9 @@ async def test_ncr_illegal_status_transition(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="minor",
+            title="t",
+            description="d",
+            severity="minor",
         ),
     )
     from app.modules.qms.schemas import NCRUpdate
@@ -474,7 +592,9 @@ async def test_ncr_patch_cannot_bypass_close_action(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="minor",
+            title="t",
+            description="d",
+            severity="minor",
         ),
     )
     # Directly from open
@@ -520,11 +640,13 @@ async def test_inspection_patch_cannot_bypass_complete_action(
     # No signatures collected — a raw PATCH must not be able to pass it.
     with pytest.raises(ValueError, match="complete.* action"):
         await svc.update_inspection(
-            insp.id, InspectionUpdate(status="passed"),
+            insp.id,
+            InspectionUpdate(status="passed"),
         )
     # Non-terminal PATCH transitions still work.
     insp = await svc.update_inspection(
-        insp.id, InspectionUpdate(status="in_progress"),
+        insp.id,
+        InspectionUpdate(status="in_progress"),
     )
     assert insp.status == "in_progress"
 
@@ -535,11 +657,14 @@ async def test_cannot_edit_closed_ncr(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="minor",
+            title="t",
+            description="d",
+            severity="minor",
         ),
     )
     a1 = await svc.assign_ncr_action(
-        ncr.id, NCRActionCreate(description="Fix"),
+        ncr.id,
+        NCRActionCreate(description="Fix"),
     )
     await svc.verify_action(a1.id)
     await svc.close_ncr(ncr.id)
@@ -556,7 +681,9 @@ async def test_cannot_verify_action_on_closed_ncr(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="minor",
+            title="t",
+            description="d",
+            severity="minor",
         ),
     )
     a1 = await svc.assign_ncr_action(ncr.id, NCRActionCreate(description="Fix"))
@@ -576,7 +703,9 @@ async def test_cannot_escalate_closed_ncr(svc: QMSService) -> None:
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=PROJECT_ID,
-            title="t", description="d", severity="critical",
+            title="t",
+            description="d",
+            severity="critical",
             cost_impact_currency="EUR",
             cost_impact_amount=Decimal("5000.00"),
         ),
@@ -600,7 +729,8 @@ async def test_punch_lifecycle_rolling(svc: QMSService) -> None:
     p = await svc.assign_punch_item(p.id, assigned_to=uuid.uuid4())
     assert p.status == "assigned"
     p = await svc.update_punch_item(
-        p.id, PunchItemUpdate(status="in_progress"),
+        p.id,
+        PunchItemUpdate(status="in_progress"),
     )
     assert p.status == "in_progress"
     p = await svc.mark_ready_for_inspection(p.id)
@@ -799,7 +929,8 @@ async def test_copq_with_override_per_punch(svc: QMSService) -> None:
         PunchItemCreate(project_id=PROJECT_ID, title="t"),
     )
     report = await svc.compute_copq(
-        PROJECT_ID, rework_cost_per_punch=Decimal("100.00"),
+        PROJECT_ID,
+        rework_cost_per_punch=Decimal("100.00"),
     )
     assert report["rework_cost_estimate"] == Decimal("100.00")
 
@@ -817,7 +948,8 @@ async def test_first_pass_yield(svc: QMSService) -> None:
         await svc.add_signature(
             i.id,
             InspectionSignatureCreate(
-                signer_user_id=uuid.uuid4(), signer_role="GC",
+                signer_user_id=uuid.uuid4(),
+                signer_role="GC",
             ),
         )
         await svc.complete_inspection(i.id, result=r)
@@ -859,9 +991,7 @@ def test_permissions_register_does_not_raise() -> None:
         "qms.audit.write",
     ]
     for perm in expected:
-        assert perm in permission_registry._permissions, (
-            f"missing permission {perm}"
-        )
+        assert perm in permission_registry._permissions, f"missing permission {perm}"
 
 
 # ── Seed sanity ──────────────────────────────────────────────────────────
@@ -889,13 +1019,19 @@ async def test_ncr_raised_event_uses_publish_detached(svc: QMSService) -> None:
     not blocking ``publish``."""
     spy_detached = MagicMock()
     spy_publish = AsyncMock()
-    with patch(
-        "app.modules.qms.service.event_bus.publish_detached", spy_detached,
-    ), patch("app.modules.qms.service.event_bus.publish", spy_publish):
+    with (
+        patch(
+            "app.modules.qms.service.event_bus.publish_detached",
+            spy_detached,
+        ),
+        patch("app.modules.qms.service.event_bus.publish", spy_publish),
+    ):
         await svc.raise_ncr(
             NCRCreate(
                 project_id=PROJECT_ID,
-                title="t", description="d", severity="minor",
+                title="t",
+                description="d",
+                severity="minor",
             ),
         )
     assert spy_detached.called
@@ -943,7 +1079,9 @@ async def test_clone_itp_template_to_project_publishes_event(
     svc: QMSService,
 ) -> None:
     from app.modules.qms.schemas import (
-        ITPTemplateCloneRequest, ITPTemplateCreate, ITPTemplateItemSpec,
+        ITPTemplateCloneRequest,
+        ITPTemplateCreate,
+        ITPTemplateItemSpec,
     )
 
     tpl = await svc.create_itp_template(
@@ -968,7 +1106,8 @@ async def test_clone_itp_template_to_project_publishes_event(
         plan = await svc.clone_itp_template_to_project(
             tpl.id,
             ITPTemplateCloneRequest(
-                project_id=PROJECT_ID, wbs_ref="WBS.05",
+                project_id=PROJECT_ID,
+                wbs_ref="WBS.05",
                 name_override="Steel erection Q3",
             ),
             user_id="u-2",
@@ -988,12 +1127,15 @@ async def test_clone_itp_template_to_project_publishes_event(
 @pytest.mark.asyncio
 async def test_clone_inactive_itp_template_rejected(svc: QMSService) -> None:
     from app.modules.qms.schemas import (
-        ITPTemplateCloneRequest, ITPTemplateCreate,
+        ITPTemplateCloneRequest,
+        ITPTemplateCreate,
     )
 
     tpl = await svc.create_itp_template(
         ITPTemplateCreate(
-            csi_division="09", work_type="finishes", name="Inactive ITP",
+            csi_division="09",
+            work_type="finishes",
+            name="Inactive ITP",
             is_active=False,
         ),
     )
@@ -1061,17 +1203,25 @@ async def test_expiring_calibrations_filters_and_publishes(
 
     today = _date.today()
     # Expires in 10 days
-    await svc.create_calibration(CalibrationCreate(
-        instrument_id="A", instrument_name="A", instrument_type="meter",
-        calibration_date=today - _td(days=300),
-        valid_until=today + _td(days=10),
-    ))
+    await svc.create_calibration(
+        CalibrationCreate(
+            instrument_id="A",
+            instrument_name="A",
+            instrument_type="meter",
+            calibration_date=today - _td(days=300),
+            valid_until=today + _td(days=10),
+        )
+    )
     # Expires in 100 days — not in 30-day window
-    await svc.create_calibration(CalibrationCreate(
-        instrument_id="B", instrument_name="B", instrument_type="meter",
-        calibration_date=today - _td(days=200),
-        valid_until=today + _td(days=100),
-    ))
+    await svc.create_calibration(
+        CalibrationCreate(
+            instrument_id="B",
+            instrument_name="B",
+            instrument_type="meter",
+            calibration_date=today - _td(days=200),
+            valid_until=today + _td(days=100),
+        )
+    )
     with patch(
         "app.modules.qms.service.event_bus.publish_detached",
         new_callable=MagicMock,
@@ -1141,15 +1291,19 @@ def test_compute_copq_breakdown_pure_helper() -> None:
 @pytest.mark.asyncio
 async def test_fpy_trend_returns_correct_bucket_count(svc: QMSService) -> None:
     data = await svc.compute_fpy_trend(
-        PROJECT_ID, period_days=7, periods=4,
+        PROJECT_ID,
+        period_days=7,
+        periods=4,
     )
     assert data["period_days"] == 7
     assert len(data["buckets"]) == 4
     # Each bucket present has the 5 required keys
     for b in data["buckets"]:
         for k in (
-            "period_start", "period_end",
-            "inspections_total", "inspections_passed_first_time",
+            "period_start",
+            "period_end",
+            "inspections_total",
+            "inspections_passed_first_time",
             "first_pass_yield",
         ):
             assert k in b
@@ -1181,7 +1335,9 @@ async def test_link_supplier_audit_publishes_event(svc: QMSService) -> None:
         new_callable=MagicMock,
     ) as spy:
         payload = await svc.link_audit_to_subcontractor(
-            audit.id, subcontractor_id=sub_id, rating_delta=-2,
+            audit.id,
+            subcontractor_id=sub_id,
+            rating_delta=-2,
         )
     assert payload["audit_id"] == str(audit.id)
     assert payload["subcontractor_id"] == str(sub_id)
@@ -1197,7 +1353,9 @@ async def test_link_non_supplier_audit_rejected(svc: QMSService) -> None:
     )
     with pytest.raises(ValueError, match="supplier audits"):
         await svc.link_audit_to_subcontractor(
-            audit.id, subcontractor_id=uuid.uuid4(), rating_delta=-1,
+            audit.id,
+            subcontractor_id=uuid.uuid4(),
+            rating_delta=-1,
         )
 
 
@@ -1231,9 +1389,14 @@ async def test_management_review_report_basic(svc: QMSService) -> None:
     assert len(data["recommendations"]) >= 1
     # Required keys
     for k in (
-        "audits_completed", "findings_open", "findings_closed",
-        "ncrs_raised", "ncrs_closed", "first_pass_yield",
-        "copq_total", "inspections_total",
+        "audits_completed",
+        "findings_open",
+        "findings_closed",
+        "ncrs_raised",
+        "ncrs_closed",
+        "first_pass_yield",
+        "copq_total",
+        "inspections_total",
     ):
         assert k in data
 
@@ -1261,8 +1424,8 @@ async def test_ncr_raised_fanout_publishes_supplier_rating_and_kpi() -> None:
     import asyncio
     import uuid as _uuid
 
-    from app.core.events import Event
     from app.core import events as _ev_module
+    from app.core.events import Event
     from app.modules.qms.events import _on_ncr_raised_fanout
 
     captured: list[tuple[str, dict]] = []

@@ -4,7 +4,7 @@
  * Triggers the BOQ-wide "re-pull bound quantities" probe (read-only,
  * never mutates), then lists every stale position with old → new →
  * delta and a per-row Apply / Skip choice. Apply is the explicit human
- * confirm step (CLAUDE.md §7): only the rows the user ticked are written.
+ * confirm step (the architecture guide §7): only the rows the user ticked are written.
  *
  * Every string goes through i18n `t()`; numbers are rendered via the
  * locale-aware `Intl.NumberFormat` (no hardcoded formatting/currency).

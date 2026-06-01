@@ -213,4 +213,4 @@
 - On-prem enterprise SSO (есть SAML/OIDC roadmap позже)
 - Microsoft Project / Primavera P6 native parsers (через MPP/XER — есть в schedule module)
 - Specific country plugins beyond what CWICR + 13 standards cover (через marketplace)
-- Replacement of DDC cad2data with native IFC parsing — запрещено CLAUDE.md (используем DDC всегда)
+- Replacement of DDC cad2data with native IFC parsing — запрещено the architecture guide (используем DDC всегда)

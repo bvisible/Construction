@@ -73,10 +73,18 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
 from app.modules.tendering.models import TenderBid, TenderPackage
 from app.modules.tendering.repository import TenderingRepository
 from app.modules.tendering.schemas import (
+    AddendumAckEntry,
+    AddendumCreate,
+    AddendumResponse,
     BidComparisonResponse,
     BidComparisonRow,
     BidCreate,
+    BidLevelingSummary,
     BidUpdate,
+    LevelBidsResponse,
+    LevelingMatrixCell,
+    LevelingMatrixResponse,
+    LevelingMatrixRow,
     PackageCreate,
     PackageUpdate,
 )
@@ -165,10 +173,7 @@ class TenderingService:
             if new_status not in allowed:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        f"Illegal package transition: "
-                        f"{package.status!r} → {new_status!r}"
-                    ),
+                    detail=(f"Illegal package transition: {package.status!r} → {new_status!r}"),
                 )
             # Stamp lifecycle timestamps into metadata (no schema column
             # exists; metadata_ is the extensible store per the data model).
@@ -276,8 +281,7 @@ class TenderingService:
         # string so the persisted JSON value matches the wire contract.
         if "line_items" in fields and fields["line_items"] is not None:
             fields["line_items"] = [
-                item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-                for item in fields["line_items"]
+                item.model_dump(mode="json") if hasattr(item, "model_dump") else item for item in fields["line_items"]
             ]
 
         if not fields:
@@ -364,13 +368,9 @@ class TenderingService:
                 bid_ccy_counts[c] = bid_ccy_counts.get(c, 0) + 1
         baseline_currency = ""
         if budget_positions:
-            baseline_currency = (
-                getattr(budget_positions[0], "currency", "") or ""
-            ).strip().upper()
+            baseline_currency = (getattr(budget_positions[0], "currency", "") or "").strip().upper()
         if not baseline_currency and bid_ccy_counts:
-            baseline_currency = max(
-                bid_ccy_counts.items(), key=lambda kv: (kv[1], kv[0])
-            )[0]
+            baseline_currency = max(bid_ccy_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
 
         def _bid_currency(bid: TenderBid) -> str:
             return (bid.currency or "").strip().upper()
@@ -390,9 +390,7 @@ class TenderingService:
                     bid_rate = _to_decimal(matching.get("unit_rate", 0))
                     bid_total = _to_decimal(matching.get("total", 0))
                     if budget_rate > 0 and _same_currency(bid):
-                        deviation = (
-                            (bid_rate - budget_rate) / budget_rate * Decimal("100")
-                        )
+                        deviation = (bid_rate - budget_rate) / budget_rate * Decimal("100")
                         dev_val = round(float(deviation), 1)
                     else:
                         dev_val = 0.0
@@ -435,9 +433,7 @@ class TenderingService:
         for bid in bids:
             total = _to_decimal(bid.total_amount)
             if budget_total > 0 and _same_currency(bid):
-                deviation = (
-                    (total - budget_total) / budget_total * Decimal("100")
-                )
+                deviation = (total - budget_total) / budget_total * Decimal("100")
                 dev_val = round(float(deviation), 1)
             else:
                 dev_val = 0.0
@@ -511,10 +507,7 @@ class TenderingService:
         if bid.status in _NON_AWARDABLE_BID_STATES:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Bid is {bid.status!r} and cannot be awarded "
-                    f"(disqualified bids are not eligible)"
-                ),
+                detail=(f"Bid is {bid.status!r} and cannot be awarded (disqualified bids are not eligible)"),
             )
 
         # ── Currency-mismatch guard ────────────────────────────────────────
@@ -529,11 +522,7 @@ class TenderingService:
 
         project_repo = ProjectRepository(self.session)
         project = await project_repo.get_by_id(package.project_id)
-        project_currency = (
-            (getattr(project, "currency", "") or "").strip().upper()
-            if project is not None
-            else ""
-        )
+        project_currency = (getattr(project, "currency", "") or "").strip().upper() if project is not None else ""
         if project_currency:
             offenders: list[dict[str, str]] = []
             bid_ccy = (bid.currency or "").strip().upper()
@@ -597,9 +586,7 @@ class TenderingService:
             qty = _to_decimal(pos.quantity)
             new_total = qty * rate
             await self.session.execute(
-                update(Position)
-                .where(Position.id == pos.id)
-                .values(unit_rate=str(rate), total=str(new_total))
+                update(Position).where(Position.id == pos.id).values(unit_rate=str(rate), total=str(new_total))
             )
             updated += 1
 
@@ -613,9 +600,7 @@ class TenderingService:
 
         # Flip statuses — package: awarded, winning bid: accepted,
         # every competing bid: rejected (a closed tender has one winner).
-        await self.repo.update_package_fields(
-            package_id, status="awarded", metadata_=meta
-        )
+        await self.repo.update_package_fields(package_id, status="awarded", metadata_=meta)
         all_bids = await self.repo.list_bids_for_package(package_id)
         for other in all_bids:
             if other.id == bid_id:
@@ -651,6 +636,396 @@ class TenderingService:
             "boq_id": str(package.boq_id),
         }
 
+    # ── Addenda (mid-tender clarifications) ────────────────────────────────
+    # Addenda live in the package ``metadata_`` JSON store under ``addenda``
+    # (an append-only list of revision dicts). No dedicated table is needed:
+    # an addendum is a small, package-scoped revision log and ``metadata_`` is
+    # already the data model's extensible per-package store. Each entry shape:
+    #   {id, revision_no, title, body, published_at, published_by_user_id,
+    #    acknowledged_by: [{bidder_id, acknowledged_at, user_id}],
+    #    created_at, updated_at}
+
+    @staticmethod
+    def _addendum_to_response(package_id: uuid.UUID, raw: dict) -> AddendumResponse:
+        acks = [
+            AddendumAckEntry(
+                bidder_id=str(a.get("bidder_id", "")),
+                acknowledged_at=str(a.get("acknowledged_at", "")),
+                user_id=a.get("user_id"),
+            )
+            for a in (raw.get("acknowledged_by") or [])
+            if isinstance(a, dict)
+        ]
+        return AddendumResponse(
+            id=str(raw.get("id", "")),
+            package_id=package_id,
+            revision_no=int(raw.get("revision_no", 0)),
+            title=str(raw.get("title", "")),
+            body=raw.get("body"),
+            published_at=raw.get("published_at"),
+            published_by_user_id=raw.get("published_by_user_id"),
+            acknowledged_by=acks,
+            created_at=str(raw.get("created_at", "")),
+            updated_at=str(raw.get("updated_at", "")),
+        )
+
+    @staticmethod
+    def _read_addenda(package: TenderPackage) -> list[dict]:
+        raw = (package.metadata_ or {}).get("addenda")
+        return [a for a in raw if isinstance(a, dict)] if isinstance(raw, list) else []
+
+    async def list_addenda(self, package_id: uuid.UUID) -> list[AddendumResponse]:
+        """List a package's addenda, oldest revision first."""
+        package = await self.get_package(package_id)
+        addenda = sorted(self._read_addenda(package), key=lambda a: int(a.get("revision_no", 0)))
+        return [self._addendum_to_response(package_id, a) for a in addenda]
+
+    async def create_addendum(self, package_id: uuid.UUID, data: AddendumCreate) -> AddendumResponse:
+        """Append a new draft addendum to a package."""
+        package = await self.get_package(package_id)
+        addenda = self._read_addenda(package)
+        next_rev = max((int(a.get("revision_no", 0)) for a in addenda), default=0) + 1
+        now = datetime.now(UTC).isoformat()
+        entry = {
+            "id": str(uuid.uuid4()),
+            "revision_no": next_rev,
+            "title": data.title,
+            "body": data.body,
+            "published_at": None,
+            "published_by_user_id": None,
+            "acknowledged_by": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        meta = dict(package.metadata_ or {})
+        meta["addenda"] = [*addenda, entry]
+        await self.repo.update_package_fields(package_id, metadata_=meta)
+
+        await _safe_publish(
+            "tendering.addendum.created",
+            {"package_id": str(package_id), "addendum_id": entry["id"], "revision_no": next_rev},
+            source_module="oe_tendering",
+        )
+        logger.info("Addendum created: package=%s rev=%s", package_id, next_rev)
+        return self._addendum_to_response(package_id, entry)
+
+    async def find_addendum_package(
+        self,
+        addendum_id: str,
+        accessible_project_ids: list[uuid.UUID] | None = None,
+    ) -> tuple[TenderPackage, dict, int]:
+        """Locate the package and stored entry for ``addendum_id``.
+
+        Returns ``(package, entry, index)``. Raises 404 if no package holds an
+        addendum with that id (the IDOR/access check still runs at the router,
+        which scopes by the returned package's project).
+
+        ``accessible_project_ids`` scopes the lookup to the caller's own
+        projects so a regular user never triggers a cross-tenant table scan
+        over every package in the database. ``None`` means "no filter" and is
+        reserved for admins (who are cross-tenant by design); an empty list
+        means the caller owns no projects and therefore can hold no addendum,
+        so we short-circuit to 404 without any scan. The package relationship
+        ``bids`` is *not* eager-loaded here — addendum lookup only reads the
+        package ``metadata_`` JSON, so we avoid the heavy bids fan-out the old
+        ``list_packages(limit=10_000)`` path incurred.
+        """
+        from sqlalchemy import select
+
+        if accessible_project_ids is not None and len(accessible_project_ids) == 0:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Addendum not found")
+
+        stmt = select(TenderPackage)
+        if accessible_project_ids is not None:
+            stmt = stmt.where(TenderPackage.project_id.in_(accessible_project_ids))
+        result = await self.session.execute(stmt)
+        for package in result.scalars().all():
+            addenda = self._read_addenda(package)
+            for idx, a in enumerate(addenda):
+                if str(a.get("id")) == str(addendum_id):
+                    return package, a, idx
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Addendum not found")
+
+    async def publish_addendum(
+        self, package: TenderPackage, addendum_id: str, user_id: str | None
+    ) -> AddendumResponse:
+        """Mark an addendum as published (stamps timestamp + publisher)."""
+        addenda = self._read_addenda(package)
+        target_idx = next(
+            (i for i, a in enumerate(addenda) if str(a.get("id")) == str(addendum_id)),
+            None,
+        )
+        if target_idx is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Addendum not found")
+        entry = dict(addenda[target_idx])
+        if entry.get("published_at"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Addendum is already published",
+            )
+        now = datetime.now(UTC).isoformat()
+        entry["published_at"] = now
+        entry["published_by_user_id"] = str(user_id) if user_id else None
+        entry["updated_at"] = now
+        addenda[target_idx] = entry
+        meta = dict(package.metadata_ or {})
+        meta["addenda"] = addenda
+        await self.repo.update_package_fields(package.id, metadata_=meta)
+
+        await _safe_publish(
+            "tendering.addendum.published",
+            {"package_id": str(package.id), "addendum_id": addendum_id},
+            source_module="oe_tendering",
+        )
+        logger.info("Addendum published: package=%s addendum=%s", package.id, addendum_id)
+        return self._addendum_to_response(package.id, entry)
+
+    async def acknowledge_addendum(
+        self, package: TenderPackage, addendum_id: str, bidder_id: str, user_id: str | None
+    ) -> AddendumResponse:
+        """Record a bidder acknowledgement of a published addendum."""
+        addenda = self._read_addenda(package)
+        target_idx = next(
+            (i for i, a in enumerate(addenda) if str(a.get("id")) == str(addendum_id)),
+            None,
+        )
+        if target_idx is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Addendum not found")
+        entry = dict(addenda[target_idx])
+        if not entry.get("published_at"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot acknowledge a draft addendum; publish it first",
+            )
+        acks = [a for a in (entry.get("acknowledged_by") or []) if isinstance(a, dict)]
+        if not any(str(a.get("bidder_id")) == str(bidder_id) for a in acks):
+            acks.append(
+                {
+                    "bidder_id": str(bidder_id),
+                    "acknowledged_at": datetime.now(UTC).isoformat(),
+                    "user_id": str(user_id) if user_id else None,
+                }
+            )
+        entry["acknowledged_by"] = acks
+        entry["updated_at"] = datetime.now(UTC).isoformat()
+        addenda[target_idx] = entry
+        meta = dict(package.metadata_ or {})
+        meta["addenda"] = addenda
+        await self.repo.update_package_fields(package.id, metadata_=meta)
+        logger.info(
+            "Addendum acknowledged: package=%s addendum=%s bidder=%s",
+            package.id,
+            addendum_id,
+            bidder_id,
+        )
+        return self._addendum_to_response(package.id, entry)
+
+    # ── Bid leveling ───────────────────────────────────────────────────────
+    # Normalize every bid onto the package's reference BOQ lines. Pure
+    # computation over existing data (BOQ positions + bid line_items); no
+    # persistence. Omitted lines are imputed at the bidder's own mean unit
+    # rate so a short quote cannot win on a misleadingly low total.
+
+    async def _build_leveling(
+        self, package_id: uuid.UUID
+    ) -> tuple[TenderPackage, list[LevelingMatrixRow], list[BidLevelingSummary], str, int]:
+        package = await self.get_package(package_id)
+        all_bids = await self.repo.list_bids_for_package(package_id)
+
+        # Cross-currency guard. Leveling normalises every bid onto the SAME
+        # reference BOQ quantities and emits raw_total / leveled_total numbers
+        # with no per-cell currency tag — so blending bids quoted in different
+        # currencies would silently sum euros with dollars. Scope leveling to
+        # the package's reporting currency (mirrors compare_bids'
+        # ``_same_currency`` and bid_management.leveling_matrix). Bids quoted in
+        # another currency are excluded and their count is surfaced so the user
+        # can re-quote / FX convert before trusting the leveled totals.
+        #
+        # Currency bug fix: ``TenderPackage`` has NO ``currency`` column (only
+        # each ``TenderBid`` carries one), so the previous
+        # ``package.currency`` read raised AttributeError -> HTTP 500 on both
+        # leveling endpoints. The package's reporting currency is the project
+        # currency, so derive it from the project exactly as ``apply_winner``
+        # already does. Fall back to "" (unknown) — NEVER hardcode "EUR" — so
+        # that when the project currency is unknown we degrade safely (the
+        # ``_same_currency`` guard then keeps every bid rather than blending a
+        # provably-foreign one). ``getattr`` is used defensively in case the
+        # project row is missing or lacks the attribute.
+        from app.modules.projects.repository import ProjectRepository
+
+        project = await ProjectRepository(self.session).get_by_id(package.project_id)
+        package_currency = (getattr(project, "currency", "") or "").strip().upper() if project is not None else ""
+
+        def _same_currency(bid: TenderBid) -> bool:
+            bc = (bid.currency or "").strip().upper()
+            # No package currency, or a bid that did not declare one, cannot
+            # be proven mismatched — keep it (degrades safely, never blends a
+            # *provably* foreign-currency bid).
+            return not package_currency or not bc or bc == package_currency
+
+        bids = [b for b in all_bids if _same_currency(b)]
+        excluded_off_currency = len(all_bids) - len(bids)
+
+        from app.modules.boq.service import BOQService
+
+        boq_service = BOQService(self.session)
+        try:
+            boq_data = await boq_service.get_boq_with_positions(package.boq_id)
+            ref_positions = boq_data.positions
+        except HTTPException:
+            ref_positions = []
+
+        # Reference line index → (position_id, code, description, unit, qty, rate, total)
+        ref_rows: list[dict] = []
+        for pos in ref_positions:
+            qty = _to_decimal(pos.quantity)
+            rate = _to_decimal(pos.unit_rate)
+            total = _to_decimal(pos.total) if pos.total else qty * rate
+            ref_rows.append(
+                {
+                    "position_id": str(pos.id),
+                    "line_code": pos.ordinal or "",
+                    "description": pos.description or "",
+                    "unit": pos.unit or "",
+                    "quantity": qty,
+                    "rate": rate,
+                    "total": total,
+                }
+            )
+
+        # Index each bid's line items by position_id (last write wins per pid).
+        bid_index: dict[str, dict[str, dict]] = {}
+        for bid in bids:
+            idx: dict[str, dict] = {}
+            for item in bid.line_items or []:
+                if not isinstance(item, dict):
+                    continue
+                key = item.get("position_id")
+                if key:
+                    idx[str(key)] = item
+            bid_index[str(bid.id)] = idx
+
+        # Per-bid mean unit rate across the lines the bidder actually quoted —
+        # used to impute omitted lines so the leveled total covers full scope.
+        bid_mean_rate: dict[str, Decimal] = {}
+        for bid in bids:
+            quoted = [_to_decimal(it.get("unit_rate", 0)) for it in bid_index[str(bid.id)].values()]
+            quoted = [r for r in quoted if r > 0]
+            bid_mean_rate[str(bid.id)] = (
+                (sum(quoted, Decimal("0")) / Decimal(len(quoted))) if quoted else Decimal("0")
+            )
+
+        summaries: dict[str, dict] = {
+            str(bid.id): {
+                "bid_id": str(bid.id),
+                "company_name": bid.company_name,
+                "raw_amount": _to_decimal(bid.total_amount),
+                "leveled_amount": Decimal("0"),
+                "matched_lines": 0,
+                "scaled_lines": 0,
+                "imputed_lines": 0,
+                "currency": bid.currency or "",
+            }
+            for bid in bids
+        }
+
+        rows: list[LevelingMatrixRow] = []
+        for ref in ref_rows:
+            pid = ref["position_id"]
+            ref_qty: Decimal = ref["quantity"]
+            cells: list[LevelingMatrixCell] = []
+            for bid in bids:
+                bid_id = str(bid.id)
+                matching = bid_index[bid_id].get(pid)
+                if matching is not None:
+                    unit_rate = _to_decimal(matching.get("unit_rate", 0))
+                    raw_total = _to_decimal(matching.get("total", 0))
+                    # When the bidder quoted a rate but not a total (or a total
+                    # that disagrees with rate×ref_qty), level to ref_qty so all
+                    # bids are compared at the SAME quantity.
+                    leveled_total = unit_rate * ref_qty if ref_qty > 0 else raw_total
+                    if leveled_total != raw_total and raw_total > 0:
+                        cell_status = "scaled"
+                        summaries[bid_id]["scaled_lines"] += 1
+                    else:
+                        cell_status = "matched"
+                        summaries[bid_id]["matched_lines"] += 1
+                else:
+                    # Imputed at the bidder's mean rate × reference quantity.
+                    unit_rate = bid_mean_rate[bid_id]
+                    leveled_total = unit_rate * ref_qty if ref_qty > 0 else Decimal("0")
+                    raw_total = Decimal("0")
+                    cell_status = "imputed"
+                    summaries[bid_id]["imputed_lines"] += 1
+                summaries[bid_id]["leveled_amount"] += leveled_total
+                cells.append(
+                    LevelingMatrixCell(
+                        bid_id=bid_id,
+                        company_name=bid.company_name,
+                        raw_total=_round2(raw_total),
+                        leveled_total=_round2(leveled_total),
+                        status=cell_status,
+                        unit_rate=_round2(unit_rate),
+                    )
+                )
+            rows.append(
+                LevelingMatrixRow(
+                    position_id=pid,
+                    line_code=ref["line_code"],
+                    description=ref["description"],
+                    unit=ref["unit"],
+                    reference_quantity=float(ref_qty),
+                    reference_rate=_round2(ref["rate"]),
+                    reference_total=_round2(ref["total"]),
+                    cells=cells,
+                )
+            )
+
+        summary_list = [
+            BidLevelingSummary(
+                bid_id=s["bid_id"],
+                company_name=s["company_name"],
+                raw_amount=_round2(s["raw_amount"]),
+                leveled_amount=_round2(s["leveled_amount"]),
+                matched_lines=s["matched_lines"],
+                scaled_lines=s["scaled_lines"],
+                imputed_lines=s["imputed_lines"],
+                currency=s["currency"],
+            )
+            for s in summaries.values()
+        ]
+        return package, rows, summary_list, package_currency, excluded_off_currency
+
+    async def get_leveling_matrix(self, package_id: uuid.UUID) -> LevelingMatrixResponse:
+        """Return the full bid-leveling matrix for a package."""
+        package, rows, summaries, currency, excluded = await self._build_leveling(package_id)
+        return LevelingMatrixResponse(
+            package_id=package_id,
+            package_name=package.name,
+            currency=currency,
+            excluded_off_currency=excluded,
+            bid_summaries=summaries,
+            rows=rows,
+        )
+
+    async def level_bids(self, package_id: uuid.UUID) -> LevelBidsResponse:
+        """Run bid leveling and return the per-bid rollup."""
+        package, rows, summaries, currency, excluded = await self._build_leveling(package_id)
+        await _safe_publish(
+            "tendering.bids.leveled",
+            {"package_id": str(package_id), "bid_count": len(summaries)},
+            source_module="oe_tendering",
+        )
+        return LevelBidsResponse(
+            package_id=package_id,
+            package_name=package.name,
+            currency=currency,
+            excluded_off_currency=excluded,
+            bid_count=len(summaries),
+            reference_line_count=len(rows),
+            bid_summaries=summaries,
+        )
+
     # ── Project Intelligence (RFC 25) ──────────────────────────────────────
 
     async def get_bid_analysis(self, project_id: uuid.UUID):
@@ -684,9 +1059,7 @@ class TenderingService:
         # currency cohort (the currency carried by the most bids).
         ccy_counts: dict[str, int] = {}
         for b in bids:
-            ccy_counts[_norm_ccy(b.currency)] = (
-                ccy_counts.get(_norm_ccy(b.currency), 0) + 1
-            )
+            ccy_counts[_norm_ccy(b.currency)] = ccy_counts.get(_norm_ccy(b.currency), 0) + 1
         dominant_ccy = max(ccy_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
 
         # Vendor rollup — Decimal sums, and a vendor that bid in more than
@@ -714,11 +1087,7 @@ class TenderingService:
             BidVendorEntry(
                 company_name=str(v["company_name"]),
                 total=_round2(v["total"]),
-                currency=(
-                    next(iter(v["currencies"]))
-                    if len(v["currencies"]) == 1
-                    else ""
-                ),
+                currency=(next(iter(v["currencies"])) if len(v["currencies"]) == 1 else ""),
                 bid_count=int(v["bid_count"]),
             )
             for v in sorted(
@@ -728,11 +1097,7 @@ class TenderingService:
         ]
 
         # Cohort restricted to the dominant currency for spread/outliers.
-        cohort = [
-            (b, _to_decimal(b.total_amount))
-            for b in bids
-            if _norm_ccy(b.currency) == dominant_ccy
-        ]
+        cohort = [(b, _to_decimal(b.total_amount)) for b in bids if _norm_ccy(b.currency) == dominant_ccy]
         totals: list[Decimal] = [t for _, t in cohort]
         sorted_totals = sorted(totals)
 
@@ -747,9 +1112,7 @@ class TenderingService:
         p75 = _pct(sorted_totals, 0.75)
         n = len(totals)
         mean = sum(totals, Decimal("0")) / Decimal(n)
-        variance = sum(
-            ((t - mean) ** 2 for t in totals), Decimal("0")
-        ) / Decimal(n)
+        variance = sum(((t - mean) ** 2 for t in totals), Decimal("0")) / Decimal(n)
         std = variance.sqrt()
 
         spread = BidSpread(

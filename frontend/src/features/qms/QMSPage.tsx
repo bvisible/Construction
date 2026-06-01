@@ -48,6 +48,8 @@ import {
   completeInspection,
   createNCR,
   addNCRAction,
+  listNCRActions,
+  verifyNCRAction,
   escalateNCRToVariation,
   closeNCR,
   createPunchItem,
@@ -55,14 +57,21 @@ import {
   createAudit,
   completeAudit,
   fetchCOPQ,
+  listITPItems,
+  signInspection,
+  listInspectionSignatures,
   type ITPPlan,
+  type ITPItem,
   type Inspection,
+  type InspectionSignature,
   type NCR,
+  type NCRAction,
   type NCRSeverity,
   type PunchItem,
   type PunchCategory,
   type Audit,
 } from './api';
+import { listVariationOrders } from '@/features/variations/api';
 
 type Tab = 'itp' | 'inspections' | 'ncrs' | 'punch' | 'audits';
 
@@ -98,6 +107,18 @@ const SEVERITY_VARIANT: Record<NCRSeverity, 'neutral' | 'blue' | 'success' | 'wa
   minor: 'neutral',
   major: 'warning',
   critical: 'error',
+};
+
+const NCR_ACTION_VARIANT: Record<string, 'neutral' | 'blue' | 'success' | 'warning' | 'error'> = {
+  assigned: 'warning',
+  in_progress: 'blue',
+  done: 'success',
+};
+
+const NCR_ACTION_LABEL: Record<string, string> = {
+  assigned: 'Assigned',
+  in_progress: 'In progress',
+  done: 'Done',
 };
 
 const PUNCH_STATUS_VARIANT: Record<string, 'neutral' | 'blue' | 'success' | 'warning' | 'error'> = {
@@ -327,7 +348,7 @@ export function QMSPage() {
           <option value="">{t('common.all_statuses', { defaultValue: 'All statuses' })}</option>
           {statusOptionsFor(tab).map((s) => (
             <option key={s} value={s}>
-              {s}
+              {statusLabel(t, s)}
             </option>
           ))}
         </select>
@@ -340,7 +361,7 @@ export function QMSPage() {
             <option value="">{t('qms.all_categories', { defaultValue: 'All categories' })}</option>
             {(['architectural', 'mechanical', 'electrical', 'finishes', 'structure'] as PunchCategory[]).map((c) => (
               <option key={c} value={c}>
-                {c}
+                {categoryLabel(t, c)}
               </option>
             ))}
           </select>
@@ -457,6 +478,82 @@ function statusOptionsFor(tab: Tab): string[] {
   }
 }
 
+type Translate = ReturnType<typeof useTranslation>['t'];
+
+// Human-readable English fallbacks for every QMS enum token. The actual
+// translations are resolved through t('qms.status.<token>', …) so the
+// i18n-sweep can localise them; these maps only provide the en defaultValue
+// so we never render a raw snake_case identifier to the user.
+const STATUS_LABEL_FALLBACK: Record<string, string> = {
+  draft: 'Draft',
+  active: 'Active',
+  superseded: 'Superseded',
+  closed: 'Closed',
+  scheduled: 'Scheduled',
+  in_progress: 'In progress',
+  passed: 'Passed',
+  failed: 'Failed',
+  conditional: 'Conditional',
+  open: 'Open',
+  action_pending: 'Action pending',
+  verifying: 'Verifying',
+  cancelled: 'Cancelled',
+  assigned: 'Assigned',
+  ready_for_inspection: 'Ready for inspection',
+  rejected: 'Rejected',
+  planned: 'Planned',
+  completed: 'Completed',
+};
+
+const SEVERITY_LABEL_FALLBACK: Record<string, string> = {
+  minor: 'Minor',
+  major: 'Major',
+  critical: 'Critical',
+  observation: 'Observation',
+};
+
+const CATEGORY_LABEL_FALLBACK: Record<string, string> = {
+  architectural: 'Architectural',
+  mechanical: 'Mechanical',
+  electrical: 'Electrical',
+  finishes: 'Finishes',
+  structure: 'Structure',
+};
+
+/** Translate a QMS status token, falling back to a humanised English label. */
+function statusLabel(t: Translate, status: string): string {
+  return t(`qms.status.${status}`, {
+    defaultValue: STATUS_LABEL_FALLBACK[status] ?? status,
+  });
+}
+
+/** Translate a QMS severity token, falling back to a humanised English label. */
+function severityLabel(t: Translate, severity: string): string {
+  return t(`qms.severity_level.${severity}`, {
+    defaultValue: SEVERITY_LABEL_FALLBACK[severity] ?? severity,
+  });
+}
+
+/** Translate a punch-category token, falling back to a humanised English label. */
+function categoryLabel(t: Translate, category: string): string {
+  return t(`qms.category_label.${category}`, {
+    defaultValue: CATEGORY_LABEL_FALLBACK[category] ?? category,
+  });
+}
+
+const AUDIT_TYPE_LABEL_FALLBACK: Record<string, string> = {
+  internal: 'Internal',
+  external: 'External',
+  supplier: 'Supplier',
+};
+
+/** Translate an audit-type token, falling back to a humanised English label. */
+function auditTypeLabel(t: Translate, auditType: string): string {
+  return t(`qms.audit_type_label.${auditType}`, {
+    defaultValue: AUDIT_TYPE_LABEL_FALLBACK[auditType] ?? auditType,
+  });
+}
+
 function filterByText<T>(rows: T[], search: string, getter: (r: T) => string): T[] {
   if (!search.trim()) return rows;
   const q = search.toLowerCase();
@@ -520,7 +617,7 @@ function ITPTable({ rows, onAction }: { rows: ITPPlan[]; onAction: () => void })
               <td className="px-4 py-2 text-content-secondary text-xs tabular-nums">v{r.version}</td>
               <td className="px-4 py-2">
                 <Badge variant={ITP_STATUS_VARIANT[r.status] || 'neutral'} dot>
-                  {r.status}
+                  {statusLabel(t, r.status)}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-right">
@@ -593,7 +690,7 @@ function InspectionTable({
               </td>
               <td className="px-4 py-2">
                 <Badge variant={INSPECTION_VARIANT[r.status] || 'neutral'} dot>
-                  {r.status}
+                  {statusLabel(t, r.status)}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-content-secondary text-xs truncate max-w-[320px]">{r.notes || '—'}</td>
@@ -648,11 +745,11 @@ function NCRTable({
             >
               <td className="px-4 py-2 font-medium text-content-primary truncate max-w-[360px]">{r.title}</td>
               <td className="px-4 py-2">
-                <Badge variant={SEVERITY_VARIANT[r.severity]}>{r.severity}</Badge>
+                <Badge variant={SEVERITY_VARIANT[r.severity]}>{severityLabel(t, r.severity)}</Badge>
               </td>
               <td className="px-4 py-2">
                 <Badge variant={NCR_STATUS_VARIANT[r.status] || 'neutral'} dot>
-                  {r.status}
+                  {statusLabel(t, r.status)}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-xs text-content-secondary">
@@ -717,13 +814,13 @@ function PunchTable({ rows, onAction }: { rows: PunchItem[]; onAction: () => voi
           {rows.map((r) => (
             <tr key={r.id} className="border-t border-border-light hover:bg-surface-secondary">
               <td className="px-4 py-2 font-medium text-content-primary truncate max-w-[320px]">{r.title}</td>
-              <td className="px-4 py-2 text-xs text-content-secondary">{r.category || '—'}</td>
+              <td className="px-4 py-2 text-xs text-content-secondary">{r.category ? categoryLabel(t, r.category) : '—'}</td>
               <td className="px-4 py-2">
-                <Badge variant={SEVERITY_VARIANT[r.severity]}>{r.severity}</Badge>
+                <Badge variant={SEVERITY_VARIANT[r.severity]}>{severityLabel(t, r.severity)}</Badge>
               </td>
               <td className="px-4 py-2">
                 <Badge variant={PUNCH_STATUS_VARIANT[r.status] || 'neutral'} dot>
-                  {r.status}
+                  {statusLabel(t, r.status)}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-xs text-content-secondary">
@@ -789,14 +886,14 @@ function AuditTable({ rows, onAction }: { rows: Audit[]; onAction: () => void })
         <tbody>
           {rows.map((r) => (
             <tr key={r.id} className="border-t border-border-light hover:bg-surface-secondary">
-              <td className="px-4 py-2 font-medium text-content-primary capitalize">{r.audit_type}</td>
+              <td className="px-4 py-2 font-medium text-content-primary">{auditTypeLabel(t, r.audit_type)}</td>
               <td className="px-4 py-2 text-content-secondary text-xs">{r.standard_ref || '—'}</td>
               <td className="px-4 py-2 text-xs text-content-secondary">
                 {r.planned_date ? <DateDisplay value={r.planned_date} /> : '—'}
               </td>
               <td className="px-4 py-2">
                 <Badge variant={AUDIT_STATUS_VARIANT[r.status] || 'neutral'} dot>
-                  {r.status}
+                  {statusLabel(t, r.status)}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-xs tabular-nums">
@@ -850,6 +947,25 @@ function NCRDrawer({
   const ncr = ncrs.find((n) => n.id === id);
   const [actionDesc, setActionDesc] = useState('');
   const [responsible, setResponsible] = useState('');
+  const [variationId, setVariationId] = useState('');
+
+  const actionsQ = useQuery({
+    queryKey: ['qms', 'ncr-actions', id],
+    queryFn: () => listNCRActions(id),
+  });
+
+  // Open variation orders the NCR can be escalated against. The QMS module
+  // never fabricates a variation, so escalation is gated on a real VO id.
+  const variationsQ = useQuery({
+    queryKey: ['qms', 'ncr-variations', ncr?.project_id],
+    queryFn: () => listVariationOrders({ project_id: ncr!.project_id }),
+    enabled: !!ncr?.project_id,
+  });
+
+  const invalidateAll = () => {
+    qc.invalidateQueries({ queryKey: ['qms', 'ncrs'] });
+    qc.invalidateQueries({ queryKey: ['qms', 'ncr-actions', id] });
+  };
 
   const addAction = useMutation({
     mutationFn: () =>
@@ -858,7 +974,7 @@ function NCRDrawer({
         responsible_user_id: responsible || undefined,
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['qms', 'ncrs'] });
+      invalidateAll();
       addToast({ type: 'success', title: t('qms.action_added', { defaultValue: 'Action assigned' }) });
       setActionDesc('');
       setResponsible('');
@@ -866,8 +982,17 @@ function NCRDrawer({
     onError: (e) => addToast({ type: 'error', title: getErrorMessage(e) }),
   });
 
+  const verifyAction = useMutation({
+    mutationFn: (actionId: string) => verifyNCRAction(id, actionId),
+    onSuccess: () => {
+      invalidateAll();
+      addToast({ type: 'success', title: t('qms.action_verified', { defaultValue: 'Action verified' }) });
+    },
+    onError: (e) => addToast({ type: 'error', title: getErrorMessage(e) }),
+  });
+
   const escalate = useMutation({
-    mutationFn: () => escalateNCRToVariation(id),
+    mutationFn: () => escalateNCRToVariation(id, variationId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['qms', 'ncrs'] });
       addToast({ type: 'success', title: t('qms.ncr_escalated', { defaultValue: 'NCR escalated to variation' }) });
@@ -889,6 +1014,9 @@ function NCRDrawer({
   useEscapeToClose(onClose);
 
   if (!ncr) return null;
+
+  const actions = actionsQ.data ?? [];
+  const canEscalate = ncr.status !== 'closed' && ncr.status !== 'cancelled';
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -916,10 +1044,10 @@ function NCRDrawer({
         <div className="space-y-4 p-5">
           <p className="text-sm text-content-secondary whitespace-pre-wrap">{ncr.description}</p>
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <Field label={t('qms.severity')} value={<Badge variant={SEVERITY_VARIANT[ncr.severity]}>{ncr.severity}</Badge>} />
+            <Field label={t('qms.severity')} value={<Badge variant={SEVERITY_VARIANT[ncr.severity]}>{severityLabel(t, ncr.severity)}</Badge>} />
             <Field
               label={t('qms.status')}
-              value={<Badge variant={NCR_STATUS_VARIANT[ncr.status] || 'neutral'} dot>{ncr.status}</Badge>}
+              value={<Badge variant={NCR_STATUS_VARIANT[ncr.status] || 'neutral'} dot>{statusLabel(t, ncr.status)}</Badge>}
             />
             <Field
               label={t('qms.raised_at')}
@@ -945,48 +1073,131 @@ function NCRDrawer({
 
           <Card padding="sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary mb-2">
-              {t('qms.add_action', { defaultValue: 'Assign corrective action' })}
+              {t('qms.corrective_actions', { defaultValue: 'Corrective actions' })}
             </p>
-            <div className="space-y-2">
-              <textarea
-                value={actionDesc}
-                onChange={(e) => setActionDesc(e.target.value)}
-                placeholder={t('qms.action_desc', { defaultValue: 'Action description' })}
-                rows={2}
-                className={clsx(inputCls, 'h-auto py-2')}
-              />
-              <input
-                value={responsible}
-                onChange={(e) => setResponsible(e.target.value)}
-                placeholder={t('qms.responsible_user', {
-                  defaultValue: 'Responsible (name or user ID — optional)',
-                })}
-                className={inputCls}
-              />
-              <Button
-                variant="primary"
-                icon={<Send size={14} />}
-                disabled={!actionDesc.trim()}
-                loading={addAction.isPending}
-                onClick={() => addAction.mutate()}
-              >
-                {t('qms.assign', { defaultValue: 'Assign' })}
-              </Button>
-            </div>
+            {actionsQ.isLoading ? (
+              <p className="text-xs text-content-tertiary">
+                {t('common.loading', { defaultValue: 'Loading…' })}
+              </p>
+            ) : actions.length === 0 ? (
+              <p className="text-xs text-content-tertiary">
+                {t('qms.no_actions', { defaultValue: 'No corrective actions assigned yet.' })}
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {actions.map((a: NCRAction) => (
+                  <li
+                    key={a.id}
+                    className="flex items-start justify-between gap-2 rounded-md border border-border-light p-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm text-content-primary break-words">{a.description}</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <Badge variant={NCR_ACTION_VARIANT[a.status] || 'neutral'} dot>
+                          {t(`qms.action_status.${a.status}`, {
+                            defaultValue: NCR_ACTION_LABEL[a.status] ?? a.status,
+                          })}
+                        </Badge>
+                        {a.due_date && (
+                          <span className="text-2xs text-content-tertiary">
+                            <DateDisplay value={a.due_date} />
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {a.status !== 'done' && ncr.status !== 'closed' && ncr.status !== 'cancelled' && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<CheckCircle2 size={14} />}
+                        loading={verifyAction.isPending && verifyAction.variables === a.id}
+                        onClick={() => verifyAction.mutate(a.id)}
+                      >
+                        {t('qms.verify_action', { defaultValue: 'Verify' })}
+                      </Button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </Card>
 
-          <div className="flex flex-wrap gap-2 pt-2">
-            {ncr.status !== 'closed' && ncr.status !== 'cancelled' && (
-              <Button
-                variant="primary"
-                icon={<ArrowUpRight size={14} />}
-                onClick={() => escalate.mutate()}
-                loading={escalate.isPending}
-              >
+          {ncr.status !== 'closed' && ncr.status !== 'cancelled' && (
+            <Card padding="sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary mb-2">
+                {t('qms.add_action', { defaultValue: 'Assign corrective action' })}
+              </p>
+              <div className="space-y-2">
+                <textarea
+                  value={actionDesc}
+                  onChange={(e) => setActionDesc(e.target.value)}
+                  placeholder={t('qms.action_desc', { defaultValue: 'Action description' })}
+                  rows={2}
+                  className={clsx(inputCls, 'h-auto py-2')}
+                />
+                <input
+                  value={responsible}
+                  onChange={(e) => setResponsible(e.target.value)}
+                  placeholder={t('qms.responsible_user', {
+                    defaultValue: 'Responsible (name or user ID — optional)',
+                  })}
+                  className={inputCls}
+                />
+                <Button
+                  variant="primary"
+                  icon={<Send size={14} />}
+                  disabled={!actionDesc.trim()}
+                  loading={addAction.isPending}
+                  onClick={() => addAction.mutate()}
+                >
+                  {t('qms.assign', { defaultValue: 'Assign' })}
+                </Button>
+              </div>
+            </Card>
+          )}
+
+          {canEscalate && (
+            <Card padding="sm">
+              <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary mb-2">
                 {t('qms.escalate_to_variation', { defaultValue: 'Escalate to Variation' })}
-              </Button>
-            )}
-            {ncr.status === 'verifying' && (
+              </p>
+              <div className="space-y-2">
+                <select
+                  value={variationId}
+                  onChange={(e) => setVariationId(e.target.value)}
+                  className={inputCls}
+                >
+                  <option value="">
+                    {t('qms.select_variation', { defaultValue: 'Select a variation order…' })}
+                  </option>
+                  {(variationsQ.data ?? []).map((vo) => (
+                    <option key={vo.id} value={vo.id}>
+                      {vo.code} — {vo.title}
+                    </option>
+                  ))}
+                </select>
+                {(variationsQ.data ?? []).length === 0 && !variationsQ.isLoading && (
+                  <p className="text-2xs text-content-tertiary">
+                    {t('qms.no_variations', {
+                      defaultValue: 'No variation orders exist for this project yet. Create one in Variations first.',
+                    })}
+                  </p>
+                )}
+                <Button
+                  variant="primary"
+                  icon={<ArrowUpRight size={14} />}
+                  disabled={!variationId}
+                  onClick={() => escalate.mutate()}
+                  loading={escalate.isPending}
+                >
+                  {t('qms.escalate_to_variation', { defaultValue: 'Escalate to Variation' })}
+                </Button>
+              </div>
+            </Card>
+          )}
+
+          {ncr.status === 'verifying' && (
+            <div className="flex flex-wrap gap-2 pt-2">
               <Button
                 variant="secondary"
                 icon={<CheckCircle2 size={14} />}
@@ -995,8 +1206,8 @@ function NCRDrawer({
               >
                 {t('qms.close_ncr', { defaultValue: 'Close NCR' })}
               </Button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -1020,6 +1231,27 @@ function InspectionDrawer({
   const insp = inspections.find((i) => i.id === id);
   const [result, setResult] = useState<'passed' | 'failed' | 'conditional'>('passed');
   const [notes, setNotes] = useState('');
+  const [signRole, setSignRole] = useState<InspectionSignature['signer_role']>('inspector');
+
+  const sigsQ = useQuery({
+    queryKey: ['qms', 'inspection-signatures', id],
+    queryFn: () => listInspectionSignatures(id),
+  });
+
+  const sign = useMutation({
+    // signer_user_id is omitted on purpose: the backend signs as the
+    // authenticated caller, so a normal user signs in one click without
+    // hand-typing a UUID.
+    mutationFn: () =>
+      signInspection(id, {
+        signer_role: signRole,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['qms', 'inspection-signatures', id] });
+      addToast({ type: 'success', title: t('qms.signature_added', { defaultValue: 'Signature recorded' }) });
+    },
+    onError: (e) => addToast({ type: 'error', title: getErrorMessage(e) }),
+  });
 
   const complete = useMutation({
     mutationFn: () => completeInspection(id, result, notes || undefined),
@@ -1036,6 +1268,19 @@ function InspectionDrawer({
   if (!insp) return null;
 
   const photos = insp.photos_json ?? [];
+  const sigData = sigsQ.data;
+  const required = sigData?.required ?? 1;
+  const collected = sigData?.collected ?? 0;
+  const signaturesSatisfied = collected >= required;
+  const isOpenStatus = insp.status === 'scheduled' || insp.status === 'in_progress';
+  const SIGNER_ROLES: InspectionSignature['signer_role'][] = [
+    'GC',
+    'designer',
+    'client',
+    'subcontractor',
+    'inspector',
+    'other',
+  ];
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
@@ -1062,7 +1307,7 @@ function InspectionDrawer({
         </div>
         <div className="space-y-4 p-5">
           <div className="grid grid-cols-2 gap-3 text-sm">
-            <Field label={t('qms.status')} value={<Badge variant={INSPECTION_VARIANT[insp.status] || 'neutral'} dot>{insp.status}</Badge>} />
+            <Field label={t('qms.status')} value={<Badge variant={INSPECTION_VARIANT[insp.status] || 'neutral'} dot>{statusLabel(t, insp.status)}</Badge>} />
             <Field
               label={t('qms.scheduled_at')}
               value={insp.scheduled_at ? <DateDisplay value={insp.scheduled_at} /> : '—'}
@@ -1076,14 +1321,70 @@ function InspectionDrawer({
           </div>
 
           <Card padding="sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary mb-2">
-              {t('qms.signatures', { defaultValue: 'Signatures' })}
-            </p>
-            <p className="text-xs text-content-tertiary">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-content-secondary">
+                {t('qms.signatures', { defaultValue: 'Signatures' })}
+              </p>
+              <Badge variant={signaturesSatisfied ? 'success' : 'warning'}>
+                {t('qms.signatures_collected', {
+                  defaultValue: '{{collected}}/{{required}} collected',
+                  collected,
+                  required,
+                })}
+              </Badge>
+            </div>
+            <p className="text-xs text-content-tertiary mb-2">
               {t('qms.signatures_hint', {
                 defaultValue: 'Sign-offs are captured per role (GC, designer, client, inspector).',
               })}
             </p>
+            {(sigData?.signatures ?? []).length > 0 && (
+              <ul className="mb-3 space-y-1">
+                {(sigData?.signatures ?? []).map((s) => (
+                  <li key={s.id} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-content-primary">
+                      {t(`qms.signer_role.${s.signer_role}`, { defaultValue: s.signer_role })}
+                    </span>
+                    <span className="text-content-tertiary">
+                      {s.signed_at ? <DateDisplay value={s.signed_at} /> : '—'}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {isOpenStatus && (
+              <div className="space-y-2 border-t border-border-light pt-2">
+                <label className="block text-2xs font-medium uppercase tracking-wide text-content-tertiary">
+                  {t('qms.sign_as_role', { defaultValue: 'Sign as role' })}
+                </label>
+                <select
+                  value={signRole}
+                  onChange={(e) => setSignRole(e.target.value as InspectionSignature['signer_role'])}
+                  className={inputCls}
+                  aria-label={t('qms.sign_as_role', { defaultValue: 'Sign as role' })}
+                >
+                  {SIGNER_ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {t(`qms.signer_role.${r}`, { defaultValue: r })}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-2xs text-content-tertiary">
+                  {t('qms.sign_as_me_hint', {
+                    defaultValue: 'You will sign this inspection as yourself in the selected role.',
+                  })}
+                </p>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<FileCheck size={14} />}
+                  loading={sign.isPending}
+                  onClick={() => sign.mutate()}
+                >
+                  {t('qms.sign_as_me', { defaultValue: 'Sign as me' })}
+                </Button>
+              </div>
+            )}
           </Card>
 
           {photos.length > 0 && (
@@ -1100,7 +1401,13 @@ function InspectionDrawer({
                       className="aspect-square rounded-md bg-surface-secondary overflow-hidden flex items-center justify-center text-content-tertiary text-2xs"
                     >
                       {url ? (
-                        <img src={url} alt="" className="h-full w-full object-cover" />
+                        <img
+                          src={url}
+                          alt={t('qms.inspection_photo', {
+                            defaultValue: 'Inspection photo',
+                          })}
+                          className="h-full w-full object-cover"
+                        />
                       ) : (
                         t('qms.photo', { defaultValue: 'Photo' })
                       )}
@@ -1122,9 +1429,9 @@ function InspectionDrawer({
                   onChange={(e) => setResult(e.target.value as 'passed' | 'failed' | 'conditional')}
                   className={inputCls}
                 >
-                  <option value="passed">passed</option>
-                  <option value="failed">failed</option>
-                  <option value="conditional">conditional</option>
+                  <option value="passed">{t('qms.result_passed', { defaultValue: 'Passed' })}</option>
+                  <option value="failed">{t('qms.result_failed', { defaultValue: 'Failed' })}</option>
+                  <option value="conditional">{t('qms.result_conditional', { defaultValue: 'Conditional' })}</option>
                 </select>
                 <textarea
                   value={notes}
@@ -1133,9 +1440,18 @@ function InspectionDrawer({
                   rows={2}
                   className={clsx(inputCls, 'h-auto py-2')}
                 />
+                {!signaturesSatisfied && (
+                  <p className="text-2xs text-semantic-warning">
+                    {t('qms.signatures_required_hint', {
+                      defaultValue: 'Collect {{required}} signature(s) before completing.',
+                      required,
+                    })}
+                  </p>
+                )}
                 <Button
                   variant="primary"
                   icon={<CheckCircle2 size={14} />}
+                  disabled={!signaturesSatisfied}
                   onClick={() => complete.mutate()}
                   loading={complete.isPending}
                 >
@@ -1185,6 +1501,15 @@ function CreateModal({
     location_ref: '',
     scheduled_at: '',
     notes: '',
+  });
+  // ITP plan picked first; its control-point items are loaded on demand so
+  // the inspection's itp_item_id is a real item id (FK to oe_qms_itp_item),
+  // never a plan id.
+  const [selectedPlanId, setSelectedPlanId] = useState('');
+  const itpItemsQ = useQuery({
+    queryKey: ['qms', 'itp-items', selectedPlanId],
+    queryFn: () => listITPItems(selectedPlanId),
+    enabled: kind === 'inspections' && !!selectedPlanId,
   });
   const [ncrForm, setNcrForm] = useState({
     title: '',
@@ -1317,18 +1642,48 @@ function CreateModal({
       {kind === 'inspections' && (
         <WideModalSection columns={2}>
           <WideModalField
-            label={t('qms.itp_item', { defaultValue: 'ITP control point (optional)' })}
-            span={2}
+            label={t('qms.itp_plan', { defaultValue: 'ITP plan (optional)' })}
           >
             <select
-              value={inspForm.itp_item_id}
-              onChange={(e) => setInspForm({ ...inspForm, itp_item_id: e.target.value })}
+              value={selectedPlanId}
+              onChange={(e) => {
+                setSelectedPlanId(e.target.value);
+                // Reset the item whenever the plan changes so we never
+                // submit an item id from a different plan.
+                setInspForm({ ...inspForm, itp_item_id: '' });
+              }}
               className={inputCls}
             >
               <option value="">—</option>
               {itpPlans.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
+                </option>
+              ))}
+            </select>
+          </WideModalField>
+          <WideModalField
+            label={t('qms.itp_item', { defaultValue: 'ITP control point (optional)' })}
+          >
+            <select
+              value={inspForm.itp_item_id}
+              onChange={(e) => setInspForm({ ...inspForm, itp_item_id: e.target.value })}
+              className={inputCls}
+              disabled={!selectedPlanId || itpItemsQ.isLoading}
+            >
+              <option value="">
+                {!selectedPlanId
+                  ? t('qms.itp_pick_plan_first', { defaultValue: 'Pick a plan first' })
+                  : itpItemsQ.isLoading
+                    ? t('common.loading', { defaultValue: 'Loading…' })
+                    : '—'}
+              </option>
+              {(itpItemsQ.data ?? []).map((it: ITPItem) => (
+                <option key={it.id} value={it.id}>
+                  {it.sequence}. {it.control_point_name}
+                  {it.signatories_required > 1
+                    ? ` (${it.signatories_required}×)`
+                    : ''}
                 </option>
               ))}
             </select>
@@ -1380,7 +1735,7 @@ function CreateModal({
             >
               {(['minor', 'major', 'critical'] as NCRSeverity[]).map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {severityLabel(t, s)}
                 </option>
               ))}
             </select>
@@ -1453,7 +1808,7 @@ function CreateModal({
               <option value="">—</option>
               {(['architectural', 'mechanical', 'electrical', 'finishes', 'structure'] as PunchCategory[]).map((c) => (
                 <option key={c} value={c}>
-                  {c}
+                  {categoryLabel(t, c)}
                 </option>
               ))}
             </select>
@@ -1466,7 +1821,7 @@ function CreateModal({
             >
               {(['minor', 'major', 'critical'] as NCRSeverity[]).map((s) => (
                 <option key={s} value={s}>
-                  {s}
+                  {severityLabel(t, s)}
                 </option>
               ))}
             </select>
@@ -1492,9 +1847,9 @@ function CreateModal({
               }
               className={inputCls}
             >
-              <option value="internal">internal</option>
-              <option value="external">external</option>
-              <option value="supplier">supplier</option>
+              <option value="internal">{auditTypeLabel(t, 'internal')}</option>
+              <option value="external">{auditTypeLabel(t, 'external')}</option>
+              <option value="supplier">{auditTypeLabel(t, 'supplier')}</option>
             </select>
           </WideModalField>
           <WideModalField label={t('qms.standard', { defaultValue: 'Standard' })}>

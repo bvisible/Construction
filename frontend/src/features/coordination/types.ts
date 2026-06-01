@@ -92,17 +92,37 @@ export interface TradeMatrixResponse {
   cells: TradeMatrixCell[];
 }
 
+/**
+ * Interpolation params the client uses to build the localised timeline
+ * label. The set of keys present depends on `type`:
+ *   • clash_run         → name, total, status, kind ('completed'|'pending')
+ *   • federation_created→ name
+ *   • rule_pack_installed→ name
+ *   • bcf_export        → name, status
+ */
+export interface CoordinationTimelineParams {
+  name?: string | null;
+  total?: number | null;
+  status?: string | null;
+  kind?: string | null;
+  [key: string]: string | number | null | undefined;
+}
+
 /** One activity-stream entry. */
 export interface CoordinationTimelineEvent {
   /** ISO-8601. */
   ts: string;
-  /** Discriminant — drives the icon + summary template. */
+  /** Discriminant — drives the icon + label template. */
   type:
     | 'clash_run'
     | 'federation_created'
     | 'rule_pack_installed'
     | 'bcf_export'
     | string;
+  /** Interpolation params for the client-built, localised label. */
+  params: CoordinationTimelineParams;
+  /** Pre-rendered English fallback (API exports / logs); the UI builds
+   *  its own localised label from `type` + `params` instead. */
   summary: string;
   user_id: string | null;
   /** Deep-link route (e.g. `/clash?run=…`). May be null. */

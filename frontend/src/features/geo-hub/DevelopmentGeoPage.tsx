@@ -12,7 +12,7 @@ import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Boxes, AlertTriangle, ServerCrash } from 'lucide-react';
+import { Boxes, AlertTriangle, ServerCrash, Loader2 } from 'lucide-react';
 
 import { ApiError, apiGet } from '@/shared/lib/api';
 
@@ -22,6 +22,7 @@ import { GeoEmptyState, type GeoEmptyKind } from './GeoEmptyState';
 import { GeoModePicker } from './GeoModePicker';
 import { GeoOverlayHud } from './GeoOverlayHud';
 import { TilesetSidebar } from './TilesetSidebar';
+import { useTilesetOverlayState } from './hooks/useTilesetOverlayState';
 import type { Tileset } from './types';
 
 interface DevelopmentSummary {
@@ -94,7 +95,17 @@ export function DevelopmentGeoPage() {
     staleTime: 30_000,
   });
 
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
+  // Per-tileset visibility + opacity, keyed by the dev id so the dev-scoped
+  // view's preferences are independent of the project-scoped view's. Both
+  // surfaces share the same hook + storage prefix; only the key differs.
+  const tilesetOverlay = useTilesetOverlayState(devId ?? null);
+  const hiddenIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const [id, entry] of Object.entries(tilesetOverlay.state)) {
+      if (entry.visible === false) s.add(id);
+    }
+    return s;
+  }, [tilesetOverlay.state]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState<boolean>(
     readTilesetsCollapsed,
@@ -237,10 +248,31 @@ export function DevelopmentGeoPage() {
           </div>
         )}
         {!error && loading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center text-xs text-slate-300">
-            {t('geo_hub.loading_config', {
-              defaultValue: 'Loading geo configuration...',
-            })}
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 text-xs text-slate-300"
+            role="status"
+            aria-live="polite"
+          >
+            {/* Skeleton placeholder so the user sees the panel chrome
+                they're about to interact with, not just a blank globe. */}
+            <div
+              aria-hidden
+              className="absolute top-3 left-3 hidden w-72 flex-col gap-2 rounded-xl border border-white/10 bg-slate-900/40 p-3 backdrop-blur-md md:flex"
+            >
+              <div className="h-3 w-1/2 rounded bg-slate-700/60 animate-pulse" />
+              <div className="h-2 w-2/3 rounded bg-slate-700/50 animate-pulse" />
+              <div className="mt-2 space-y-1.5">
+                <div className="h-8 rounded bg-slate-800/60 animate-pulse" />
+                <div className="h-8 rounded bg-slate-800/60 animate-pulse" />
+                <div className="h-8 rounded bg-slate-800/60 animate-pulse" />
+              </div>
+            </div>
+            <Loader2 size={20} className="animate-spin text-emerald-300" />
+            <span className="font-medium">
+              {t('geo_hub.loading_config', {
+                defaultValue: 'Loading geo configuration...',
+              })}
+            </span>
           </div>
         )}
         {!error && mapConfig.data && (
@@ -257,6 +289,7 @@ export function DevelopmentGeoPage() {
               mode="development"
               mapConfig={viewerMapConfig}
               focusedTilesetId={focusedTilesetId}
+              tilesetOverlayState={tilesetOverlay.state}
               onMouseMove={setCursorCoords}
               onCameraChange={setCameraState}
               overlay={
@@ -276,15 +309,10 @@ export function DevelopmentGeoPage() {
                     isLoading={loading}
                     hiddenIds={hiddenIds}
                     focusedId={focusedId}
-                    onToggleVisibility={(id) =>
-                      setHiddenIds((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(id)) next.delete(id);
-                        else next.add(id);
-                        return next;
-                      })
-                    }
+                    onToggleVisibility={tilesetOverlay.toggleVisible}
                     onFocus={(ts) => setFocusedId(ts.id)}
+                    getOpacity={tilesetOverlay.getOpacity}
+                    onChangeOpacity={tilesetOverlay.setOpacity}
                   />
                   {emptyKind && (
                     <GeoEmptyState kind={emptyKind} projectId={projectId} />

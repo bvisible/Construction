@@ -27,6 +27,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,6 +54,7 @@ from app.modules.costs.intelligence import (
     CostUsageRecorder,
     RegionalIndexService,
 )
+from app.modules.costs.cwicr_v3_catalogue import CWICR_V3_CATALOGUES
 from app.modules.costs.matcher import (
     MatchResult,
     match_cwicr_for_position,
@@ -91,61 +93,75 @@ _MAX_COST_UPLOAD_BYTES = 25 * 1024 * 1024
 # common delimiter (handled inline in the route).
 _ALLOWED_COST_IMPORT_SIGNATURES: frozenset[str] = frozenset({"zip", "ole"})
 
-router = APIRouter()
+router = APIRouter(tags=["costs"])
 logger = logging.getLogger(__name__)
+
+
+from app.core.sql_json import json_path_text
+
+
+class CertaintyBatchRequest(BaseModel):
+    """Request body for ``POST /v1/costs/certainty/batch``.
+
+    Carries the cost-item ids visible on one list page so the certainty
+    badges can be resolved in a single round-trip instead of one HTTP
+    request per row (an N+1 the list view fired on every page). Bounded
+    to 200 ids — comfortably above the 10-row default page size while
+    still capping the ``IN()`` fan-out.
+    """
+
+    ids: list[uuid.UUID] = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="Cost-item ids to grade (deduplicated server-side; unknown ids dropped).",
+    )
 
 
 # ── Region → currency map ─────────────────────────────────────────────────
 #
 # CWICR catalogues are imported per-region, but the parquet files don't
 # carry an explicit currency column — every rate is denominated in the
-# region's local currency. Mirror the frontend ``REGION_MAP`` so we can
-# resolve the right ISO 4217 code at ingestion time AND lazily on read
-# for legacy rows that landed with ``currency = ''`` before this map
-# existed.
+# region's local currency. We resolve the right ISO 4217 code at ingestion
+# time (so rates persist with their true currency) AND lazily on read for
+# legacy rows that landed with ``currency = ''`` before this map existed.
 #
-# Keep the keys exactly aligned with the parquet ``db_id`` / ``region``
-# convention (UPPERCASE, country prefix). Unknown keys fall back to the
-# explicit currency on the row, then to "EUR" so the picker never crashes.
-_REGION_CURRENCY: dict[str, str] = {
-    "DE_BERLIN": "EUR",
-    "DE_MUNICH": "EUR",
+# Single source of truth: the v3 catalogue registry
+# (:data:`CWICR_V3_CATALOGUES`) already declares the ISO currency of every
+# region DDC ships. Deriving the map from it means new catalogue rows are
+# covered automatically and the two can never drift — the old hand-kept
+# literal omitted ~18 live regions (KES/GHS/KRW/THB/VND/…) and silently
+# mislabeled their rates as EUR.
+#
+# Legacy / alias keys that are NOT in the v3 registry (older parquet
+# ``db_id`` tags the importer still accepts) are merged on top so they keep
+# resolving. Keys follow the parquet ``db_id`` / ``region`` convention
+# (UPPERCASE, country prefix).
+_REGION_CURRENCY_LEGACY: dict[str, str] = {
     "DE_HAMBURG": "EUR",
-    "AT_VIENNA": "EUR",
-    "CH_ZURICH": "CHF",
-    "FR_PARIS": "EUR",
-    "ES_MADRID": "EUR",
-    "IT_ROME": "EUR",
-    "NL_AMSTERDAM": "EUR",
     "BE_BRUSSELS": "EUR",
-    "PT_LISBON": "EUR",
-    # NOTE: ``PT_SAOPAULO`` was historically present as ``BRL`` — that's a
-    # mislabeled entry (São Paulo is Brazil, prefix should be ``BR_``).
-    # Kept canonical key is ``BR_SAOPAULO`` (see below). The bogus
-    # ``PT_SAOPAULO`` is intentionally not registered here.
-    "GB_LONDON": "GBP",
     "IE_DUBLIN": "EUR",
-    "PL_WARSAW": "PLN",
-    "CZ_PRAGUE": "CZK",
-    "RO_BUCHAREST": "RON",
-    "RU_STPETERSBURG": "RUB",
-    "RU_MOSCOW": "RUB",
-    "USA_USD": "USD",
     "USA_NEWYORK": "USD",
-    "CA_TORONTO": "CAD",
-    "MX_MEXICO": "MXN",
-    "BR_SAOPAULO": "BRL",
-    "AR_BUENOSAIRES": "ARS",
-    "CN_SHANGHAI": "CNY",
-    "JP_TOKYO": "JPY",
-    "IN_MUMBAI": "INR",
-    "AE_DUBAI": "AED",
     "SA_RIYADH": "SAR",
-    "TR_ISTANBUL": "TRY",
-    "AU_SYDNEY": "AUD",
-    "NZ_AUCKLAND": "NZD",
-    "ZA_JOHANNESBURG": "ZAR",
+    # NOTE: ``PT_SAOPAULO`` is intentionally NOT registered — it was a
+    # mislabeled tag (São Paulo is Brazil; canonical key is ``BR_SAOPAULO``,
+    # supplied by the v3 registry). A stray ``PT_SAOPAULO`` row should hit
+    # the unknown-region path, not silently resolve.
 }
+
+
+def _build_region_currency_map() -> dict[str, str]:
+    """Derive ``{region: ISO currency}`` from the v3 catalogue + legacy aliases."""
+    out: dict[str, str] = {
+        cat.region: cat.currency for cat in CWICR_V3_CATALOGUES if cat.currency
+    }
+    # Legacy/alias keys only fill gaps — never override a canonical v3 entry.
+    for region, currency in _REGION_CURRENCY_LEGACY.items():
+        out.setdefault(region, currency)
+    return out
+
+
+_REGION_CURRENCY: dict[str, str] = _build_region_currency_map()
 
 
 # CWICR region tags follow the convention ``<2-letter country>_<UPPERCASE city>``
@@ -174,16 +190,19 @@ def _resolve_currency(
 
     Resolution order:
         1. Non-empty incoming ``currency`` (caller-supplied wins).
-        2. ``_REGION_CURRENCY[region]`` when the region matches a known key.
-        3. ``"EUR"`` as a final fallback so the API never returns an
-           empty currency string to the frontend.
+        2. ``_REGION_CURRENCY[region]`` when the region matches a known key
+           (derived from the v3 catalogue registry, so every shipped region
+           resolves to its true ISO code).
+        3. ``""`` (unset) when the region is unknown or malformed.
 
-    When falling back to EUR (step 3), a structured warning is emitted via
+    A genuinely unknown region returns an EMPTY string rather than a wrong
+    "EUR" — mislabeling a Kenyan/Thai/Korean rate as EUR silently corrupts
+    every downstream cross-currency conversion, whereas an empty currency is
+    honestly "unknown" and is rendered as such (and skipped by FX maths).
+    When the region can't be resolved a structured warning is emitted via
     ``logger.warning`` and — if a ``warnings`` list is supplied by the caller
     — a short human-readable message is appended so the route handler can
     surface it to the API response (frontend renders as a non-blocking toast).
-    Malformed region strings (not matching ``XX_CITY``) are also flagged,
-    even when the lookup would otherwise have succeeded.
     """
     if isinstance(currency, str):
         cleaned = currency.strip().upper()
@@ -195,7 +214,7 @@ def _resolve_currency(
             if not _is_valid_region_format(normalized):
                 msg = (
                     f"Cost row uses non-canonical region tag {normalized!r} "
-                    f"(expected ``XX_CITY``); currency falls back to EUR."
+                    f"(expected ``XX_CITY``); currency left unset."
                 )
                 logger.warning(msg)
                 if warnings is not None and msg not in warnings:
@@ -205,13 +224,13 @@ def _resolve_currency(
                 if mapped:
                     return mapped
                 msg = (
-                    f"Unknown region {normalized!r} — no entry in "
-                    f"_REGION_CURRENCY; currency falls back to EUR."
+                    f"Unknown region {normalized!r} — no entry in _REGION_CURRENCY "
+                    f"(add it to the CWICR catalogue registry); currency left unset."
                 )
                 logger.warning(msg)
                 if warnings is not None and msg not in warnings:
                     warnings.append(msg)
-    return "EUR"
+    return ""
 
 
 def _get_service(session: SessionDep) -> CostItemService:
@@ -405,9 +424,7 @@ async def autocomplete_cost_items(
                         items_from_db = await service.get_by_codes(codes)
                         for db_item in items_from_db:
                             components_map[db_item.code] = db_item.components or []
-                            metadata_map[db_item.code] = (
-                                db_item.metadata_ or {}
-                            )
+                            metadata_map[db_item.code] = db_item.metadata_ or {}
                     except Exception:
                         logger.debug("Cost search: component lookup failed", exc_info=True)
 
@@ -431,9 +448,7 @@ async def autocomplete_cost_items(
                                 description=r.get("description", ""),
                                 unit=r.get("unit", ""),
                                 rate=float(r.get("rate", 0)),
-                                currency=_resolve_currency(
-                                    r.get("currency"), r.get("region")
-                                ),
+                                currency=_resolve_currency(r.get("currency"), r.get("region")),
                                 region=r.get("region"),
                                 classification=cls,
                                 components=comps,
@@ -673,7 +688,8 @@ async def search_cost_items(
 
     if skip_count_via_cache:
         items, _, has_more, next_cursor = await service.search_costs_paginated(
-            query, skip_count=True,
+            query,
+            skip_count=True,
         )
         total = cached_total
     else:
@@ -702,7 +718,9 @@ async def search_cost_items(
             row_region = getattr(i, "region", None)
             if not (isinstance(row_currency, str) and row_currency.strip()):
                 resolved = _resolve_currency(
-                    row_currency, row_region, warnings=currency_warnings,
+                    row_currency,
+                    row_region,
+                    warnings=currency_warnings,
                 )
                 # Stamp the resolved value onto the ORM instance so the
                 # schema validator (which can't see ``warnings``) sees a
@@ -714,7 +732,8 @@ async def search_cost_items(
         except Exception:
             logger.debug("Currency warning capture skipped", exc_info=True)
         payload = _localize_response_payload(
-            CostItemResponse.model_validate(i), resolved_locale,
+            CostItemResponse.model_validate(i),
+            resolved_locale,
         )
         if lite:
             comps = payload.get("components") or []
@@ -1040,9 +1059,7 @@ async def vector_v3_status(
                     "bound_language": "",
                 }
             else:
-                payload["language_mismatch"] = await _detect_language_mismatch(
-                    db, project_id
-                )
+                payload["language_mismatch"] = await _detect_language_mismatch(db, project_id)
 
     if not payload["connected"]:
         payload["error"] = base.get("error", "")
@@ -1134,11 +1151,7 @@ async def _detect_language_mismatch(
 
         # MatchProjectSettings uses an ``id`` PK with a unique FK on
         # ``project_id``; ``db.get`` cannot be used here.
-        result = await db.execute(
-            select(MatchProjectSettings).where(
-                MatchProjectSettings.project_id == project_id
-            )
-        )
+        result = await db.execute(select(MatchProjectSettings).where(MatchProjectSettings.project_id == project_id))
         settings = result.scalar_one_or_none()
         if not settings or not settings.cost_database_id:
             out["status"] = "unbound"
@@ -1147,9 +1160,7 @@ async def _detect_language_mismatch(
         out["bound_language"] = language_for(settings.cost_database_id)
 
         if out["project_language"] and out["bound_language"]:
-            out["status"] = (
-                "ok" if out["project_language"] == out["bound_language"] else "mismatch"
-            )
+            out["status"] = "ok" if out["project_language"] == out["bound_language"] else "mismatch"
     except Exception:  # pragma: no cover — defensive
         logger.debug("language mismatch probe failed", exc_info=True)
     return out
@@ -1200,6 +1211,7 @@ async def embedder_status() -> dict[str, Any]:
     installed = False
     try:
         import FlagEmbedding  # type: ignore[import-not-found]  # noqa: F401, PLC0415
+
         installed = True
     except ImportError:
         missing.append("FlagEmbedding")
@@ -1297,9 +1309,7 @@ async def qdrant_smoke_search(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("CWICR Qdrant smoke search failed")
-        raise HTTPException(
-            status_code=500, detail="qdrant search failed (see server logs)"
-        ) from exc
+        raise HTTPException(status_code=500, detail="qdrant search failed (see server logs)") from exc
 
     rate_codes = [h.rate_code for h in hits]
     full_rows = await lookup_full_rows(country=country, rate_codes=rate_codes)
@@ -1344,14 +1354,31 @@ async def vectorize_cost_items(
 ) -> JSONResponse | dict:
     """Generate embeddings and index cost items into vector DB.
 
+    Thin HTTP wrapper around :func:`vectorize_region`; the work lives in that
+    module-level helper so the partner-pack one-click installer can build the
+    vector DB through the same path without going through HTTP.
+    """
+    return await vectorize_region(session, region=region, batch_size=batch_size)
+
+
+async def vectorize_region(
+    session: AsyncSession,
+    *,
+    region: str | None = None,
+    batch_size: int = 256,
+) -> JSONResponse | dict:
+    """Embed and index the cost items of one region into the vector DB.
+
     Uses FastEmbed/ONNX (all-MiniLM-L6-v2, 384d) locally — no API key needed.
     Default backend: LanceDB (embedded, no Docker required).
 
-    Returns ``503 Service Unavailable`` when the vector backend
-    (Qdrant / LanceDB / embedding model) is not reachable or not
-    installed. Body keeps the legacy ``{"indexed": 0, "message":
-    ..., "error": ...}`` shape so existing clients still parse it;
-    only the status code flips from the previous silent 200.
+    Returns ``503 Service Unavailable`` (as a ``JSONResponse``) when the vector
+    backend (Qdrant / LanceDB / embedding model) is not reachable or not
+    installed. The body keeps the legacy ``{"indexed": 0, "message": ...,
+    "error": ...}`` shape so existing clients still parse it. The happy path
+    returns a plain ``dict``. Reusable building block shared by the
+    ``POST /vector/index/`` route and the partner-pack ``full-install``
+    orchestrator (which treats a 503 as graceful degradation, not a failure).
     """
     import asyncio
     import time
@@ -1894,7 +1921,7 @@ def _snapshot_error_hint(err: str) -> str | None:
             "Windows Defender is locking files in Qdrant's storage folder during "
             "fsync. The download succeeded — only the final disk write was blocked. "
             "Fix: open PowerShell AS ADMINISTRATOR and run:\n"
-            "  Add-MpPreference -ExclusionPath \"$env:USERPROFILE\\.openestimator\"\n"
+            '  Add-MpPreference -ExclusionPath "$env:USERPROFILE\\.openestimator"\n'
             "Then click Install again. (No restart needed — Qdrant picks it up "
             "on the next attempt.) GUI alternative: Settings → Update & Security → "
             "Windows Security → Virus & threat protection → Manage settings → "
@@ -2129,8 +2156,7 @@ async def install_v3_catalogue(
             status.HTTP_502_BAD_GATEWAY,
             (
                 f"Qdrant could not restore the snapshot from {snapshot_url}.\n"
-                f"Qdrant said: {qdrant_err}"
-                + (f"\nHint: {hint}" if hint else "")
+                f"Qdrant said: {qdrant_err}" + (f"\nHint: {hint}" if hint else "")
             ),
         ) from exc
     except RuntimeError as exc:
@@ -2150,9 +2176,7 @@ async def install_v3_catalogue(
     poll_deadline = time.monotonic() + 30.0
     poll_delay = 0.5
     while time.monotonic() < poll_deadline:
-        collections_after = await loop.run_in_executor(
-            None, lambda: server_collections(qdrant_url=qdrant_url)
-        )
+        collections_after = await loop.run_in_executor(None, lambda: server_collections(qdrant_url=qdrant_url))
         if cat.collection in collections_after:
             appeared = True
             break
@@ -2238,7 +2262,7 @@ async def list_categories(
 
     _url = str(_engine.url)
     if "sqlite" in _url:
-        collection_expr = func.json_extract(CostItem.classification, "$.collection")
+        collection_expr = json_path_text(CostItem.classification, "$.collection")
     else:
         collection_expr = CostItem.classification["collection"].as_string()
 
@@ -2351,16 +2375,16 @@ async def list_loaded_databases(
     * ``count > 0`` and ``vectorized_count > 0``  — ready for matching
 
     Cheap: the SQL count comes from a single ``GROUP BY region`` against
-    the indexed ``region`` column; the vector count is a substring-LIKE
-    on the LanceDB ``payload`` column, capped at the table size and
-    short-circuited when LanceDB is unavailable.
+    the indexed ``region`` column; the vector count comes from
+    ``vector_count_for_region`` which counts the same ``cost_items`` store
+    the ``/vector/index/`` action writes, filtered by the region field, so
+    the badge tracks vectorisation progress instead of staying stuck (#170).
     """
     _ = user_id  # auth required via dependency; unused beyond that
     from sqlalchemy import func, select  # noqa: PLC0415
 
     from app.core.match_service.region_language import language_for  # noqa: PLC0415
-    from app.core.vector import vector_count_with_payload_substring  # noqa: PLC0415
-    from app.core.vector_index import COLLECTION_COSTS  # noqa: PLC0415
+    from app.core.vector import vector_count_for_region  # noqa: PLC0415
     from app.modules.costs.models import CostItem  # noqa: PLC0415
 
     result = await session.execute(
@@ -2375,7 +2399,7 @@ async def list_loaded_databases(
     for region, sql_count in result.all():
         if not region or sql_count <= 0:
             continue
-        vectorized = vector_count_with_payload_substring(COLLECTION_COSTS, region)
+        vectorized = vector_count_for_region(region)
         out.append(
             {
                 "id": region,
@@ -2740,10 +2764,7 @@ async def import_cost_file(
             # recognised as a container is a mismatch.
             raise HTTPException(
                 status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=(
-                    f"File extension is .csv but the content is a {signature} "
-                    "container. Re-upload as a real CSV."
-                ),
+                detail=(f"File extension is .csv but the content is a {signature} container. Re-upload as a real CSV."),
             )
         if b"\x00" in head:
             raise HTTPException(
@@ -3102,12 +3123,27 @@ async def load_cwicr_database(
 ) -> dict:
     """Load a CWICR regional database from local DDC Toolkit files.
 
+    Thin HTTP wrapper around :func:`load_cwicr_region`. The actual import work
+    lives in that module-level helper so the partner-pack one-click installer
+    can run the same load path without going through HTTP.
+    """
+    return await load_cwicr_region(db_id, session)
+
+
+async def load_cwicr_region(db_id: str, session: AsyncSession) -> dict:
+    """Load one CWICR regional cost database into the relational store.
+
     Optimized: reads Parquet, deduplicates by rate_code (55K unique items
     from 900K total rows), then bulk-inserts into SQLite.
     Typical time: 10-30 seconds.
 
     For databases not available locally (e.g. UK_GBP, USA_USD), automatically
     downloads from GitHub and caches at ~/.openestimator/cache/.
+
+    Reusable building block shared by the ``POST /load-cwicr/{db_id}`` route and
+    the partner-pack ``full-install`` orchestrator. Raises ``HTTPException`` on
+    a missing file (404) or an import failure (500); callers that need fail-soft
+    behaviour must catch it. Returns the same body dict the route returns.
     """
     import time
 
@@ -3172,14 +3208,29 @@ async def load_cwicr_database(
     logger.info("Raw data: %d rows", total_rows)
 
     from app.config import get_settings
+    from app.database import _is_sqlite
 
     settings = get_settings()
-    sqlite_url = settings.database_url
-    db_file = sqlite_url.split("///")[-1] if "///" in sqlite_url else "openestimate.db"
+    # Dialect-aware target resolution. On SQLite we keep the fast raw-sqlite3
+    # bulk-load path (single transaction + PRAGMAs). On PostgreSQL we must NOT
+    # open a stray local ``openestimate.db`` — the worker uses a short-lived
+    # sync SQLAlchemy engine built from ``database_sync_url`` instead.
+    # Prefer the live process env: embedded PG (v6 default) sets
+    # DATABASE_URL/DATABASE_SYNC_URL there after the Settings cache is built, so
+    # the cached pydantic values can be stale/empty (mirrors auto_migrate +
+    # seed_demo_v2, which also read os.environ directly).
+    import os as _os
 
-    # Run in thread to avoid blocking the event loop during heavy pandas + sqlite work.
+    db_url = _os.environ.get("DATABASE_URL") or settings.database_url
+    sync_url = _os.environ.get("DATABASE_SYNC_URL") or settings.database_sync_url
+    if _is_sqlite(db_url):
+        target = db_url.split("///")[-1] if "///" in db_url else "openestimate.db"
+    else:
+        target = sync_url
+
+    # Run in thread to avoid blocking the event loop during heavy pandas + DB work.
     try:
-        result_data = await asyncio.to_thread(_process_and_insert_cwicr, str(cwicr_path), db_id, db_file)
+        result_data = await asyncio.to_thread(_process_and_insert_cwicr, str(cwicr_path), db_id, target)
     except Exception:
         logger.exception("CWICR import failed for %s", db_id)
         raise HTTPException(
@@ -3208,6 +3259,16 @@ async def load_cwicr_database(
         duration,
     )
     _invalidate_cost_cache()
+    # A new CWICR parquet may have been written alongside the SQL import
+    # (or the import itself writes a parquet artefact). Clear the polars
+    # LazyFrame + path-resolution lru_caches so the next /qdrant-search
+    # call opens the new file rather than reading the old mmap snapshot.
+    try:
+        from app.modules.costs.parquet_lookup import clear_parquet_caches
+
+        clear_parquet_caches()
+    except Exception:
+        logger.debug("parquet cache clear failed (non-fatal)", exc_info=True)
 
     # Schema-level failures (e.g. parquet missing the required ``rate_code``
     # column) must surface as 422 Unprocessable Entity — the file was
@@ -3220,11 +3281,122 @@ async def load_cwicr_database(
     return result_data
 
 
-def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> dict[str, Any]:
-    """Process CWICR parquet + insert into SQLite. Runs in a SEPARATE PROCESS.
+def _pg_bulk_insert_cost_rows(sync_url: str, rows: list[tuple]) -> int:
+    """Bulk-load CWICR cost rows into PostgreSQL, idempotent on (code, region).
 
-    Uses vectorized pandas (no iterrows!) + micro-batch SQLite inserts.
-    Completely bypasses GIL — the main process event loop stays responsive.
+    Uses PostgreSQL's native ``COPY`` into a staging table cloned from the target
+    (no indexes), then a single ``INSERT ... SELECT ... ON CONFLICT (code, region)
+    DO NOTHING`` into the live table. A 55K-row regional database loads in a few
+    seconds, matching the SQLite ``INSERT OR IGNORE`` fast path.
+
+    The previous implementation issued one 1000-row multi-VALUES ``INSERT`` per
+    batch. Each statement paid a large SQLAlchemy Core compile (≈16K bind
+    parameters) plus a server-side parse of the same, so a single regional import
+    took roughly three minutes on embedded PostgreSQL versus ~5 seconds on
+    SQLite. The synchronous HTTP request then timed out and the client saw no
+    response -- the user-visible "crash" in issue #171. ``COPY`` skips per-row SQL
+    parsing entirely and closes that gap.
+
+    Duplicate ``(code, region)`` pairs are silently skipped via the
+    ``uq_costs_code_region`` constraint, exactly like the SQLite path. Runs on a
+    short-lived sync engine built from ``database_sync_url`` (falling back to the
+    live ``DATABASE_SYNC_URL`` env var, which embedded PG wires in after the
+    Settings cache is built) so the load always reaches the real cluster.
+
+    Args:
+        sync_url: Sync SQLAlchemy URL (e.g. ``postgresql+psycopg2://...``).
+        rows: Positional tuples in the SQLite column order
+            ``(id, code, description, unit, rate, currency, source,
+            classification, tags, components, descriptions, is_active,
+            region, metadata)``. The five JSON columns carry pre-serialized JSON
+            text and stream straight into the ``json`` columns -- no decode /
+            re-encode round-trip.
+
+    Returns:
+        Number of rows actually inserted (conflicts excluded).
+    """
+    import csv
+    import io
+    import os as _os
+
+    from sqlalchemy import create_engine
+
+    if not rows:
+        return 0
+
+    # Embedded PostgreSQL (the v6 default) wires DATABASE_SYNC_URL into the
+    # process env *after* the pydantic Settings cache is built, so a caller may
+    # hand us an empty/stale sync URL. Fall back to the live env var (the
+    # authoritative source, same as auto_migrate_legacy_sqlite + seed_demo_v2)
+    # so the bulk load reaches the real embedded cluster instead of raising
+    # "Could not parse SQLAlchemy URL from given URL string".
+    if not sync_url:
+        sync_url = _os.environ.get("DATABASE_SYNC_URL", "")
+
+    table = CostItem.__table__.name  # "oe_costs_item"
+    col_list = (
+        "id, code, description, unit, rate, currency, source, "
+        "classification, tags, components, descriptions, is_active, region, metadata"
+    )
+
+    def _row_for_copy(row: tuple) -> list[object]:
+        # ``is_active`` (index 11) is an int flag in the tuple; COPY needs a
+        # boolean literal. Everything else is already text (the JSON columns
+        # carry JSON text, streamed verbatim into the ``json`` columns).
+        out = list(row)
+        out[11] = "true" if row[11] else "false"
+        return out
+
+    engine = create_engine(sync_url)
+    inserted = 0
+    copy_chunk = 5000  # bound peak memory of the CSV buffer for large JSON rows
+    raw = engine.raw_connection()
+    try:
+        cur = raw.cursor()
+        # Staging table cloned from the target: same column types and defaults,
+        # but no indexes or unique constraint, so COPY is maximally fast.
+        # ``INCLUDING DEFAULTS`` lets COPY fill the omitted created_at/updated_at
+        # (NOT NULL) columns with now() instead of failing on a null. The temp
+        # table is dropped automatically when the transaction commits.
+        cur.execute(f"CREATE TEMP TABLE _cwicr_stage (LIKE {table} INCLUDING DEFAULTS) ON COMMIT DROP")  # noqa: S608
+        copy_sql = f"COPY _cwicr_stage ({col_list}) FROM STDIN WITH (FORMAT csv)"  # noqa: S608
+        for i in range(0, len(rows), copy_chunk):
+            buf = io.StringIO()
+            writer = csv.writer(buf, quoting=csv.QUOTE_ALL)
+            for r in rows[i : i + copy_chunk]:
+                writer.writerow(_row_for_copy(r))
+            buf.seek(0)
+            cur.copy_expert(copy_sql, buf)
+        # One idempotent upsert from staging into the indexed live table. The
+        # target's server_default fills created_at/updated_at for the omitted
+        # columns; duplicate (code, region) rows are skipped.
+        cur.execute(  # noqa: S608
+            f"INSERT INTO {table} ({col_list}) "
+            f"SELECT {col_list} FROM _cwicr_stage "
+            f"ON CONFLICT (code, region) DO NOTHING"
+        )
+        inserted = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        raw.commit()
+    except Exception:
+        try:
+            raw.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    finally:
+        raw.close()
+        engine.dispose()
+    return inserted
+
+
+def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> dict[str, Any]:
+    """Process CWICR parquet + insert into SQLite or PostgreSQL. Runs in a thread.
+
+    Uses vectorized pandas (no iterrows!) + a single-transaction bulk load.
+    On SQLite this is a raw-sqlite3 ``INSERT OR IGNORE`` fast path; on
+    PostgreSQL it delegates to ``_pg_bulk_insert_cost_rows`` (ON CONFLICT DO
+    NOTHING). ``db_file`` carries a SQLite file path on a SQLite deployment and
+    a sync SQLAlchemy URL on a PostgreSQL deployment.
     """
     import json as _json
     import logging
@@ -3233,6 +3405,8 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
     import time
 
     import pandas as pd
+
+    from app.database import _is_sqlite
 
     _log = logging.getLogger("cwicr_import")
     start = time.monotonic()
@@ -3401,18 +3575,16 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
                 if v <= 0:
                     continue
                 variable_part = lbl[:200]
-                full_label = (
-                    f"{common_start} {variable_part}".strip()
-                    if common_start
-                    else variable_part
-                )[:400]
-                variants_l.append({
-                    "index": i,
-                    "label": variable_part,
-                    "full_label": full_label,
-                    "price": round(v, 2),
-                    "price_per_unit": round(_safe_float(pu_vals[i]), 4) if i < len(pu_vals) else None,
-                })
+                full_label = (f"{common_start} {variable_part}".strip() if common_start else variable_part)[:400]
+                variants_l.append(
+                    {
+                        "index": i,
+                        "label": variable_part,
+                        "full_label": full_label,
+                        "price": round(v, 2),
+                        "price_per_unit": round(_safe_float(pu_vals[i]), 4) if i < len(pu_vals) else None,
+                    }
+                )
             if not variants_l:
                 continue
             abstract_variants_by_pair[(rc, rescode)] = {
@@ -3458,7 +3630,14 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
     resources_by_code: dict[str, list[dict]] = {}
     if "resource_name" in df.columns and _cost_col in df.columns:
         # Filter rows that have resource data (non-empty name, non-zero cost)
-        res_df = df[available_res_cols + (["price_abstract_resource_variable_parts"] if "price_abstract_resource_variable_parts" in df.columns else [])].copy()
+        res_df = df[
+            available_res_cols
+            + (
+                ["price_abstract_resource_variable_parts"]
+                if "price_abstract_resource_variable_parts" in df.columns
+                else []
+            )
+        ].copy()
         res_df = res_df[res_df["resource_name"].fillna("").str.len() > 0]
         if _cost_col in res_df.columns:
             # Keep abstract-resource rows even with cost==0 — they're a
@@ -3467,12 +3646,8 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
             # silently dropped and the user loses one of their variant
             # picks.
             if "price_abstract_resource_variable_parts" in res_df.columns:
-                _is_abstract = (
-                    res_df["price_abstract_resource_variable_parts"].fillna("").astype(str).str.len() > 0
-                )
-                res_df = res_df[
-                    (res_df[_cost_col].fillna(0).astype(float).abs() > 0.001) | _is_abstract
-                ]
+                _is_abstract = res_df["price_abstract_resource_variable_parts"].fillna("").astype(str).str.len() > 0
+                res_df = res_df[(res_df[_cost_col].fillna(0).astype(float).abs() > 0.001) | _is_abstract]
             else:
                 res_df = res_df[res_df[_cost_col].fillna(0).astype(float).abs() > 0.001]
         if "row_type" in res_df.columns:
@@ -3510,8 +3685,16 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
 
             # Compute ctype vectorized
             _row_type = res_df.get("row_type", pd.Series([""] * len(res_df), index=res_df.index)).fillna("").astype(str)
-            _is_mach = res_df.get("is_machine", pd.Series([False] * len(res_df), index=res_df.index)).fillna(False).astype(bool)
-            _is_mat = res_df.get("is_material", pd.Series([False] * len(res_df), index=res_df.index)).fillna(False).astype(bool)
+            _is_mach = (
+                res_df.get("is_machine", pd.Series([False] * len(res_df), index=res_df.index))
+                .fillna(False)
+                .astype(bool)
+            )
+            _is_mat = (
+                res_df.get("is_material", pd.Series([False] * len(res_df), index=res_df.index))
+                .fillna(False)
+                .astype(bool)
+            )
             _unit_lc = res_df["_unit"].str.lower()
             _is_labor_unit = _unit_lc.isin(_LABOR_UNITS)
 
@@ -3576,18 +3759,27 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
 
         _log.info("Built resources for %d rate_codes in %.1fs", len(resources_by_code), time.monotonic() - start)
 
-    # 5. Open SQLite with aggressive write tuning — single transaction, no
-    # per-batch commits. Empirically: micro-batch commits were the bottleneck
-    # (275 fsyncs × ~250ms = ~70s). One big transaction + synchronous=NORMAL
-    # brings insert phase from ~70s down to ~3-5s for 55K rows.
-    # isolation_level=None → we manage BEGIN/COMMIT manually (no auto-begin
-    # from the sqlite3 driver that could conflict with our transaction).
-    conn = sqlite3.connect(db_file, timeout=60, isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=30000")
-    conn.execute("PRAGMA temp_store=MEMORY")
-    conn.execute("PRAGMA cache_size=-20000")  # 20 MB cache
+    # 5. Open the target DB. ``db_file`` carries a SQLite file path on a
+    # SQLite deployment and a sync SQLAlchemy URL (postgresql://...) on a
+    # PostgreSQL deployment — see the dialect branch in the caller. We keep
+    # the fast raw-sqlite3 single-transaction path for SQLite and fall back to
+    # a SQLAlchemy ON CONFLICT DO NOTHING bulk insert for PostgreSQL.
+    use_sqlite = _is_sqlite(db_file)
+
+    conn = None
+    if use_sqlite:
+        # Aggressive write tuning — single transaction, no per-batch commits.
+        # Empirically: micro-batch commits were the bottleneck (275 fsyncs ×
+        # ~250ms = ~70s). One big transaction + synchronous=NORMAL brings the
+        # insert phase from ~70s down to ~3-5s for 55K rows.
+        # isolation_level=None → we manage BEGIN/COMMIT manually (no auto-begin
+        # from the sqlite3 driver that could conflict with our transaction).
+        conn = sqlite3.connect(db_file, timeout=60, isolation_level=None)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-20000")  # 20 MB cache
 
     sql = """INSERT OR IGNORE INTO oe_costs_item
         (id, code, description, unit, rate, currency, source,
@@ -3595,12 +3787,22 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
          is_active, region, metadata)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
 
+    # CWICR parquet carries no currency column — every rate is denominated in
+    # the region's local currency. Resolve it ONCE from ``db_id`` (constant for
+    # the whole import) so each row persists its true ISO currency instead of
+    # the empty string that read-side fallbacks then had to paper over. This
+    # ``batch`` is reused for BOTH the SQLite executemany and the PostgreSQL
+    # bulk helper below, so this single value fixes both dialects.
+    resolved_currency = _resolve_currency(None, db_id)
+
     imported = 0
     skipped_count = 0
-    # Bigger chunk and only ONE commit at the end
+    # Bigger chunk and only ONE commit at the end (SQLite). On PostgreSQL we
+    # accumulate every row and hand the whole list to the PG bulk helper.
     flush_every = 5000
     batch: list[tuple] = []
-    conn.execute("BEGIN IMMEDIATE")
+    if conn is not None:
+        conn.execute("BEGIN IMMEDIATE")
 
     for rate_code, row in grouped.iterrows():
         desc = _safe_str(row.get("_desc", ""))
@@ -3673,11 +3875,7 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
                 if v <= 0:
                     continue
                 variable_part = lbl[:200]
-                full_label = (
-                    f"{common_start} {variable_part}".strip()
-                    if common_start
-                    else variable_part
-                )[:400]
+                full_label = (f"{common_start} {variable_part}".strip() if common_start else variable_part)[:400]
                 variants.append(
                     {
                         "index": i,
@@ -3711,7 +3909,7 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
                 desc[:500],
                 unit,
                 str(rate),
-                "",
+                resolved_currency,
                 "cwicr",
                 _json.dumps(classification),
                 "[]",
@@ -3723,18 +3921,24 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
             )
         )
 
-        if len(batch) >= flush_every:
+        if conn is not None and len(batch) >= flush_every:
             conn.executemany(sql, batch)
             imported += len(batch)
             batch.clear()
 
-    # Final chunk (still inside the BEGIN)
-    if batch:
-        conn.executemany(sql, batch)
-        imported += len(batch)
+    if conn is not None:
+        # Final chunk (still inside the BEGIN)
+        if batch:
+            conn.executemany(sql, batch)
+            imported += len(batch)
+        conn.execute("COMMIT")  # single commit — one fsync for the whole import
+        conn.close()
+    else:
+        # PostgreSQL: idempotent bulk insert via ON CONFLICT (code, region)
+        # DO NOTHING, batched inside a transaction. ``batch`` holds every row
+        # because the per-loop flush above is gated on the SQLite connection.
+        imported = _pg_bulk_insert_cost_rows(db_file, batch)
 
-    conn.execute("COMMIT")  # single commit — one fsync for the whole import
-    conn.close()
     elapsed = round(time.monotonic() - start, 1)
     _log.info("CWICR %s: %d imported, %d skipped in %.1fs", db_id, imported, skipped_count, elapsed)
 
@@ -3891,6 +4095,11 @@ def _bulk_insert_costs_sync(db_path: str, items: list[dict]) -> int:
     rows = []
     for item in items:
         region = item.get("region", "")
+        # Stamp the true region currency when the item didn't carry one, so
+        # rates never persist with an empty currency (mirrors the live CWICR
+        # ingest path). ``_resolve_currency`` returns "" only for genuinely
+        # unknown regions — honest, never a wrong "EUR".
+        currency = item.get("currency") or _resolve_currency(None, region)
 
         rows.append(
             (
@@ -3899,7 +4108,7 @@ def _bulk_insert_costs_sync(db_path: str, items: list[dict]) -> int:
                 item["description"][:500],
                 item["unit"][:20],
                 item["rate"],
-                item.get("currency", ""),
+                currency,
                 item.get("source", "cwicr"),
                 _json.dumps(item.get("classification", {})),
                 "[]",
@@ -3943,20 +4152,51 @@ def _bulk_insert_costs_sync(db_path: str, items: list[dict]) -> int:
 
 
 async def _bulk_insert_costs(session: AsyncSession, items: list[dict]) -> int:
-    """Async wrapper: runs bulk insert in a thread with its own SQLite connection."""
+    """Async wrapper: runs the dialect-correct bulk insert in a worker thread.
+
+    On SQLite this opens its own raw-sqlite3 connection (so it never blocks the
+    async session pool). On PostgreSQL it routes to the ON CONFLICT DO NOTHING
+    bulk helper on a short-lived sync engine — never a stray local SQLite file.
+    """
     import asyncio
 
     from app.config import get_settings
+    from app.database import _is_sqlite
 
     settings = get_settings()
-    db_url = settings.database_url
-    # Extract SQLite file path from URL like "sqlite+aiosqlite:///path/to/db"
-    if "sqlite" in db_url:
-        db_path = db_url.split("///")[-1] if "///" in db_url else "openestimate.db"
-    else:
-        db_path = "openestimate.db"
 
-    return await asyncio.to_thread(_bulk_insert_costs_sync, db_path, items)
+    if _is_sqlite(settings.database_url):
+        # Extract SQLite file path from URL like "sqlite+aiosqlite:///path/to/db".
+        db_url = settings.database_url
+        db_path = db_url.split("///")[-1] if "///" in db_url else "openestimate.db"
+        return await asyncio.to_thread(_bulk_insert_costs_sync, db_path, items)
+
+    # PostgreSQL: build positional rows matching the CWICR column order and run
+    # the idempotent ON CONFLICT (code, region) DO NOTHING bulk insert.
+    import json as _json
+
+    rows: list[tuple] = [
+        (
+            str(uuid.uuid4()),
+            item["code"],
+            item["description"][:500],
+            item["unit"][:20],
+            item["rate"],
+            # Resolve the region currency when the item has none, so PG rows
+            # never land with an empty currency (matches the SQLite path).
+            item.get("currency") or _resolve_currency(None, item.get("region", "")),
+            item.get("source", "cwicr"),
+            _json.dumps(item.get("classification", {})),
+            "[]",
+            "[]",
+            "{}",
+            1,
+            item.get("region", ""),
+            _json.dumps(item.get("metadata", {})),
+        )
+        for item in items
+    ]
+    return await asyncio.to_thread(_pg_bulk_insert_cost_rows, settings.database_sync_url, rows)
 
 
 # ── Delete CWICR database ───────────────────────────────────────────────────
@@ -4022,11 +4262,7 @@ async def export_cost_database(
     # Fetch in batches to avoid loading 50K+ rows into memory at once
     batch_size = 1000
     offset = 0
-    base_stmt = (
-        select(CostItem)
-        .where(CostItem.is_active.is_(True))
-        .order_by(CostItem.code)
-    )
+    base_stmt = select(CostItem).where(CostItem.is_active.is_(True)).order_by(CostItem.code)
 
     while True:
         result = await session.execute(base_stmt.offset(offset).limit(batch_size))
@@ -4039,15 +4275,17 @@ async def export_cost_database(
                 rate_val = float(item.rate)
             except (ValueError, TypeError):
                 rate_val = 0
-            ws.append([
-                item.code,
-                item.description,
-                item.unit,
-                rate_val,
-                item.currency,
-                item.source,
-                getattr(item, "region", ""),
-            ])
+            ws.append(
+                [
+                    item.code,
+                    item.description,
+                    item.unit,
+                    rate_val,
+                    item.currency,
+                    item.source,
+                    getattr(item, "region", ""),
+                ]
+            )
 
         if len(items) < batch_size:
             break
@@ -4133,9 +4371,7 @@ async def suggest_costs_for_element_by_id(
     if isinstance(meta, dict):
         candidate = meta.get("classification")
         if isinstance(candidate, dict):
-            classification = {
-                k: str(v) for k, v in candidate.items() if isinstance(v, (str, int))
-            }
+            classification = {k: str(v) for k, v in candidate.items() if isinstance(v, (str, int))}
 
     # Quantities may contain non-float entries in practice; coerce safely.
     quantities_raw = getattr(element, "quantities", None) or {}
@@ -4211,9 +4447,7 @@ async def match_cwicr_from_position(
             region=request.region,
         )
     except LookupError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
 # ── Cost Intelligence (v3.12.0 — Stream B) ────────────────────────────────
@@ -4228,9 +4462,7 @@ async def regional_adjust(
     # Round-7: ``Decimal`` for money — FastAPI parses the query string
     # without going through ``float``. The response model serialises
     # the values back out as strings so JS clients keep exact precision.
-    base_rate: Decimal = Query(
-        ..., ge=0, description="Unit rate in the catalogue's currency"
-    ),
+    base_rate: Decimal = Query(..., ge=0, description="Unit rate in the catalogue's currency"),
     subcategory: str | None = Query(
         default=None,
         max_length=64,
@@ -4250,9 +4482,7 @@ async def regional_adjust(
     """
     _ = user  # accept anonymous
     svc = RegionalIndexService(session)
-    adjusted, factor, source, effective = await svc.adjust(
-        region, category, base_rate, subcategory=subcategory
-    )
+    adjusted, factor, source, effective = await svc.adjust(region, category, base_rate, subcategory=subcategory)
     return RegionalAdjustResponse(
         region=region.strip().upper(),
         category=category.strip().lower(),
@@ -4285,6 +4515,103 @@ async def list_regional_indices(
     return [RegionalIndexResponse.model_validate(row) for row in rows]
 
 
+@router.post("/certainty/batch/", response_model=list[CertaintyBadge])
+async def get_cost_item_certainty_batch(
+    body: CertaintyBatchRequest,
+    session: SessionDep,
+    user: OptionalUserPayload,
+) -> list[CertaintyBadge]:
+    """‌⁠‍Return certainty badges for many cost items in a single round-trip.
+
+    The list view renders one badge per visible row; fetching them
+    individually fires N HTTP requests per page (one per row), which is
+    a per-keystroke N+1 against the usage ledger. This endpoint folds
+    the whole visible page into two grouped queries — ``count(*)`` and
+    ``max(used_at)`` keyed by ``cost_item_id`` — then classifies each
+    band in Python, so the page costs one request regardless of row
+    count.
+
+    Unknown ids are silently dropped (the badge is decorative — a
+    missing row simply renders nothing on the client). Duplicate ids in
+    the request collapse to one result. Public, mirroring the
+    single-item endpoint.
+    """
+    _ = user
+
+    # De-duplicate while preserving the caller's order so the response is
+    # deterministic; cap at the request schema's max_length (validated on
+    # ``ids``) so a hostile payload can't fan out into an unbounded IN().
+    seen: set[uuid.UUID] = set()
+    ordered_ids: list[uuid.UUID] = []
+    for raw in body.ids:
+        if raw not in seen:
+            seen.add(raw)
+            ordered_ids.append(raw)
+    if not ordered_ids:
+        return []
+
+    from datetime import UTC, datetime
+
+    from sqlalchemy import func
+
+    from app.modules.costs.intelligence import (
+        NEVER_USED_AGE_DAYS,
+        classify_certainty,
+    )
+    from app.modules.costs.models import CostItemUsage
+
+    # Only items that actually exist get a badge — resolve their ``source``
+    # in one pass so the band carries the correct provenance label.
+    item_rows = await session.execute(select(CostItem.id, CostItem.source).where(CostItem.id.in_(ordered_ids)))
+    source_by_id: dict[uuid.UUID, str] = {row[0]: (row[1] or "manual") for row in item_rows.all()}
+
+    # Two grouped aggregates over the usage ledger — frequency + last use —
+    # instead of one query per id. The composite index on
+    # ``(cost_item_id, used_at)`` covers both.
+    usage_rows = await session.execute(
+        select(
+            CostItemUsage.cost_item_id,
+            func.count(CostItemUsage.id).label("freq"),
+            func.max(CostItemUsage.used_at).label("last_used"),
+        )
+        .where(CostItemUsage.cost_item_id.in_(ordered_ids))
+        .group_by(CostItemUsage.cost_item_id)
+    )
+    usage_by_id: dict[uuid.UUID, tuple[int, datetime | None]] = {
+        row[0]: (int(row[1] or 0), row[2]) for row in usage_rows.all()
+    }
+
+    now = datetime.now(UTC)
+    out: list[CertaintyBadge] = []
+    for item_id in ordered_ids:
+        if item_id not in source_by_id:
+            continue
+        frequency, last_used = usage_by_id.get(item_id, (0, None))
+        if last_used is None:
+            age_days = NEVER_USED_AGE_DAYS
+            last_used_iso: datetime | None = None
+        else:
+            # SQLite returns naive datetimes; normalise to UTC-aware so the
+            # diff matches the single-item endpoint's behaviour.
+            if last_used.tzinfo is None:
+                last_used = last_used.replace(tzinfo=UTC)
+            age_days = max(0, int((now - last_used).total_seconds() // 86400))
+            last_used_iso = last_used
+        out.append(
+            CertaintyBadge.model_validate(
+                {
+                    "cost_item_id": item_id,
+                    "frequency": frequency,
+                    "age_days": age_days,
+                    "source": source_by_id[item_id],
+                    "confidence_badge": classify_certainty(frequency, age_days),
+                    "last_used_at": last_used_iso,
+                }
+            )
+        )
+    return out
+
+
 @router.get("/{item_id}/certainty/", response_model=CertaintyBadge)
 async def get_cost_item_certainty(
     item_id: uuid.UUID,
@@ -4308,9 +4635,7 @@ async def get_cost_item_certainty(
     try:
         data = await svc.compute(item_id)
     except LookupError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     return CertaintyBadge.model_validate(data)
 
 
@@ -4336,9 +4661,7 @@ async def record_cost_item_usage(
     """
     # Verify cost item exists so we can give a precise 404 rather than
     # letting the FK CASCADE constraint do it at commit time.
-    item_check = await session.execute(
-        select(CostItem).where(CostItem.id == item_id).limit(1)
-    )
+    item_check = await session.execute(select(CostItem).where(CostItem.id == item_id).limit(1))
     if item_check.scalar_one_or_none() is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

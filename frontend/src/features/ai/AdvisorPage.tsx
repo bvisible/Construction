@@ -18,6 +18,7 @@ import { apiGet, apiPost } from '@/shared/lib/api';
 import { Link } from 'react-router-dom';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { useLLMRun } from './hooks/useLLMRun';
 
 /* ── Types ──────────────────────────────────────────────────────── */
 
@@ -25,6 +26,8 @@ interface CostSource {
   code: string;
   description: string;
   rate: number;
+  /** ISO currency of the source rate. May be empty for legacy rows. */
+  currency?: string;
   unit: string;
   region: string;
 }
@@ -103,6 +106,59 @@ function renderMarkdown(text: string) {
   });
 }
 
+/* ── Provider detection ──────────────────────────────────────────── */
+
+/**
+ * Provider catalogue used for "is AI configured" + active-provider detection.
+ * `key` is the settings flag prefix (`<key>_api_key_set`); `match` are tokens
+ * looked for in `preferred_model` to map a model preference back to a provider.
+ */
+const PROVIDER_DISPLAY: ReadonlyArray<{ key: string; label: string; match: string[] }> = [
+  { key: 'anthropic', label: 'Anthropic Claude', match: ['claude', 'anthropic'] },
+  { key: 'openai', label: 'OpenAI', match: ['gpt', 'openai'] },
+  { key: 'gemini', label: 'Google Gemini', match: ['gemini', 'google'] },
+  { key: 'openrouter', label: 'OpenRouter', match: ['openrouter', 'router'] },
+  { key: 'mistral', label: 'Mistral AI', match: ['mistral'] },
+  { key: 'groq', label: 'Groq', match: ['groq', 'llama'] },
+  { key: 'deepseek', label: 'DeepSeek', match: ['deepseek'] },
+  { key: 'together', label: 'Together AI', match: ['together'] },
+  { key: 'fireworks', label: 'Fireworks AI', match: ['fireworks'] },
+  { key: 'perplexity', label: 'Perplexity', match: ['perplexity', 'sonar'] },
+  { key: 'cohere', label: 'Cohere', match: ['cohere', 'command'] },
+  { key: 'ai21', label: 'AI21 Labs', match: ['ai21', 'jamba'] },
+  { key: 'xai', label: 'xAI Grok', match: ['xai', 'grok'] },
+  { key: 'zhipu', label: 'Zhipu AI', match: ['zhipu', 'glm'] },
+  { key: 'baidu', label: 'Baidu ERNIE', match: ['baidu', 'ernie'] },
+  { key: 'yandex', label: 'Yandex GPT', match: ['yandex'] },
+  { key: 'gigachat', label: 'GigaChat', match: ['gigachat'] },
+  { key: 'kimi', label: 'Kimi', match: ['kimi', 'moonshot'] },
+  { key: 'ollama', label: 'Ollama', match: ['ollama'] },
+  { key: 'vllm', label: 'vLLM', match: ['vllm'] },
+];
+
+/**
+ * Derive the active-provider display name shown in the status pill.
+ *
+ * The settings API has no `provider` field; the active provider is implied by
+ * `preferred_model` (mapped via PROVIDER_DISPLAY.match) and, failing that, the
+ * first provider whose key is configured.
+ */
+function resolveActiveProvider(
+  s: Record<string, unknown>,
+  configured: ReadonlyArray<{ key: string; label: string }>,
+): string {
+  const preferred = String(s.preferred_model || '').toLowerCase();
+  if (preferred) {
+    const byModel = PROVIDER_DISPLAY.find((p) => p.match.some((m) => preferred.includes(m)));
+    // Only trust the model->provider mapping when that provider actually has a
+    // configured key; otherwise fall through to the first configured one.
+    if (byModel && configured.some((c) => c.key === byModel.key)) {
+      return byModel.label;
+    }
+  }
+  return configured.length > 0 ? configured[0]!.label : '';
+}
+
 /* ── Typing Indicator (3 dots) ───────────────────────────────────── */
 
 function TypingDots() {
@@ -178,7 +234,18 @@ function ChatBubble({
                 {s.code}: {s.description.slice(0, 50)}
                 {s.description.length > 50 ? '…' : ''}{' '}
                 <span className="font-medium">
-                  {s.rate} /{s.unit}
+                  {s.currency
+                    ? t('ai.advisor_source_rate', {
+                        defaultValue: '{{rate}} {{currency}}/{{unit}}',
+                        rate: s.rate,
+                        currency: s.currency,
+                        unit: s.unit,
+                      })
+                    : t('ai.advisor_source_rate_nocur', {
+                        defaultValue: '{{rate}}/{{unit}}',
+                        rate: s.rate,
+                        unit: s.unit,
+                      })}
                 </span>
               </p>
             ))}
@@ -226,7 +293,6 @@ export function AdvisorPage() {
   const { t } = useTranslation();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [loading, setLoading] = useState(false);
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null); // null = loading
   const [aiProvider, setAiProvider] = useState<string>('');
   const [region, setRegion] = useState('');
@@ -236,20 +302,95 @@ export function AdvisorPage() {
   const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
   const addToast = useToastStore((s) => s.addToast);
 
+  // ── Advisor chat run — backed by useLLMRun for AbortController-aware
+  //    cancellation (unmount during a long LLM round-trip no longer
+  //    delivers a phantom assistant bubble) and normalised Error so the
+  //    toast `.message` access is always safe.
+  //
+  //    `mutationFn` re-builds the request payload on every invocation
+  //    so it always sees the freshest closure values for `messages`,
+  //    `region`, and `activeProjectId` — react-query reads the latest
+  //    `mutationFn` from each render, so this stays in lock-step with
+  //    UI state without needing manual queryKeys.
+  const advisorRun = useLLMRun<{ msg: string }, AdvisorResponse>({
+    mutationFn: ({ msg }, { signal }) => {
+      // Build conversation history for context (last 10 messages).
+      // Captured here so the latest message list is always sent, even
+      // when the user fires multiple requests in quick succession.
+      const history = messages.slice(-10).map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      return apiPost<AdvisorResponse>(
+        '/v1/ai/advisor/chat/',
+        {
+          message: msg,
+          project_id: activeProjectId || undefined,
+          region: region || undefined,
+          locale: i18next.language,
+          history,
+        },
+        { signal },
+      );
+    },
+    onSuccess: (data) => {
+      const { cleanText, options } = parseOptions(data.answer);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: cleanText,
+          sources: data.sources,
+          options: options.length > 0 ? options : undefined,
+          timestamp: Date.now(),
+        },
+      ]);
+      inputRef.current?.focus();
+    },
+    onError: (err) => {
+      // A cancelled in-flight request (user navigated away or fired a new
+      // send) surfaces as a DOMException with name 'AbortError'. That is not
+      // a failure — don't show a phantom error bubble or toast for it.
+      if (err.name === 'AbortError') return;
+      addToast({
+        type: 'error',
+        title: t('ai.advisor_error', { defaultValue: 'AI Advisor Error' }),
+        message: err.message,
+      });
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: t('ai.advisor_unavailable', {
+            defaultValue: 'Unable to get a response. Please check AI settings.',
+          }),
+          timestamp: Date.now(),
+        },
+      ]);
+      inputRef.current?.focus();
+    },
+  });
+  // Keep the existing `loading` identifier so the rest of the JSX (typing
+  // dots, send-button disabled, textarea disabled, `canSend`) stays
+  // bit-identical — only the source of truth changed.
+  const loading = advisorRun.isPending;
+
   // Check if AI is configured on mount
   useEffect(() => {
     apiGet<Record<string, unknown>>('/v1/ai/settings/')
       .then((s) => {
-        const hasKey =
-          !!s.anthropic_api_key_set ||
-          !!s.openai_api_key_set ||
-          !!s.gemini_api_key_set ||
-          !!s.openrouter_api_key_set ||
-          !!s.mistral_api_key_set ||
-          !!s.groq_api_key_set ||
-          !!s.deepseek_api_key_set;
-        setAiConfigured(hasKey);
-        setAiProvider((s.provider as string) || '');
+        // Every provider whose key is set (and decryptable) reports a
+        // `<provider>_api_key_set` boolean. Treat the AI as configured when
+        // ANY of them is true — the previous list omitted half the providers
+        // (together/fireworks/perplexity/cohere/ai21/xai/kimi/zhipu/...),
+        // making those users see a false "not configured" warning.
+        const flag = (key: string) => !!s[`${key}_api_key_set`];
+        const configured = PROVIDER_DISPLAY.filter((p) => flag(p.key));
+        setAiConfigured(configured.length > 0);
+        // Derive the active provider from the preferred model first, falling
+        // back to the first configured key. AISettingsResponse has no
+        // `provider` field, so reading it always yielded '' (pill said "AI").
+        setAiProvider(resolveActiveProvider(s, configured));
       })
       .catch(() => setAiConfigured(false));
   }, []);
@@ -273,67 +414,19 @@ export function AdvisorPage() {
   }, [input]);
 
   const sendMessage = useCallback(
-    async (text?: string) => {
+    (text?: string) => {
       const msg = (text || input).trim();
       if (!msg || loading) return;
 
       setInput('');
       setMessages((prev) => [...prev, { role: 'user', content: msg, timestamp: Date.now() }]);
-      setLoading(true);
-
-      try {
-        // Build conversation history for context (last 10 messages)
-        const history = messages.slice(-10).map((m) => ({
-          role: m.role,
-          content: m.content,
-        }));
-
-        const data = await apiPost<AdvisorResponse>('/v1/ai/advisor/chat/', {
-          message: msg,
-          project_id: activeProjectId || undefined,
-          region: region || undefined,
-          locale: i18next.language,
-          history,
-        });
-
-        // Parse options from the response
-        const { cleanText, options } = parseOptions(data.answer);
-
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: cleanText,
-            sources: data.sources,
-            options: options.length > 0 ? options : undefined,
-            timestamp: Date.now(),
-          },
-        ]);
-      } catch (err) {
-        addToast({
-          type: 'error',
-          title: t('ai.advisor_error', { defaultValue: 'AI Advisor Error' }),
-          message: err instanceof Error ? err.message : '',
-        });
-        setMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: t('ai.advisor_unavailable', {
-              defaultValue: 'Unable to get a response. Please check AI settings.',
-            }),
-            timestamp: Date.now(),
-          },
-        ]);
-      } finally {
-        setLoading(false);
-        inputRef.current?.focus();
-      }
+      // The hook owns the in-flight controller, success/error toasts and
+      // assistant-bubble append — see `advisorRun` above. `messages`,
+      // `region` and `activeProjectId` are read inside the hook's
+      // `mutationFn` closure on every invocation, so no extra deps here.
+      advisorRun.run({ msg });
     },
-    // `messages` and `region` are read inside this callback — they MUST be in
-    // the dependency list or the AI loses conversation history and the region
-    // filter silently stops applying after the first send.
-    [input, loading, messages, region, activeProjectId, addToast, t],
+    [input, loading, advisorRun],
   );
 
   const clearConversation = useCallback(() => {

@@ -988,6 +988,7 @@ function DetailPanel({ manifest, selectedNodeId, onClose }: DetailPanelProps) {
         </span>
         <button
           onClick={onClose}
+          aria-label={t('common.close', { defaultValue: 'Close' })}
           className="p-1 rounded-md hover:bg-white/10 transition-colors"
           style={{ color: NODE_TEXT_DIM }}
         >

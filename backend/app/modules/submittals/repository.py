@@ -26,8 +26,12 @@ class SubmittalRepository:
         submittal_type: str | None = None,
     ) -> int:
         """Single-query count — used by list responses to avoid N+1."""
-        base = select(func.count()).select_from(Submittal).where(
-            Submittal.project_id == project_id,
+        base = (
+            select(func.count())
+            .select_from(Submittal)
+            .where(
+                Submittal.project_id == project_id,
+            )
         )
         if status is not None:
             base = base.where(Submittal.status == status)
@@ -58,26 +62,43 @@ class SubmittalRepository:
         return list(result.scalars().all()), total
 
     async def next_submittal_number(self, project_id: uuid.UUID) -> str:
-        """‌⁠‍Generate the next submittal number using MAX to avoid duplicates."""
-        from sqlalchemy import Integer as SAInteger
-        from sqlalchemy import cast
-        from sqlalchemy.sql import func as sqlfunc
+        """‌⁠‍Generate the next submittal number using MAX to avoid duplicates.
 
-        stmt = (
-            select(
-                sqlfunc.coalesce(
-                    sqlfunc.max(
-                        cast(
-                            func.substr(Submittal.submittal_number, 5),
-                            SAInteger,
-                        )
-                    ),
-                    0,
-                )
-            )
-            .where(Submittal.project_id == project_id)
-        )
-        max_num = (await self.session.execute(stmt)).scalar_one()
+        Numbers are server-generated as ``SUB-%03d`` (the ``SUB-`` prefix is
+        4 chars, so the numeric ordinal begins at index 4 of the string).
+
+        Dialect-safety: the previous implementation pushed
+        ``CAST(substr(number, 5) AS INTEGER)`` into SQL. That diverges by
+        backend — SQLite is lenient (``CAST('001-A' AS INTEGER)`` -> 1), but
+        embedded PostgreSQL raises ``invalid input syntax for type integer``
+        and 500s the whole create path for any row whose suffix is not a clean
+        integer (e.g. a legacy import / seed / migrated row like ``SUBM-1`` or
+        ``SUB-001-R2``). We instead select the existing numbers for the project
+        and compute the max ordinal in Python, parsing the trailing digits
+        defensively and skipping anything non-numeric. This is identical on
+        every backend and never feeds a non-numeric string to a SQL cast. The
+        candidate set is scoped to a single project so the read stays small.
+        """
+        stmt = select(Submittal.submittal_number).where(Submittal.project_id == project_id)
+        numbers = (await self.session.execute(stmt)).scalars().all()
+
+        max_num = 0
+        for number in numbers:
+            if not number:
+                continue
+            # Take the trailing run of digits (handles ``SUB-007`` and tolerates
+            # legacy variants like ``SUB-007-R2`` by reading the leading numeric
+            # part of the suffix); ignore rows with no numeric ordinal at all.
+            suffix = number.rsplit("-", 1)[-1]
+            digits = ""
+            for ch in suffix:
+                if ch.isdigit():
+                    digits += ch
+                else:
+                    break
+            if digits:
+                max_num = max(max_num, int(digits))
+
         return f"SUB-{max_num + 1:03d}"
 
     async def create(self, submittal: Submittal) -> Submittal:

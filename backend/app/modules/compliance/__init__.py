@@ -10,4 +10,14 @@ hand-coded built-ins.
 
 from app.modules.compliance.manifest import manifest
 
-__all__ = ["manifest"]
+
+async def on_startup() -> None:
+    """‌⁠‍Module startup hook — register the rule-builder permissions."""
+    from app.modules.compliance.permissions import (
+        register_compliance_permissions,
+    )
+
+    register_compliance_permissions()
+
+
+__all__ = ["manifest", "on_startup"]

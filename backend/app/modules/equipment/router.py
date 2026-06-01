@@ -64,7 +64,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
+from app.dependencies import RequirePermission, SessionDep
 from app.modules.equipment.schemas import (
     DamageReportCreate,
     DamageReportResponse,
@@ -99,7 +99,7 @@ from app.modules.equipment.schemas import (
 )
 from app.modules.equipment.service import EquipmentService
 
-router = APIRouter()
+router = APIRouter(tags=["equipment"])
 logger = logging.getLogger(__name__)
 
 
@@ -194,13 +194,12 @@ async def create_equipment(
 @router.get("/equipment/{equipment_id}", response_model=EquipmentResponse)
 async def get_equipment(
     equipment_id: uuid.UUID,
-    user_id: CurrentUserId,
-    session: SessionDep,
     _perm: None = Depends(RequirePermission("equipment.read")),
     service: EquipmentService = Depends(_get_service),
 ) -> EquipmentResponse:
+    # Equipment is fleet-wide (not project-scoped); the permission guard is the
+    # access check, mirroring the list/create handlers.
     e = await service.get_equipment(equipment_id)
-    await verify_project_access(e.project_id, str(user_id), session)
     return EquipmentResponse.model_validate(e)
 
 
@@ -208,13 +207,12 @@ async def get_equipment(
 async def update_equipment(
     equipment_id: uuid.UUID,
     data: EquipmentUpdate,
-    user_id: CurrentUserId,
-    session: SessionDep,
     _perm: None = Depends(RequirePermission("equipment.update")),
     service: EquipmentService = Depends(_get_service),
 ) -> EquipmentResponse:
-    existing = await service.get_equipment(equipment_id)
-    await verify_project_access(existing.project_id, str(user_id), session)
+    # Equipment is fleet-wide (not project-scoped); the permission guard is the
+    # access check. get_equipment raises 404 when the unit does not exist.
+    await service.get_equipment(equipment_id)
     e = await service.update_equipment(equipment_id, data)
     return EquipmentResponse.model_validate(e)
 
@@ -222,13 +220,12 @@ async def update_equipment(
 @router.delete("/equipment/{equipment_id}", status_code=204)
 async def delete_equipment(
     equipment_id: uuid.UUID,
-    user_id: CurrentUserId,
-    session: SessionDep,
     _perm: None = Depends(RequirePermission("equipment.delete")),
     service: EquipmentService = Depends(_get_service),
 ) -> None:
-    existing = await service.get_equipment(equipment_id)
-    await verify_project_access(existing.project_id, str(user_id), session)
+    # Equipment is fleet-wide (not project-scoped); the permission guard is the
+    # access check. get_equipment raises 404 when the unit does not exist.
+    await service.get_equipment(equipment_id)
     await service.delete_equipment(equipment_id)
 
 
@@ -457,6 +454,7 @@ async def list_inspections(
         items = await service.inspection_repo.list_for_equipment(equipment_id)
     else:
         from datetime import date as _d
+
         items = await service.inspection_repo.expiring_within(_d.today().isoformat(), 365)
     return [InspectionResponse.model_validate(i) for i in items]
 
@@ -600,9 +598,7 @@ async def list_fuel_logs(
     _perm: None = Depends(RequirePermission("equipment.read")),
     service: EquipmentService = Depends(_get_service),
 ) -> list[FuelLogResponse]:
-    items, _ = await service.fuel_repo.list_for_equipment(
-        equipment_id, offset=offset, limit=limit
-    )
+    items, _ = await service.fuel_repo.list_for_equipment(equipment_id, offset=offset, limit=limit)
     return [FuelLogResponse.model_validate(i) for i in items]
 
 
@@ -625,9 +621,7 @@ async def update_fuel_log(
 ) -> FuelLogResponse:
     log = await service.fuel_repo.get_by_id(log_id)
     if log is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Fuel log not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Fuel log not found")
     fields = data.model_dump(exclude_unset=True)
     if fields:
         await service.fuel_repo.update_fields(log_id, **fields)
@@ -652,9 +646,7 @@ async def fuel_efficiency(
     _perm: None = Depends(RequirePermission("equipment.read")),
     service: EquipmentService = Depends(_get_service),
 ) -> dict[str, Decimal]:
-    return await service.fuel_repo.fuel_consumption(
-        equipment_id, period_start, period_end
-    )
+    return await service.fuel_repo.fuel_consumption(equipment_id, period_start, period_end)
 
 
 # ── Parts Logs ───────────────────────────────────────────────────────────
@@ -668,9 +660,7 @@ async def list_parts_logs(
     _perm: None = Depends(RequirePermission("equipment.read")),
     service: EquipmentService = Depends(_get_service),
 ) -> list[PartsLogResponse]:
-    items, _ = await service.parts_repo.list_for_equipment(
-        equipment_id, offset=offset, limit=limit
-    )
+    items, _ = await service.parts_repo.list_for_equipment(equipment_id, offset=offset, limit=limit)
     return [PartsLogResponse.model_validate(i) for i in items]
 
 

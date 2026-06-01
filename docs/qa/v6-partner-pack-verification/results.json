@@ -1,0 +1,50 @@
+{
+  "results": [
+    {
+      "name": "proxy /current shape",
+      "status": "PASS",
+      "note": "slug=batimatech-ca"
+    },
+    {
+      "name": "dashboard-partner-banner.png",
+      "status": "PASS",
+      "note": "dashboard-badge=1 nav-badge=1 text=\"POWERED BY OPENCONSTRUCTIONERP · IN PARTNERSHIP WITH BATIMATECH | Pré-configuré pour les entreprises canadiennes de constr\""
+    },
+    {
+      "name": "nav-partner-chip.png",
+      "status": "PASS",
+      "note": "text=\"batimatech\""
+    },
+    {
+      "name": "partner-banner-dismissed.png",
+      "status": "PASS",
+      "note": "dashboard-badge-after-dismiss=0"
+    },
+    {
+      "name": "partner-banner-after-reload.png",
+      "status": "INFO",
+      "note": "dashboard-badge-after-reload=0 (sessionStorage persists across reload by web spec → 0 expected)"
+    },
+    {
+      "name": "reappears in fresh session",
+      "status": "PASS",
+      "note": "dashboard-badge-fresh-ctx=1"
+    },
+    {
+      "name": "partner-logo-image.png",
+      "status": "PASS",
+      "note": "screenshot taken"
+    },
+    {
+      "name": "overlap @ 1366x768",
+      "status": "INFO",
+      "note": "no nav chip (md+ only, viewport too small or absent)"
+    },
+    {
+      "name": "overlap @ 1920x1080",
+      "status": "INFO",
+      "note": "no nav chip (md+ only, viewport too small or absent)"
+    }
+  ],
+  "errors": []
+}

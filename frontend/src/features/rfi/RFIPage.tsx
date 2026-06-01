@@ -1749,7 +1749,10 @@ export function RFIPage() {
   const createVariationMut = useMutation({
     mutationFn: (rfiId: string) =>
       apiPost<{ change_order_id: string; code: string; title: string }>(
-        `/v1/rfi/${rfiId}/create-variation`,
+        // Route is POST /{rfi_id}/create-variation/ WITH a trailing slash
+        // (router.py); with redirect_slashes=False the no-slash form 404s
+        // and the Create Variation action silently fails.
+        `/v1/rfi/${rfiId}/create-variation/`,
         {},
       ),
     onSuccess: (data) => {
@@ -2236,9 +2239,10 @@ export function RFIPage() {
                       </span>
                     </div>
                     <div className="text-xs text-content-tertiary space-y-1">
-                      {(rfi.ball_in_court) && (
-                        <div>{t('rfi.col_bic', { defaultValue: 'Ball in Court' })}: {rfi.ball_in_court}</div>
-                      )}
+                      {/* The ball-in-court party is already conveyed by the
+                          "With you / With them" side badge above; rendering the
+                          raw ball_in_court UUID here was unreadable to operators,
+                          so it is intentionally omitted. */}
                       {isOverdue && overdueDelta !== null && overdueDelta > 0 && (
                         <div className="inline-flex items-center rounded-full bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 px-1.5 py-0.5 text-2xs font-bold">
                           {t('rfi.overdue_by_days', { defaultValue: 'Overdue by {{count}} days', count: overdueDelta })}

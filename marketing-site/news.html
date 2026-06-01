@@ -15,13 +15,13 @@
   <meta property="og:url" content="https://openconstructionerp.com/news.html" />
   <meta property="og:title" content="News &amp; releases — OpenConstructionERP" />
   <meta property="og:description" content="Release notes, product updates and engineering posts from the OpenConstructionERP team." />
-  <meta property="og:image" content="https://openconstructionerp.com/pro/shared/media/og-breeze.png" />
+  <meta property="og:image" content="https://openconstructionerp.com/screenshots/hero-overview.jpg" />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="News &amp; releases — OpenConstructionERP" />
   <meta name="twitter:description" content="Release notes, product updates and engineering posts." />
-  <meta name="twitter:image" content="https://openconstructionerp.com/pro/shared/media/og-breeze.png" />
+  <meta name="twitter:image" content="https://openconstructionerp.com/screenshots/hero-overview.jpg" />
 
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="manifest" href="/site.webmanifest" />
@@ -357,10 +357,20 @@
       color: var(--accent);
       border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent);
     }
+    .chip.hotfix {
+      background: color-mix(in oklab, #f59e0b 14%, transparent);
+      color: #b45309;
+      border: 1px solid color-mix(in oklab, #f59e0b 30%, transparent);
+    }
     .chip.coming {
       background: color-mix(in oklab, var(--ink-2) 8%, transparent);
       color: var(--ink-2);
       border: 1px solid var(--line-2);
+    }
+    .chip.v3 {
+      background: color-mix(in oklab, var(--accent-4) 12%, transparent);
+      color: var(--accent-4);
+      border: 1px solid color-mix(in oklab, var(--accent-4) 28%, transparent);
     }
     .card-date {
       font-family: 'JetBrains Mono', monospace;
@@ -537,11 +547,327 @@
         </a>
       </article>
 
+      <!-- v5.5.0 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-5-0.html" aria-label="Read: v5.5.0 — Stability wave, full Japanese locale, 9-of-9 verified">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><circle cx="12" cy="12" r="9"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-28</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~6 min read</span>
+            </div>
+            <h3>v5.5.0 — Stability wave + full Japanese locale + 9-of-9 verified.</h3>
+            <p class="excerpt">
+              Last stable 5.x cut. Eight user-reported bugs fixed end-to-end (PDF worker,
+              PDF <code>403</code>, JWT session reset, CAD/BIM Data Explorer RVT, BIM
+              Section Box, Walk mode, <code>/bim/federations</code> 3D, DWG load). Each
+              one verified through a sequential Playwright probe before commit &mdash; 9
+              PASS, 0 FAIL. The Japanese locale crosses 98.5&nbsp;% (1,627 keys).
+              Six dependabot upgrades merged. News articles get a related-articles
+              right-rail.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.3.0 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-3-0.html" aria-label="Read: v5.3.0 — Geo Hub round 2 + Brazil invoices + login dark-mode + WCAG-AA">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L3 7v6c0 5 4 9 9 11 5-2 9-6 9-11V7l-9-5z"/><path d="M9 12l2 2 4-4"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-27</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~5 min read</span>
+            </div>
+            <h3>v5.3.0 — Geo Hub round 2 + Brazil Tier-1 + login dark-mode + WCAG-AA.</h3>
+            <p class="excerpt">
+              Six deep bundles and the last stable cut of the 5.x line. Geo Hub closes its
+              storage leaks and caps accuracy at 10&nbsp;km; Brazil gets <code>BRL</code>,
+              NBR&nbsp;12721 and an RPS-layout invoice PDF; <code>/login</code> reads cleanly in
+              dark mode; <code>/reporting</code> finally renders HTML reports in-page; Daily
+              Diary entries can be deleted; and 51 frontend files pass WCAG-AA on the top
+              contrast offender.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.2.8 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-2-8.html" aria-label="Read: v5.2.8 — /geo tabs reliability + /markups deep-link + /resources inline edit">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-27</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~3 min read</span>
+            </div>
+            <h3>v5.2.8 — /geo tabs reliability + /markups deep-link + /resources inline edit.</h3>
+            <p class="excerpt">
+              Three first-touch fixes on top of v5.2.7. The Geo Hub Global / Project /
+              Development tabs always navigate to the right scope instead of being dead
+              links, <code>/markups</code> → <code>/takeoff</code> deep links land on the
+              right measurement (flashed into view), and <code>/resources</code> gets
+              inline pencil + trash icons with a real edit modal and danger-styled delete
+              confirmation.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.2.7 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-2-7.html" aria-label="Read: v5.2.7 — Project-detail widget grid + one-click in-app upgrade">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-27</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~4 min read</span>
+            </div>
+            <h3>v5.2.7 — Project-detail widget grid + one-click in-app upgrade.</h3>
+            <p class="excerpt">
+              Two visible improvements on top of v5.2.6. The 13 widgets on
+              <code>/projects/:id</code> finally lay out as a responsive 1/2/3-column grid
+              instead of one tall stack, and the in-app update checker gains a real
+              <strong>Apply update</strong> button — same interpreter, captured pip log,
+              humanised restart hint.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.2.6 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-2-6.html" aria-label="Read: v5.2.6 — Demo login fix, WCAG-AA, Reporting renderer, Dashboard rollup, JA">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-27</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~4 min read</span>
+            </div>
+            <h3>v5.2.6 — Demo login JustWorks. WCAG-AA contrast. Reporting renderer. Dashboard rollup. 1197 JA keys.</h3>
+            <p class="excerpt">
+              A quality-of-life wave on top of v5.2.5's install-crash fix. The documented demo
+              password works, ~700 contrast violations cleared at the token layer,
+              <code>/reports</code> renders real HTML, the project dashboard stops fanning out, and
+              Japanese covers 1197 more keys.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.2.5 hotfix -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-2-5.html" aria-label="Read: v5.2.5 — Install-crash fix">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip hotfix">Hotfix</span>
+              <span class="card-date">2026-05-27</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~3 min read</span>
+            </div>
+            <h3>v5.2.5 — Install-crash fix. Fresh <code>pip install</code> works again.</h3>
+            <p class="excerpt">
+              Unblocks fresh installs that crashed on the 4.5.0 wheel by pinning
+              <code>fastapi&nbsp;&gt;=&nbsp;0.116</code>. Plus a restored <code>/dashboard</code>
+              landing route, the <code>deleteDiary</code> API helper for Daily Diary, and a
+              widened <code>Payment.amount</code> type for the finance UI.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.2.3 hotfix -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-2-3.html" aria-label="Read: v5.2.3 — Vector backend gate + .env.example clarity">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 12l2 2 4-4"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip hotfix">Hotfix</span>
+              <span class="card-date">2026-05-27</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~3 min read</span>
+            </div>
+            <h3>v5.2.3 — Issue #162 vector-backend gate. Semantic search finally on by default.</h3>
+            <p class="excerpt">
+              The <code>costs.vector_adapter</code> health probe was hardcoded to LanceDB
+              while production defaults to Qdrant since v3, so every cost upsert silently
+              no-op'd — <code>/match-elements</code> read "AI Semantic Search is offline" on
+              healthy installs. Probe now dispatches on <code>settings.vector_backend</code>,
+              and <code>backend/.env.example</code> got a full rewrite.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.2.2 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-2-2.html" aria-label="Read: v5.2.2 — /dashboard route + W10/W13/SAF-A3 + a11y bundle">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-27</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~4 min read</span>
+            </div>
+            <h3>v5.2.2 — /dashboard route + W10/W13/SAF-A3 + a11y bundle.</h3>
+            <p class="excerpt">
+              Seven small fixes on top of v5.2.0. <code>/dashboard</code> now renders
+              DashboardPage instead of redirecting, the takeoff viewer cancels in-flight
+              pdf.js renders on page change, the validation banner stops lying about empty
+              runs, the project widget grid stops 405-ing on Change Orders, six OSHA fields
+              exposed on Safety Incident responses, and an aria-label backfill across five
+              Page.tsx files.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.2.0 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-2-0.html" aria-label="Read: v5.2.0 — International BOQ">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-26</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~5 min read</span>
+            </div>
+            <h3>v5.2.0 — International BOQ. GAEB · BC3 · NRM · MasterFormat under one roof.</h3>
+            <p class="excerpt">
+              Epic I lands native I/O for the four BOQ formats that cover roughly 70% of the
+              Tier-1 construction market — DACH, Spain, UK and US — plus one drag-and-drop
+              import surface (<code>/regional-exchange</code>) that ties them together.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.1.0 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-1-0.html" aria-label="Read: v5.1.0 — Wave 1 polish">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-26</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~3 min read</span>
+            </div>
+            <h3>v5.1.0 — Wave 1 polish. TypeScript strict everywhere, dispatcher hardening.</h3>
+            <p class="excerpt">
+              A tight follow-up to v5.0. Full <code>strict</code> TypeScript over the new
+              notifications and file-version surface, dispatcher retry + de-dup, and the
+              first 751 v1 file rows backfilled on the live demo VPS.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v5.0.0 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v5-0-0.html" aria-label="Read: v5.0.0 — Deep-Coordination foundation">
+          <div class="card-media placeholder" aria-hidden="true">
+            <svg class="ph-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-26</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~4 min read</span>
+            </div>
+            <h3>v5.0.0 — The Deep-Coordination foundation. Notifications · file versioning · audit trail.</h3>
+            <p class="excerpt">
+              The first stable v5 major. Wave 1 of the Deep-Coordination initiative lands
+              three pieces of cross-module infrastructure that every workflow above them now
+              relies on — and the platform crosses 116 modules.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
       <!-- v4.0.0 release -->
       <article class="card">
         <a class="card-link" href="/news/v4-0-0.html" aria-label="Read: v4.0.0 — Stable Major">
           <div class="card-media">
-            <img src="/screenshots-v4/news-02-dashboard.png" alt="OpenConstructionERP v4.0.0 dashboard" loading="lazy" decoding="async" />
+            <img src="/screenshots/02-dashboard.png" alt="OpenConstructionERP v4.0.0 dashboard" loading="lazy" decoding="async" />
           </div>
           <div class="card-body">
             <div class="card-meta">
@@ -556,6 +882,93 @@
               rebuild, a 7-stage Match Elements pipeline, a starter pack of BI dashboards and
               a public <code>/api/v1/*</code> contract you can build on — all in one
               <code>pip install</code>.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v3.11.0 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v3-11-0.html" aria-label="Read: v3.11.0 — Wave 3/4 modules and Validation@Import">
+          <div class="card-media">
+            <img src="/screenshots/07-ai-estimate.png" alt="AI estimate panel — v3.11.0 added Validation@Import alongside GAEB X84 writer" loading="lazy" decoding="async" />
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip v3">v3</span>
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-20</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~5 min read</span>
+            </div>
+            <h3>v3.11.0 — Validation@Import. GAEB X84 writer. RVT diagnostics.</h3>
+            <p class="excerpt">
+              Wave 3/4 modules land with eight new Alembic revisions
+              (<code>v3088</code>→<code>v3095</code>). Validation moves out of the editor and
+              into the import pipeline itself, GAEB X84 <em>Nebenangebot</em> ships as a
+              first-class writer, and RVT import gains a structured diagnostics report.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v3.6.0 / v3.6.1 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v3-6-0.html" aria-label="Read: v3.6.0 / v3.6.1 — Multi-level BOQ hierarchy">
+          <div class="card-media">
+            <img src="/screenshots/04-boq-list.png" alt="BOQ editor — v3.6 lifted the hierarchy cap to MAX_NESTING_DEPTH=8" loading="lazy" decoding="async" />
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip v3">v3</span>
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-18</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~4 min read</span>
+            </div>
+            <h3>v3.6.0 / v3.6.1 — Multi-level BOQ hierarchy. Recursive parent_id tree walk.</h3>
+            <p class="excerpt">
+              BOQs that nest as deep as a real project does. The hard cap rises to
+              <code>MAX_NESTING_DEPTH=8</code>, the editor switches to a recursive
+              <code>parent_id</code> walk, a resource-code dedup closes <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/issues/133" target="_blank" rel="noopener">#133</a>, and v3.6.1 fixes the one
+              render path that still flattened deep rows.
+            </p>
+            <span class="read-more">
+              Read the release notes
+              <svg class="arrow" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </span>
+          </div>
+        </a>
+      </article>
+
+      <!-- v3.0.0 release -->
+      <article class="card">
+        <a class="card-link" href="/news/v3-0-0.html" aria-label="Read: v3.0.0 — First stable v3 major">
+          <div class="card-media">
+            <img src="/screenshots/hero-overview.jpg" alt="OpenConstructionERP v3.0.0 platform overview" loading="lazy" decoding="async" />
+          </div>
+          <div class="card-body">
+            <div class="card-meta">
+              <span class="chip v3">v3</span>
+              <span class="chip release">Release</span>
+              <span class="card-date">2026-05-13</span>
+              <span class="card-date">·</span>
+              <span class="card-date">~6 min read</span>
+            </div>
+            <h3>v3.0.0 — First stable v3 major. 18 modules, FSM engine, ISO 16739-1 IFC.</h3>
+            <p class="excerpt">
+              The release that put the platform's skeleton in place. Eighteen business
+              modules on one loader, a deterministic FSM engine replacing ad-hoc status
+              fields, a pure-Python ISO 16739-1 IFC parser, and the Qdrant + BGE rerank
+              Match Elements pipeline.
             </p>
             <span class="read-more">
               Read the release notes

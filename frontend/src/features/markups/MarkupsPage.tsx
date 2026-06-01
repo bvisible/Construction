@@ -1,6 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import clsx from 'clsx';
 import {
@@ -9,6 +9,7 @@ import {
   Download,
   GitCompare,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Trash2,
   Cloud,
@@ -29,6 +30,7 @@ import {
   LayoutGrid,
   FileText,
   TriangleRight,
+  ExternalLink,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, ConfirmDialog, RecoveryCard, SkeletonTable } from '@/shared/ui';
 import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
@@ -36,6 +38,7 @@ import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { apiGet } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
+import { fetchUsers, type User as AssigneeUser } from '@/features/users/api';
 import {
   fetchMarkups,
   fetchMarkupsSummary,
@@ -54,6 +57,8 @@ import type {
 } from './api';
 import { InlinePdfAnnotator } from './InlinePdfAnnotator';
 import { UnifiedMarkupsList } from './UnifiedMarkupsList';
+import { EditMarkupModal } from './EditMarkupModal';
+import { ApprovalInstanceCard } from '@/features/approval-routes';
 
 /* ── Constants ─────────────────────────────────────────────────────────── */
 
@@ -176,6 +181,51 @@ const inputCls =
 
 const selectCls = inputCls + ' pr-7 appearance-none cursor-pointer';
 
+/* ── Assignee filter sentinels ────────────────────────────────────────── */
+// "" = no filter, "__unassigned__" = NULL assignee, otherwise user UUID.
+const ASSIGNEE_UNASSIGNED = '__unassigned__';
+
+/* ── Assignee chip ────────────────────────────────────────────────────── */
+
+function AssigneeChip({
+  assigneeId,
+  userMap,
+}: {
+  assigneeId: string | null | undefined;
+  userMap: Map<string, AssigneeUser>;
+}) {
+  const { t } = useTranslation();
+  if (!assigneeId) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-surface-secondary text-2xs text-content-tertiary border border-border-light"
+        title={t('markups.unassigned', { defaultValue: 'Unassigned' })}
+      >
+        {t('markups.unassigned', { defaultValue: 'Unassigned' })}
+      </span>
+    );
+  }
+  const user = userMap.get(assigneeId);
+  const display = user?.full_name?.trim() || user?.email || assigneeId.slice(0, 8);
+  const initials = (user?.full_name || user?.email || '?')
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((s) => s[0]?.toUpperCase() ?? '')
+    .join('') || '?';
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-oe-blue-subtle text-2xs text-oe-blue-text border border-oe-blue/30 max-w-[150px]"
+      title={display}
+    >
+      <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-oe-blue text-content-inverse text-[8px] font-semibold shrink-0">
+        {initials}
+      </span>
+      <span className="truncate">{display}</span>
+    </span>
+  );
+}
+
 /* ── Add Markup Modal ─────────────────────────────────────────────────── */
 
 function AddMarkupModal({
@@ -183,12 +233,14 @@ function AddMarkupModal({
   onClose,
   projectId,
   documents,
+  users,
   onCreated,
 }: {
   open: boolean;
   onClose: () => void;
   projectId: string;
   documents: DocItem[];
+  users: AssigneeUser[];
   onCreated: () => void;
 }) {
   const { t } = useTranslation();
@@ -203,6 +255,7 @@ function AddMarkupModal({
   const [color, setColor] = useState(PRESET_COLORS[1]!.value);
   const [measurementValue, setMeasurementValue] = useState('');
   const [measurementUnit, setMeasurementUnit] = useState('m');
+  const [assigneeId, setAssigneeId] = useState('');
 
   // Reset form on open
   useEffect(() => {
@@ -215,6 +268,7 @@ function AddMarkupModal({
       setColor(PRESET_COLORS[1]!.value);
       setMeasurementValue('');
       setMeasurementUnit('m');
+      setAssigneeId('');
     }
   }, [open, documents]);
 
@@ -270,6 +324,7 @@ function AddMarkupModal({
       ...(page > 0 && { page }),
       ...(label.trim() && { label: label.trim() }),
       ...(text.trim() && { text: text.trim() }),
+      ...(assigneeId && { assignee_id: assigneeId }),
       ...(MEASUREMENT_TYPES.includes(selectedType) &&
         measurementValue && {
           measurement_value: parseFloat(measurementValue),
@@ -301,6 +356,7 @@ function AddMarkupModal({
           </h2>
           <button
             onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
             className="p-1 rounded-md hover:bg-surface-secondary text-content-tertiary transition-colors"
           >
             <X size={16} />
@@ -324,7 +380,7 @@ function AddMarkupModal({
                     className={clsx(
                       'flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-medium transition-all border',
                       isSelected
-                        ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue ring-1 ring-oe-blue/30'
+                        ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue-text ring-1 ring-oe-blue/30'
                         : 'border-border-light bg-surface-primary text-content-secondary hover:bg-surface-secondary',
                     )}
                   >
@@ -424,6 +480,26 @@ function AddMarkupModal({
                 />
               ))}
             </div>
+          </div>
+
+          {/* Assignee dropdown */}
+          <div>
+            <label className="block text-xs font-medium text-content-secondary mb-1.5">
+              {t('markups.assignee', { defaultValue: 'Assignee' })}
+            </label>
+            <select
+              value={assigneeId}
+              onChange={(e) => setAssigneeId(e.target.value)}
+              className={selectCls + ' w-full'}
+              data-testid="markup-form-assignee"
+            >
+              <option value="">{t('markups.unassigned', { defaultValue: 'Unassigned' })}</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.full_name?.trim() || u.email}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Measurement fields (only for distance/area/count) */}
@@ -552,13 +628,119 @@ function StatsBar({ summary }: { summary: MarkupsSummary | undefined }) {
 function MarkupDetail({
   markup,
   documentName,
+  onEdit,
+  siblings,
+  onNavigate,
+  onOpenInDocument,
 }: {
   markup: Markup;
   documentName?: string;
+  onEdit?: () => void;
+  /**
+   * Other markups on the same document, sorted by created_at ASC.
+   * Used to compute prev/next for chevron navigation. When the current
+   * markup has no document, only itself is provided so chevrons are
+   * disabled at both ends.
+   */
+  siblings?: Markup[];
+  onNavigate?: (id: string) => void;
+  /**
+   * Opens the source document in the inline PDF annotator and pulses a
+   * glow ring around this markup. Disabled / hidden when the markup has
+   * no ``document_id`` (project-level annotation).
+   */
+  onOpenInDocument?: (markup: Markup) => void;
 }) {
   const { t } = useTranslation();
+  const idx = siblings ? siblings.findIndex((m) => m.id === markup.id) : -1;
+  const total = siblings?.length ?? 0;
+  const prevId = idx > 0 ? siblings![idx - 1]!.id : null;
+  const nextId = idx >= 0 && idx < total - 1 ? siblings![idx + 1]!.id : null;
+  const showNav = !!siblings && total > 1 && idx >= 0;
+
   return (
     <div className="px-6 py-3 bg-surface-secondary/40 border-t border-border-light">
+      {/* Deep-link CTA — primary action for the detail row. Sits above the
+          metadata grid so reviewers see it first when expanding a row.
+          Hidden for project-level (no-document) markups since there's
+          nothing to navigate to. */}
+      {markup.document_id && onOpenInDocument && (
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={() => onOpenInDocument(markup)}
+            title={t('markups.openInDocumentHint', {
+              defaultValue: 'Jump to this markup on the source document',
+            })}
+            data-testid="markup-open-in-document"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-oe-blue text-white hover:bg-oe-blue-hover transition-colors shadow-sm"
+          >
+            <FileText size={13} />
+            {t('markups.openInDocument', { defaultValue: 'Open in document' })}
+            <ExternalLink size={11} className="opacity-80" />
+          </button>
+        </div>
+      )}
+      {showNav && (
+        <div className="flex items-center justify-between mb-3 pb-2 border-b border-border-light/60">
+          <button
+            type="button"
+            onClick={() => prevId && onNavigate?.(prevId)}
+            disabled={!prevId}
+            data-testid="markup-prev"
+            aria-label={t('markups.previous', { defaultValue: 'Previous markup' })}
+            title={t('markups.previous', { defaultValue: 'Previous' }) + ' (←)'}
+            className={clsx(
+              'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors',
+              prevId
+                ? 'text-content-primary hover:bg-surface-primary'
+                : 'text-content-tertiary opacity-50 cursor-not-allowed',
+            )}
+          >
+            <ChevronLeft size={14} />
+            {t('markups.previous', { defaultValue: 'Prev' })}
+          </button>
+          <span
+            className="text-xs text-content-tertiary tabular-nums"
+            data-testid="markup-position"
+          >
+            {t('markups.position_n_of_m', {
+              defaultValue: '{{n}} of {{total}}',
+              n: idx + 1,
+              total,
+            })}
+          </span>
+          <button
+            type="button"
+            onClick={() => nextId && onNavigate?.(nextId)}
+            disabled={!nextId}
+            data-testid="markup-next"
+            aria-label={t('markups.next', { defaultValue: 'Next markup' })}
+            title={t('markups.next', { defaultValue: 'Next' }) + ' (→)'}
+            className={clsx(
+              'inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-colors',
+              nextId
+                ? 'text-content-primary hover:bg-surface-primary'
+                : 'text-content-tertiary opacity-50 cursor-not-allowed',
+            )}
+          >
+            {t('markups.next', { defaultValue: 'Next' })}
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
+      {onEdit && (
+        <div className="flex items-center justify-end mb-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onEdit}
+            icon={<Edit3 size={13} />}
+          >
+            {t('markups.edit', { defaultValue: 'Edit' })}
+          </Button>
+        </div>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <div>
           <p className="text-2xs font-medium text-content-tertiary uppercase tracking-wide mb-0.5">
@@ -609,6 +791,15 @@ function MarkupDetail({
           </pre>
         </div>
       )}
+      {/* Wave-2 Epic A — approval workflow drop-in. The card no-ops
+          gracefully when no instance exists and no route is configured. */}
+      <div className="mt-3">
+        <ApprovalInstanceCard
+          targetKind="markup"
+          targetId={markup.id}
+          projectId={markup.project_id}
+        />
+      </div>
     </div>
   );
 }
@@ -619,10 +810,14 @@ function MarkupGridCard({
   markup,
   onChangeStatus,
   onDelete,
+  onEdit,
+  userMap,
 }: {
   markup: Markup;
   onChangeStatus: (status: MarkupStatus) => void;
   onDelete: () => void;
+  onEdit: () => void;
+  userMap: Map<string, AssigneeUser>;
 }) {
   const { t } = useTranslation();
   const Icon = TYPE_ICONS[markup.type] ?? PenTool;
@@ -682,10 +877,22 @@ function MarkupGridCard({
         </p>
       )}
 
+      {/* Assignee chip */}
+      <div className="mt-2">
+        <AssigneeChip assigneeId={markup.assignee_id} userMap={userMap} />
+      </div>
+
       {/* Footer: date + actions */}
       <div className="flex items-center justify-between mt-2.5 pt-2 border-t border-border-light/50">
         <span className="text-2xs text-content-tertiary">{formattedDate}</span>
         <div className="flex items-center gap-0.5">
+          <button
+            onClick={onEdit}
+            title={t('markups.edit', { defaultValue: 'Edit' })}
+            className="p-1 rounded hover:bg-surface-secondary text-content-tertiary hover:text-oe-blue transition-colors"
+          >
+            <Edit3 size={13} />
+          </button>
           {markup.status === 'active' && (
             <button
               onClick={() => onChangeStatus('resolved')}
@@ -725,14 +932,24 @@ function MarkupTableRow({
   onToggleExpand,
   onChangeStatus,
   onDelete,
+  onEdit,
   documentName,
+  siblings,
+  onNavigate,
+  userMap,
+  onOpenInDocument,
 }: {
   markup: Markup;
   isExpanded: boolean;
   onToggleExpand: () => void;
   onChangeStatus: (status: MarkupStatus) => void;
   onDelete: () => void;
+  onEdit: () => void;
   documentName?: string;
+  siblings?: Markup[];
+  onNavigate?: (id: string) => void;
+  userMap: Map<string, AssigneeUser>;
+  onOpenInDocument?: (markup: Markup) => void;
 }) {
   const { t } = useTranslation();
   const TypeIcon = TYPE_ICONS[markup.type] ?? PenTool;
@@ -809,6 +1026,10 @@ function MarkupTableRow({
             })}
           </Badge>
         </td>
+        {/* Assignee */}
+        <td className="px-3 py-2.5">
+          <AssigneeChip assigneeId={markup.assignee_id} userMap={userMap} />
+        </td>
         {/* Measurement */}
         <td className="px-3 py-2.5 text-xs text-content-secondary tabular-nums">
           {measurementDisplay}
@@ -821,6 +1042,13 @@ function MarkupTableRow({
             className="flex items-center justify-end gap-0.5"
             onClick={(e) => e.stopPropagation()}
           >
+            <button
+              onClick={onEdit}
+              title={t('markups.edit', { defaultValue: 'Edit' })}
+              className="p-1 rounded hover:bg-surface-secondary text-content-tertiary hover:text-oe-blue transition-colors"
+            >
+              <Edit3 size={14} />
+            </button>
             {markup.status === 'active' && (
               <button
                 onClick={() => onChangeStatus('resolved')}
@@ -836,7 +1064,7 @@ function MarkupTableRow({
                 title={t('markups.action_archive', { defaultValue: 'Archive' })}
                 className="p-1 rounded hover:bg-surface-secondary text-content-tertiary transition-colors"
               >
-                <Edit3 size={14} />
+                <Check size={14} />
               </button>
             )}
             <button
@@ -851,8 +1079,15 @@ function MarkupTableRow({
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={8}>
-            <MarkupDetail markup={markup} documentName={documentName} />
+          <td colSpan={9}>
+            <MarkupDetail
+              markup={markup}
+              documentName={documentName}
+              onEdit={onEdit}
+              siblings={siblings}
+              onNavigate={onNavigate}
+              onOpenInDocument={onOpenInDocument}
+            />
           </td>
         </tr>
       )}
@@ -874,13 +1109,22 @@ export function MarkupsPage() {
   const [filterType, setFilterType] = useState<MarkupType | ''>('');
   const [filterStatus, setFilterStatus] = useState<MarkupStatus | ''>('');
   const [filterDocumentId, setFilterDocumentId] = useState('');
+  // M3 — assignee filter: "" = no filter, "__unassigned__" = NULL,
+  // anything else = user id.
+  const [filterAssignee, setFilterAssignee] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [expandedRowId, setExpandedRowId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [editTarget, setEditTarget] = useState<Markup | null>(null);
   const [annotateDocId, setAnnotateDocId] = useState<string | null>(null);
   const [annotateStamp, setAnnotateStamp] = useState<string | undefined>(undefined);
+  // Deep-link target — when set, the annotator pulses a glow ring on
+  // this markup id and scrolls it into view. Cleared either by the
+  // annotator (after the 2s pulse) or when the user closes it.
+  const [highlightMarkupId, setHighlightMarkupId] = useState<string | undefined>(undefined);
+  const [annotateInitialPage, setAnnotateInitialPage] = useState<number | undefined>(undefined);
   const [showCustomStampForm, setShowCustomStampForm] = useState(false);
   const [customStampName, setCustomStampName] = useState('');
   const [customStampColor, setCustomStampColor] = useState('#3B82F6');
@@ -895,6 +1139,42 @@ export function MarkupsPage() {
     orientation: 'horizontal',
   });
 
+  // Deep-link reader — supports both calling conventions:
+  //   /markups?openDoc=<id>&page=<n>&markup=<id>   (from the file manager)
+  //   /markups?markup=<id>                         (from anywhere with just
+  //                                                 the markup id; we'll
+  //                                                 fetch the markup, then
+  //                                                 derive document + page)
+  // Runs once on mount and whenever the params change.
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    const openDoc = searchParams.get('openDoc');
+    const markupParam = searchParams.get('markup');
+    const pageParam = searchParams.get('page');
+    if (!markupParam && !openDoc) return;
+    if (openDoc) {
+      setFilterDocumentId(openDoc);
+      setAnnotateDocId(openDoc);
+    }
+    if (pageParam) {
+      const n = parseInt(pageParam, 10);
+      if (Number.isFinite(n) && n > 0) setAnnotateInitialPage(n);
+    }
+    if (markupParam) {
+      setHighlightMarkupId(markupParam);
+    }
+    // Strip the params from the URL once consumed so a back-button reload
+    // doesn't re-trigger the highlight (which would be confusing if the
+    // user already dismissed it).
+    const next = new URLSearchParams(searchParams);
+    next.delete('openDoc');
+    next.delete('markup');
+    next.delete('page');
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
   // Data queries
   const { data: projects = [] } = useQuery({
     queryKey: ['projects'],
@@ -903,6 +1183,21 @@ export function MarkupsPage() {
   });
 
   const projectId = activeProjectId || projects[0]?.id || '';
+
+  // M3 — fetch users for the assignee dropdown + row chip.
+  // Failures degrade silently to an empty list (the chip falls back to
+  // showing the raw user-id slice) so the page still works without
+  // /v1/users/ read access (e.g. project viewers without users.read).
+  const { data: users = [] } = useQuery({
+    queryKey: ['markups', 'users'],
+    queryFn: () => fetchUsers({ is_active: true, limit: 200 }).catch(() => [] as AssigneeUser[]),
+    staleTime: 5 * 60_000,
+  });
+  const userMap = useMemo(() => {
+    const m = new Map<string, AssigneeUser>();
+    for (const u of users) m.set(u.id, u);
+    return m;
+  }, [users]);
 
   const { data: documents = [] } = useQuery({
     // Share the queryKey with ``useUnifiedMarkups`` (mounted by the
@@ -921,16 +1216,21 @@ export function MarkupsPage() {
   // Share the queryKey in that case so React Query dedupes the fetch —
   // otherwise both queries fire their own copy of GET /v1/markups/ on
   // every page open.
-  const noFilters = !filterType && !filterStatus && !filterDocumentId;
+  const noFilters = !filterType && !filterStatus && !filterDocumentId && !filterAssignee;
+  const isUnassignedFilter = filterAssignee === ASSIGNEE_UNASSIGNED;
+  const assigneeIdFilter =
+    filterAssignee && !isUnassignedFilter ? filterAssignee : undefined;
   const { data: markups = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: noFilters
       ? ['unified-markups', projectId, 'hub']
-      : ['markups', projectId, filterType, filterStatus, filterDocumentId],
+      : ['markups', projectId, filterType, filterStatus, filterDocumentId, filterAssignee],
     queryFn: () =>
       fetchMarkups(projectId, {
         type: filterType || undefined,
         status: filterStatus || undefined,
         document_id: filterDocumentId || undefined,
+        assignee_id: assigneeIdFilter,
+        unassigned: isUnassignedFilter,
       }),
     enabled: !!projectId,
     staleTime: noFilters ? 30_000 : 0,
@@ -956,6 +1256,70 @@ export function MarkupsPage() {
     return map;
   }, [documents]);
 
+  // Siblings of the currently-expanded markup (same document_id),
+  // sorted oldest-first by created_at. Used for ‹ / › chevron nav and
+  // ArrowLeft / ArrowRight keyboard shortcuts. Project-level markups
+  // (no document_id) share a sibling group keyed on `null`.
+  const expandedMarkup = useMemo(
+    () => markups.find((m) => m.id === expandedRowId) ?? null,
+    [markups, expandedRowId],
+  );
+  const siblingsForExpanded = useMemo(() => {
+    if (!expandedMarkup) return [] as Markup[];
+    const docKey = expandedMarkup.document_id ?? null;
+    return markups
+      .filter((m) => (m.document_id ?? null) === docKey)
+      .slice()
+      .sort((a, b) => {
+        const da = new Date(a.created_at).getTime();
+        const db = new Date(b.created_at).getTime();
+        return da - db;
+      });
+  }, [markups, expandedMarkup]);
+
+  // Navigate prev/next inside the expanded detail. We swap
+  // ``expandedRowId`` rather than ``navigate('/markups/{id}')`` because
+  // this page is single-route — the "detail" is the expanded row pane.
+  // Keeps the surrounding scroll position because we never unmount the
+  // row.
+  const goToMarkup = useCallback(
+    (id: string) => {
+      setExpandedRowId(id);
+    },
+    [],
+  );
+
+  // Keyboard shortcuts: ← / → step through siblings while a row is
+  // expanded. Suppressed when an input/textarea/select/contenteditable
+  // owns the focus so typing in the search box keeps working.
+  useEffect(() => {
+    if (!expandedRowId || siblingsForExpanded.length < 2) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const ae = document.activeElement as HTMLElement | null;
+      const tag = ae?.tagName;
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        ae?.isContentEditable
+      ) {
+        return;
+      }
+      const idx = siblingsForExpanded.findIndex((m) => m.id === expandedRowId);
+      if (idx < 0) return;
+      if (e.key === 'ArrowLeft' && idx > 0) {
+        e.preventDefault();
+        goToMarkup(siblingsForExpanded[idx - 1]!.id);
+      } else if (e.key === 'ArrowRight' && idx < siblingsForExpanded.length - 1) {
+        e.preventDefault();
+        goToMarkup(siblingsForExpanded[idx + 1]!.id);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [expandedRowId, siblingsForExpanded, goToMarkup]);
+
   // Client-side search filter
   const filteredMarkups = useMemo(() => {
     if (!searchQuery.trim()) return markups;
@@ -967,6 +1331,35 @@ export function MarkupsPage() {
         m.type.toLowerCase().includes(q),
     );
   }, [markups, searchQuery]);
+
+  // Opens the inline PDF annotator for a markup's source document and
+  // tells the annotator to pulse-highlight the markup itself. Falls back
+  // to a toast when the markup is project-level (no document_id) so the
+  // user doesn't silently click a dead button.
+  const handleOpenInDocument = useCallback((markup: Markup) => {
+    if (!markup.document_id) {
+      addToast({
+        type: 'info',
+        title: t('markups.no_document_to_open', {
+          defaultValue: 'This markup has no source document',
+        }),
+      });
+      return;
+    }
+    // Auto-pick the document in the top filter so the toolbar reflects
+    // what the annotator is showing — small UX nicety, prevents the
+    // dropdown from disagreeing with the open document.
+    setFilterDocumentId(markup.document_id);
+    setAnnotateDocId(markup.document_id);
+    setAnnotateInitialPage(markup.page || 1);
+    setHighlightMarkupId(markup.id);
+    // Scroll the annotator into view — the markups list can be long,
+    // and the annotator mounts further down the page.
+    requestAnimationFrame(() => {
+      const el = document.querySelector('[data-inline-annotator-mount]');
+      el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }, [addToast, t]);
 
   // Invalidation. Includes the unified feed so hub-scope mutations appear
   // in the "All annotations" tab without a manual reload.
@@ -1255,14 +1648,21 @@ export function MarkupsPage() {
 
           {/* ── Inline PDF Annotator ──────────────────────────────────────── */}
           {annotateDocId && (
-            <div className="mt-3">
+            <div className="mt-3" data-inline-annotator-mount>
               <InlinePdfAnnotator
                 documentId={annotateDocId}
                 documentName={documents.find((d) => d.id === annotateDocId)?.name || 'Document'}
                 projectId={projectId}
-                onClose={() => { setAnnotateDocId(null); setAnnotateStamp(undefined); }}
+                onClose={() => {
+                  setAnnotateDocId(null);
+                  setAnnotateStamp(undefined);
+                  setHighlightMarkupId(undefined);
+                  setAnnotateInitialPage(undefined);
+                }}
                 onMarkupCreated={invalidateAll}
                 activeStamp={annotateStamp}
+                highlightMarkupId={highlightMarkupId}
+                initialPage={annotateInitialPage}
               />
             </div>
           )}
@@ -1369,11 +1769,33 @@ export function MarkupsPage() {
                 ))}
               </select>
 
-              {(filterType || filterStatus) && (
+              {/* M3: assignee filter */}
+              <select
+                value={filterAssignee}
+                onChange={(e) => setFilterAssignee(e.target.value)}
+                className={selectCls + ' max-w-[180px]'}
+                aria-label={t('markups.filterByAssignee', { defaultValue: 'Filter by assignee' })}
+                data-testid="markups-filter-assignee"
+              >
+                <option value="">
+                  {t('markups.all_assignees', { defaultValue: 'All Assignees' })}
+                </option>
+                <option value={ASSIGNEE_UNASSIGNED}>
+                  {t('markups.unassigned', { defaultValue: 'Unassigned' })}
+                </option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.full_name?.trim() || u.email}
+                  </option>
+                ))}
+              </select>
+
+              {(filterType || filterStatus || filterAssignee) && (
                 <button
                   onClick={() => {
                     setFilterType('');
                     setFilterStatus('');
+                    setFilterAssignee('');
                   }}
                   className="text-xs text-oe-blue hover:underline"
                 >
@@ -1438,6 +1860,9 @@ export function MarkupsPage() {
                         <th className="px-3 py-2 text-left text-2xs font-semibold uppercase tracking-wider text-content-tertiary w-[90px]">
                           {t('markups.col_status', { defaultValue: 'Status' })}
                         </th>
+                        <th className="px-3 py-2 text-left text-2xs font-semibold uppercase tracking-wider text-content-tertiary w-[140px]">
+                          {t('markups.col_assignee', { defaultValue: 'Assignee' })}
+                        </th>
                         <th className="px-3 py-2 text-left text-2xs font-semibold uppercase tracking-wider text-content-tertiary w-[100px]">
                           {t('markups.col_measurement', { defaultValue: 'Measure' })}
                         </th>
@@ -1469,6 +1894,15 @@ export function MarkupsPage() {
                             statusMut.mutate({ id: markup.id, status })
                           }
                           onDelete={() => setDeleteTarget(markup.id)}
+                          onEdit={() => setEditTarget(markup)}
+                          siblings={
+                            expandedRowId === markup.id
+                              ? siblingsForExpanded
+                              : undefined
+                          }
+                          onNavigate={goToMarkup}
+                          userMap={userMap}
+                          onOpenInDocument={handleOpenInDocument}
                         />
                       ))}
                     </tbody>
@@ -1486,6 +1920,8 @@ export function MarkupsPage() {
                       statusMut.mutate({ id: markup.id, status })
                     }
                     onDelete={() => setDeleteTarget(markup.id)}
+                    onEdit={() => setEditTarget(markup)}
+                    userMap={userMap}
                   />
                 ))}
               </div>
@@ -1547,7 +1983,17 @@ export function MarkupsPage() {
         onClose={() => setShowAddModal(false)}
         projectId={projectId}
         documents={documents}
+        users={users}
         onCreated={invalidateAll}
+      />
+
+      {/* ── Edit Markup Modal ──────────────────────────────────────────── */}
+      <EditMarkupModal
+        open={editTarget !== null}
+        markup={editTarget}
+        projectId={projectId}
+        onClose={() => setEditTarget(null)}
+        onUpdated={invalidateAll}
       />
 
       {/* ── Custom Stamp Form ──────────────────────────────────────────── */}

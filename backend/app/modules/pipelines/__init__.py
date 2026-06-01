@@ -9,7 +9,7 @@ proves the whole flow end-to-end:
 
     trigger.manual → source.boq → gate.validation → action.export.excel
 
-See ``.claude/research/pipeline_builder/00_DESIGN.md`` for the canonical
+See the internal pipeline design notes for the canonical
 design (the module deliberately reuses, never reinvents, infrastructure).
 """
 

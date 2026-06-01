@@ -42,6 +42,10 @@ import {
   getPackage,
   createPackage,
   publishPackage,
+  // dead_button fix: openBids was exported but never wired into the page, so a
+  // published package could never advance to "open" — the only path that marks
+  // submissions is_valid=True. Without it leveling stayed empty and award blocked.
+  openBids,
   closePackage,
   awardPackage,
   packageDashboard,
@@ -49,18 +53,20 @@ import {
   createInvitation,
   createQA,
   answerQA,
-  createComparison,
+  getOrCreateComparison,
   computeLeveling,
   levelingTable,
+  levelingMatrix,
   type BidPackage,
   type BidPackageStatus,
   type BidInvitationStatus,
+  type BidConfidentiality,
   type Bidder,
   type BidInvitation,
   type BidSubmission,
-  type BidSubmissionLine,
   type BidQA,
   type BidPackageLineItem,
+  type LevelingTable as LevelingTableData,
 } from './api';
 
 const BID_TAB_IDS = ['packages', 'invitations', 'submissions', 'qa'] as const;
@@ -89,6 +95,59 @@ const INVITATION_STATUS_VARIANT: Record<
   declined: 'error',
   expired: 'neutral',
 };
+
+const PACKAGE_STATUSES: BidPackageStatus[] = [
+  'draft',
+  'published',
+  'open',
+  'closed',
+  'cancelled',
+  'awarded',
+];
+
+type TFn = (key: string, options?: Record<string, string | number>) => string;
+
+const PACKAGE_STATUS_LABEL_FALLBACK: Record<BidPackageStatus, string> = {
+  draft: 'Draft',
+  published: 'Published',
+  open: 'Open',
+  closed: 'Closed',
+  cancelled: 'Cancelled',
+  awarded: 'Awarded',
+};
+
+const INVITATION_STATUS_LABEL_FALLBACK: Record<BidInvitationStatus, string> = {
+  pending: 'Pending',
+  sent: 'Sent',
+  opened: 'Opened',
+  submitted: 'Submitted',
+  declined: 'Declined',
+  expired: 'Expired',
+};
+
+const CONFIDENTIALITY_LABEL_FALLBACK: Record<BidConfidentiality, string> = {
+  public: 'Public',
+  limited: 'Limited',
+  confidential: 'Confidential',
+};
+
+function packageStatusLabel(t: TFn, status: BidPackageStatus): string {
+  return t(`bid_management.status_${status}`, {
+    defaultValue: PACKAGE_STATUS_LABEL_FALLBACK[status] ?? status,
+  });
+}
+
+function invitationStatusLabel(t: TFn, status: BidInvitationStatus): string {
+  return t(`bid_management.inv_status_${status}`, {
+    defaultValue: INVITATION_STATUS_LABEL_FALLBACK[status] ?? status,
+  });
+}
+
+function confidentialityLabel(t: TFn, level: BidConfidentiality): string {
+  return t(`bid_management.confidentiality_${level}`, {
+    defaultValue: CONFIDENTIALITY_LABEL_FALLBACK[level] ?? level,
+  });
+}
 
 const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
@@ -127,12 +186,6 @@ function listLineItemsForPackage(packageId: string): Promise<BidPackageLineItem[
   return apiGet<BidPackageLineItem[]>(
     `/v1/bid-management/bid-package-line-items/?package_id=${packageId}&limit=500`,
   ).catch(() => [] as BidPackageLineItem[]);
-}
-
-function listSubmissionLines(submissionId: string): Promise<BidSubmissionLine[]> {
-  return apiGet<BidSubmissionLine[]>(
-    `/v1/bid-management/submission-lines/?submission_id=${submissionId}&limit=500`,
-  ).catch(() => [] as BidSubmissionLine[]);
 }
 
 function listQAForPackage(packageId: string): Promise<BidQA[]> {
@@ -367,9 +420,9 @@ export function BidManagementPage() {
             className={clsx(inputCls, 'max-w-[200px]')}
           >
             <option value="">{t('common.all_statuses', { defaultValue: 'All statuses' })}</option>
-            {['draft', 'published', 'open', 'closed', 'cancelled', 'awarded'].map((s) => (
+            {PACKAGE_STATUSES.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {packageStatusLabel(t, s)}
               </option>
             ))}
           </select>
@@ -387,7 +440,7 @@ export function BidManagementPage() {
           <PackageTable
             rows={filteredPackages}
             onSelect={(id) => setSelectedPackageId(id)}
-            currency={currentProject?.currency || 'EUR'}
+            currency={currentProject?.currency || undefined}
             emptyAction={() => setCreateOpen(true)}
           />
         ) : tab === 'invitations' ? (
@@ -395,7 +448,7 @@ export function BidManagementPage() {
         ) : tab === 'submissions' ? (
           <SubmissionsLevelingView
             packages={filteredPackages}
-            currency={currentProject?.currency || 'EUR'}
+            currency={currentProject?.currency || undefined}
           />
         ) : (
           <QAView packages={filteredPackages} />
@@ -406,14 +459,14 @@ export function BidManagementPage() {
         <PackageDrawer
           packageId={selectedPackageId}
           onClose={() => setSelectedPackageId(null)}
-          currency={currentProject?.currency || 'EUR'}
+          currency={currentProject?.currency || undefined}
         />
       )}
 
       {createOpen && (
         <CreatePackageModal
           projectId={projectId}
-          currency={currentProject?.currency || 'EUR'}
+          currency={currentProject?.currency || undefined}
           onClose={() => setCreateOpen(false)}
         />
       )}
@@ -431,7 +484,7 @@ function PackageTable({
 }: {
   rows: BidPackage[];
   onSelect: (id: string) => void;
-  currency: string;
+  currency?: string;
   emptyAction: () => void;
 }) {
   const { t } = useTranslation();
@@ -486,7 +539,7 @@ function PackageTable({
               </td>
               <td className="px-4 py-2">
                 <Badge variant={PACKAGE_STATUS_VARIANT[r.status]} dot>
-                  {r.status}
+                  {packageStatusLabel(t, r.status)}
                 </Badge>
               </td>
               <td className="px-4 py-2 text-right">
@@ -617,7 +670,7 @@ function PackageInvitationsRow({
                     </td>
                     <td className="px-3 py-1.5">
                       <Badge variant={INVITATION_STATUS_VARIANT[inv.status]} dot>
-                        {inv.status}
+                        {invitationStatusLabel(t, inv.status)}
                       </Badge>
                     </td>
                   </tr>
@@ -638,7 +691,7 @@ function SubmissionsLevelingView({
   currency,
 }: {
   packages: BidPackage[];
-  currency: string;
+  currency?: string;
 }) {
   const { t } = useTranslation();
   // Controlled selection that *defaults* to the first package even when
@@ -706,56 +759,86 @@ function SubmissionsLevelingView({
   );
 }
 
+/** Map the persisted recommended_reason into a localized string.
+ *
+ * The backend now stores a stable token ("leveling.top_rank") instead of
+ * baking English into the DB (audit #6). Older rows may still hold raw
+ * English — those are passed through verbatim so nothing breaks.
+ */
+function levelingReasonLabel(
+  t: TFn,
+  reason: string,
+  companyName: string,
+): string {
+  if (reason === 'leveling.top_rank') {
+    return t('bid_management.reason_top_rank', {
+      defaultValue: 'Top rank ({{company}})',
+      company: companyName,
+    });
+  }
+  return reason;
+}
+
 function LevelingTable({
   packageId,
   currency,
   awardable,
 }: {
   packageId: string;
-  currency: string;
+  currency?: string;
   awardable: boolean;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
 
-  const submissionsQ = useQuery({
-    queryKey: ['bid-management', 'submissions', packageId],
-    queryFn: () => listSubmissionsForPackage(packageId),
-  });
-  const linesQ = useQuery({
-    queryKey: ['bid-management', 'lines', packageId],
-    queryFn: () => listLineItemsForPackage(packageId),
+  // Server-side, valid-only, currency-safe matrix. The backend filters out
+  // invalid (late / currency-mismatched / incomplete) submissions, marks
+  // the lowest competitive bid per line (is_low), and only valid bids — all
+  // necessarily in the package currency — appear as columns (audit #1, #2, #8).
+  const matrixQ = useQuery({
+    queryKey: ['bid-management', 'leveling-matrix', packageId],
+    queryFn: () => levelingMatrix(packageId),
   });
   const biddersQ = useQuery({
     queryKey: ['bid-management', 'bidders', packageId],
     queryFn: () => listBiddersForPackage(packageId),
   });
 
-  const submissions = submissionsQ.data ?? [];
-  const lineItems = linesQ.data ?? [];
+  const matrix = matrixQ.data;
   const bidders = biddersQ.data ?? [];
 
-  const subLinesQs = useQuery({
-    queryKey: ['bid-management', 'submission-lines', packageId, submissions.map((s) => s.id).join(',')],
-    queryFn: async () => {
-      const buckets = await Promise.all(submissions.map((s) => listSubmissionLines(s.id)));
-      const map: Record<string, BidSubmissionLine[]> = {};
-      submissions.forEach((s, i) => {
-        map[s.id] = buckets[i] ?? [];
-      });
-      return map;
+  // Authoritative penalty-adjusted leveling (rank, normalized totals,
+  // commercial/technical scores, recommended bidder) — rendered when the
+  // user has computed it (audit #4).
+  const [leveling, setLeveling] = useState<LevelingTableData | null>(null);
+
+  const computeMut = useMutation({
+    mutationFn: async () => {
+      // Get-or-create: re-running leveling after a prior run must not 409
+      // (audit #3). Then recompute the rows and fetch the table.
+      const comparison = await getOrCreateComparison({ package_id: packageId });
+      await computeLeveling(comparison.id);
+      return levelingTable(comparison.id);
     },
-    enabled: submissions.length > 0,
+    onSuccess: (table) => {
+      setLeveling(table);
+      qc.invalidateQueries({ queryKey: ['bid-management', 'leveling-matrix', packageId] });
+      addToast({
+        type: 'success',
+        title: t('bid_management.leveling_done', { defaultValue: 'Leveling computed' }),
+      });
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
   });
 
   const awardMut = useMutation({
-    mutationFn: async (sub: BidSubmission) => {
+    mutationFn: async (vars: { bidderId: string; amount: number }) => {
       return awardPackage(packageId, {
         package_id: packageId,
-        awarded_bidder_id: sub.bidder_id,
-        awarded_amount: Number(sub.total_amount) || 0,
-        currency: sub.currency || currency,
+        awarded_bidder_id: vars.bidderId,
+        awarded_amount: vars.amount,
+        currency,
         decision_summary: '',
       });
     },
@@ -769,135 +852,272 @@ function LevelingTable({
     onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
   });
 
-  if (submissionsQ.isLoading || linesQ.isLoading || biddersQ.isLoading) {
+  if (matrixQ.isLoading || biddersQ.isLoading) {
     return <SkeletonTable rows={6} columns={4} />;
   }
-  if (submissions.length === 0) {
-    return (
-      <EmptyState
-        icon={<Inbox size={22} />}
-        title={t('bid_management.no_submissions_for_pkg', {
-          defaultValue: 'No submissions for this package',
-        })}
-        description={t('bid_management.no_submissions_desc', {
-          defaultValue: 'Once bidders submit their priced offers, leveling appears here.',
-        })}
-      />
-    );
+  if (matrixQ.isError) {
+    return <RecoveryCard error={matrixQ.error} onRetry={() => matrixQ.refetch()} />;
   }
 
-  const bidderName = (id: string) => bidders.find((b) => b.id === id)?.company_name || id.slice(0, 8);
+  const columns = matrix
+    ? matrix.bidder_ids.map((id, i) => ({ id, name: matrix.bidder_names[i] || id.slice(0, 8) }))
+    : [];
 
-  const totalsBySub = new Map<string, number>(
-    submissions.map((s) => [s.id, Number(s.total_amount) || 0]),
-  );
-  const totals = Array.from(totalsBySub.values());
-  const min = Math.min(...totals);
-  const max = Math.max(...totals);
+  // Per-bidder column totals = sum of competitive line cells in the matrix
+  // (all in the package currency, since invalid/foreign bids are excluded).
+  const columnTotals = new Map<string, number>();
+  for (const col of columns) columnTotals.set(col.id, 0);
+  if (matrix) {
+    for (const row of matrix.rows) {
+      for (const cell of row.cells) {
+        if (
+          ['included', 'alternative', 'noted'].includes(cell.inclusion_status) &&
+          Number(cell.total_price) > 0
+        ) {
+          columnTotals.set(
+            cell.bidder_id,
+            (columnTotals.get(cell.bidder_id) ?? 0) + (Number(cell.total_price) || 0),
+          );
+        }
+      }
+    }
+  }
+  const totalValues = Array.from(columnTotals.values()).filter((v) => v > 0);
+  const totalMin = totalValues.length ? Math.min(...totalValues) : 0;
+  const totalMax = totalValues.length ? Math.max(...totalValues) : 0;
 
-  const linePriceMap = (subId: string, lineItemId: string): number => {
-    const arr = subLinesQs.data?.[subId];
-    if (!arr) return 0;
-    const row = arr.find((l) => l.line_item_id === lineItemId);
-    return row ? Number(row.total_price) || 0 : 0;
-  };
+  const recommendedName = leveling?.recommended_bidder_id
+    ? bidders.find((b) => b.id === leveling.recommended_bidder_id)?.company_name ||
+      leveling.recommended_bidder_id.slice(0, 8)
+    : '';
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm border-collapse">
-        <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
-          <tr>
-            <th className="px-3 py-2 text-left sticky left-0 z-10 bg-surface-secondary">
-              {t('bid_management.scope_line', { defaultValue: 'Scope line' })}
-            </th>
-            {submissions.map((sub) => (
-              <th key={sub.id} className="px-3 py-2 text-right whitespace-nowrap">
-                {bidderName(sub.bidder_id)}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {lineItems.map((li) => {
-            const prices = submissions.map((sub) => linePriceMap(sub.id, li.id));
-            const nonZero = prices.filter((p) => p > 0);
-            const lo = nonZero.length ? Math.min(...nonZero) : 0;
-            const hi = nonZero.length ? Math.max(...nonZero) : 0;
-            return (
-              <tr key={li.id} className="border-t border-border-light">
-                <td className="px-3 py-1.5 sticky left-0 z-10 bg-surface-primary">
-                  <div className="font-mono text-xs text-content-tertiary">{li.code || '—'}</div>
-                  <div className="text-xs truncate max-w-[260px]">{li.description || '—'}</div>
-                </td>
-                {submissions.map((sub, i) => {
-                  const p = prices[i] ?? 0;
-                  const cls =
-                    p > 0 && p === lo
-                      ? 'text-green-700 font-semibold'
-                      : p > 0 && p === hi && lo !== hi
-                        ? 'text-red-700'
-                        : 'text-content-primary';
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-xs text-content-secondary">
+          {t('bid_management.leveling_valid_only', {
+            defaultValue:
+              'Only valid bids (on time, complete, in the package currency) are compared here.',
+          })}
+        </p>
+        <Button
+          size="sm"
+          variant="secondary"
+          icon={<Calculator size={14} />}
+          loading={computeMut.isPending}
+          onClick={() => computeMut.mutate()}
+        >
+          {t('bid_management.run_leveling', { defaultValue: 'Compute Leveling' })}
+        </Button>
+      </div>
+
+      {columns.length === 0 ? (
+        <EmptyState
+          icon={<Inbox size={22} />}
+          title={t('bid_management.no_valid_submissions', {
+            defaultValue: 'No valid bids to compare',
+          })}
+          description={t('bid_management.no_valid_submissions_desc', {
+            defaultValue:
+              'Once bidders submit valid priced offers and bidding is opened, leveling appears here.',
+          })}
+        />
+      ) : (
+        <>
+          {leveling && leveling.rows.length > 0 && (
+            <div className="overflow-x-auto rounded-lg border border-border-light">
+              <table className="w-full text-sm border-collapse">
+                <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="px-3 py-2 text-left">
+                      {t('bid_management.rank', { defaultValue: 'Rank' })}
+                    </th>
+                    <th className="px-3 py-2 text-left">
+                      {t('bid_management.bidder', { defaultValue: 'Bidder' })}
+                    </th>
+                    <th className="px-3 py-2 text-right">
+                      {t('bid_management.normalized_total', {
+                        defaultValue: 'Adjusted total',
+                      })}
+                    </th>
+                    <th className="px-3 py-2 text-right">
+                      {t('bid_management.commercial_score', {
+                        defaultValue: 'Commercial',
+                      })}
+                    </th>
+                    <th className="px-3 py-2 text-right">
+                      {t('bid_management.technical_score', { defaultValue: 'Technical' })}
+                    </th>
+                    <th className="px-3 py-2 text-right">
+                      {t('bid_management.total_score', { defaultValue: 'Score' })}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...leveling.rows]
+                    .sort((a, b) => a.rank - b.rank)
+                    .map((row) => {
+                      const name =
+                        bidders.find((b) => b.id === row.bidder_id)?.company_name ||
+                        row.bidder_id.slice(0, 8);
+                      const isRecommended = row.bidder_id === leveling.recommended_bidder_id;
+                      return (
+                        <tr
+                          key={row.id}
+                          className={clsx(
+                            'border-t border-border-light',
+                            isRecommended && 'bg-emerald-50/60 dark:bg-emerald-950/20',
+                          )}
+                        >
+                          <td className="px-3 py-1.5 tabular-nums">{row.rank}</td>
+                          <td className="px-3 py-1.5">
+                            <span className="font-medium">{name}</span>
+                            {isRecommended && (
+                              <Badge variant="success" className="ml-2">
+                                {t('bid_management.recommended', {
+                                  defaultValue: 'Recommended',
+                                })}
+                              </Badge>
+                            )}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">
+                            <MoneyDisplay amount={Number(row.normalized_total) || 0} currency={currency} />
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">
+                            {Number(row.commercial_score).toFixed(1)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums">
+                            {Number(row.technical_score).toFixed(1)}
+                          </td>
+                          <td className="px-3 py-1.5 text-right tabular-nums font-semibold">
+                            {Number(row.total_score).toFixed(1)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+              {leveling.recommended_bidder_id && leveling.recommended_reason && (
+                <p className="px-3 py-2 text-xs text-content-secondary border-t border-border-light bg-surface-secondary">
+                  {levelingReasonLabel(t, leveling.recommended_reason, recommendedName)}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
+                <tr>
+                  <th className="px-3 py-2 text-left sticky left-0 z-10 bg-surface-secondary">
+                    {t('bid_management.scope_line', { defaultValue: 'Scope line' })}
+                  </th>
+                  {columns.map((col) => (
+                    <th key={col.id} className="px-3 py-2 text-right whitespace-nowrap">
+                      {col.name}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(matrix?.rows ?? []).map((row) => {
+                  const cellByBidder = new Map(
+                    row.cells.map((c) => [c.bidder_id, c] as const),
+                  );
                   return (
-                    <td key={sub.id} className={clsx('px-3 py-1.5 text-right tabular-nums', cls)}>
-                      {p > 0 ? (
-                        <MoneyDisplay amount={p} currency={sub.currency || currency} />
-                      ) : (
-                        <span className="text-content-tertiary">—</span>
-                      )}
-                    </td>
+                    <tr key={row.line_item_id} className="border-t border-border-light">
+                      <td className="px-3 py-1.5 sticky left-0 z-10 bg-surface-primary">
+                        <div className="font-mono text-xs text-content-tertiary">
+                          {row.line_item_code || '—'}
+                        </div>
+                        <div className="text-xs truncate max-w-[260px]">
+                          {row.description || '—'}
+                        </div>
+                      </td>
+                      {columns.map((col) => {
+                        const cell = cellByBidder.get(col.id);
+                        const price = cell ? Number(cell.total_price) || 0 : 0;
+                        const competitive =
+                          cell != null &&
+                          ['included', 'alternative', 'noted'].includes(cell.inclusion_status);
+                        const cls = cell?.is_low
+                          ? 'text-green-700 font-semibold'
+                          : 'text-content-primary';
+                        return (
+                          <td
+                            key={col.id}
+                            className={clsx('px-3 py-1.5 text-right tabular-nums', cls)}
+                          >
+                            {competitive && price > 0 ? (
+                              <MoneyDisplay amount={price} currency={currency} />
+                            ) : (
+                              <span className="text-content-tertiary">—</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
                   );
                 })}
-              </tr>
-            );
-          })}
-          <tr className="border-t-2 border-border bg-surface-secondary font-semibold">
-            <td className="px-3 py-2 sticky left-0 bg-surface-secondary">
-              {t('bid_management.total', { defaultValue: 'Total' })}
-            </td>
-            {submissions.map((sub) => {
-              const v = Number(sub.total_amount) || 0;
-              const cls =
-                v > 0 && v === min
-                  ? 'text-green-700'
-                  : v > 0 && v === max && min !== max
-                    ? 'text-red-700'
-                    : '';
-              return (
-                <td key={sub.id} className={clsx('px-3 py-2 text-right tabular-nums', cls)}>
-                  <MoneyDisplay amount={v} currency={sub.currency || currency} />
-                </td>
-              );
-            })}
-          </tr>
-          <tr className="border-t border-border-light">
-            <td className="px-3 py-2 sticky left-0 bg-surface-primary text-xs text-content-secondary">
-              {t('bid_management.action', { defaultValue: 'Action' })}
-            </td>
-            {submissions.map((sub) => (
-              <td key={sub.id} className="px-3 py-2 text-right">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon={<Award size={12} />}
-                  loading={awardMut.isPending}
-                  disabled={!awardable}
-                  title={
-                    awardable
-                      ? t('bid_management.award', { defaultValue: 'Award' })
-                      : t('bid_management.award_disabled', {
-                          defaultValue:
-                            'Package already awarded or cancelled',
-                        })
-                  }
-                  onClick={() => awardMut.mutate(sub)}
-                >
-                  {t('bid_management.award', { defaultValue: 'Award' })}
-                </Button>
-              </td>
-            ))}
-          </tr>
-        </tbody>
-      </table>
+                <tr className="border-t-2 border-border bg-surface-secondary font-semibold">
+                  <td className="px-3 py-2 sticky left-0 bg-surface-secondary">
+                    {t('bid_management.total', { defaultValue: 'Total' })}
+                  </td>
+                  {columns.map((col) => {
+                    const v = columnTotals.get(col.id) ?? 0;
+                    const cls =
+                      v > 0 && v === totalMin
+                        ? 'text-green-700'
+                        : v > 0 && v === totalMax && totalMin !== totalMax
+                          ? 'text-red-700'
+                          : '';
+                    return (
+                      <td key={col.id} className={clsx('px-3 py-2 text-right tabular-nums', cls)}>
+                        {v > 0 ? (
+                          <MoneyDisplay amount={v} currency={currency} />
+                        ) : (
+                          <span className="text-content-tertiary">—</span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+                <tr className="border-t border-border-light">
+                  <td className="px-3 py-2 sticky left-0 bg-surface-primary text-xs text-content-secondary">
+                    {t('bid_management.action', { defaultValue: 'Action' })}
+                  </td>
+                  {columns.map((col) => (
+                    <td key={col.id} className="px-3 py-2 text-right">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        icon={<Award size={12} />}
+                        loading={awardMut.isPending}
+                        disabled={!awardable}
+                        title={
+                          awardable
+                            ? t('bid_management.award', { defaultValue: 'Award' })
+                            : t('bid_management.award_disabled', {
+                                defaultValue: 'Package already awarded or cancelled',
+                              })
+                        }
+                        onClick={() =>
+                          awardMut.mutate({
+                            bidderId: col.id,
+                            amount: columnTotals.get(col.id) ?? 0,
+                          })
+                        }
+                      >
+                        {t('bid_management.award', { defaultValue: 'Award' })}
+                      </Button>
+                    </td>
+                  ))}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1114,7 +1334,7 @@ function PackageDrawer({
 }: {
   packageId: string;
   onClose: () => void;
-  currency: string;
+  currency?: string;
 }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
@@ -1149,6 +1369,22 @@ function PackageDrawer({
     onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
   });
 
+  // dead_button fix: wire the previously-unused openBids() so a published
+  // package can advance to "open". open_bids is the ONLY backend path that runs
+  // pre-open validation and sets submission.is_valid=True, which leveling and
+  // award depend on. Without this button the workflow was unreachable.
+  const openBidsMut = useMutation({
+    mutationFn: () => openBids(packageId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['bid-management'] });
+      addToast({
+        type: 'success',
+        title: t('bid_management.bids_opened', { defaultValue: 'Bidding opened' }),
+      });
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
   const closeMut = useMutation({
     mutationFn: () => closePackage(packageId),
     onSuccess: () => {
@@ -1163,15 +1399,24 @@ function PackageDrawer({
 
   const compareMut = useMutation({
     mutationFn: async () => {
-      const c = await createComparison({ package_id: packageId });
+      // Get-or-create so re-running leveling never 409s (audit #3).
+      const c = await getOrCreateComparison({ package_id: packageId });
       await computeLeveling(c.id);
       return levelingTable(c.id);
     },
-    onSuccess: () => {
+    onSuccess: (table) => {
       qc.invalidateQueries({ queryKey: ['bid-management'] });
+      // Surface the authoritative recommendation rather than discarding it
+      // (audit #4). The full penalty-adjusted ranking is rendered in the
+      // Submissions tab's leveling table.
       addToast({
         type: 'success',
-        title: t('bid_management.leveling_done', { defaultValue: 'Leveling computed' }),
+        title:
+          table.recommended_bidder_id && table.recommended_reason
+            ? t('bid_management.leveling_done_with_rec', {
+                defaultValue: 'Leveling computed — top bid identified. Open Submissions to review the ranking.',
+              })
+            : t('bid_management.leveling_done', { defaultValue: 'Leveling computed' }),
       });
     },
     onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
@@ -1239,13 +1484,13 @@ function PackageDrawer({
                   label={t('bid_management.status')}
                   value={
                     <Badge variant={PACKAGE_STATUS_VARIANT[pkg.status]} dot>
-                      {pkg.status}
+                      {packageStatusLabel(t, pkg.status)}
                     </Badge>
                   }
                 />
                 <Field
                   label={t('bid_management.confidentiality', { defaultValue: 'Confidentiality' })}
-                  value={pkg.confidentiality_level}
+                  value={confidentialityLabel(t, pkg.confidentiality_level)}
                 />
                 <Field
                   label={t('bid_management.deadline')}
@@ -1279,6 +1524,19 @@ function PackageDrawer({
                     loading={publishMut.isPending}
                   >
                     {t('bid_management.publish', { defaultValue: 'Publish' })}
+                  </Button>
+                )}
+                {/* dead_button fix: expose Open Bids (published → open). This is the
+                    only action that validates submissions (is_valid) so leveling
+                    and award become reachable instead of being silently blocked. */}
+                {pkg.status === 'published' && (
+                  <Button
+                    variant="primary"
+                    icon={<Inbox size={14} />}
+                    onClick={() => openBidsMut.mutate()}
+                    loading={openBidsMut.isPending}
+                  >
+                    {t('bid_management.open_bids', { defaultValue: 'Open Bids' })}
                   </Button>
                 )}
                 {(pkg.status === 'open' || pkg.status === 'published') && (
@@ -1376,7 +1634,7 @@ function PackageDrawer({
                           <span className="ml-2 text-content-tertiary">{inv.invitee_email}</span>
                         </span>
                         <Badge variant={INVITATION_STATUS_VARIANT[inv.status]} dot>
-                          {inv.status}
+                          {invitationStatusLabel(t, inv.status)}
                         </Badge>
                       </li>
                     ))}
@@ -1500,7 +1758,7 @@ function CreatePackageModal({
   onClose,
 }: {
   projectId: string;
-  currency: string;
+  currency?: string;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -1511,7 +1769,10 @@ function CreatePackageModal({
     title: '',
     scope_description: '',
     submission_deadline: '',
-    currency,
+    // Seed the currency input from the project currency when known. When
+    // the project has none configured, start blank (rather than a guessed
+    // EUR) so the user must enter an explicit ISO-4217 code.
+    currency: currency ?? '',
     total_budget_estimate: '0',
   });
   const [busy, setBusy] = useState(false);

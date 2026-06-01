@@ -64,7 +64,10 @@ import zipfile
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from app.modules.boq.importers import ImportedBOQ
 
 from fastapi import (
     APIRouter,
@@ -174,7 +177,7 @@ from app.modules.boq.schemas import (
 from app.modules.boq.service import MAX_NESTING_DEPTH, BOQService
 from app.modules.costs.repository import CostItemRepository
 
-router = APIRouter()
+router = APIRouter(tags=["boq"])
 _log = logging.getLogger(__name__)
 
 
@@ -188,9 +191,11 @@ async def _verify_boq_owner(
     user_id: str,
     payload: dict | None = None,
 ) -> None:
-    """‌⁠‍Load a BOQ, then its project, and verify ownership.
+    """‌⁠‍Load a BOQ, then its project, and verify the user has access.
 
-    Admins bypass the check. Raises 403 if the user is not the project owner.
+    Admins bypass the check. Grants access to the project owner and to
+    any user who is a team member of the project (added via add_project_member).
+    Raises 403 if none of those conditions are met.
     """
     if payload and payload.get("role") == "admin":
         return
@@ -205,11 +210,20 @@ async def _verify_boq_owner(
     project = await project_repo.get_by_id(boq.project_id)
     if project is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale()))
-    if str(project.owner_id) != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this BOQ",
-        )
+    if str(project.owner_id) == user_id:
+        return
+    from app.modules.teams.access import is_project_member
+
+    try:
+        uid = uuid.UUID(str(user_id))
+    except (ValueError, TypeError):
+        uid = None
+    if uid is not None and await is_project_member(session, boq.project_id, uid):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this BOQ",
+    )
 
 
 async def _verify_project_owner_for_boq(
@@ -218,8 +232,9 @@ async def _verify_project_owner_for_boq(
     user_id: str,
     payload: dict | None = None,
 ) -> None:
-    """‌⁠‍Verify the current user owns the given project. Admins bypass.
+    """‌⁠‍Verify the current user has access to the given project.
 
+    Grants access to: admins, the project owner, and team members.
     Treats archived (soft-deleted) projects as 404 — no operations on
     archived projects are permitted via this gateway.
     """
@@ -229,14 +244,25 @@ async def _verify_project_owner_for_boq(
     project_repo = ProjectRepository(session)
     project = await project_repo.get_by_id(project_id)
     if project is None or project.status == "archived":
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.project_not_found", locale=get_locale())
+        )
     if is_admin:
         return
-    if str(project.owner_id) != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this project",
-        )
+    if str(project.owner_id) == user_id:
+        return
+    from app.modules.teams.access import is_project_member
+
+    try:
+        uid = uuid.UUID(str(user_id))
+    except (ValueError, TypeError):
+        uid = None
+    if uid is not None and await is_project_member(session, project_id, uid):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this project",
+    )
 
 
 async def _log_activity(
@@ -374,6 +400,15 @@ async def _position_to_response_with_links(
     if isinstance(info, dict):
         merged = dict(resp.metadata) if isinstance(resp.metadata, dict) else {}
         merged["link_propagation"] = info
+        resp.metadata = merged
+    # Issue #157 (skolodi): missing-FX warnings — stashed by
+    # ``update_position`` when a resource is priced in a currency the
+    # project has no rate for. Surfaced as ``metadata.fx_warnings: list[str]``
+    # so the UI can render a yellow badge + "Add USD" CTA.
+    fx_warnings = getattr(position, "_fx_warnings", None)
+    if isinstance(fx_warnings, list) and fx_warnings:
+        merged = dict(resp.metadata) if isinstance(resp.metadata, dict) else {}
+        merged["fx_warnings"] = list(fx_warnings)
         resp.metadata = merged
     return resp
 
@@ -546,6 +581,8 @@ async def list_templates(
 async def create_boq_from_template(
     data: BOQFromTemplateRequest,
     _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> BOQResponse:
     """Create a complete BOQ from a built-in template.
@@ -558,6 +595,11 @@ async def create_boq_from_template(
 
     Use ``GET /boqs/templates`` to discover available template IDs.
     """
+    # IDOR guard: the global boq.create role is not project-scoped, so verify the
+    # caller may access the target project before seeding a BOQ into it. Without
+    # this any role holder could create BOQs in a project/tenant they cannot
+    # access (and a bogus project_id would surface as a raw FK 500 instead of 404).
+    await _verify_project_owner_for_boq(session, data.project_id, _user_id, payload)
     boq = await service.create_boq_from_template(data)
     return BOQResponse.model_validate(boq)
 
@@ -1137,6 +1179,9 @@ async def get_boq_activity(
 )
 async def get_project_activity(
     project_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
     service: BOQService = Depends(_get_service),
@@ -1145,6 +1190,10 @@ async def get_project_activity(
 
     Returns all BOQ-related activity across all BOQs in the project.
     """
+    # IDOR guard: the global boq.read role is not project-scoped, so verify the
+    # caller may access this project before returning its full activity log.
+    # Without this any role holder could read the audit trail of any project by id.
+    await _verify_project_owner_for_boq(session, project_id, _user_id, payload)
     return await service.get_activity_for_project(project_id, offset=offset, limit=limit)
 
 
@@ -1223,6 +1272,9 @@ async def delete_boq(
 )
 async def duplicate_boq(
     boq_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> BOQResponse:
     """Duplicate an entire BOQ with all its positions and markups.
@@ -1230,6 +1282,8 @@ async def duplicate_boq(
     Creates a new BOQ named "<original> (Copy)" in the same project.
     All positions (with hierarchy) and markups are deep-copied with new IDs.
     """
+    # IDOR guard: verify the caller owns the source BOQ before cloning it
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     new_boq = await service.duplicate_boq(boq_id)
     return BOQResponse.model_validate(new_boq)
 
@@ -1243,12 +1297,23 @@ async def duplicate_boq(
 )
 async def duplicate_position(
     position_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> PositionResponse:
     """Duplicate a single position within the same BOQ.
 
     Creates a copy with ordinal "<original>.1" placed after the original.
     """
+    # IDOR guard: load position → derive boq_id → verify ownership chain
+    existing = await service.position_repo.get_by_id(position_id)
+    if existing is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=translate("errors.position_not_found", locale=get_locale()),
+        )
+    await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     new_position = await service.duplicate_position(position_id)
     return _position_to_response(new_position)
 
@@ -1737,7 +1802,9 @@ async def get_position(
     # IDOR guard: load position → derive boq_id → verify ownership chain
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale())
+        )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     return await _position_to_response_with_links(service, existing)
 
@@ -1760,7 +1827,9 @@ async def update_position(
     # IDOR guard: load position → derive boq_id → verify ownership chain
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale())
+        )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     # Pass actor_id through so the audit log records who made the change
     # (BUG-AUDIT01).  Without it the service falls back to anonymous and
@@ -1810,9 +1879,7 @@ async def bulk_update_positions(
     """
     await _verify_boq_owner(session, boq_id, user_id, payload)
     try:
-        return await service.bulk_update_positions(
-            boq_id, data, actor_id=user_id
-        )
+        return await service.bulk_update_positions(boq_id, data, actor_id=user_id)
     except HTTPException:
         raise
     except ValueError as exc:
@@ -1863,9 +1930,7 @@ async def restore_position_field(
     # Re-read the freshest log so we can echo the restore entry id.
     new_log_id: uuid.UUID | None = None
     try:
-        recent, _total = await service.activity_repo.list_for_boq(
-            boq_id, offset=0, limit=1
-        )
+        recent, _total = await service.activity_repo.list_for_boq(boq_id, offset=0, limit=1)
         if recent and recent[0].action == "position.field_restored":
             new_log_id = recent[0].id
     except Exception:  # noqa: BLE001 — informational only
@@ -1923,7 +1988,9 @@ async def repick_resource_variant(
     # IDOR guard: load position → derive boq_id → verify ownership chain.
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale())
+        )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
 
     position = await service.repick_resource_variant(
@@ -1959,7 +2026,9 @@ async def list_position_links(
     """
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale())
+        )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     return await service.list_links(position_id)
 
@@ -1986,7 +2055,9 @@ async def unlink_position(
     """
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale())
+        )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     position = await service.unlink_position(position_id, actor_id=user_id)
     return await _position_to_response_with_links(service, position)
@@ -2013,7 +2084,9 @@ async def delete_position(
     # IDOR guard: load position → derive boq_id → verify ownership chain
     existing = await service.position_repo.get_by_id(position_id)
     if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.position_not_found", locale=get_locale())
+        )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     await _log_activity(
         service,
@@ -2166,6 +2239,16 @@ async def update_markup(
 ) -> MarkupResponse:
     """Update a markup/overhead line on a BOQ."""
     await _verify_boq_owner(session, boq_id, user_id, payload)
+    # IDOR guard: owning the URL boq_id is not enough — confirm the markup
+    # actually belongs to it, otherwise a user owning BOQ-A could mutate a markup
+    # of another tenant's BOQ-B via /boqs/{A}/markups/{B-markup-id} (404, not 403,
+    # to avoid leaking existence — same cross-check delete_quantity_link uses).
+    existing_markup = await service.markup_repo.get_by_id(markup_id)
+    if existing_markup is None or existing_markup.boq_id != boq_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Markup not found",
+        )
     markup = await service.update_markup(markup_id, data)
     return _markup_to_response(markup)
 
@@ -2186,6 +2269,16 @@ async def delete_markup(
 ) -> None:
     """Delete a markup/overhead line from a BOQ."""
     await _verify_boq_owner(session, boq_id, user_id, payload)
+    # IDOR guard: owning the URL boq_id is not enough — confirm the markup
+    # actually belongs to it, otherwise a user owning BOQ-A could delete a markup
+    # of another tenant's BOQ-B via /boqs/{A}/markups/{B-markup-id} (404, not 403,
+    # to avoid leaking existence — same cross-check delete_quantity_link uses).
+    existing_markup = await service.markup_repo.get_by_id(markup_id)
+    if existing_markup is None or existing_markup.boq_id != boq_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Markup not found",
+        )
     await service.delete_markup(markup_id)
 
 
@@ -2197,6 +2290,9 @@ async def delete_markup(
 )
 async def apply_default_markups(
     boq_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     region: str = Query(
         default="DEFAULT",
         description="Region code: DACH, UK, US, FR, GULF, IN, AU, JP, BR, NORDIC, RU, CN, KR, DEFAULT",
@@ -2211,6 +2307,10 @@ async def apply_default_markups(
     Supported regions: DACH, UK, US, FR, GULF, IN, AU, JP, BR, NORDIC,
     RU, CN, KR, DEFAULT.
     """
+    # IDOR guard: this destructively REPLACES all markups, yet the global
+    # boq.update role is not project-scoped — verify the caller may access the
+    # BOQ's project before wiping/resetting markups on a BOQ in another tenant.
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     markups = await service.apply_default_markups(boq_id, region)
     return [_markup_to_response(m) for m in markups]
 
@@ -2260,7 +2360,7 @@ async def create_quantity_link(
     """Create a live binding (extraction rule) — does NOT change the quantity.
 
     The position's quantity is only ever changed by an explicit confirm
-    (CLAUDE.md §7 — human-confirmed). Creating the link records the rule
+    (the architecture guide §7 — human-confirmed). Creating the link records the rule
     and provenance so a later model revision can be re-pulled for review.
     """
     existing = await service.position_repo.get_by_id(position_id)
@@ -2270,18 +2370,13 @@ async def create_quantity_link(
             detail=translate("errors.position_not_found", locale=get_locale()),
         )
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
-    link = await service.create_quantity_link(
-        position_id, data, created_by=user_id
-    )
+    link = await service.create_quantity_link(position_id, data, created_by=user_id)
     await _log_activity(
         service,
         user_id=user_id,
         action="quantity_link_created",
         target_type="position",
-        description=(
-            f"Bound {data.quantity_field} → quantity from "
-            f"{len(data.element_stable_ids)} model element(s)"
-        ),
+        description=(f"Bound {data.quantity_field} → quantity from {len(data.element_stable_ids)} model element(s)"),
         boq_id=existing.boq_id,
         target_id=position_id,
     )
@@ -2312,9 +2407,7 @@ async def delete_quantity_link(
     await _verify_boq_owner(session, existing.boq_id, user_id, payload)
     link = await service.quantity_link_repo.get_by_id(link_id)
     if link is None or link.position_id != position_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Quantity link not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Quantity link not found")
     await service.delete_quantity_link(link_id)
 
 
@@ -2362,17 +2455,13 @@ async def apply_quantity_links(
     origin is auditable and never silently overwritten.
     """
     await _verify_boq_owner(session, boq_id, user_id, payload)
-    result = await service.apply_quantity_links(
-        boq_id, data.link_ids, applied_by=user_id
-    )
+    result = await service.apply_quantity_links(boq_id, data.link_ids, applied_by=user_id)
     await _log_activity(
         service,
         user_id=user_id,
         action="quantity_link_applied",
         target_type="boq",
-        description=(
-            f"Applied {result.applied} model-driven quantity update(s)"
-        ),
+        description=(f"Applied {result.applied} model-driven quantity update(s)"),
         boq_id=boq_id,
     )
     return result
@@ -2416,9 +2505,15 @@ async def compare_boqs(
 )
 async def list_snapshots(
     boq_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> list[SnapshotResponse]:
     """List all snapshots for a BOQ, newest first."""
+    # IDOR guard: the global boq.read role is not project-scoped — verify the
+    # caller may access this BOQ's project before listing its version history.
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     snapshots = await service.list_snapshots(boq_id)
     return [
         SnapshotResponse(
@@ -2442,10 +2537,15 @@ async def list_snapshots(
 async def create_snapshot(
     boq_id: uuid.UUID,
     data: SnapshotCreate,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     user_id: CurrentUserId = None,
     service: BOQService = Depends(_get_service),
 ) -> SnapshotResponse:
     """Create a point-in-time snapshot of the current BOQ state."""
+    # IDOR guard: the global boq.update role is not project-scoped — verify the
+    # caller may access this BOQ's project before snapshotting it.
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     snap = await service.create_snapshot(boq_id, name=data.name, user_id=user_id)
     return SnapshotResponse(
         id=snap.id,
@@ -2465,9 +2565,16 @@ async def create_snapshot(
 async def restore_snapshot(
     boq_id: uuid.UUID,
     snapshot_id: uuid.UUID,
+    user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> BOQWithPositions:
     """Restore a BOQ to a previous snapshot state."""
+    # IDOR guard: restore OVERWRITES the BOQ, yet the global boq.update role is
+    # not project-scoped — verify the caller may access this BOQ's project before
+    # rolling it back to a snapshot in a project/tenant they cannot access.
+    await _verify_boq_owner(session, boq_id, user_id, payload)
     boq = await service.restore_snapshot(boq_id, snapshot_id)
     return boq
 
@@ -2501,6 +2608,11 @@ def _build_rule_sets(
         "nrm": "nrm",
         "masterformat": "masterformat",
         "sinapi": "sinapi",
+        # NBR 12721 (Brazil ABNT cost-group hierarchy) — picked up when a
+        # Brazilian project sets classification_standard="nbr" explicitly.
+        # SINAPI rules also fire via the BR region rules below; the two
+        # rule packs are complementary, not redundant.
+        "nbr": "nbr",
         "gesn": "gesn",
         "dpgf": "dpgf",
         "onorm": "onorm",
@@ -3002,11 +3114,14 @@ async def ai_chat_boq(
 def _get_classification_code(classification: dict[str, Any]) -> str:
     """Extract the most relevant classification code for display.
 
-    Checks din276, nrm, masterformat in order.
+    Checks din276, nrm, masterformat, sinapi, nbr in order. SINAPI/NBR are
+    appended (not prepended) so non-BR projects keep their existing
+    presentation; BR-only projects rarely carry a din276/nrm/masterformat
+    code at the same time so the fallback still wins for them.
     """
     if not classification:
         return ""
-    for key in ("din276", "nrm", "masterformat"):
+    for key in ("din276", "nrm", "masterformat", "sinapi", "nbr"):
         val = classification.get(key, "")
         if val:
             return str(val)
@@ -3068,6 +3183,9 @@ def _fmt_number(value: Any) -> str:
 )
 async def export_boq_csv(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> StreamingResponse:
     """Export BOQ positions as a CSV file.
@@ -3079,6 +3197,9 @@ async def export_boq_csv(
     """
     import json as _json
 
+    # IDOR guard: every BOQ read endpoint scopes to project owner/member;
+    # exports must do the same before fetching any priced data.
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     # Use structured data to include markups in the grand total
     structured = await service.get_boq_structured(boq_id)
     # Issue #111 — freeze the project FX table into the exported artifact so
@@ -3135,17 +3256,11 @@ async def export_boq_csv(
             _fmt_number(getattr(pos, "total", 0.0)),
             neutralise_formula(_row_currency(pos)),
             neutralise_formula(_get_classification_code(classification)),
-            neutralise_formula(
-                _json.dumps(classification, ensure_ascii=False) if classification else ""
-            ),
+            neutralise_formula(_json.dumps(classification, ensure_ascii=False) if classification else ""),
             neutralise_formula(getattr(pos, "source", "") or ""),
-            _fmt_number(getattr(pos, "confidence", None))
-            if getattr(pos, "confidence", None) is not None
-            else "",
+            _fmt_number(getattr(pos, "confidence", None)) if getattr(pos, "confidence", None) is not None else "",
             neutralise_formula(getattr(pos, "wbs_code", "") or getattr(pos, "wbs_id", "") or ""),
-            neutralise_formula(
-                ",".join(str(x) for x in cad_ids) if isinstance(cad_ids, list) else ""
-            ),
+            neutralise_formula(",".join(str(x) for x in cad_ids) if isinstance(cad_ids, list) else ""),
             neutralise_formula(_json.dumps(metadata_, ensure_ascii=False) if metadata_ else ""),
         ]
 
@@ -3202,9 +3317,7 @@ async def export_boq_csv(
 
     # Markup rows — markup.name is user-controlled.
     for markup in structured.markups:
-        writer.writerow(
-            _total_row(neutralise_formula(f"  {markup.name}"), markup.amount)
-        )
+        writer.writerow(_total_row(neutralise_formula(f"  {markup.name}"), markup.amount))
 
     # Grand total row (includes markups)
     writer.writerow(_total_row("Grand Total", structured.grand_total))
@@ -3214,9 +3327,7 @@ async def export_boq_csv(
     # of base per 1 unit of the listed foreign currency.
     if fx_map:
         writer.writerow([""] * 14)
-        writer.writerow(
-            ["", "FX Rates (frozen at export)", "", "", "", "", "", "", "", "", "", "", "", ""]
-        )
+        writer.writerow(["", "FX Rates (frozen at export)", "", "", "", "", "", "", "", "", "", "", "", ""])
         writer.writerow(
             [
                 "",
@@ -3261,10 +3372,9 @@ async def export_boq_csv(
     # Description column). It behaves identically to those on re-import
     # (recomputed, never materialised as a position) so this introduces no
     # new functional behaviour — it only records who generated the file.
-    _xtok_csv = bytes(
-        b ^ 0x55
-        for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
-    ).decode("ascii")
+    _xtok_csv = bytes(b ^ 0x55 for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63").decode(
+        "ascii"
+    )
     writer.writerow([""] * 14)
     writer.writerow(
         [
@@ -3313,6 +3423,9 @@ async def export_boq_csv(
 )
 async def export_boq_excel(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
+    session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> StreamingResponse:
     """Export BOQ positions as an Excel (xlsx) file with formatting.
@@ -3329,6 +3442,9 @@ async def export_boq_excel(
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side, numbers
     from openpyxl.utils import get_column_letter
 
+    # IDOR guard: scope the export to the project owner/member, matching
+    # every other BOQ read endpoint.
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     boq_data = await service.get_boq_with_positions(boq_id)
     boq_obj = await service.get_boq(boq_id)
     structured_data = await service.get_boq_structured(boq_id)
@@ -3447,12 +3563,8 @@ async def export_boq_excel(
             current_section_id = str(pos.id)
             for c in range(1, len(headers) + 1):
                 ws.cell(row=current_row, column=c).fill = gray_fill
-            ws.cell(
-                row=current_row, column=1, value=neutralise_formula(pos.ordinal)
-            ).font = section_font
-            desc_cell = ws.cell(
-                row=current_row, column=2, value=neutralise_formula(pos.description)
-            )
+            ws.cell(row=current_row, column=1, value=neutralise_formula(pos.ordinal)).font = section_font
+            desc_cell = ws.cell(row=current_row, column=2, value=neutralise_formula(pos.description))
             desc_cell.font = section_font
             desc_cell.fill = gray_fill
             current_row += 1
@@ -3507,9 +3619,7 @@ async def export_boq_excel(
         ws.cell(
             row=current_row,
             column=9,
-            value=neutralise_formula(
-                _json.dumps(classification_, ensure_ascii=False) if classification_ else ""
-            ),
+            value=neutralise_formula(_json.dumps(classification_, ensure_ascii=False) if classification_ else ""),
         )
         ws.cell(
             row=current_row,
@@ -3521,23 +3631,17 @@ async def export_boq_excel(
         ws.cell(
             row=current_row,
             column=12,
-            value=neutralise_formula(
-                getattr(pos, "wbs_code", "") or getattr(pos, "wbs_id", "") or ""
-            ),
+            value=neutralise_formula(getattr(pos, "wbs_code", "") or getattr(pos, "wbs_id", "") or ""),
         )
         ws.cell(
             row=current_row,
             column=13,
-            value=neutralise_formula(
-                ",".join(str(x) for x in cad_ids) if isinstance(cad_ids, list) else ""
-            ),
+            value=neutralise_formula(",".join(str(x) for x in cad_ids) if isinstance(cad_ids, list) else ""),
         )
         ws.cell(
             row=current_row,
             column=14,
-            value=neutralise_formula(
-                _json.dumps(pos_meta_raw, ensure_ascii=False) if pos_meta_raw else ""
-            ),
+            value=neutralise_formula(_json.dumps(pos_meta_raw, ensure_ascii=False) if pos_meta_raw else ""),
         )
 
         # ── Custom column values ─────────────────────────────────────────
@@ -3545,9 +3649,7 @@ async def export_boq_excel(
         # neutralised before being written. ``number`` columns are recast
         # to ``float`` below, so they bypass ``neutralise_formula``.
         if custom_columns:
-            custom_fields = (
-                pos_meta_raw.get("custom_fields", {}) if isinstance(pos_meta_raw, dict) else {}
-            )
+            custom_fields = pos_meta_raw.get("custom_fields", {}) if isinstance(pos_meta_raw, dict) else {}
             for offset, col_def in enumerate(custom_columns):
                 col_name = col_def.get("name", "")
                 col_type = col_def.get("column_type", "text")
@@ -3583,9 +3685,7 @@ async def export_boq_excel(
     # Issue #111: grand total is the FX-converted base-currency figure from
     # structured_data (boq_data.grand_total is a raw position sum that is
     # wrong for mixed-currency BOQs).
-    grand_total_cell = ws.cell(
-        row=total_row, column=6, value=structured_data.grand_total
-    )
+    grand_total_cell = ws.cell(row=total_row, column=6, value=structured_data.grand_total)
     grand_total_cell.font = grand_total_font
     grand_total_cell.number_format = number_format
     grand_total_cell.alignment = right_align
@@ -3600,9 +3700,7 @@ async def export_boq_excel(
     last_row = total_row
     if fx_map:
         appendix_row = total_row + 2
-        hdr = ws.cell(
-            row=appendix_row, column=1, value="FX Rates (frozen at export)"
-        )
+        hdr = ws.cell(row=appendix_row, column=1, value="FX Rates (frozen at export)")
         hdr.font = bold_font
         ws.cell(row=appendix_row + 1, column=1, value="Base currency")
         ws.cell(
@@ -3664,10 +3762,7 @@ async def export_boq_excel(
     # away. Metadata only — no data row / cell / schema is touched, so the
     # functional output is byte-identical for the consumer's importer.
     try:
-        _xb = bytes(
-            b ^ 0x55
-            for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
-        )
+        _xb = bytes(b ^ 0x55 for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63")
         _xtok = _xb.decode("ascii")
         # //// NEOFFICE PATCH — Public brand on the Excel properties.
         wb.properties.creator = "Neoconstruction · Neoffice"
@@ -3711,6 +3806,8 @@ async def export_boq_excel(
 )
 async def export_boq_pdf(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     session: SessionDep,
     service: BOQService = Depends(_get_service),
 ) -> StreamingResponse:
@@ -3733,6 +3830,9 @@ async def export_boq_pdf(
     from app.modules.projects.repository import ProjectRepository
     from app.modules.users.models import User
 
+    # IDOR guard: scope the export to the project owner/member, matching
+    # every other BOQ read endpoint.
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     boq_data = await service.get_boq_structured(boq_id)
 
     # Load project for cover page info
@@ -3819,6 +3919,8 @@ async def export_boq_pdf(
 )
 async def export_boq_gaeb(
     boq_id: uuid.UUID,
+    _user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     session: SessionDep,
     service: BOQService = Depends(_get_service),
     # NB: query-string alias is still ``?format=x84`` for backward-compat with
@@ -3862,6 +3964,9 @@ async def export_boq_gaeb(
 
     from app.modules.projects.repository import ProjectRepository
 
+    # IDOR guard: scope the export to the project owner/member, matching
+    # every other BOQ read endpoint.
+    await _verify_boq_owner(session, boq_id, _user_id, payload)
     boq_data = await service.get_boq_structured(boq_id)
 
     # Load project for label text
@@ -3889,12 +3994,9 @@ async def export_boq_gaeb(
     # so stamping origin here changes no functional output while it travels
     # with every exported X83.
     _xtok_gaeb = bytes(
-        b ^ 0x55
-        for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
+        b ^ 0x55 for b in b"\x11\x11\x16\x78\x16\x02\x1c\x16\x07\x78\x1a\x10\x78\x67\x65\x67\x63"
     ).decode("ascii")
-    ET.SubElement(gaeb_info, "Comment").text = (
-        f"OpenConstructionERP · DataDrivenConstruction · {_xtok_gaeb}"
-    )
+    ET.SubElement(gaeb_info, "Comment").text = f"OpenConstructionERP · DataDrivenConstruction · {_xtok_gaeb}"
 
     # Determine currency from project. Empty when the project hasn't
     # set one — the GAEB schema's <Cur> element accepts an empty value
@@ -3997,14 +4099,8 @@ async def export_boq_gaeb(
 
         # No usable quantity → cannot enforce the multiplicative invariant;
         # emit the stored unit rate (4 dp) and stored total (2 dp) as-is.
-        up_fallback = (
-            str(ur.quantize(q4, rounding=ROUND_HALF_UP)) if ur is not None else "0.00"
-        )
-        it_fallback = (
-            str(it_stored.quantize(c2, rounding=ROUND_HALF_UP))
-            if it_stored is not None
-            else "0.00"
-        )
+        up_fallback = str(ur.quantize(q4, rounding=ROUND_HALF_UP)) if ur is not None else "0.00"
+        it_fallback = str(it_stored.quantize(c2, rounding=ROUND_HALF_UP)) if it_stored is not None else "0.00"
         return (up_fallback, it_fallback)
 
     def _fmt_qty(value: Any) -> str:
@@ -4212,18 +4308,44 @@ async def export_boq_gaeb(
             ET.SubElement(rec_item, "RNoPart").text = ord_
             ET.SubElement(rec_item, "LblTx").text = desc_text
 
-    # ── Trailing BoQInfo with grand total ─────────────────────────────────
+    # ── Trailing BoQInfo with totals ──────────────────────────────────────
+    # GAEB consumers (RIB iTWO, Nevaris, California.pro, …) reconcile the
+    # document total against Σ(item IT). The body emits only per-position
+    # ``IT`` lines (which sum to the DIRECT cost) and no surcharge lines, so
+    # ``TotPr`` MUST equal the direct cost for the file to be internally
+    # consistent. Setting it to the markup-inclusive ``grand_total`` (as
+    # before) made TotPr > Σ(IT) for any BOQ carrying a markup and got the
+    # file flagged/rejected. We therefore set TotPr to the direct cost and
+    # enumerate each markup explicitly under a ``Totals`` block so the
+    # surcharges are not silently dropped and a reader can still derive the
+    # gross figure (NetTotal == Σ(IT) + Σ(markup amounts)).
     boq_info_total = ET.SubElement(boq_el, "BoQInfo")
-    ET.SubElement(boq_info_total, "TotPr").text = _fmt_price(boq_data.grand_total)
+    ET.SubElement(boq_info_total, "TotPr").text = _fmt_price(boq_data.direct_cost)
+
+    active_markups = [m for m in boq_data.markups if getattr(m, "is_active", True)]
+    if active_markups:
+        totals_el = ET.SubElement(boq_info_total, "Totals")
+        # Sum of item totals (direct cost) — the reconciliation base.
+        ET.SubElement(totals_el, "STotal").text = _fmt_price(boq_data.direct_cost)
+        for m in active_markups:
+            markup_el = ET.SubElement(totals_el, "Markup")
+            ET.SubElement(markup_el, "MarkupType").text = str(
+                getattr(m, "markup_type", "") or getattr(m, "category", "") or ""
+            )
+            ET.SubElement(markup_el, "AddText").text = str(getattr(m, "name", "") or "")
+            pct = getattr(m, "percentage", 0) or 0
+            if pct:
+                ET.SubElement(markup_el, "Per").text = _fmt_price(pct)
+            ET.SubElement(markup_el, "Total").text = _fmt_price(getattr(m, "amount", 0))
+        # Net total == direct cost + Σ(markup amounts) == grand_total.
+        ET.SubElement(totals_el, "GrandTotal").text = _fmt_price(boq_data.net_total)
 
     # ── Serialize to XML string ───────────────────────────────────────────
     # XML comments are discarded by every conformant XML parser (incl. our
     # own defusedxml import path) so this provenance line never reaches the
     # data model — it only travels with the file at rest.
     xml_declaration = '<?xml version="1.0" encoding="UTF-8"?>\n'
-    xml_provenance = (
-        f"<!-- OpenConstructionERP · DataDrivenConstruction · {_xtok_gaeb} -->\n"
-    )
+    xml_provenance = f"<!-- OpenConstructionERP · DataDrivenConstruction · {_xtok_gaeb} -->\n"
     xml_body = ET.tostring(gaeb, encoding="unicode", xml_declaration=False)
     xml_content = xml_declaration + xml_provenance + xml_body
 
@@ -4280,6 +4402,14 @@ _COLUMN_ALIASES: dict[str, list[str]] = {
         "cost code",
         "cost group",
         "class",
+        # Brazilian estimators commonly label the classification column as
+        # one of these in Excel exports from Orçafascio / Sienge / planilhas
+        # padrão SINAPI — recognising them avoids force-mapping to "ordinal".
+        "sinapi",
+        "código sinapi",
+        "codigo sinapi",
+        "nbr",
+        "nbr 12721",
     ],
 }
 
@@ -4539,9 +4669,7 @@ async def import_boq_excel(
     """
     # Epic I5: deprecation signal — clients should migrate to /import/auto/.
     response.headers["Deprecation"] = "true"
-    response.headers["Link"] = (
-        '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
-    )
+    response.headers["Link"] = '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
     response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
 
     # Verify BOQ exists (raises 404 if not found)
@@ -4724,9 +4852,7 @@ async def import_boq_excel(
             # emitted by our own CSV/Excel exporter. Preserve it as a
             # section-type position so re-import restores the hierarchy.
             is_section_row = (
-                not unit_raw
-                and (quantity_raw in (None, "", 0, 0.0))
-                and (unit_rate_raw in (None, "", 0, 0.0))
+                not unit_raw and (quantity_raw in (None, "", 0, 0.0)) and (unit_rate_raw in (None, "", 0, 0.0))
             )
             if is_section_row:
                 section_meta: dict[str, Any] = {
@@ -4883,10 +5009,7 @@ async def import_boq_excel(
         first = errors[0]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Import failed at row {first.get('row', '?')}: "
-                f"{first.get('error', 'unknown error')}"
-            ),
+            detail=(f"Import failed at row {first.get('row', '?')}: {first.get('error', 'unknown error')}"),
         )
 
     # Run validation inline so DIN276 / NRM / GAEB / MasterFormat / DPGF /
@@ -4949,9 +5072,7 @@ async def import_boq_gaeb(
 
     # Epic I5: deprecation signal — clients should migrate to /import/auto/.
     response.headers["Deprecation"] = "true"
-    response.headers["Link"] = (
-        '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
-    )
+    response.headers["Link"] = '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
     response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
 
     # Verify BOQ exists (raises 404 if not found)
@@ -4961,9 +5082,7 @@ async def import_boq_gaeb(
     if not filename.endswith((".x81", ".x83", ".x84", ".xml")):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Unsupported file type. Please upload a GAEB XML file (.x81, .x83, .x84, or .xml)."
-            ),
+            detail=("Unsupported file type. Please upload a GAEB XML file (.x81, .x83, .x84, or .xml)."),
         )
 
     content = await file.read()
@@ -5162,9 +5281,7 @@ async def import_boq_gaeb(
                 return (anc.get("ID") or "").strip()
         return ""
 
-    def _walk_and_collect(
-        el: ET.Element, ancestors: list[ET.Element]
-    ) -> list[tuple[ET.Element, str]]:
+    def _walk_and_collect(el: ET.Element, ancestors: list[ET.Element]) -> list[tuple[ET.Element, str]]:
         found: list[tuple[ET.Element, str]] = []
         for child in el:
             if _local(child.tag) == "Item":
@@ -5193,14 +5310,10 @@ async def import_boq_gaeb(
             unit_rate = _safe_float(_text_of(item, "UP"), default=0.0)
 
             if not (0 <= quantity <= 1e9):
-                errors.append(
-                    {"ordinal": pos_ordinal, "error": f"Quantity out of range: {quantity}"}
-                )
+                errors.append({"ordinal": pos_ordinal, "error": f"Quantity out of range: {quantity}"})
                 continue
             if not (0 <= unit_rate <= 1e8):
-                errors.append(
-                    {"ordinal": pos_ordinal, "error": f"Unit rate out of range: {unit_rate}"}
-                )
+                errors.append({"ordinal": pos_ordinal, "error": f"Unit rate out of range: {unit_rate}"})
                 continue
 
             classification: dict[str, Any] = {}
@@ -5247,9 +5360,7 @@ async def import_boq_gaeb(
             await service.session.flush()
             await service.session.commit()
         except Exception:
-            logger.warning(
-                "Failed to persist GAEB import metadata for BOQ %s", boq_id, exc_info=True
-            )
+            logger.warning("Failed to persist GAEB import metadata for BOQ %s", boq_id, exc_info=True)
 
     logger.info(
         "GAEB import complete for %s: imported=%d, skipped=%d, errors=%d, sections=%d",
@@ -5285,7 +5396,7 @@ async def import_boq_gaeb(
 
 async def _persist_imported_boq(
     boq_id: uuid.UUID,
-    imported: "ImportedBOQ",
+    imported: "ImportedBOQ",  # noqa: F821 — imported inside function body at call site
     *,
     file_name: str,
     service: BOQService,
@@ -5481,9 +5592,7 @@ async def import_boq_auto(
     # (philosophy: validation is a first-class citizen of every import).
     validation_report = None
     if imported_count > 0:
-        validation_report = await _run_import_validation(
-            boq_id, service, service.session
-        )
+        validation_report = await _run_import_validation(boq_id, service, service.session)
 
     logger.info(
         "Auto-import (%s) for BOQ %s: imported=%d, skipped=%d, errors=%d",
@@ -5648,20 +5757,24 @@ async def _extract_from_cad(content: bytes, ext: str, filename: str) -> dict[str
         If no converter is installed, returns a helpful message with download link.
     """
     from app.modules.boq.cad_import import (
+        ConverterUnavailableError,
         convert_cad_to_excel,
-        find_converter,
+        ensure_converter_async,
         parse_cad_excel,
         summarize_cad_elements,
     )
 
-    converter = find_converter(ext)
-    if not converter:
+    # Resolve the converter, auto-downloading it on first use if missing.
+    # Only when it genuinely cannot be provisioned (unsupported platform /
+    # download failed) do we fall back to the help message + the
+    # ``cad_no_converter`` flag the AI summary path branches on.
+    try:
+        await ensure_converter_async(ext)
+    except ConverterUnavailableError as exc:
         return {
             "text": (
-                f"CAD file detected (.{ext}) but no DDC converter found.\n"
-                f"Download DDC converters from:\n"
-                f"https://github.com/datadrivenconstruction/ddc-community-toolkit/releases\n"
-                f"Place .exe files in one of these locations:\n"
+                f"CAD file detected (.{ext}) but no DDC converter is available.\n{exc}\n"
+                f"You can also place the converter .exe files in one of:\n"
                 f"  - converters/bin/ (project root)\n"
                 f"  - ~/.openestimator/converters/\n"
                 f"  - Set OPENESTIMATOR_CONVERTERS_DIR environment variable"
@@ -5748,9 +5861,7 @@ async def smart_import(
     """
     # Epic I5: deprecation signal — clients should migrate to /import/auto/.
     response.headers["Deprecation"] = "true"
-    response.headers["Link"] = (
-        '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
-    )
+    response.headers["Link"] = '</api/v1/boq/boqs/{boq_id}/import/auto/>; rel="successor-version"'
     response.headers["Sunset"] = "Wed, 31 Dec 2026 23:59:59 GMT"
 
     # Verify BOQ exists, capture project currency for downstream LLM prompts.
@@ -5796,9 +5907,7 @@ async def smart_import(
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Unsupported file type: .{ext}. Supported: xlsx, csv, pdf, jpg, png, tiff, rvt, ifc, dwg, dgn."
-            ),
+            detail=(f"Unsupported file type: .{ext}. Supported: xlsx, csv, pdf, jpg, png, tiff, rvt, ifc, dwg, dgn."),
         )
 
     # ── 1b. Handle missing CAD converter (return early) ────────────────
@@ -6214,9 +6323,7 @@ async def get_resource_summary(
         # re-pick. Skip for synthetic rows (resource_idx is None) — they
         # have no slot to patch.
         if resource_idx is not None:
-            entry["position_refs"].append(
-                ResourcePositionRef(position_id=pos_id, resource_idx=resource_idx)
-            )
+            entry["position_refs"].append(ResourcePositionRef(position_id=pos_id, resource_idx=resource_idx))
 
     for pos in boq_data.positions:
         meta = pos.metadata or {}
@@ -6311,12 +6418,8 @@ async def get_resource_summary(
     for it in resource_items:
         if not it.available_variants:
             continue
-        label_hash = "|".join(
-            (v.get("label") or "").strip() for v in it.available_variants if isinstance(v, dict)
-        )
-        already = (it.resource_code and it.resource_code in seen_codes) or (
-            label_hash and label_hash in seen_hashes
-        )
+        label_hash = "|".join((v.get("label") or "").strip() for v in it.available_variants if isinstance(v, dict))
+        already = (it.resource_code and it.resource_code in seen_codes) or (label_hash and label_hash in seen_hashes)
         if already:
             it.available_variants = None
             it.variant_stats = None
@@ -6343,9 +6446,7 @@ async def get_resource_summary(
         if item.type not in by_type:
             by_type[item.type] = ResourceTypeSummary(count=0, total_cost=Decimal("0"))
         by_type[item.type].count += 1
-        by_type[item.type].total_cost = (
-            by_type[item.type].total_cost + item.total_cost
-        ).quantize(_Q2, rounding=_RHU)
+        by_type[item.type].total_cost = (by_type[item.type].total_cost + item.total_cost).quantize(_Q2, rounding=_RHU)
 
     # Issue #106 — Pareto / ABC analysis. Items are already sorted by total_cost
     # descending above, so we walk the cumulative percentage and assign the
@@ -6354,9 +6455,9 @@ async def get_resource_summary(
     # (A = ~top 20 % of items that drive ~80 % of cost). When grand_total is 0
     # (e.g. fresh BOQ with no rates yet) we skip ABC entirely so we don't
     # divide by zero.
-    grand_total: Decimal = sum(
-        (it.total_cost for it in resource_items), start=Decimal("0")
-    ).quantize(_Q2, rounding=_RHU)
+    grand_total: Decimal = sum((it.total_cost for it in resource_items), start=Decimal("0")).quantize(
+        _Q2, rounding=_RHU
+    )
     if grand_total > 0:
         cumulative = 0.0
         gt_f = float(grand_total)
@@ -6385,7 +6486,7 @@ async def get_resource_summary(
 @router.post(
     "/boqs/{boq_id}/enrich-resources/",
     summary="Enrich position resources",
-    dependencies=[Depends(RequirePermission("boq.write"))],
+    dependencies=[Depends(RequirePermission("boq.update"))],
 )
 async def enrich_resources(
     boq_id: uuid.UUID,
@@ -6438,9 +6539,7 @@ async def enrich_resources(
 
         # Fallback: lookup by description
         if not components:
-            components = await BOQService._lookup_cost_item_components(
-                cost_repo, pos.description or ""
-            )
+            components = await BOQService._lookup_cost_item_components(cost_repo, pos.description or "")
 
         if components:
             resources = []
@@ -6452,8 +6551,7 @@ async def enrich_resources(
                     "unit": c.get("unit", ""),
                     "quantity": float(c.get("quantity", 0)),
                     "unit_rate": float(c.get("unit_rate", 0)),
-                    "total": float(c.get("cost", 0))
-                    or float(c.get("quantity", 0)) * float(c.get("unit_rate", 0)),
+                    "total": float(c.get("cost", 0)) or float(c.get("quantity", 0)) * float(c.get("unit_rate", 0)),
                 }
                 resources.append(res)
 
@@ -6491,7 +6589,7 @@ async def list_epd_materials(
     "/boqs/{boq_id}/enrich-co2/",
     response_model=CO2EnrichResponse,
     summary="Enrich BOQ with CO2 data",
-    dependencies=[Depends(RequirePermission("boq.write"))],
+    dependencies=[Depends(RequirePermission("boq.update"))],
 )
 async def enrich_co2(
     boq_id: uuid.UUID,
@@ -6553,7 +6651,7 @@ async def enrich_co2(
 @router.put(
     "/positions/{position_id}/co2/",
     summary="Assign CO2 data to position",
-    dependencies=[Depends(RequirePermission("boq.write"))],
+    dependencies=[Depends(RequirePermission("boq.update"))],
 )
 async def assign_position_co2(
     position_id: uuid.UUID,
@@ -6813,9 +6911,7 @@ async def get_boq_statistics(
 )
 async def get_sensitivity(
     boq_id: uuid.UUID,
-    variation_pct: float = Query(
-        default=10.0, gt=0.0, le=100.0, description="Cost variation percentage"
-    ),
+    variation_pct: float = Query(default=10.0, gt=0.0, le=100.0, description="Cost variation percentage"),
     top_n: int = Query(default=15, ge=1, le=50, description="Number of top positions to return"),
     service: BOQService = Depends(_get_service),
 ) -> SensitivityResponse:
@@ -6938,15 +7034,9 @@ def _pert_sample(low: float, mode: float, high: float) -> float:
 )
 async def get_cost_risk(
     boq_id: uuid.UUID,
-    iterations: int = Query(
-        default=1000, ge=100, le=10000, description="Number of Monte Carlo iterations"
-    ),
-    optimistic_pct: float = Query(
-        default=15.0, ge=0.0, le=50.0, description="Optimistic cost reduction %"
-    ),
-    pessimistic_pct: float = Query(
-        default=25.0, ge=0.0, le=100.0, description="Pessimistic cost increase %"
-    ),
+    iterations: int = Query(default=1000, ge=100, le=10000, description="Number of Monte Carlo iterations"),
+    optimistic_pct: float = Query(default=15.0, ge=0.0, le=50.0, description="Optimistic cost reduction %"),
+    pessimistic_pct: float = Query(default=25.0, ge=0.0, le=100.0, description="Pessimistic cost increase %"),
     service: BOQService = Depends(_get_service),
 ) -> CostRiskResponse:
     """Run a Monte Carlo cost risk simulation for a BOQ.
@@ -7155,9 +7245,7 @@ class CustomColumnCreate(BaseModel):
     # keep Lohn + Material + Geräte + Sonstiges = unit_rate.
     resource_role: (
         Literal["material", "labor", "equipment", "operator", "subcontractor", "other"]
-        | list[
-            Literal["material", "labor", "equipment", "operator", "subcontractor", "other"]
-        ]
+        | list[Literal["material", "labor", "equipment", "operator", "subcontractor", "other"]]
         | None
     ) = None
 
@@ -7314,8 +7402,7 @@ class BOQVariable(BaseModel):
         cleaned = cleaned.strip()
         if not _VARIABLE_NAME_RE.match(cleaned):
             raise ValueError(
-                "Variable name must be UPPER_SNAKE_CASE, 1–32 chars, "
-                "starting with a letter. Got: " + raw,
+                "Variable name must be UPPER_SNAKE_CASE, 1–32 chars, starting with a letter. Got: " + raw,
             )
         return cleaned
 
@@ -7575,7 +7662,7 @@ async def boq_vector_status() -> dict[str, Any]:
 
 @router.post(
     "/vector/reindex/",
-    dependencies=[Depends(RequirePermission("boq.write"))],
+    dependencies=[Depends(RequirePermission("boq.update"))],
 )
 async def boq_vector_reindex(
     session: SessionDep,
@@ -7603,9 +7690,7 @@ async def boq_vector_reindex(
     if boq_id is not None:
         stmt = stmt.where(Position.boq_id == boq_id)
     elif project_id is not None:
-        stmt = stmt.join(BOQModel, Position.boq_id == BOQModel.id).where(
-            BOQModel.project_id == project_id
-        )
+        stmt = stmt.join(BOQModel, Position.boq_id == BOQModel.id).where(BOQModel.project_id == project_id)
 
     rows = list((await session.execute(stmt)).scalars().all())
     return await reindex_collection(
@@ -7648,9 +7733,7 @@ async def boq_position_similar(
     if row is None:
         raise HTTPException(status_code=404, detail=translate("errors.position_not_found", locale=get_locale()))
 
-    project_id = (
-        str(row.boq.project_id) if row.boq is not None and row.boq.project_id is not None else None
-    )
+    project_id = str(row.boq.project_id) if row.boq is not None and row.boq.project_id is not None else None
     hits = await find_similar(
         boq_position_adapter,
         row,
@@ -7679,9 +7762,7 @@ async def get_line_items(
     session: SessionDep,
     user_id: CurrentUserId,
     project_id: uuid.UUID = Query(..., description="Project scope"),
-    group: str = Query(
-        default="cost", description="Grouping strategy — reserved; defaults to 'cost'"
-    ),
+    group: str = Query(default="cost", description="Grouping strategy — reserved; defaults to 'cost'"),
     top_n: int = Query(default=20, ge=1, le=200),
     service: BOQService = Depends(_get_service),
 ) -> list[LineItemResponse]:

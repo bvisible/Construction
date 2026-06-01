@@ -56,6 +56,11 @@ interface SmartViewUserData {
   _smartViewOriginalMaterial?: THREE.Material | THREE.Material[];
   /** Cached clone we keep mutating across re-applies. Cleared on revert. */
   _smartViewMaterial?: THREE.Material;
+  /** Set to ``true`` when applySmartView itself flipped this mesh hidden.
+   *  {@link revertSmartView} only re-shows meshes carrying this tag, so it
+   *  never resurrects elements hidden by context-menu Hide / Layers tab /
+   *  filter / isolation (those flips don't carry the tag). */
+  _smartViewHidVisible?: boolean;
 }
 
 function looksLikeMesh(obj: THREE.Object3D): obj is THREE.Mesh {
@@ -156,6 +161,14 @@ export function applySmartView(
     const state = evalResult[stable];
     if (!state) return;
 
+    const ud = mesh.userData as SmartViewUserData;
+    // Tag meshes WE hide so revertSmartView can re-show exactly those and
+    // leave alone anything hidden by Hide / Layers / filter / isolation.
+    if (!state.visible) {
+      ud._smartViewHidVisible = true;
+    } else {
+      delete ud._smartViewHidVisible;
+    }
     mesh.visible = state.visible;
 
     if (state.color || state.opacity < 1) {
@@ -169,7 +182,6 @@ export function applySmartView(
       // visible-but-default-colour: if we previously cloned a material
       // for this mesh, restore the original look so the swatch doesn't
       // freeze on the last colour.
-      const ud = mesh.userData as SmartViewUserData;
       if (ud._smartViewOriginalMaterial) {
         mesh.material = ud._smartViewOriginalMaterial;
         delete ud._smartViewMaterial;
@@ -203,10 +215,14 @@ export function revertSmartView(viewer: SmartViewViewerHandle): number {
       delete ud._smartViewMaterial;
       touched += 1;
     }
-    // Always restore visibility — a "hide" action may have flipped it
-    // off without touching the material.
-    if (!mesh.visible) {
+    // Only restore visibility for meshes WE hid (tagged on apply). A bare
+    // `mesh.visible = true` here would resurrect elements hidden by the
+    // context-menu Hide, the Layers tab, a category filter, or an active
+    // isolate — none of which the SmartView owns. Clear the tag so a later
+    // hide-then-revert cycle stays correct.
+    if (ud._smartViewHidVisible) {
       mesh.visible = true;
+      delete ud._smartViewHidVisible;
       touched += 1;
     }
   });

@@ -115,6 +115,50 @@ export function BidComparisonChart({
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const [svgWidth, setSvgWidth] = useState(600);
 
+  // A single value axis can only honestly compare bids quoted in the SAME
+  // currency — plotting EUR and USD bars side by side on one axis labelled
+  // with one currency silently treats 1 EUR = 1 USD. So we pick a single
+  // "comparison currency" (the one carried by the most bids, falling back to
+  // the project currency) and plot only those bids, surfacing a notice for
+  // any bids excluded because they are in a different currency.
+  const { chartCurrency, plottedBids, excludedCount, excludedCurrencies } =
+    useMemo(() => {
+      const norm = (c: string) => (c || '').trim().toUpperCase();
+      const counts = new Map<string, number>();
+      for (const b of bidTotals) {
+        const c = norm(b.currency);
+        if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
+      }
+      const projectCcy = norm(currency);
+      let dominant = projectCcy;
+      let best = -1;
+      for (const [c, n] of counts) {
+        if (n > best || (n === best && c === projectCcy)) {
+          best = n;
+          dominant = c;
+        }
+      }
+      // When no bid carries a currency at all, fall back to plotting every
+      // bid (legacy behavior) under the project currency label.
+      const anyCurrency = counts.size > 0;
+      const plotted = anyCurrency
+        ? bidTotals.filter((b) => norm(b.currency) === dominant)
+        : bidTotals;
+      const excluded = bidTotals.length - plotted.length;
+      const excludedCcys = anyCurrency
+        ? [...new Set(bidTotals
+            .filter((b) => norm(b.currency) !== dominant)
+            .map((b) => norm(b.currency))
+            .filter(Boolean))]
+        : [];
+      return {
+        chartCurrency: anyCurrency ? dominant : projectCcy,
+        plottedBids: plotted,
+        excludedCount: excluded,
+        excludedCurrencies: excludedCcys,
+      };
+    }, [bidTotals, currency]);
+
   const containerNodeRef = useRef<HTMLDivElement | null>(null);
 
   const containerRef = useCallback((node: HTMLDivElement | null) => {
@@ -135,7 +179,7 @@ export function BidComparisonChart({
   }, []);
 
   const { lowestTotal, highestTotal, yAxis, chartArea, bars, budgetY } = useMemo(() => {
-    const allValues = bidTotals.map((b) => b.total);
+    const allValues = plottedBids.map((b) => b.total);
     const lowest = allValues.length > 0 ? Math.min(...allValues) : 0;
     const highest = allValues.length > 0 ? Math.max(...allValues) : 0;
 
@@ -149,12 +193,12 @@ export function BidComparisonChart({
       height: MIN_CHART_HEIGHT - CHART_PADDING_TOP - CHART_PADDING_BOTTOM,
     };
 
-    const barCount = bidTotals.length;
+    const barCount = plottedBids.length;
     const totalBarWidth = barCount > 0 ? area.width / barCount : area.width;
     const barWidth = totalBarWidth * (1 - BAR_GAP_RATIO);
     const gapWidth = totalBarWidth * BAR_GAP_RATIO;
 
-    const barsArr = bidTotals.map((bid, i) => {
+    const barsArr = plottedBids.map((bid, i) => {
       const barHeight = yAx.max > 0 ? (bid.total / yAx.max) * area.height : 0;
       return {
         x: area.x + i * totalBarWidth + gapWidth / 2,
@@ -178,7 +222,7 @@ export function BidComparisonChart({
       bars: barsArr,
       budgetY: budgetYPos,
     };
-  }, [bidTotals, budgetTotal, svgWidth]);
+  }, [plottedBids, budgetTotal, svgWidth]);
 
   const yTicks = useMemo(() => {
     const ticks: number[] = [];
@@ -188,7 +232,7 @@ export function BidComparisonChart({
     return ticks;
   }, [yAxis]);
 
-  if (bidTotals.length === 0) {
+  if (plottedBids.length === 0) {
     return null;
   }
 
@@ -196,7 +240,23 @@ export function BidComparisonChart({
     <div className="mb-4">
       <h5 className="text-xs font-semibold text-content-secondary uppercase tracking-wider mb-3">
         {t('tendering.bid_totals_chart', 'Bid Totals Overview')}
+        {chartCurrency && (
+          <span className="ml-2 font-normal normal-case text-content-tertiary">
+            ({chartCurrency})
+          </span>
+        )}
       </h5>
+      {excludedCount > 0 && (
+        <p className="mb-2 text-xs text-semantic-warning">
+          {t('tendering.chart_mixed_currency', {
+            defaultValue:
+              '{{count}} bid(s) in {{currencies}} are not shown — bids in a different currency cannot be plotted on the {{base}} axis without conversion.',
+            count: excludedCount,
+            currencies: excludedCurrencies.join(', '),
+            base: chartCurrency,
+          })}
+        </p>
+      )}
       <div ref={containerRef} className="w-full">
         <svg
           ref={svgRef}
@@ -229,7 +289,7 @@ export function BidComparisonChart({
                   className="text-[10px]"
                   fill="var(--color-content-tertiary, #9ca3af)"
                 >
-                  {formatCompact(tick, currency)}
+                  {formatCompact(tick, chartCurrency)}
                 </text>
               </g>
             );
@@ -265,7 +325,7 @@ export function BidComparisonChart({
               bar.bid.total,
               lowestTotal,
               highestTotal,
-              bidTotals.length,
+              plottedBids.length,
             );
             const isHovered = hoveredIndex === i;
             return (
@@ -359,7 +419,7 @@ export function BidComparisonChart({
 
           {/* Legend */}
           <g transform={`translate(${chartArea.x}, ${MIN_CHART_HEIGHT - 20})`}>
-            {bidTotals.length > 1 && (
+            {plottedBids.length > 1 && (
               <>
                 <rect x={0} y={0} width={10} height={10} rx={2} fill="var(--oe-success, #15803d)" />
                 <text
@@ -391,7 +451,7 @@ export function BidComparisonChart({
               </>
             )}
             {budgetTotal > 0 && (
-              <g transform={`translate(${bidTotals.length > 1 ? 200 : 0}, 0)`}>
+              <g transform={`translate(${plottedBids.length > 1 ? 200 : 0}, 0)`}>
                 <line
                   x1={0}
                   y1={5}

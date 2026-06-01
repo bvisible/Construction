@@ -17,10 +17,13 @@ Endpoints:
 
 import logging
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.file_signature import (
     SIGNATURE_BYTES_REQUIRED,
@@ -47,7 +50,7 @@ from app.modules.submittals.schemas import (
 )
 from app.modules.submittals.service import SubmittalService
 
-router = APIRouter()
+router = APIRouter(tags=["submittals"])
 logger = logging.getLogger(__name__)
 
 # Magic-byte allow-list for direct submittal-attachment uploads.
@@ -59,9 +62,19 @@ logger = logging.getLogger(__name__)
 _ALLOWED_ATTACHMENT_TYPES = frozenset(
     {
         "pdf",
-        "png", "jpeg", "gif", "webp", "heic", "heif", "tiff",
-        "zip", "ole",
-        "dwg", "dxf", "ifc", "glb",
+        "png",
+        "jpeg",
+        "gif",
+        "webp",
+        "heic",
+        "heif",
+        "tiff",
+        "zip",
+        "ole",
+        "dwg",
+        "dxf",
+        "ifc",
+        "glb",
     }
 )
 
@@ -80,7 +93,41 @@ def _get_service(session: SessionDep) -> SubmittalService:
     return SubmittalService(session)
 
 
-def _to_response(item: object) -> SubmittalResponse:
+async def _fetch_user_names(
+    session: AsyncSession,
+    user_ids: Iterable[str | None],
+) -> dict[str, str]:
+    """Resolve ``ball_in_court`` user UUIDs -> display name in one round trip.
+
+    Returns a dict keyed by the string form of the user UUID. Unknown IDs
+    (user deleted, typo in the string, etc.) just don't appear in the map,
+    so the caller falls back to showing the raw UUID. Mirrors the
+    ``_fetch_vendor_names`` pattern used by the procurement module.
+    """
+    from app.modules.users.models import User
+
+    ids: set[uuid.UUID] = set()
+    for raw in user_ids:
+        if not raw:
+            continue
+        try:
+            ids.add(uuid.UUID(str(raw)))
+        except (ValueError, TypeError):
+            continue
+    if not ids:
+        return {}
+    rows = (await session.execute(select(User).where(User.id.in_(ids)))).scalars().all()
+    out: dict[str, str] = {}
+    for u in rows:
+        name = (u.full_name or "").strip() or (u.email or "").split("@", 1)[0]
+        if name:
+            out[str(u.id)] = name
+    return out
+
+
+def _to_response(item: object, name_map: dict[str, str] | None = None) -> SubmittalResponse:
+    names = name_map or {}
+    ball = str(item.ball_in_court) if item.ball_in_court else None  # type: ignore[attr-defined]
     return SubmittalResponse(
         id=item.id,  # type: ignore[attr-defined]
         project_id=item.project_id,  # type: ignore[attr-defined]
@@ -89,7 +136,8 @@ def _to_response(item: object) -> SubmittalResponse:
         spec_section=item.spec_section,  # type: ignore[attr-defined]
         submittal_type=item.submittal_type,  # type: ignore[attr-defined]
         status=item.status,  # type: ignore[attr-defined]
-        ball_in_court=str(item.ball_in_court) if item.ball_in_court else None,  # type: ignore[attr-defined]
+        ball_in_court=ball,
+        ball_in_court_name=names.get(ball) if ball else None,
         current_revision=item.current_revision,  # type: ignore[attr-defined]
         submitted_by_org=item.submitted_by_org,  # type: ignore[attr-defined]
         reviewer_id=str(item.reviewer_id) if item.reviewer_id else None,  # type: ignore[attr-defined]
@@ -128,7 +176,8 @@ async def list_submittals(
         status_filter=status_filter,
         submittal_type=type_filter,
     )
-    return [_to_response(s) for s in submittals]
+    name_map = await _fetch_user_names(session, (s.ball_in_court for s in submittals))
+    return [_to_response(s, name_map) for s in submittals]
 
 
 @router.post("/", response_model=SubmittalResponse, status_code=201)
@@ -141,7 +190,8 @@ async def create_submittal(
 ) -> SubmittalResponse:
     await verify_project_access(data.project_id, user_id, session)
     submittal = await service.create_submittal(data, user_id=user_id)
-    return _to_response(submittal)
+    name_map = await _fetch_user_names(session, [submittal.ball_in_court])
+    return _to_response(submittal, name_map)
 
 
 @router.get(
@@ -157,7 +207,8 @@ async def get_submittal(
 ) -> SubmittalResponse:
     submittal = await service.get_submittal(submittal_id)
     await verify_project_access(submittal.project_id, str(user_id), session)
-    return _to_response(submittal)
+    name_map = await _fetch_user_names(session, [submittal.ball_in_court])
+    return _to_response(submittal, name_map)
 
 
 @router.patch("/{submittal_id}", response_model=SubmittalResponse)
@@ -172,7 +223,8 @@ async def update_submittal(
     existing = await service.get_submittal(submittal_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     submittal = await service.update_submittal(submittal_id, data)
-    return _to_response(submittal)
+    name_map = await _fetch_user_names(session, [submittal.ball_in_court])
+    return _to_response(submittal, name_map)
 
 
 @router.delete("/{submittal_id}", status_code=204)
@@ -200,7 +252,8 @@ async def submit_submittal(
     existing = await service.get_submittal(submittal_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     submittal = await service.submit_submittal(submittal_id)
-    return _to_response(submittal)
+    name_map = await _fetch_user_names(session, [submittal.ball_in_court])
+    return _to_response(submittal, name_map)
 
 
 @router.post(
@@ -227,8 +280,14 @@ async def review_submittal(
     """
     existing = await service.get_submittal(submittal_id)
     await verify_project_access(existing.project_id, str(user_id), session)
-    submittal = await service.review_submittal(submittal_id, body.status, reviewer_id=user_id)
-    return _to_response(submittal)
+    submittal = await service.review_submittal(
+        submittal_id,
+        body.status,
+        reviewer_id=user_id,
+        notes=body.notes,
+    )
+    name_map = await _fetch_user_names(session, [submittal.ball_in_court])
+    return _to_response(submittal, name_map)
 
 
 @router.post(
@@ -258,7 +317,8 @@ async def approve_submittal(
     existing = await service.get_submittal(submittal_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     submittal = await service.approve_submittal(submittal_id, approver_id=user_id)
-    return _to_response(submittal)
+    name_map = await _fetch_user_names(session, [submittal.ball_in_court])
+    return _to_response(submittal, name_map)
 
 
 # ── Attachments ──────────────────────────────────────────────────────────
@@ -501,11 +561,7 @@ async def add_submittal_attachment(
     attachments: list[dict] = list(meta.get("attachments", []) or [])
 
     # Reject duplicates — idempotency for retry-safe clients.
-    if any(
-        str(a.get("document_id")) == str(data.document_id)
-        for a in attachments
-        if isinstance(a, dict)
-    ):
+    if any(str(a.get("document_id")) == str(data.document_id) for a in attachments if isinstance(a, dict)):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Document already attached to this submittal",
@@ -550,10 +606,7 @@ async def remove_submittal_attachment(
     meta = dict(getattr(submittal, "metadata_", {}) or {})
     attachments: list[dict] = list(meta.get("attachments", []) or [])
 
-    new_list = [
-        a for a in attachments
-        if isinstance(a, dict) and str(a.get("document_id")) != str(document_id)
-    ]
+    new_list = [a for a in attachments if isinstance(a, dict) and str(a.get("document_id")) != str(document_id)]
     if len(new_list) == len(attachments):
         raise HTTPException(status_code=404, detail="Attachment not found")
 

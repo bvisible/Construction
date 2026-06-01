@@ -204,9 +204,7 @@ async def index_file(
         payload = payload_override
         mime = mime_override or ""
     else:
-        payload, mime, _name = await _fetch_file_payload(
-            session, project_id, kind, file_id
-        )
+        payload, mime, _name = await _fetch_file_payload(session, project_id, kind, file_id)
 
     extraction = extract_text(payload, mime)
     return await _upsert_index_row(session, project_id, kind, file_id, extraction)
@@ -336,9 +334,7 @@ async def search_content(
 
     hits: list[SearchHit] = []
     for row in rows:
-        name = await _resolve_canonical_name(
-            session, project_id, row.file_kind, row.file_id
-        )
+        name = await _resolve_canonical_name(session, project_id, row.file_kind, row.file_id)
         snippet = _build_snippet(row.content_text, q)
         hits.append(
             SearchHit(
@@ -385,14 +381,21 @@ async def _content_search_postgres(
     """Postgres tsvector-backed search."""
     from sqlalchemy import text as sa_text
 
-    sql = """
+    # Compute the tsvector inline rather than referencing a stored ``tsv_vector``
+    # column. That column was only ever added by a hand-written migration; a fresh
+    # ``create_all`` PostgreSQL schema does not have it, so the original query
+    # raised "column tsv_vector does not exist". ``to_tsvector(content_text)``
+    # over the row is equivalent for correctness (a stored generated column +
+    # GIN index would be a pure performance optimisation, tracked separately).
+    tsv = "to_tsvector('simple', coalesce(content_text, ''))"
+    sql = f"""
         SELECT * FROM oe_file_search_index
         WHERE project_id = :pid
         AND (
-            tsv_vector @@ plainto_tsquery('simple', :q)
+            {tsv} @@ plainto_tsquery('simple', :q)
             OR content_text ILIKE :like
         )
-    """
+    """  # noqa: S608 - tsv is a fixed literal, not user input
     params: dict = {
         "pid": str(project_id),
         "q": q,
@@ -401,7 +404,7 @@ async def _content_search_postgres(
     if kind is not None:
         sql += " AND file_kind = :kind"
         params["kind"] = kind
-    sql += " ORDER BY ts_rank(tsv_vector, plainto_tsquery('simple', :q)) DESC LIMIT :limit"
+    sql += f" ORDER BY ts_rank({tsv}, plainto_tsquery('simple', :q)) DESC LIMIT :limit"
     params["limit"] = limit
 
     result = await session.execute(sa_text(sql), params)
@@ -465,6 +468,7 @@ async def _search_by_filename(
     case-insensitive substring match on each kind's name attribute.
     """
     import importlib
+
     from sqlalchemy import func
 
     needle = f"%{q.lower()}%"
@@ -485,12 +489,7 @@ async def _search_by_filename(
         name_attr = getattr(Cls, spec[3], None)
         if name_attr is None:
             continue
-        stmt = (
-            select(Cls)
-            .where(Cls.project_id == project_id)
-            .where(func.lower(name_attr).like(needle))
-            .limit(limit)
-        )
+        stmt = select(Cls).where(Cls.project_id == project_id).where(func.lower(name_attr).like(needle)).limit(limit)
         result = await session.execute(stmt)
         for row in result.scalars().all():
             name = getattr(row, spec[3], None) or f"{k}/{row.id}"
@@ -539,9 +538,7 @@ async def reindex_project(
                 await index_file(session, project_id, kind, str(row.id))
                 indexed += 1
             except Exception:
-                logger.exception(
-                    "Reindex failed for kind=%s file_id=%s", kind, row.id
-                )
+                logger.exception("Reindex failed for kind=%s file_id=%s", kind, row.id)
                 errors += 1
                 continue
 

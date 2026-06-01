@@ -5,7 +5,7 @@ import { chromium } from 'playwright';
 
 const FRONTEND = 'http://localhost:5180';
 const BACKEND  = 'http://localhost:8000';
-const EMAIL    = 'demo@openestimator.io';
+const EMAIL    = 'demo@openconstructionerp.com';
 const PASSWORD = 'DemoPass1234!';
 
 const browser = await chromium.launch({ headless: true });
@@ -40,7 +40,7 @@ await page.addInitScript((tok) => {
   // useAuthStore reads `oe_access_token` from localStorage when remember=true.
   window.localStorage.setItem('oe_remember', '1');
   window.localStorage.setItem('oe_access_token', tok);
-  window.localStorage.setItem('oe_user_email', 'demo@openestimator.io');
+  window.localStorage.setItem('oe_user_email', 'demo@openconstructionerp.com');
   // Skip onboarding tour
   window.localStorage.setItem('oe_tour_completed', 'true');
   window.localStorage.setItem('oe_onboarding_completed', 'true');

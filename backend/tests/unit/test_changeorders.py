@@ -31,7 +31,6 @@ from app.modules.changeorders.schemas import (
 )
 from app.modules.changeorders.service import ChangeOrderService
 
-
 # ── Schema tests (BUG-385) ──────────────────────────────────────────────────
 
 
@@ -209,7 +208,7 @@ async def test_create_order_retries_on_integrity_error() -> None:
 async def test_create_order_without_currency_does_not_become_eur() -> None:
     """A change order created without an explicit currency on a project
     that has no currency must NOT silently become 'EUR' (task #217 /
-    CLAUDE.md ban on model-/schema-level hardcoded currency)."""
+    the architecture guide ban on model-/schema-level hardcoded currency)."""
     service, session, repo = _make_service()
     pid = uuid.uuid4()
     # Project exists but carries no currency (honest-unknown project).

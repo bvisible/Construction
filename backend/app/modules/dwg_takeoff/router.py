@@ -21,13 +21,15 @@ Endpoints:
         GET    /pins/?drawing_id=X            — Task/punchlist pins
 """
 
+import ipaddress
 import logging
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, UploadFile, status
 from fastapi.responses import Response
 
+from app.config import get_settings
 from app.core.rate_limiter import upload_limiter
 from app.dependencies import (
     CurrentUserId,
@@ -40,6 +42,7 @@ from app.modules.dwg_takeoff.schemas import (
     DwgAnnotationCreate,
     DwgAnnotationResponse,
     DwgAnnotationUpdate,
+    DwgDrawingFromDocument,
     DwgDrawingResponse,
     DwgDrawingScaleUpdate,
     DwgDrawingVersionResponse,
@@ -50,7 +53,7 @@ from app.modules.dwg_takeoff.schemas import (
 )
 from app.modules.dwg_takeoff.service import DwgTakeoffService
 
-router = APIRouter()
+router = APIRouter(tags=["dwg_takeoff"])
 logger = logging.getLogger(__name__)
 
 
@@ -251,6 +254,58 @@ async def upload_drawing(
         )
 
 
+@router.post(
+    "/drawings/from-document/",
+    response_model=DwgDrawingResponse,
+    status_code=201,
+)
+async def import_drawing_from_document(
+    data: DwgDrawingFromDocument,
+    user_id: CurrentUserId = None,  # type: ignore[assignment]
+    session: SessionDep = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("dwg_takeoff.create")),
+    service: DwgTakeoffService = Depends(_get_service),
+) -> DwgDrawingResponse:
+    """Materialise a DWG/DXF drawing from an existing project Document.
+
+    Powers the Documents / File Manager "Open in DWG Takeoff" action for a
+    CAD file that lives only as a Document (uploaded via /files or another
+    module) and therefore has no drawing to render — the deep-link used to
+    land on a blank page. Idempotent per document: re-opening returns the
+    same drawing rather than creating a duplicate.
+
+    Access is gated on the *document's* owning project (resolved server-side
+    from the trusted document row), mirroring the IDOR policy on every other
+    write in this module — a 404 is returned for both a missing document and
+    one in a foreign tenant's project.
+    """
+    # Resolve the document first to learn its project, then gate. We import
+    # the documents service lazily to avoid a module-load-order dependency.
+    from app.modules.documents.service import DocumentService
+
+    doc_service = DocumentService(session)
+    document = await doc_service.get_document(data.document_id)
+    await verify_project_access(document.project_id, str(user_id or ""), session)
+
+    try:
+        drawing = await service.import_drawing_from_document(
+            data.document_id,
+            user_id,
+            name=data.name,
+            discipline=data.discipline,
+        )
+        version = await service.get_latest_version(drawing.id)
+        return _drawing_to_response(drawing, version)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unable to import drawing from document")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to open this document in DWG Takeoff — please try again",
+        )
+
+
 # ── Drawing CRUD ────────────────────────────────────────────────────────────
 
 
@@ -262,6 +317,7 @@ async def list_drawings(
     limit: int = Query(default=50, ge=1, le=200),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     session: SessionDep = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[DwgDrawingResponse]:
     """List drawings for a project.
@@ -459,6 +515,7 @@ async def list_annotations(
     limit: int = Query(default=200, ge=1, le=500),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     session: SessionDep = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[DwgAnnotationResponse]:
     """List annotations for a drawing.
@@ -529,7 +586,11 @@ async def link_to_boq(
     (poisoning their estimate) or vice versa.
     """
     await _gate_by_annotation(annotation_id, user_id, service, session)
-    item = await service.link_annotation_to_boq(annotation_id, data.position_id)
+    item = await service.link_annotation_to_boq(
+        annotation_id,
+        data.position_id,
+        push_quantity=data.push_quantity,
+    )
     return _annotation_to_response(item)
 
 
@@ -541,6 +602,7 @@ async def get_pins(
     drawing_id: uuid.UUID = Query(...),
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     session: SessionDep = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("dwg_takeoff.read")),
     service: DwgTakeoffService = Depends(_get_service),
 ) -> list[DwgAnnotationResponse]:
     """Get task/punchlist pins for a drawing.
@@ -634,13 +696,42 @@ async def delete_entity_group(
 # ── Offline Readiness (R3 #9) ────────────────────────────────────────────────
 
 
+def _request_is_loopback(request: Request) -> bool:
+    """Return True when the caller reached us over the loopback interface.
+
+    Used to gate the "your files never leave your computer" trust claim: it
+    is only literally true when the browser and the backend run on the same
+    machine. We read the immediate socket peer (``request.client.host``)
+    rather than any ``X-Forwarded-For`` header, because a forwarded value is
+    attacker-controllable and a reverse proxy in front of a hosted demo
+    would itself connect from loopback — which is exactly the case we must
+    NOT treat as local-only.
+    """
+    client = request.client
+    if client is None or not client.host:
+        return False
+    try:
+        return ipaddress.ip_address(client.host).is_loopback
+    except ValueError:
+        # Non-IP peer (e.g. a UNIX socket name) — treat as not loopback.
+        return False
+
+
 @router.get("/offline-readiness/", response_model=DwgOfflineReadinessResponse)
-async def offline_readiness() -> DwgOfflineReadinessResponse:
+async def offline_readiness(request: Request) -> DwgOfflineReadinessResponse:
     """Probe local-converter availability for the DWG takeoff page.
 
     The backend runs fully offline; this endpoint surfaces whether the
     optional DWG-to-data binary is present so the UI can show an
     "Offline Ready" vs "Install converter" badge.
+
+    ``local_only`` is set True only when the request arrived over loopback
+    AND the server is not a hosted/production deployment, so the strong
+    "files never leave your computer" copy is shown only when it is true.
+    On the hosted demo the UI falls back to honest "processed on your
+    OpenConstructionERP server" wording.
     """
     payload = DwgTakeoffService.get_offline_readiness()
+    settings = get_settings()
+    payload["local_only"] = _request_is_loopback(request) and not settings.is_production
     return DwgOfflineReadinessResponse(**payload)

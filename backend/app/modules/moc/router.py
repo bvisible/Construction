@@ -19,7 +19,7 @@ from app.modules.moc.schemas import (
 )
 from app.modules.moc.service import MoCService
 
-router = APIRouter()
+router = APIRouter(tags=["moc"])
 logger = logging.getLogger(__name__)
 
 
@@ -223,11 +223,17 @@ async def update_moc_impact(
     """Update an impact-assessment line."""
     entry = await svc.get_entry(entry_id)
     await verify_project_access(entry.project_id, str(user_id), session)
-    impact = await svc.update_impact(impact_id, data)
-    # IDOR guard: impact must belong to the requested entry.
+    # IDOR guard: confirm the impact belongs to the requested entry BEFORE
+    # mutating it, mirroring ``delete_moc_impact``. Checking after the write
+    # is fragile — it relies on the request-scoped session rolling back the
+    # flushed change on the 404, which breaks if ``update_impact`` ever
+    # commits explicitly or the rollback-on-exception behaviour changes.
+    impact = await svc.get_impact(impact_id)
     if impact.moc_entry_id != entry_id:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="MoC impact not found")
+    impact = await svc.update_impact(impact_id, data)
     return MoCImpactResponse.model_validate(impact)
 
 
@@ -246,5 +252,6 @@ async def delete_moc_impact(
     impact = await svc.get_impact(impact_id)
     if impact.moc_entry_id != entry_id:
         from fastapi import HTTPException
+
         raise HTTPException(status_code=404, detail="MoC impact not found")
     await svc.delete_impact(impact_id)

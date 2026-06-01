@@ -78,6 +78,23 @@ class TestIsEncryptedPdf:
         body = prefix + (b"safe" * 5000) + (b"x" * 10000) + b"\ntrailer<<>>\n%%EOF"
         assert _is_encrypted_pdf(body) is False
 
+    def test_returns_true_for_inline_encrypt_dict(self):
+        """Some generators (e.g. LibreOffice) emit /Encrypt << ... >> inline
+        instead of an indirect reference /Encrypt N 0 R.  D-TKC-ENC01 fix.
+        """
+        body = (
+            b"%PDF-1.7\n"
+            + b"1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+            + b"xref\n0 2\n"
+            + b"trailer\n<< /Size 2 /Encrypt << /Filter /Standard /R 6 >> >>\n%%EOF"
+        )
+        assert _is_encrypted_pdf(body) is True
+
+    def test_returns_false_for_partial_encrypt_word_in_content(self):
+        """String '/Encrypting' in a content stream should NOT match."""
+        body = b"%PDF-1.4\n" + b"pad" * 1000 + b"\n(Encrypting data...)\ntrailer<<>>\n%%EOF"
+        assert _is_encrypted_pdf(body) is False
+
 
 # ---------------------------------------------------------------------------
 # Upload size cap & env overrides
@@ -326,7 +343,8 @@ class TestUploadDocumentGates:
 
         monkeypatch.setattr(svc_mod, "_count_pdf_pages", lambda *a, **k: 1)
         monkeypatch.setattr(
-            svc_mod, "_extract_pdf_pages",
+            svc_mod,
+            "_extract_pdf_pages",
             lambda *a, **k: [{"page": 1, "text": "hello"}],
         )
 
@@ -346,18 +364,13 @@ class TestUploadDocumentGates:
             )
         except HTTPException as exc:
             assert exc.status_code != 413, (
-                "Unlimited config must not produce a 413 — got: "
-                f"{exc.status_code} {exc.detail}"
+                f"Unlimited config must not produce a 413 — got: {exc.status_code} {exc.detail}"
             )
 
     @pytest.mark.asyncio
     async def test_encrypted_pdf_rejected_with_actionable_message(self):
         svc = _make_service()
-        encrypted = (
-            b"%PDF-1.6\n"
-            + b"some content\n" * 10
-            + b"trailer\n<< /Size 5 /Root 1 0 R /Encrypt 4 0 R >>\n%%EOF"
-        )
+        encrypted = b"%PDF-1.6\n" + b"some content\n" * 10 + b"trailer\n<< /Size 5 /Root 1 0 R /Encrypt 4 0 R >>\n%%EOF"
         with pytest.raises(HTTPException) as exc:
             await svc.upload_document(
                 filename="locked.pdf",
@@ -459,7 +472,13 @@ class TestScannedPdfNeedsOcr:
         assert doc.status == "needs_ocr", "Scanned-PDF must be persisted with needs_ocr status"
         assert doc.pages == 3
         # A clear log line tells operators to install [cv].
-        install_hints = [r for r in caplog.records if "install [cv] extra" in r.getMessage().lower() or "install" in r.getMessage().lower() and "cv" in r.getMessage().lower()]
+        install_hints = [
+            r
+            for r in caplog.records
+            if "install [cv] extra" in r.getMessage().lower()
+            or "install" in r.getMessage().lower()
+            and "cv" in r.getMessage().lower()
+        ]
         assert install_hints, "Operator-facing OCR install hint not logged"
 
 

@@ -64,7 +64,7 @@ from app.modules.documents.service import (
     _sanitize_filename,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["documents"])
 logger = logging.getLogger(__name__)
 
 
@@ -297,12 +297,15 @@ async def list_documents(
     # Admin bypass — _verify_project_membership_or_404 already let them
     # through, but we still need to skip filtering for them.
     from app.modules.users.repository import UserRepository
+
     user = await UserRepository(session).get_by_id(user_uuid)
     if user is not None and getattr(user, "role", "") == "admin":
         return [_doc_to_response(d) for d in docs]
 
     grants = await effective_permissions_for(
-        session, project_id=project_id, user_id=user_uuid,
+        session,
+        project_id=project_id,
+        user_id=user_uuid,
     )
     restricted = await restricted_scopes_for_project(session, project_id)
 
@@ -311,10 +314,7 @@ async def list_documents(
         kind, path = kind_and_path_for_document(doc.category)
         # If the folder has any grant, only show docs the user has
         # an explicit grant on (exact scope OR wildcard for the kind).
-        is_restricted = (
-            (kind, path) in restricted
-            or (kind, None) in restricted
-        )
+        is_restricted = (kind, path) in restricted or (kind, None) in restricted
         if not is_restricted:
             visible.append(doc)
             continue
@@ -333,31 +333,40 @@ async def file_types_by_project(
     page to render "has RVT / IFC / DWG / PDF" chips on each card in a
     single round-trip (instead of N requests, one per card).
 
-    Returns extensions lower-cased, without the leading dot. Any project
-    the caller cannot read is silently omitted.
+    Uses the same owner-OR-member project set as the project list and
+    dashboard endpoints (admins see every project) so team-member projects
+    keep their file-type chips. Returns extensions lower-cased, without the
+    leading dot. Any project the caller cannot read is silently omitted.
     """
     from sqlalchemy import select as _select
 
     from app.modules.documents.models import Document
     from app.modules.projects.models import Project
+    from app.modules.teams.access import member_project_ids_subquery
+    from app.modules.users.repository import UserRepository
 
-    # Projects the caller owns. The Projects page already filters by
-    # ``owner_id`` client-side, so mirroring the same rule here keeps
-    # the response set identical.
     if user_id is None:
         return {}
-    own_ids = (
-        await session.execute(
-            _select(Project.id).where(Project.owner_id == uuid.UUID(str(user_id))),
+    user_uuid = uuid.UUID(str(user_id))
+
+    # Owner-OR-member set, mirroring ``list_projects`` / ``dashboard_cards``.
+    # Admins bypass the ownership check and see every project's chips.
+    user = await UserRepository(session).get_by_id(user_uuid)
+    is_admin = user is not None and getattr(user, "role", "") == "admin"
+    if is_admin:
+        proj_stmt = _select(Project.id)
+    else:
+        proj_stmt = _select(Project.id).where(
+            (Project.owner_id == user_uuid) | (Project.id.in_(member_project_ids_subquery(user_uuid)))
         )
-    ).scalars().all()
-    if not own_ids:
+    visible_ids = (await session.execute(proj_stmt)).scalars().all()
+    if not visible_ids:
         return {}
 
     rows = (
         await session.execute(
             _select(Document.project_id, Document.file_path, Document.name).where(
-                Document.project_id.in_(own_ids),
+                Document.project_id.in_(visible_ids),
             ),
         )
     ).all()
@@ -1146,14 +1155,12 @@ async def batch_delete_documents(
     from app.modules.projects.repository import ProjectRepository
 
     proj_repo = ProjectRepository(session)
-    owned_projects, _ = await proj_repo.list_for_user(
-        owner_id=user_id, offset=0, limit=10000, exclude_archived=False
-    )
+    owned_projects, _ = await proj_repo.list_for_user(owner_id=user_id, offset=0, limit=10000, exclude_archived=False)
     owned_project_ids = {str(p.id) for p in owned_projects}
 
-    rows = (await session.execute(
-        _select(Document.id, Document.project_id, Document.name).where(Document.id.in_(body.ids))
-    )).all()
+    rows = (
+        await session.execute(_select(Document.id, Document.project_id, Document.name).where(Document.id.in_(body.ids)))
+    ).all()
     allowed = [r[0] for r in rows if str(r[1]) in owned_project_ids]
     name_by_id = {r[0]: r[2] for r in rows if str(r[1]) in owned_project_ids}
 
@@ -1175,7 +1182,9 @@ async def batch_delete_documents(
     deleted = await bulk_delete(session, Document, allowed)
     logger.info(
         "Bulk delete documents: requested=%d deleted=%d user=%s",
-        len(body.ids), deleted, user_id,
+        len(body.ids),
+        deleted,
+        user_id,
     )
     return {"requested": len(body.ids), "deleted": deleted}
 
@@ -1233,7 +1242,9 @@ async def access_share_link_endpoint(
     from app.modules.documents.share_service import access_share_link
 
     link, doc = await access_share_link(
-        session, token=token, password=body.password,
+        session,
+        token=token,
+        password=body.password,
     )
     return ShareLinkAccessResponse(
         download_url=f"/api/v1/documents/share-links/{link.token}/file/",
@@ -1415,12 +1426,15 @@ async def download_document(
             file_path = (upload_base / "demo" / f"{doc.id}.pdf").resolve()
             logger.info(
                 "Re-anchored demo doc %s to %s (stored path outside upload_base)",
-                doc.id, file_path,
+                doc.id,
+                file_path,
             )
         else:
             logger.warning(
                 "Document %s file_path %s resolves outside upload_base %s",
-                doc.id, doc.file_path, upload_base,
+                doc.id,
+                doc.file_path,
+                upload_base,
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1545,9 +1559,7 @@ async def upload_document_revision(
         )
 
     try:
-        doc = await service.upload_document_revision(
-            document_id, file, str(user_id) if user_id else "", notes=notes
-        )
+        doc = await service.upload_document_revision(document_id, file, str(user_id) if user_id else "", notes=notes)
         return _doc_to_response(doc)
     except HTTPException:
         raise
@@ -1798,7 +1810,9 @@ async def documents_similar(
     stmt = select(Document).where(Document.id == document_id)
     row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.document_not_found", locale=get_locale()))
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=translate("errors.document_not_found", locale=get_locale())
+        )
 
     # Cross-tenant IDOR gate — mirror ``get_document`` so a caller with no
     # access to the document's project gets a 404 (not a 200 leaking a

@@ -55,6 +55,7 @@ def _safe_document_url(value: str | None) -> str | None:
         raise ValueError("document_url must be a relative upload path or https/s3 URL")
     return value
 
+
 # ── Subcontractor ────────────────────────────────────────────────────────
 
 
@@ -465,7 +466,8 @@ class WorkPackageCreate(BaseModel):
     planned_value: Decimal = Field(default=Decimal("0"), ge=0)
     completion_percent: Decimal = Field(default=Decimal("0"), ge=0, le=100)
     status: str = Field(
-        default="planned", pattern=r"^(planned|in_progress|completed)$",
+        default="planned",
+        pattern=r"^(planned|in_progress|completed)$",
     )
 
 
@@ -479,7 +481,8 @@ class WorkPackageUpdate(BaseModel):
     planned_value: Decimal | None = Field(default=None, ge=0)
     completion_percent: Decimal | None = Field(default=None, ge=0, le=100)
     status: str | None = Field(
-        default=None, pattern=r"^(planned|in_progress|completed)$",
+        default=None,
+        pattern=r"^(planned|in_progress|completed)$",
     )
 
 
@@ -689,6 +692,17 @@ class PaymentBlockResult(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class CurrencyAmount(BaseModel):
+    """One ISO-currency bucket of a money rollup.
+
+    Used to expose per-currency breakdowns of amounts that would otherwise
+    be blended into a single, meaningless cross-currency scalar.
+    """
+
+    currency: str = ""
+    amount: Decimal = Decimal("0")
+
+
 class SubcontractorDashboard(BaseModel):
     """Summary statistics for a subcontractor."""
 
@@ -698,7 +712,18 @@ class SubcontractorDashboard(BaseModel):
     rating_score: Decimal = Decimal("0")
     active_agreements: int = 0
     open_payment_applications: int = 0
+    # ── Money-correctness (additive, non-breaking) ──────────────────────
+    # ``pending_retention`` is retained for back-compat but is only a
+    # meaningful total when every agreement shares one currency. A
+    # subcontractor may hold agreements in different currencies (each
+    # SubcontractAgreement carries its own ``currency``), so summing their
+    # retention balances into one scalar blends ISO currencies. Consumers
+    # should read ``pending_retention_by_currency`` (one bucket per
+    # currency) and treat ``pending_retention`` as a blended figure only
+    # when ``mixed_currency`` is False.
     pending_retention: Decimal = Decimal("0")
+    pending_retention_by_currency: list[CurrencyAmount] = Field(default_factory=list)
+    mixed_currency: bool = False
     expired_certificates: int = 0
     expiring_soon_certificates: int = 0
     blocked: bool = False
@@ -811,7 +836,8 @@ class LienWaiverResponse(BaseModel):
     # ORM attribute (the model maps SQLAlchemy's reserved ``metadata``
     # column to ``metadata_`` in Python). Mirrors CertificateResponse.
     metadata: dict[str, Any] = Field(
-        default_factory=dict, validation_alias="metadata_",
+        default_factory=dict,
+        validation_alias="metadata_",
     )
     created_at: datetime
     updated_at: datetime

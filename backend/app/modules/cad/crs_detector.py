@@ -24,7 +24,7 @@ Public API
   xmax, ymax) and a units string.
 * :func:`detect_from_dwg_header` — read DXF/DWG header via ``ezdxf``.
 * :func:`detect_from_ifc` — regex-grep the IFC STEP header (no
-  IfcOpenShell — see project CLAUDE.md).
+  IfcOpenShell — see project the architecture guide).
 * :func:`detect_from_canonical` — entry point used by the IFC/RVT
   pipeline once a canonical JSON dict is in memory.
 
@@ -102,7 +102,7 @@ class CRSGuess(BaseModel):
 # Each entry: (name, epsg, xmin, ymin, xmax, ymax, units).
 # The bbox is the *coordinate-valid window* in that CRS — not the
 # country bbox. We use it to score how likely an incoming model belongs
-# in this CRS. See .claude/research/crs_detection.md §1 for sources.
+# in this CRS. See the internal CRS-detection research notes §1 for sources.
 
 _REGION_TABLE: list[tuple[str, int, float, float, float, float, str]] = [
     # ── India — UTM 42N..46N. Y window matches Indian latitude band
@@ -276,12 +276,7 @@ def _pyproj_verify(epsg: int, bbox: BBox) -> float | None:
         cy = (bbox[1] + bbox[3]) / 2
         transformer = Transformer.from_crs(epsg, 4326, always_xy=True)
         lon, lat = transformer.transform(cx, cy)
-        if (
-            lon is None
-            or lat is None
-            or not (-180.0 <= lon <= 180.0)
-            or not (-90.0 <= lat <= 90.0)
-        ):
+        if lon is None or lat is None or not (-180.0 <= lon <= 180.0) or not (-90.0 <= lat <= 90.0):
             return 0.0
         # All in range → full bonus.
         return 1.0

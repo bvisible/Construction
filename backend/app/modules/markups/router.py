@@ -50,7 +50,7 @@ from app.modules.markups.schemas import (
 )
 from app.modules.markups.service import MarkupsService
 
-router = APIRouter()
+router = APIRouter(tags=["markups"])
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +72,7 @@ def _markup_to_response(item: object) -> MarkupResponse:
         line_width=item.line_width,  # type: ignore[attr-defined]
         opacity=item.opacity,  # type: ignore[attr-defined]
         author_id=item.author_id,  # type: ignore[attr-defined]
+        assignee_id=getattr(item, "assignee_id", None),  # type: ignore[attr-defined]
         status=item.status,  # type: ignore[attr-defined]
         label=item.label,  # type: ignore[attr-defined]
         measurement_value=item.measurement_value,  # type: ignore[attr-defined]
@@ -162,7 +163,7 @@ async def export_markups(
     return PlainTextResponse(
         content=csv_content,
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=markups.csv"},
+        headers={"Content-Disposition": 'attachment; filename="markups.csv"'},
     )
 
 
@@ -233,6 +234,16 @@ async def list_markups(
     type: str | None = Query(default=None, alias="type"),
     status_filter: str | None = Query(default=None, alias="status"),
     layer: str | None = Query(default=None),
+    assignee_id: uuid.UUID | None = Query(
+        default=None,
+        description="Filter to markups assigned to this user. Pass with empty value via "
+        "'unassigned=true' to fetch markups with no assignee.",
+    ),
+    unassigned: bool = Query(
+        default=False,
+        description="When true, return only markups with NULL assignee_id. "
+        "Mutually exclusive with assignee_id (assignee_id wins if both supplied).",
+    ),
     query: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
@@ -268,6 +279,8 @@ async def list_markups(
         document_id=document_id,
         page=page_filter,
         layer=layer,
+        assignee_id=assignee_id,
+        unassigned=unassigned and assignee_id is None,
     )
     return [_markup_to_response(i) for i in items]
 
@@ -360,7 +373,12 @@ async def create_scale(
 
 @router.get("/scales/", response_model=list[ScaleConfigResponse])
 async def list_scales(
+    session: SessionDep,
     document_id: str = Query(...),
+    project_id: uuid.UUID = Query(
+        ...,
+        description="Project that owns the document. Used for IDOR guard.",
+    ),
     document_page: int | None = Query(
         default=None,
         ge=1,
@@ -379,11 +397,13 @@ async def list_scales(
 ) -> list[ScaleConfigResponse]:
     """List scale configs for a document.
 
-    Authn is required (CurrentUserId). Scales are document-scoped — until
-    documents grow a project FK we keep authz at the calibrator level (see
-    delete_scale). ``page`` is the deprecated alias for ``document_page``;
+    ``project_id`` is required and verified via :func:`verify_project_access`
+    so a caller cannot enumerate another tenant's calibration data by
+    supplying an arbitrary ``document_id`` (A-MRK-01 IDOR fix).
+    ``page`` is the deprecated alias for ``document_page``;
     pagination uses platform-standard ``offset``+``limit``.
     """
+    await verify_project_access(project_id, str(user_id), session)
     page_filter = document_page if document_page is not None else page
     items = await service.list_scales(document_id, page=page_filter)
     # Apply offset/limit at the API edge so the route matches platform shape

@@ -212,6 +212,48 @@ describe('SectionBox', () => {
     expect(fakes.mat.clippingPlanes).toBe(existing);
   });
 
+  it('setBoundsToBox rejects an empty box and leaves prior bounds intact', () => {
+    sb.enable();
+    const good = new THREE.Box3(
+      new THREE.Vector3(-1, -1, -1),
+      new THREE.Vector3(1, 1, 1),
+    );
+    expect(sb.setBoundsToBox(good)).toBe(true);
+    // An empty box (max < min) must be rejected without clobbering bounds.
+    const empty = new THREE.Box3(
+      new THREE.Vector3(1, 1, 1),
+      new THREE.Vector3(-1, -1, -1),
+    );
+    expect(sb.setBoundsToBox(empty)).toBe(false);
+    const bounds = sb.getBounds();
+    expect(bounds.min.x).toBeCloseTo(-1, 6);
+    expect(bounds.max.x).toBeCloseTo(1, 6);
+  });
+
+  it('setBoundsToBox rejects a degenerate (zero-size) box that would clip everything', () => {
+    sb.enable();
+    // A collapsed AABB (min === max) is NOT empty in three.js, but fitting
+    // the six inward planes to it hides the whole model. Must be rejected.
+    const point = new THREE.Box3(
+      new THREE.Vector3(5, 5, 5),
+      new THREE.Vector3(5, 5, 5),
+    );
+    expect(sb.setBoundsToBox(point)).toBe(false);
+    expect(SectionBox.isUsableBox(point)).toBe(false);
+    // A box larger than 1mm on at least one axis is accepted.
+    const thin = new THREE.Box3(
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(2, 0, 0),
+    );
+    expect(SectionBox.isUsableBox(thin)).toBe(true);
+  });
+
+  it('setBoundsToSelection returns false for an empty selection', () => {
+    sb.enable();
+    expect(sb.setBoundsToSelection([])).toBe(false);
+    expect(sb.setBoundsToSelection([fakes.mesh])).toBe(true);
+  });
+
   it('enableManualDrag(true) wires up the TransformControls gizmo', () => {
     sb.enable(
       new THREE.Box3(new THREE.Vector3(-1, -1, -1), new THREE.Vector3(1, 1, 1)),

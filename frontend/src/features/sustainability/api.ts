@@ -70,7 +70,7 @@ export interface CO2EnrichResponse {
 
 export function fetchSustainability(boqId: string, areaM2: number) {
   return apiGet<SustainabilityData>(
-    `/v1/boq/boqs/${boqId}/sustainability?area_m2=${areaM2}`,
+    `/v1/boq/boqs/${boqId}/sustainability/?area_m2=${areaM2}`,
   );
 }
 
@@ -80,7 +80,7 @@ export function enrichCO2(boqId: string) {
 
 export function assignPositionCO2(positionId: string, epdId: string) {
   return apiPut<{ status: string; co2: Record<string, unknown> }>(
-    `/v1/boq/positions/${positionId}/co2`,
+    `/v1/boq/positions/${positionId}/co2/`,
     { epd_id: epdId },
   );
 }

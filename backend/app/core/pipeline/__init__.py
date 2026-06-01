@@ -5,7 +5,7 @@
 This package is the thin orchestration spine for the ``oe_pipelines``
 module. It wraps EXISTING infrastructure (``JobRun``, the validation
 engine, the per-module Excel utilities) rather than introducing a new
-execution engine. See ``.claude/research/pipeline_builder/00_DESIGN.md``
+execution engine. See the internal pipeline design notes
 sections 2, 3 and 6 for the load-bearing reuse decisions.
 """
 

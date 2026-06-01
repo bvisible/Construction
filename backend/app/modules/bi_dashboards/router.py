@@ -65,7 +65,7 @@ from app.modules.bi_dashboards.schemas import (
 from app.modules.bi_dashboards.service import BIDashboardsService
 
 logger = logging.getLogger(__name__)
-router = APIRouter()
+router = APIRouter(tags=["bi_dashboards"])
 
 
 def _service(session: SessionDep) -> BIDashboardsService:
@@ -124,6 +124,52 @@ async def _ensure_dashboard_owner(
     if dashboard.owner_user_id is not None and dashboard.owner_user_id == caller:
         return dashboard
     if await _is_admin(user_id, session):
+        return dashboard
+    raise _not_found("Dashboard not found")
+
+
+async def _ensure_dashboard_read_access(
+    dashboard_id: uuid.UUID,
+    user_id: str,
+    session: SessionDep,
+) -> Dashboard:
+    """‌⁠‍Authorize READ access (render / evaluate), mirroring list visibility.
+
+    Closes the read-vs-write RBAC gap: ``_ensure_dashboard_owner`` was
+    gating reads too, so non-owners saw shared (global/role) dashboards in
+    the grid via ``list_dashboards_visible_to`` but got 404 on open, and
+    project team members with legitimate project access could never read a
+    project-scoped dashboard.
+
+    Read policy — kept in sync with
+    :meth:`BIDashboardsRepository.list_dashboards_visible_to`:
+
+    * admin                      -> allowed (cross-tenant superpower)
+    * owner                      -> allowed
+    * scope in ('global','role') -> allowed (shared dashboards)
+    * scope == 'project'         -> require ``verify_project_access`` on the
+      dashboard's ``project_id`` (team-inclusive: project owner, admin,
+      team members; 404 on denial)
+    * otherwise (personal/unknown, non-owner) -> 404 (IDOR-safe, no leak)
+
+    Writes are unaffected — mutation endpoints keep ``_ensure_dashboard_owner``.
+    """
+    dashboard = await session.get(Dashboard, dashboard_id)
+    if dashboard is None:
+        raise _not_found("Dashboard not found")
+    caller = _user_uuid(user_id)
+    if dashboard.owner_user_id is not None and dashboard.owner_user_id == caller:
+        return dashboard
+    if await _is_admin(user_id, session):
+        return dashboard
+    scope = getattr(dashboard, "scope", None)
+    if scope in ("global", "role"):
+        return dashboard
+    if scope == "project":
+        # verify_project_access raises 404 on denial; grants owner/admin/team.
+        await verify_project_access(
+            getattr(dashboard, "project_id", None), user_id, session
+        )
         return dashboard
     raise _not_found("Dashboard not found")
 
@@ -253,7 +299,9 @@ async def kpi_history(
     if project_id is not None:
         await verify_project_access(project_id, user_id, session)
     points = await service.kpi_history(
-        code, project_id=project_id, limit=limit,
+        code,
+        project_id=project_id,
+        limit=limit,
     )
     return KPIHistoryResponse(kpi_code=code, history=points)
 
@@ -346,7 +394,8 @@ async def create_dashboard(
     service: BIDashboardsService = Depends(_service),
 ) -> DashboardRead:
     row = await service.create_dashboard(
-        payload, owner_user_id=_user_uuid(user_id),
+        payload,
+        owner_user_id=_user_uuid(user_id),
     )
     return DashboardRead.model_validate(row)
 
@@ -398,7 +447,9 @@ async def render_dashboard(
     session: SessionDep,
     service: BIDashboardsService = Depends(_service),
 ) -> DashboardRenderResponse:
-    await _ensure_dashboard_owner(dashboard_id, user_id, session)
+    # Read-vs-write RBAC: render is a READ — allow owner/admin + shared
+    # (global/role) + project-team access, matching the dashboards grid.
+    await _ensure_dashboard_read_access(dashboard_id, user_id, session)
     result = await service.render_dashboard(dashboard_id)
     if result is None:
         raise _not_found("Dashboard not found")
@@ -427,15 +478,14 @@ async def evaluate_dashboard(
     If ``filters['project_id']`` is supplied we also verify the caller
     can access that project — same IDOR pattern as the KPI endpoints.
     """
-    await _ensure_dashboard_owner(dashboard_id, user_id, session)
+    # Read-vs-write RBAC: evaluate is a READ — allow owner/admin + shared
+    # (global/role) + project-team access, matching the dashboards grid.
+    await _ensure_dashboard_read_access(dashboard_id, user_id, session)
     filters = payload.filters or {}
     project_filter = filters.get("project_id")
     if project_filter:
         try:
-            project_uuid = (
-                project_filter if isinstance(project_filter, uuid.UUID)
-                else uuid.UUID(str(project_filter))
-            )
+            project_uuid = project_filter if isinstance(project_filter, uuid.UUID) else uuid.UUID(str(project_filter))
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -534,7 +584,8 @@ async def create_report(
     service: BIDashboardsService = Depends(_service),
 ) -> ReportDefinitionRead:
     row = await service.create_report(
-        payload, owner_user_id=_user_uuid(user_id),
+        payload,
+        owner_user_id=_user_uuid(user_id),
     )
     return ReportDefinitionRead.model_validate(row)
 
@@ -625,11 +676,40 @@ async def run_schedule_now(
     dependencies=[Depends(RequirePermission("bi.alert.read"))],
 )
 async def list_alerts(
-    user_id: CurrentUserId,  # noqa: ARG001
+    user_id: CurrentUserId,
+    session: SessionDep,
     service: BIDashboardsService = Depends(_service),
 ) -> list[AlertRuleRead]:
+    # Tenant-wide alerts (scope_project_id IS NULL) are visible to any
+    # caller with bi.alert.read. Project-scoped alerts are data about one
+    # project, so only return those whose project the caller can access —
+    # mirrors ``_ensure_alert_access`` used on toggle and the per-caller
+    # filtering dashboards/reports already do. Without this, every tenant's
+    # project-scoped rule names / thresholds leak cross-tenant.
     rows = await service.repo.list_alerts()
-    return [AlertRuleRead.model_validate(r) for r in rows]
+    admin = await _is_admin(user_id, session)
+    if admin:
+        return [AlertRuleRead.model_validate(r) for r in rows]
+
+    # Resolve project access once per distinct scope_project_id.
+    access_cache: dict[uuid.UUID, bool] = {}
+    visible: list[AlertRule] = []
+    for row in rows:
+        scope_pid = row.scope_project_id
+        if scope_pid is None:
+            visible.append(row)
+            continue
+        allowed = access_cache.get(scope_pid)
+        if allowed is None:
+            try:
+                await verify_project_access(scope_pid, user_id, session)
+                allowed = True
+            except HTTPException:
+                allowed = False
+            access_cache[scope_pid] = allowed
+        if allowed:
+            visible.append(row)
+    return [AlertRuleRead.model_validate(r) for r in visible]
 
 
 @router.post(
@@ -699,7 +779,8 @@ async def list_filters(
     module: str | None = Query(default=None),
 ) -> list[SavedFilterRead]:
     rows = await service.list_filters(
-        owner_user_id=_user_uuid(user_id), module=module,
+        owner_user_id=_user_uuid(user_id),
+        module=module,
     )
     return [SavedFilterRead.model_validate(r) for r in rows]
 
@@ -716,7 +797,8 @@ async def create_filter(
     service: BIDashboardsService = Depends(_service),
 ) -> SavedFilterRead:
     row = await service.create_filter(
-        payload, owner_user_id=_user_uuid(user_id),
+        payload,
+        owner_user_id=_user_uuid(user_id),
     )
     return SavedFilterRead.model_validate(row)
 
@@ -781,6 +863,7 @@ async def download_report_file(
     from pathlib import Path as _Path
 
     from app.modules.bi_dashboards.report_builder import _reports_dir
+
     resolved = _Path(run.file_path).resolve()
     base = _Path(_reports_dir()).resolve()
     try:
@@ -792,9 +875,7 @@ async def download_report_file(
 
     media_type = {
         "pdf": "application/pdf",
-        "xlsx": (
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
+        "xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         "csv": "text/csv",
     }.get(run.output_format, "application/octet-stream")
     return FileResponse(

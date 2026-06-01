@@ -11,7 +11,15 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 interface WidgetSettingsState {
-  /** Show an OSM map thumbnail in project cards + full map on detail page. */
+  /**
+   * Show a map on project cards + the detail page.
+   *
+   * Cards always render a lightweight STATIC raster thumbnail (one cached
+   * <img>, no MapLibre / WebGL / live tile streaming) — the interactive
+   * MapLibre map is reserved for the project detail page. This flag only
+   * toggles whether that card thumbnail is shown at all; it never opts a
+   * card into the heavy live-map path. Defaults on.
+   */
   projectMapEnabled: boolean;
   /** Show an 18-day weather forecast on the project detail page. */
   projectWeatherEnabled: boolean;
@@ -26,7 +34,9 @@ export const useWidgetSettingsStore = create<WidgetSettingsState>()(
   persist(
     (set) => ({
       projectMapEnabled: true,
-      projectWeatherEnabled: true,
+      // Weather is an opt-in widget chosen via dashboard Customize, not a
+      // default — off until the user explicitly enables it.
+      projectWeatherEnabled: false,
 
       toggleProjectMap: () =>
         set((s) => ({ projectMapEnabled: !s.projectMapEnabled })),

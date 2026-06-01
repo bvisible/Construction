@@ -10,7 +10,13 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Query
 from pydantic import BaseModel, Field
 
-from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
+from app.dependencies import (
+    CurrentUserId,
+    CurrentUserPayload,
+    RequirePermission,
+    SessionDep,
+    verify_project_access,
+)
 from app.modules.variations.schemas import (
     DayworkSheetCreate,
     DayworkSheetLineCreate,
@@ -51,11 +57,12 @@ from app.modules.variations.schemas import (
 )
 from app.modules.variations.service import (
     VariationsService,
+    ensure_high_value_authorised,
     is_nec4_overdue,
     supported_contract_standards,
 )
 
-router = APIRouter()
+router = APIRouter(tags=["variations"])
 logger = logging.getLogger(__name__)
 
 
@@ -101,7 +108,10 @@ async def list_notices(
 ) -> list[NoticeResponse]:
     await verify_project_access(project_id, user_id, session)
     rows, _ = await service.notice_repo.list_for_project(
-        project_id, offset=offset, limit=limit, status=status,
+        project_id,
+        offset=offset,
+        limit=limit,
+        status=status,
     )
     return [NoticeResponse.model_validate(r) for r in rows]
 
@@ -186,7 +196,10 @@ async def respond_notice(
     existing = await service.get_notice(notice_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     notice = await service.transition_notice(
-        notice_id, "responded", user_id=user_id, response_summary=body.response_summary,
+        notice_id,
+        "responded",
+        user_id=user_id,
+        response_summary=body.response_summary,
     )
     return NoticeResponse.model_validate(notice)
 
@@ -221,7 +234,10 @@ async def list_variation_requests(
 ) -> list[VariationRequestResponse]:
     await verify_project_access(project_id, user_id, session)
     rows, _ = await service.vr_repo.list_for_project(
-        project_id, offset=offset, limit=limit, status=status,
+        project_id,
+        offset=offset,
+        limit=limit,
+        status=status,
     )
     return [VariationRequestResponse.model_validate(r) for r in rows]
 
@@ -299,14 +315,23 @@ async def approve_variation_request(
     vr_id: uuid.UUID,
     session: SessionDep,
     user_id: CurrentUserId,
+    payload: CurrentUserPayload,
     body: _DecisionBody = Body(default=_DecisionBody()),
     _perm: None = Depends(RequirePermission("variations.approve_request")),
     service: VariationsService = Depends(_get_service),
 ) -> VariationRequestResponse:
     existing = await service.get_request(vr_id)
     await verify_project_access(existing.project_id, str(user_id), session)
+    # RBAC: enforce the high-value approval tier — a Manager holding only
+    # variations.approve_request must not wave through a variation whose cost
+    # impact exceeds HIGH_VALUE_APPROVAL_THRESHOLD without the admin-only
+    # variations.approve_high_value permission (closes the dead-gate finding).
+    ensure_high_value_authorised(existing.estimated_cost_impact, payload=payload)
     vr = await service.transition_variation_request(
-        vr_id, "approved", user_id=user_id, decision_notes=body.decision_notes,
+        vr_id,
+        "approved",
+        user_id=user_id,
+        decision_notes=body.decision_notes,
     )
     return VariationRequestResponse.model_validate(vr)
 
@@ -323,7 +348,10 @@ async def reject_variation_request(
     existing = await service.get_request(vr_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     vr = await service.transition_variation_request(
-        vr_id, "rejected", user_id=user_id, decision_notes=body.decision_notes,
+        vr_id,
+        "rejected",
+        user_id=user_id,
+        decision_notes=body.decision_notes,
     )
     return VariationRequestResponse.model_validate(vr)
 
@@ -333,12 +361,19 @@ async def convert_vr_to_vo(
     vr_id: uuid.UUID,
     session: SessionDep,
     user_id: CurrentUserId,
+    user_payload: CurrentUserPayload,
     body: _ConvertVOBody = Body(default=_ConvertVOBody()),
     _perm: None = Depends(RequirePermission("variations.convert_to_vo")),
     service: VariationsService = Depends(_get_service),
 ) -> VariationOrderResponse:
     vr = await service.get_request(vr_id)
     await verify_project_access(vr.project_id, str(user_id), session)
+    # RBAC: convert-to-VO commits the variation's money into a VariationOrder
+    # (and a mirrored ChangeOrder), so it is symmetric with approval — gate
+    # high-value conversions behind variations.approve_high_value too. Use the
+    # effective committed amount (body override else the source VR estimate).
+    effective_amount = body.final_cost_impact or vr.estimated_cost_impact
+    ensure_high_value_authorised(effective_amount, payload=user_payload)
     payload = VariationOrderCreate(
         project_id=vr.project_id,
         variation_request_id=vr_id,
@@ -369,7 +404,10 @@ async def list_variation_orders(
 ) -> list[VariationOrderResponse]:
     await verify_project_access(project_id, user_id, session)
     rows, _ = await service.vo_repo.list_for_project(
-        project_id, offset=offset, limit=limit, status=status,
+        project_id,
+        offset=offset,
+        limit=limit,
+        status=status,
     )
     return [VariationOrderResponse.model_validate(r) for r in rows]
 
@@ -608,13 +646,17 @@ async def list_site_measurements(
 ) -> list[SiteMeasurementResponse]:
     await verify_project_access(project_id, user_id, session)
     rows, _ = await service.site_measurement_repo.list_for_project(
-        project_id, offset=offset, limit=limit,
+        project_id,
+        offset=offset,
+        limit=limit,
     )
     return [SiteMeasurementResponse.model_validate(r) for r in rows]
 
 
 @router.post(
-    "/site-measurements/", response_model=SiteMeasurementResponse, status_code=201,
+    "/site-measurements/",
+    response_model=SiteMeasurementResponse,
+    status_code=201,
 )
 async def create_site_measurement(
     data: SiteMeasurementCreate,
@@ -629,7 +671,8 @@ async def create_site_measurement(
 
 
 @router.patch(
-    "/site-measurements/{sm_id}", response_model=SiteMeasurementResponse,
+    "/site-measurements/{sm_id}",
+    response_model=SiteMeasurementResponse,
 )
 async def update_site_measurement(
     sm_id: uuid.UUID,
@@ -659,7 +702,8 @@ async def delete_site_measurement(
 
 
 @router.post(
-    "/site-measurements/{sm_id}/agree", response_model=SiteMeasurementResponse,
+    "/site-measurements/{sm_id}/agree",
+    response_model=SiteMeasurementResponse,
 )
 async def agree_site_measurement(
     sm_id: uuid.UUID,
@@ -690,7 +734,10 @@ async def list_daywork_sheets(
 ) -> list[DayworkSheetResponse]:
     await verify_project_access(project_id, user_id, session)
     rows, _ = await service.daywork_repo.list_for_project(
-        project_id, offset=offset, limit=limit, status=status,
+        project_id,
+        offset=offset,
+        limit=limit,
+        status=status,
     )
     return [DayworkSheetResponse.model_validate(r) for r in rows]
 
@@ -797,7 +844,8 @@ async def create_daywork_line(
 
 
 @router.patch(
-    "/daywork-sheet-lines/{line_id}", response_model=DayworkSheetLineResponse,
+    "/daywork-sheet-lines/{line_id}",
+    response_model=DayworkSheetLineResponse,
 )
 async def update_daywork_line(
     line_id: uuid.UUID,
@@ -861,13 +909,18 @@ async def list_disruption_claims(
 ) -> list[DisruptionClaimResponse]:
     await verify_project_access(project_id, user_id, session)
     rows, _ = await service.disruption_repo.list_for_project(
-        project_id, offset=offset, limit=limit, status=status,
+        project_id,
+        offset=offset,
+        limit=limit,
+        status=status,
     )
     return [DisruptionClaimResponse.model_validate(r) for r in rows]
 
 
 @router.post(
-    "/disruption-claims/", response_model=DisruptionClaimResponse, status_code=201,
+    "/disruption-claims/",
+    response_model=DisruptionClaimResponse,
+    status_code=201,
 )
 async def create_disruption_claim(
     data: DisruptionClaimCreate,
@@ -882,7 +935,8 @@ async def create_disruption_claim(
 
 
 @router.patch(
-    "/disruption-claims/{claim_id}", response_model=DisruptionClaimResponse,
+    "/disruption-claims/{claim_id}",
+    response_model=DisruptionClaimResponse,
 )
 async def update_disruption_claim(
     claim_id: uuid.UUID,
@@ -912,7 +966,8 @@ async def delete_disruption_claim(
 
 
 @router.post(
-    "/disruption-claims/{claim_id}/submit", response_model=DisruptionClaimResponse,
+    "/disruption-claims/{claim_id}/submit",
+    response_model=DisruptionClaimResponse,
 )
 async def submit_disruption_claim(
     claim_id: uuid.UUID,
@@ -928,7 +983,8 @@ async def submit_disruption_claim(
 
 
 @router.post(
-    "/disruption-claims/{claim_id}/review", response_model=DisruptionClaimResponse,
+    "/disruption-claims/{claim_id}/review",
+    response_model=DisruptionClaimResponse,
 )
 async def review_disruption_claim(
     claim_id: uuid.UUID,
@@ -944,7 +1000,8 @@ async def review_disruption_claim(
 
 
 @router.post(
-    "/disruption-claims/{claim_id}/decide", response_model=DisruptionClaimResponse,
+    "/disruption-claims/{claim_id}/decide",
+    response_model=DisruptionClaimResponse,
 )
 async def decide_disruption_claim(
     claim_id: uuid.UUID,
@@ -958,7 +1015,9 @@ async def decide_disruption_claim(
     existing = await service.get_disruption_claim(claim_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     claim = await service.transition_disruption(
-        claim_id, decision, decided_amount=body.decided_amount,
+        claim_id,
+        decision,
+        decided_amount=body.decided_amount,
     )
     return DisruptionClaimResponse.model_validate(claim)
 
@@ -979,13 +1038,18 @@ async def list_eot_claims(
 ) -> list[ExtensionOfTimeClaimResponse]:
     await verify_project_access(project_id, user_id, session)
     rows, _ = await service.eot_repo.list_for_project(
-        project_id, offset=offset, limit=limit, status=status,
+        project_id,
+        offset=offset,
+        limit=limit,
+        status=status,
     )
     return [ExtensionOfTimeClaimResponse.model_validate(r) for r in rows]
 
 
 @router.post(
-    "/eot-claims/", response_model=ExtensionOfTimeClaimResponse, status_code=201,
+    "/eot-claims/",
+    response_model=ExtensionOfTimeClaimResponse,
+    status_code=201,
 )
 async def create_eot_claim(
     data: ExtensionOfTimeClaimCreate,
@@ -1000,7 +1064,8 @@ async def create_eot_claim(
 
 
 @router.patch(
-    "/eot-claims/{claim_id}", response_model=ExtensionOfTimeClaimResponse,
+    "/eot-claims/{claim_id}",
+    response_model=ExtensionOfTimeClaimResponse,
 )
 async def update_eot_claim(
     claim_id: uuid.UUID,
@@ -1030,7 +1095,8 @@ async def delete_eot_claim(
 
 
 @router.post(
-    "/eot-claims/{claim_id}/submit", response_model=ExtensionOfTimeClaimResponse,
+    "/eot-claims/{claim_id}/submit",
+    response_model=ExtensionOfTimeClaimResponse,
 )
 async def submit_eot_claim(
     claim_id: uuid.UUID,
@@ -1046,7 +1112,8 @@ async def submit_eot_claim(
 
 
 @router.post(
-    "/eot-claims/{claim_id}/review", response_model=ExtensionOfTimeClaimResponse,
+    "/eot-claims/{claim_id}/review",
+    response_model=ExtensionOfTimeClaimResponse,
 )
 async def review_eot_claim(
     claim_id: uuid.UUID,
@@ -1062,7 +1129,8 @@ async def review_eot_claim(
 
 
 @router.post(
-    "/eot-claims/{claim_id}/grant", response_model=ExtensionOfTimeClaimResponse,
+    "/eot-claims/{claim_id}/grant",
+    response_model=ExtensionOfTimeClaimResponse,
 )
 async def grant_eot_claim(
     claim_id: uuid.UUID,
@@ -1084,7 +1152,8 @@ async def grant_eot_claim(
 
 
 @router.post(
-    "/eot-claims/{claim_id}/reject", response_model=ExtensionOfTimeClaimResponse,
+    "/eot-claims/{claim_id}/reject",
+    response_model=ExtensionOfTimeClaimResponse,
 )
 async def reject_eot_claim(
     claim_id: uuid.UUID,
@@ -1097,7 +1166,9 @@ async def reject_eot_claim(
     existing = await service.get_eot_claim(claim_id)
     await verify_project_access(existing.project_id, str(user_id), session)
     claim = await service.transition_eot(
-        claim_id, "rejected", decision_notes=body.decision_notes,
+        claim_id,
+        "rejected",
+        decision_notes=body.decision_notes,
     )
     return ExtensionOfTimeClaimResponse.model_validate(claim)
 
@@ -1119,7 +1190,9 @@ async def list_final_accounts(
 
 
 @router.post(
-    "/final-accounts/", response_model=FinalAccountResponse, status_code=201,
+    "/final-accounts/",
+    response_model=FinalAccountResponse,
+    status_code=201,
 )
 async def create_final_account(
     data: FinalAccountCreate,
@@ -1175,7 +1248,8 @@ async def delete_final_account(
 
 
 @router.post(
-    "/final-accounts/{fa_id}/close", response_model=FinalAccountResponse,
+    "/final-accounts/{fa_id}/close",
+    response_model=FinalAccountResponse,
 )
 async def close_final_account(
     fa_id: uuid.UUID,
@@ -1265,6 +1339,8 @@ async def record_eot_tia(
     claim = await service.get_eot_claim(claim_id)
     await verify_project_access(claim.project_id, user_id, session)
     updated = await service.record_eot_tia(
-        claim_id, data.tia_delta_days, data.critical_path_impact,
+        claim_id,
+        data.tia_delta_days,
+        data.critical_path_impact,
     )
     return ExtensionOfTimeClaimResponse.model_validate(updated)

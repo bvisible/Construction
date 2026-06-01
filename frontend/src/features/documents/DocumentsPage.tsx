@@ -209,7 +209,7 @@ function DocBIMIcon({ docId }: { docId: string }) {
       elementIds={elementIds}
       iconSize={10}
       label=""
-      className="inline-flex items-center gap-0.5 text-2xs text-oe-blue hover:text-oe-blue-dark transition-colors"
+      className="inline-flex items-center gap-0.5 text-2xs text-oe-blue hover:text-oe-blue-text transition-colors"
     />
   );
 }
@@ -407,7 +407,7 @@ function SortDropdown({
               onClick={() => { onChange(field); setOpen(false); }}
               className={`w-full text-left px-3 py-2 text-xs transition-colors ${
                 value === field
-                  ? 'bg-oe-blue-subtle/30 text-oe-blue font-medium'
+                  ? 'bg-oe-blue-subtle/30 text-oe-blue-text font-medium'
                   : 'text-content-secondary hover:bg-surface-secondary'
               }`}
             >
@@ -1239,7 +1239,11 @@ export function DocumentsPage() {
                       <DateDisplay value={doc.created_at} />
                     </p>
                     <div className="flex items-center gap-1.5 flex-wrap mt-2">
-                      <Badge variant="neutral" size="sm">{doc.category}</Badge>
+                      <Badge variant="neutral" size="sm">
+                        {t(`documents.cat_${doc.category}`, {
+                          defaultValue: doc.category.charAt(0).toUpperCase() + doc.category.slice(1),
+                        })}
+                      </Badge>
                       {doc.version > 1 && <Badge variant="blue" size="sm">v{doc.version}</Badge>}
                       {doc.cde_state && (
                         <Badge variant={CDE_STATE_COLORS[doc.cde_state] ?? 'neutral'} size="sm">

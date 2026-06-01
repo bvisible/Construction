@@ -17,7 +17,7 @@ import { join } from 'node:path';
  */
 
 const SCREENSHOT_DIR = join(__dirname, '..', 'qa-screenshots', 'V_HSE');
-const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.QA_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 const DEMO_PASSWORD = process.env.QA_DEMO_PASSWORD ?? 'demo123';
 
 async function login(page: Page): Promise<void> {

@@ -39,7 +39,7 @@ from app.modules.tasks.schemas import (
 )
 from app.modules.tasks.service import TaskService
 
-router = APIRouter()
+router = APIRouter(tags=["tasks"])
 logger = logging.getLogger(__name__)
 
 
@@ -77,11 +77,7 @@ def _to_response(
 ) -> TaskResponse:
     checklist = item.checklist or []  # type: ignore[attr-defined]
     responsible_id = str(item.responsible_id) if item.responsible_id else None  # type: ignore[attr-defined]
-    assigned_to_name = (
-        name_map.get(responsible_id)
-        if name_map is not None and responsible_id is not None
-        else None
-    )
+    assigned_to_name = name_map.get(responsible_id) if name_map is not None and responsible_id is not None else None
     # Derive completed_at from updated_at when status is "completed" (the model
     # doesn't have a dedicated column, so we approximate).
     completed_at: str | None = None
@@ -107,9 +103,7 @@ def _to_response(
         created_by=item.created_by,  # type: ignore[attr-defined]
         assigned_to=responsible_id,
         assigned_to_name=assigned_to_name,
-        bim_element_ids=[
-            str(x) for x in (getattr(item, "bim_element_ids", None) or [])
-        ],
+        bim_element_ids=[str(x) for x in (getattr(item, "bim_element_ids", None) or [])],
         metadata=getattr(item, "metadata_", {}),
         created_at=item.created_at,  # type: ignore[attr-defined]
         updated_at=item.updated_at,  # type: ignore[attr-defined]
@@ -180,11 +174,7 @@ async def list_tasks(
         if priority is not None:
             tasks_with_bim = [t for t in tasks_with_bim if t.priority == priority]
         if responsible_id is not None:
-            tasks_with_bim = [
-                t
-                for t in tasks_with_bim
-                if str(t.responsible_id or "") == responsible_id
-            ]
+            tasks_with_bim = [t for t in tasks_with_bim if str(t.responsible_id or "") == responsible_id]
         if meeting_id is not None:
             tasks_with_bim = [t for t in tasks_with_bim if t.meeting_id == meeting_id]
         if search and search.strip():
@@ -280,9 +270,7 @@ async def export_tasks(
     from openpyxl import Workbook
     from openpyxl.styles import Font
 
-    tasks, _ = await service.list_tasks(
-        project_id, current_user_id=user_id, offset=0, limit=10000
-    )
+    tasks, _ = await service.list_tasks(project_id, current_user_id=user_id, offset=0, limit=10000)
 
     wb = Workbook()
     ws = wb.active
@@ -607,6 +595,32 @@ async def import_tasks_file(
             detail="Uploaded file is empty.",
         )
 
+    # Magic-byte sniff — the extension is hostile-supplied, so reject any
+    # payload whose first bytes don't match the declared format before we
+    # hand the buffer to openpyxl / csv.reader. Mirrors the contacts
+    # importer (R7 audit pattern). CSV has no canonical signature; reject
+    # an obvious-binary leading byte instead.
+    head = content[:8]
+    if filename.endswith(".xlsx"):
+        if not head.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="File does not look like a valid .xlsx (missing ZIP signature).",
+            )
+    elif filename.endswith(".xls"):
+        if not head.startswith(b"\xd0\xcf\x11\xe0"):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="File does not look like a valid .xls (missing OLE signature).",
+            )
+    else:  # .csv
+        for sig in (b"MZ", b"\x7fELF", b"\xca\xfe\xba\xbe", b"PK\x03\x04", b"\xd0\xcf\x11\xe0"):
+            if head.startswith(sig):
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail="File does not look like CSV (binary signature detected).",
+                )
+
     try:
         if filename.endswith(".xlsx") or filename.endswith(".xls"):
             rows = _parse_task_rows_from_excel(content)
@@ -655,11 +669,13 @@ async def import_tasks_file(
 
             due_date = str(row.get("due_date", "")).strip() or None
             if due_date and not _DATE_RE.match(due_date):
-                errors.append({
-                    "row": row_idx,
-                    "error": f"Invalid date format: {due_date} (expected YYYY-MM-DD)",
-                    "data": {k: str(v)[:100] for k, v in row.items()},
-                })
+                errors.append(
+                    {
+                        "row": row_idx,
+                        "error": f"Invalid date format: {due_date} (expected YYYY-MM-DD)",
+                        "data": {k: str(v)[:100] for k, v in row.items()},
+                    }
+                )
                 continue
 
             description = str(row.get("description", "")).strip() or None
@@ -676,11 +692,13 @@ async def import_tasks_file(
             await service.create_task(create_data, user_id=user_id)
             imported_count += 1
         except Exception as exc:
-            errors.append({
-                "row": row_idx,
-                "error": str(exc)[:200],
-                "data": {k: str(v)[:100] for k, v in row.items()},
-            })
+            errors.append(
+                {
+                    "row": row_idx,
+                    "error": str(exc)[:200],
+                    "data": {k: str(v)[:100] for k, v in row.items()},
+                }
+            )
 
     return {
         "imported": imported_count,
@@ -705,14 +723,10 @@ async def _filter_owned_task_ids(
     from app.modules.tasks.models import Task
 
     proj_repo = ProjectRepository(session)
-    owned_projects, _ = await proj_repo.list_for_user(
-        owner_id=user_id, offset=0, limit=10000, exclude_archived=False
-    )
+    owned_projects, _ = await proj_repo.list_for_user(owner_id=user_id, offset=0, limit=10000, exclude_archived=False)
     owned_project_ids = {str(p.id) for p in owned_projects}
 
-    rows = (await session.execute(
-        _select(Task.id, Task.project_id).where(Task.id.in_(task_ids))
-    )).all()
+    rows = (await session.execute(_select(Task.id, Task.project_id).where(Task.id.in_(task_ids)))).all()
     return [r[0] for r in rows if str(r[1]) in owned_project_ids]
 
 
@@ -734,7 +748,9 @@ async def batch_delete_tasks(
     deleted = await bulk_delete(session, Task, allowed)
     logger.info(
         "Bulk delete tasks: requested=%d deleted=%d user=%s",
-        len(body.ids), deleted, user_id,
+        len(body.ids),
+        deleted,
+        user_id,
     )
     return {"requested": len(body.ids), "deleted": deleted}
 
@@ -761,12 +777,13 @@ async def batch_update_task_status(
         )
 
     allowed_ids = await _filter_owned_task_ids(session, user_id, body.ids)
-    updated = await bulk_update_status(
-        session, Task, allowed_ids, body.status, allowed_statuses=allowed_statuses
-    )
+    updated = await bulk_update_status(session, Task, allowed_ids, body.status, allowed_statuses=allowed_statuses)
     logger.info(
         "Bulk update task status: requested=%d updated=%d new_status=%s user=%s",
-        len(body.ids), updated, body.status, user_id,
+        len(body.ids),
+        updated,
+        body.status,
+        user_id,
     )
     return {"requested": len(body.ids), "updated": updated, "status": body.status}
 
@@ -786,12 +803,13 @@ async def batch_assign_tasks(
     from app.modules.tasks.models import Task
 
     allowed_ids = await _filter_owned_task_ids(session, user_id, body.ids)
-    updated = await bulk_update_fields(
-        session, Task, allowed_ids, {"responsible_id": body.assignee_id}
-    )
+    updated = await bulk_update_fields(session, Task, allowed_ids, {"responsible_id": body.assignee_id})
     logger.info(
         "Bulk assign tasks: requested=%d updated=%d assignee=%s user=%s",
-        len(body.ids), updated, body.assignee_id, user_id,
+        len(body.ids),
+        updated,
+        body.assignee_id,
+        user_id,
     )
     return {"requested": len(body.ids), "updated": updated, "assignee_id": body.assignee_id}
 

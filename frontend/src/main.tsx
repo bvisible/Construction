@@ -136,6 +136,21 @@ __rootEl.setAttribute(
   '4443432d4357494352-4f452d32303236',
 );
 
+// When a new build is deployed while a tab stays open, client-side navigation
+// to a not-yet-loaded route tries to import a chunk hash that no longer exists
+// on the server ("Failed to fetch dynamically imported module"). Vite fires
+// `vite:preloadError` for exactly that case. Reload once to pull the fresh
+// index.html and the current chunk graph. The timestamp guard caps auto-reloads
+// so a genuine outage cannot turn into a reload loop.
+window.addEventListener('vite:preloadError', () => {
+  const KEY = 'oe_chunk_reload_at';
+  const last = Number(sessionStorage.getItem(KEY) || 0);
+  if (Date.now() - last > 10_000) {
+    sessionStorage.setItem(KEY, String(Date.now()));
+    window.location.reload();
+  }
+});
+
 ReactDOM.createRoot(__rootEl).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>

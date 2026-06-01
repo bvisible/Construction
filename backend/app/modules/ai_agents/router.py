@@ -16,9 +16,10 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session_factory
@@ -36,7 +37,7 @@ from app.modules.ai_agents.service import AgentService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter()
+router = APIRouter(tags=["ai_agents"])
 
 
 # ── Idempotency cache ────────────────────────────────────────────────────
@@ -47,18 +48,27 @@ router = APIRouter()
 # IDEMPOTENCY_TTL_SECONDS.
 #
 # Single-process scope is acceptable for now (single-tenant VPS deploy);
-# multi-instance prod will need Redis backing (TODO).
+# multi-instance prod needs Redis/DB backing so the dedupe holds across
+# workers — see needs_shared_change. Until then the cache is bounded both
+# by TTL and a hard entry cap so a key recorded-but-never-looked-up again
+# can't accumulate for the process lifetime.
 IDEMPOTENCY_TTL_SECONDS = 600  # 10 minutes
-_IDEMPOTENCY_CACHE: dict[tuple[str, str], tuple[uuid.UUID, float]] = {}
+IDEMPOTENCY_MAX_ENTRIES = 10_000
+# ``OrderedDict`` keeps insertion order so we can drop the oldest entries
+# in O(1) when the hard cap is hit (FIFO eviction).
+_IDEMPOTENCY_CACHE: "OrderedDict[tuple[str, str], tuple[uuid.UUID, float]]" = OrderedDict()
+
+
+def _sweep_stale(now: float) -> None:
+    """Drop every entry older than the TTL (cheap; cache is small)."""
+    stale = [k for k, (_, ts) in _IDEMPOTENCY_CACHE.items() if now - ts > IDEMPOTENCY_TTL_SECONDS]
+    for k in stale:
+        _IDEMPOTENCY_CACHE.pop(k, None)
 
 
 def _idempotency_lookup(user_id: str, key: str) -> uuid.UUID | None:
     """Return the cached run_id for this user+key, or None if absent/expired."""
-    now = time.monotonic()
-    # Lazy eviction of stale entries (cheap; cache is tiny).
-    stale = [k for k, (_, ts) in _IDEMPOTENCY_CACHE.items() if now - ts > IDEMPOTENCY_TTL_SECONDS]
-    for k in stale:
-        _IDEMPOTENCY_CACHE.pop(k, None)
+    _sweep_stale(time.monotonic())
     entry = _IDEMPOTENCY_CACHE.get((user_id, key))
     if entry is None:
         return None
@@ -66,11 +76,57 @@ def _idempotency_lookup(user_id: str, key: str) -> uuid.UUID | None:
 
 
 def _idempotency_record(user_id: str, key: str, run_id: uuid.UUID) -> None:
-    _IDEMPOTENCY_CACHE[(user_id, key)] = (run_id, time.monotonic())
+    """Record a key→run mapping, bounding growth by TTL sweep + size cap.
+
+    Without an eviction path on *write*, keys that are recorded but never
+    looked up again (the common case — a retry rarely arrives) would
+    accumulate for the whole process lifetime. We sweep expired entries
+    first, then enforce a hard FIFO cap so the cache can never grow
+    unbounded even under a flood of unique keys.
+    """
+    now = time.monotonic()
+    _sweep_stale(now)
+    cache_key = (user_id, key)
+    # Refresh ordering on overwrite so the most recently written key is
+    # treated as newest for FIFO eviction.
+    _IDEMPOTENCY_CACHE.pop(cache_key, None)
+    _IDEMPOTENCY_CACHE[cache_key] = (run_id, now)
+    while len(_IDEMPOTENCY_CACHE) > IDEMPOTENCY_MAX_ENTRIES:
+        _IDEMPOTENCY_CACHE.popitem(last=False)  # drop oldest
 
 
 def _get_service(session: SessionDep) -> AgentService:
     return AgentService(session)
+
+
+async def _assert_project_access(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> None:
+    """Raise 404/403 unless ``user_id`` owns or is a member of ``project_id``.
+
+    Mirrors the BOQ module's guard: 404 when the project doesn't exist (so
+    we never confirm/deny existence of a project the caller can't see), 403
+    when it exists but the caller is neither owner nor a team member.
+    """
+    from app.modules.projects.repository import ProjectRepository
+    from app.modules.teams.access import is_project_member
+
+    project = await ProjectRepository(session).get_by_id(project_id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+    if str(project.owner_id) == str(user_id):
+        return
+    if await is_project_member(session, project_id, user_id):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="You do not have access to this project",
+    )
 
 
 # ── Agent / tool catalogues ──────────────────────────────────────────────
@@ -270,6 +326,13 @@ async def create_run(
     """
     uid = uuid.UUID(user_id)
 
+    # Defense-in-depth: a run may be tagged to a project, so verify the
+    # caller actually has access to it before persisting the row. Without
+    # this a user could tag runs to projects they don't own. Owner OR team
+    # member is allowed (same rule the BOQ module uses).
+    if request.project_id is not None:
+        await _assert_project_access(session, request.project_id, uid)
+
     # Idempotency replay: return existing run for the same key within TTL.
     if idempotency_key:
         existing_run_id = _idempotency_lookup(user_id, idempotency_key)
@@ -325,10 +388,14 @@ async def create_run(
 async def list_runs(
     user_id: CurrentUserId,
     project_id: uuid.UUID | None = None,
-    limit: int = 50,
+    limit: int = Query(50, ge=1, le=200),
     service: AgentService = Depends(_get_service),
 ) -> list[AgentRunListItem]:
-    """List the caller's recent runs. ``project_id`` optionally narrows."""
+    """List the caller's recent runs. ``project_id`` optionally narrows.
+
+    ``limit`` is clamped to 1..200 so a caller can't request an unbounded
+    result set (?limit=1000000) and blow up the payload.
+    """
     uid = uuid.UUID(user_id)
     runs = await service.list_runs(user_id=uid, project_id=project_id, limit=limit)
     return [AgentRunListItem.model_validate(r) for r in runs]

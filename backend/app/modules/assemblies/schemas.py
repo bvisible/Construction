@@ -33,6 +33,7 @@ def _serialise_money(v: Decimal | None) -> str | None:
         return "0"
     return format(v, "f")
 
+
 # ── Component schemas ────────────────────────────────────────────────────────
 
 
@@ -260,9 +261,7 @@ class AssemblyUpdate(BaseModel):
     # Same bounds as AssemblyCreate.bid_factor (ASM-002 / NEW-ASM-101) —
     # an UPDATE must not be a back door for a non-finite / negative
     # markup that would poison the recalculated total_rate.
-    bid_factor: float | None = Field(
-        default=None, ge=0.0, le=_NUM_MAX, allow_inf_nan=False
-    )
+    bid_factor: float | None = Field(default=None, ge=0.0, le=_NUM_MAX, allow_inf_nan=False)
     regional_factors: dict[str, Any] | None = None
     is_template: bool | None = None
     project_id: UUID | None = None
@@ -345,22 +344,22 @@ class AssemblyWithComponents(AssemblyResponse):
 
 
 class ApplyToBOQRequest(BaseModel):
-    """Request body for applying an assembly to a BOQ as a new position."""
+    """Request body for applying an assembly to a BOQ as a new position.
+
+    Cross-currency behaviour (Issue #128): an assembly priced in a
+    currency other than the target project's base is converted via the
+    project's ``fx_rates`` when a matching rate exists; otherwise it is
+    applied un-converted and the created position carries a non-blocking
+    ``currency_mismatch`` flag in its metadata (the value stays in the
+    assembly's own currency, which is recorded alongside it). The apply
+    is never hard-refused — the old 409 trapped the user with no UI
+    escape hatch, so there is no opt-in flag to set.
+    """
 
     boq_id: UUID
     quantity: float = Field(..., gt=0.0, le=_NUM_MAX, allow_inf_nan=False)
     ordinal: str = Field(default="", max_length=50, description="Position ordinal; auto-generated if empty")
     region: str | None = Field(default=None, description="Region key for regional factor lookup")
-    # An assembly priced in one currency dropped into a BOQ of another
-    # currency silently corrupts the bill (the number is treated as the
-    # BOQ's currency downstream). By default we refuse the mismatch with
-    # a clear 409; the caller must consciously opt in (and the position
-    # then carries a loud currency_mismatch warning in its metadata).
-    allow_currency_mismatch: bool = Field(
-        default=False,
-        description="Permit applying an assembly whose currency differs "
-        "from the target project's currency (records a warning).",
-    )
 
 
 class CloneAssemblyRequest(BaseModel):
@@ -373,9 +372,7 @@ class CloneAssemblyRequest(BaseModel):
 class ReorderComponentsRequest(BaseModel):
     """Request body for reordering components within an assembly."""
 
-    component_ids: list[UUID] = Field(
-        ..., min_length=1, description="Ordered list of component IDs"
-    )
+    component_ids: list[UUID] = Field(..., min_length=1, description="Ordered list of component IDs")
 
 
 class AssemblyExport(BaseModel):

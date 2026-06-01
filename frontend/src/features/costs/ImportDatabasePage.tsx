@@ -21,6 +21,7 @@ import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { apiGet, apiPost, apiDelete, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
+import { formatFileSize } from '@/shared/lib/formatters';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -128,7 +129,7 @@ async function uploadCostFile(file: File): Promise<ImportResult> {
     let detail = 'Upload failed';
     try {
       const body = await response.json();
-      detail = body.detail || detail;
+      detail = extractErrorMessageFromBody(body) ?? detail;
     } catch {
       // ignore parse error
     }
@@ -146,11 +147,8 @@ interface FilePreview {
   type: 'excel' | 'csv';
 }
 
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
+// `formatFileSize` lives in `@/shared/lib/formatters` — same implementation,
+// shared with the AI and Takeoff surfaces. Imported above.
 
 function getFileType(name: string): 'excel' | 'csv' | null {
   const lower = name.toLowerCase();
@@ -320,7 +318,16 @@ function CWICRDatabaseGrid(_props: { onLoadDatabase: (file: File) => void }) {
       void GITHUB_ONLY_DBS; // Referenced in JSX badge
 
       try {
-        const data = await apiPost<Record<string, unknown>>(`/v1/costs/load-cwicr/${db.id}`);
+        // A regional CWICR import reads a ~40 MB parquet, expands 900K rows to
+        // 55K items and bulk-loads them — tens of seconds, well past the 30s
+        // default abort. Opt into the 5-min long-running budget (see api.ts) so
+        // the request waits for the backend instead of aborting mid-import and
+        // showing a false "Request timed out" (GitHub #171).
+        const data = await apiPost<Record<string, unknown>>(
+          `/v1/costs/load-cwicr/${db.id}`,
+          undefined,
+          { longRunning: true },
+        );
 
         setLoaded((prev) => new Set(prev).add(db.id));
         addLoadedDatabase(db.id);
@@ -1145,7 +1152,7 @@ function VectorDatabaseSection() {
         setLastResult({ region: 'all', indexed: data.indexed, duration: data.duration_seconds });
         addToast({
           type: 'success',
-          title: 'Vector index created',
+          title: t('costs.vector_index_created', { defaultValue: 'Vector index created' }),
           message: `${data.indexed.toLocaleString()} items indexed in ${data.duration_seconds}s`,
         });
         refetchStatus();
@@ -1153,7 +1160,7 @@ function VectorDatabaseSection() {
         queryClient.invalidateQueries({ queryKey: ['costs', 'vector'] });
       } else {
         const err = await res.json().catch(() => ({ detail: 'Indexing failed' }));
-        addToast({ type: 'error', title: t('costs.indexing_failed', { defaultValue: 'Indexing failed' }), message: err.detail });
+        addToast({ type: 'error', title: t('costs.indexing_failed', { defaultValue: 'Indexing failed' }), message: extractErrorMessageFromBody(err) ?? 'Indexing failed' });
       }
     } catch {
       addToast({ type: 'error', title: t('common.connection_error', { defaultValue: 'Connection error' }) });

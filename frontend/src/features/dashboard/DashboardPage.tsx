@@ -39,7 +39,8 @@ import {
   Activity,
   LayoutGrid,
 } from 'lucide-react';
-import { Card, CardHeader, CardContent, Button, Badge, Skeleton, ActivityFeed as CrossModuleActivityFeed, EmptyState, ModuleHelpButton } from '@/shared/ui';
+import { Card, CardHeader, CardContent, Button, Badge, Skeleton, ActivityFeed as CrossModuleActivityFeed, EmptyState, ModuleHelpButton, PartnerLogoBadge } from '@/shared/ui';
+import { MultiCurrencyTotal } from '@/shared/ui/MultiCurrencyTotal';
 import { WhatsNewCard } from '@/shared/ui/WhatsNewCard';
 import BIMCoverageCard from './BIMCoverageCard';
 import { CompactProjectCard } from './components/CompactProjectCard';
@@ -59,6 +60,36 @@ import {
   DashboardRollupProvider,
   useDashboardRollupContext,
 } from './context/DashboardRollupContext';
+
+/* ── Helpers ──────────────────────────────────────────────────────────── */
+
+/**
+ * Derive a presentable first name from a signed-in user's email.
+ *
+ * The auth store only persists the email (no full_name), so we build a
+ * friendly label from the local-part: take everything before "@", split on
+ * dots / underscores / hyphens / digits, title-case the first usable token,
+ * and trim. Returns `undefined` when nothing usable can be derived so the
+ * greeting can render name-less — we never expose a raw email or "undefined".
+ *
+ * Examples:
+ *   "artem.boiko@acme.io" → "Artem"
+ *   "j_smith42@x.com"     → "J"
+ *   "demo@openconstructionerp.com" → "Demo"
+ *   "@x.com" / "" / null  → undefined
+ */
+function deriveGreetingName(email: string | null | undefined): string | undefined {
+  if (!email) return undefined;
+  const local = email.split('@', 1)[0]?.trim();
+  if (!local) return undefined;
+  // First token before any common separator; drop trailing digits.
+  const token = local
+    .split(/[._\-+]/)
+    .map((s) => s.replace(/\d+$/, '').trim())
+    .find((s) => s.length > 0);
+  if (!token) return undefined;
+  return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+}
 
 /* ── Types ────────────────────────────────────────────────────────────── */
 
@@ -109,6 +140,24 @@ interface BOQWithTotal {
   status: string;
   grand_total: number;
   positions: { total: number }[];
+}
+
+/** Per-currency BOQ value subtotal from ``boq_summary.by_currency``. */
+interface CurrencyTotal {
+  currency: string;
+  total_value: string;
+}
+
+/**
+ * Multi-currency fields the backend adds to the ``boq_summary`` rollup
+ * (see backend dashboard/service.py). The shared rollup payload type does
+ * not yet declare them, so we read them through this narrow local shape.
+ * RULE: across projects with different currencies there is no blended
+ * rate — render per-currency chips, never one mixed scalar.
+ */
+interface BoqCurrencyBreakdown {
+  by_currency?: CurrencyTotal[];
+  multi_currency?: boolean;
 }
 
 interface RegionStat {
@@ -548,7 +597,7 @@ function OnboardingSteps({
                     className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold ${
                       step.done
                         ? 'bg-semantic-success-bg text-semantic-success'
-                        : 'bg-oe-blue-subtle text-oe-blue'
+                        : 'bg-oe-blue-subtle text-oe-blue-text'
                     }`}
                   >
                     {step.id}
@@ -655,25 +704,29 @@ function KpiRibbon({
   boqs,
   schedules,
   projects,
+  byCurrency,
+  multiCurrency,
 }: {
   boqs?: BOQWithTotal[];
   schedules?: ScheduleSummary[];
   projects?: ProjectSummary[];
+  /** Per-currency BOQ value subtotals from the rollup. */
+  byCurrency?: CurrencyTotal[];
+  /** True when projects span more than one currency. */
+  multiCurrency?: boolean;
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  const totalValue = useMemo(() => {
-    if (!boqs || boqs.length === 0) return 0;
-    // Backend serialises money as a Decimal-string ("1234.56") per the
-    // project-wide contract. Coerce every leg before summing so a stray
-    // string doesn't trigger JS string concatenation ("01234.565678") +
-    // a downstream `.toFixed is not a function` crash in formatMoney.
-    return boqs.reduce((sum, b) => {
-      const n = Number(b.grand_total);
-      return sum + (Number.isFinite(n) ? n : 0);
-    }, 0);
-  }, [boqs]);
+  // Per-currency value buckets straight from the backend rollup. Summing
+  // amounts across currencies into one scalar is financially meaningless
+  // (no cross-project rate table), so the Total Value tile renders one
+  // labelled total when everything shares a currency, or per-currency
+  // chips when ``multiCurrency`` is true.
+  const currencyTotals = useMemo<CurrencyTotal[]>(() => {
+    if (byCurrency && byCurrency.length > 0) return byCurrency;
+    return [];
+  }, [byCurrency]);
 
   const activeEstimates = useMemo(() => {
     if (!boqs) return 0;
@@ -700,35 +753,55 @@ function KpiRibbon({
     return Math.round((positionsWithPrice / totalPositions) * 100);
   }, [boqs]);
 
-  const currency = projects?.[0]?.currency ?? 'EUR';
+  // Fallback currency for the rare case the rollup has no per-currency
+  // buckets yet (no priced BOQs) \u2014 only used to label a zero figure.
+  const fallbackCurrency =
+    currencyTotals[0]?.currency ?? projects?.[0]?.currency ?? 'EUR';
 
   // Compact currency formatter using Intl.NumberFormat \u2014 handles every ISO
   // 4217 code natively (BRL, INR, JPY, etc.). For values \u2265 1M we use the
-  // built-in compact notation; below that, two decimals. Previously this
-  // had an ad-hoc switch covering only EUR/GBP/USD/AED.
-  const formatMoney = (raw: number | string | null | undefined) => {
+  // built-in compact notation; below that, two decimals. The ISO code is
+  // ALWAYS rendered next to the figure (Intl currency style emits the
+  // symbol/code), so a per-currency chip is never ambiguous.
+  const formatMoney = (raw: number | string | null | undefined, code: string) => {
     // Harden against backend Decimal-strings sneaking past TypeScript: any
     // string that can't be parsed degrades to 0 rather than crashing.
     const value = typeof raw === 'number' ? raw : Number(raw ?? 0);
-    if (!Number.isFinite(value)) return `0 ${currency}`;
+    if (!Number.isFinite(value)) return `0 ${code}`;
     try {
       const compact = value >= 1_000;
       return new Intl.NumberFormat(getIntlLocale(), {
         style: 'currency',
-        currency,
+        currency: code,
         notation: compact ? 'compact' : 'standard',
         maximumFractionDigits: compact ? 1 : 2,
       }).format(value);
     } catch {
       // Unknown currency code \u2014 fall back to raw number with code suffix.
-      return `${value.toFixed(2)} ${currency}`;
+      return `${value.toFixed(2)} ${code}`;
     }
   };
+
+  // The Total Value tile value: a single labelled figure when all projects
+  // share one currency, or comma-joined per-currency chips when they don't.
+  // ``null`` means "still loading" (skeleton); an empty bucket list shows a
+  // labelled zero.
+  const totalValueDisplay = useMemo<string | null>(() => {
+    if (!boqs) return null;
+    if (currencyTotals.length === 0) return formatMoney(0, fallbackCurrency);
+    return currencyTotals
+      .map((ct) => formatMoney(ct.total_value, ct.currency))
+      .join(' \u00b7 ');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [boqs, currencyTotals, fallbackCurrency]);
 
   const cards = [
     {
       icon: <DollarSign size={20} strokeWidth={1.75} />,
-      value: boqs ? formatMoney(totalValue) : null,
+      value: totalValueDisplay,
+      sublabel: multiCurrency
+        ? t('dashboard.kpi_multi_currency', { defaultValue: 'multi-currency' })
+        : '',
       label: t('dashboard.kpi_total_value', { defaultValue: 'Total Value' }),
       color: 'text-oe-blue',
       bg: 'bg-oe-blue-subtle',
@@ -828,6 +901,17 @@ interface AnalyticsOverview {
   total_planned: number;
   total_actual: number;
   total_variance: number;
+  // A-DASH-01: each project carries its own currency, so the flat
+  // total_* scalars above blend currencies whenever multi_currency is
+  // true and must NOT be rendered as a single headline figure. Use
+  // totals_by_currency for an honest per-currency rollup.
+  multi_currency?: boolean;
+  totals_by_currency?: {
+    currency: string;
+    total_planned: number;
+    total_actual: number;
+    total_variance: number;
+  }[];
   over_budget_count: number;
   projects: {
     id: string;
@@ -854,12 +938,19 @@ function PortfolioOverview({ projects: _projects }: { projects: ProjectSummary[]
   if (!analytics) return null;
 
   const hasWarnings = analytics.over_budget_count > 0;
-  const totalPlannedNum = Number(analytics.total_planned ?? 0);
-  const totalBudgetFormatted = totalPlannedNum >= 1_000_000
-    ? `${(totalPlannedNum / 1_000_000).toFixed(1)}M`
-    : totalPlannedNum >= 1_000
-      ? `${(totalPlannedNum / 1_000).toFixed(0)}K`
-      : totalPlannedNum.toLocaleString();
+
+  // A-DASH-01: the flat total_planned scalar blends per-project
+  // currencies. Render the Total Budget card honestly: when more than
+  // one currency is in play (multi_currency flag, or totals_by_currency
+  // carries >1 ISO entry) show a per-currency rollup via
+  // <MultiCurrencyTotal>; only show a single headline figure when there
+  // is exactly one currency, and always attach its ISO code so we never
+  // print a bare, currency-less number.
+  const totalsByCurrency = analytics.totals_by_currency ?? [];
+  const totalBudgetItems = totalsByCurrency.map((row) => ({
+    amount: row.total_planned,
+    currency: row.currency,
+  }));
 
   const overBudgetProjects = (analytics.projects || []).filter(
     (p) => p.status === 'over_budget',
@@ -896,7 +987,7 @@ function PortfolioOverview({ projects: _projects }: { projects: ProjectSummary[]
             {t('dashboard.total_budget_all', { defaultValue: 'Total Budget' })}
           </div>
           <div className="mt-1 text-xl font-bold tabular-nums text-content-primary">
-            {totalBudgetFormatted}
+            <MultiCurrencyTotal items={totalBudgetItems} variant="inline" compact />
           </div>
         </div>
         <div className="rounded-lg bg-surface-secondary p-3">
@@ -1637,7 +1728,7 @@ function QuickUploadCard() {
               }
             }}
           />
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text">
             {uploading ? (
               <Loader2 size={22} className="animate-spin" />
             ) : (
@@ -1663,7 +1754,7 @@ function QuickUploadCard() {
             <div className="mt-2 flex items-center gap-3 text-2xs text-content-tertiary">
               <button
                 type="button"
-                className="inline-flex items-center gap-1 text-oe-blue hover:text-oe-blue-dark transition-colors"
+                className="inline-flex items-center gap-1 text-oe-blue hover:text-oe-blue-text transition-colors"
                 onClick={() => navigate('/documents')}
                 disabled={!hasProject}
               >
@@ -1731,6 +1822,15 @@ function DashboardPageInner() {
     [widgetOrder],
   );
 
+  // Friendly display name for the greeting. The auth store only carries the
+  // signed-in user's email, so derive a presentable first name from the
+  // local-part (everything before "@"): split on the usual separators,
+  // title-case each token, and join. We deliberately never surface a raw
+  // email (with "@") or an "undefined" — if nothing usable comes out, the
+  // greeting renders name-less.
+  const userEmail = useAuthStore((s) => s.userEmail);
+  const greetingName = useMemo(() => deriveGreetingName(userEmail), [userEmail]);
+
   // Pull the server-side layout once at mount so a user who customised on
   // another browser sees the same dashboard here. Idempotent: only the
   // first call actually fires.
@@ -1781,12 +1881,15 @@ function DashboardPageInner() {
     retry: false,
   });
 
-  // Fetch system status for vector DB count (used in onboarding steps)
+  // Fetch system status for vector DB count (used in onboarding steps).
+  // Shares the ``['system-status']`` cache with the SystemStatus panel
+  // below — same 60s staleTime, no polling interval, so the two observers
+  // never fire competing fetches against the expensive status endpoint.
   const { data: systemStatus } = useQuery({
     queryKey: ['system-status'],
     queryFn: () => fetch('/api/system/status').then((r) => r.json()) as Promise<SystemStatusData>,
     retry: false,
-    staleTime: 30_000,
+    staleTime: 60_000,
   });
 
   const vectorCount = systemStatus?.vector_db?.vectors ?? 0;
@@ -1849,6 +1952,32 @@ function DashboardPageInner() {
       status: 'active',
     }));
   }, [scheduleCritical]);
+
+  // Per-currency BOQ value subtotals for the KPI ribbon + Analytics. We
+  // prefer the backend's ``by_currency`` / ``multi_currency`` fields; if an
+  // older backend omits them we reconstruct the buckets from the per-project
+  // rows (each carries its own currency). Either way we never sum across
+  // currencies into one scalar.
+  const boqCurrency = useMemo<{ byCurrency: CurrencyTotal[]; multiCurrency: boolean }>(() => {
+    if (!boqSummary) return { byCurrency: [], multiCurrency: false };
+    const extra = boqSummary as unknown as BoqCurrencyBreakdown;
+    if (extra.by_currency && extra.by_currency.length > 0) {
+      return {
+        byCurrency: extra.by_currency,
+        multiCurrency: extra.multi_currency ?? extra.by_currency.length > 1,
+      };
+    }
+    // Fallback: group the per-project rows by their own currency.
+    const sums = new Map<string, number>();
+    for (const row of boqSummary.by_project) {
+      const cur = row.currency || 'EUR';
+      sums.set(cur, (sums.get(cur) ?? 0) + (Number(row.total_value) || 0));
+    }
+    const byCurrency: CurrencyTotal[] = Array.from(sums.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([currency, total]) => ({ currency, total_value: total.toFixed(2) }));
+    return { byCurrency, multiCurrency: byCurrency.length > 1 };
+  }, [boqSummary]);
 
   // Fetch contacts count for NextSteps suggestions
   const { data: contactsList } = useQuery({
@@ -1928,7 +2057,15 @@ function DashboardPageInner() {
 
     today: <TodaySnapshot cards={projectCards} />,
 
-    kpi: <KpiRibbon boqs={allBoqs} schedules={allSchedules} projects={projects} />,
+    kpi: (
+      <KpiRibbon
+        boqs={allBoqs}
+        schedules={allSchedules}
+        projects={projects}
+        byCurrency={boqCurrency.byCurrency}
+        multiCurrency={boqCurrency.multiCurrency}
+      />
+    ),
 
     projects: (
       <>
@@ -2050,6 +2187,10 @@ function DashboardPageInner() {
   return (
     <DashboardRollupProvider>
     <div className="space-y-5 animate-fade-in">
+      {/* Partner co-brand strip — only renders when a partner pack is
+          active (env OE_PARTNER_PACK or first installed). Dismissable
+          per session; reappears on next browser launch. */}
+      <PartnerLogoBadge variant="dashboard" />
       {/* "What's new in vX.Y.Z" release-notes card. Self-gates on a
           localStorage `oe_whats_new_seen_<version>` flag so it only
           appears once per release per browser. Sits above the hero so
@@ -2074,7 +2215,10 @@ function DashboardPageInner() {
             : h < 12 ? 'Good morning'
             : h < 18 ? 'Good afternoon'
             :          'Good evening';
-            return t(key, { defaultValue: fallback });
+            const greeting = t(key, { defaultValue: fallback });
+            // Append the user's name as ", Name" so the greeting i18n keys
+            // stay reusable across languages without a name-aware template.
+            return `${greeting}${greetingName ? `, ${greetingName}` : ''}`;
           })()}
         </h1>
         <div
@@ -2280,7 +2424,7 @@ function ProjectsList({ projects }: { projects?: ProjectSummary[] }) {
           className="flex w-full items-center gap-4 px-6 py-3.5 text-left transition-all duration-normal ease-oe hover:bg-surface-secondary animate-stagger-in"
           style={{ animationDelay: `${300 + index * 60}ms` }}
         >
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue text-xs font-bold">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text text-xs font-bold">
             {p.name.charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0 flex-1">
@@ -2314,18 +2458,43 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
     if (!boqSummary) return null;
 
     const totalBoqs = boqSummary.total_boqs;
-    const totalValue = Number(boqSummary.total_value_eur) || 0;
+
+    // Per-currency value subtotals — never a blended scalar. Prefer the
+    // backend's ``by_currency``; fall back to grouping the per-project rows
+    // by their own currency on an older backend.
+    const extra = boqSummary as unknown as BoqCurrencyBreakdown;
+    let byCurrency: CurrencyTotal[];
+    if (extra.by_currency && extra.by_currency.length > 0) {
+      byCurrency = extra.by_currency;
+    } else {
+      const sums = new Map<string, number>();
+      for (const row of boqSummary.by_project) {
+        const cur = row.currency || 'EUR';
+        sums.set(cur, (sums.get(cur) ?? 0) + (Number(row.total_value) || 0));
+      }
+      byCurrency = Array.from(sums.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([currency, total]) => ({ currency, total_value: total.toFixed(2) }));
+    }
+    const multiCurrency = extra.multi_currency ?? byCurrency.length > 1;
 
     // Per-project total values come directly from the rollup. Dedup by
     // display name so two same-named projects merge (legacy behaviour the
-    // analytics chart relied on).
-    const valueByName = new Map<string, number>();
+    // analytics chart relied on). Keep each project's currency so the bar
+    // labels stay correct in mixed-currency portfolios.
+    const valueByName = new Map<string, { value: number; currency: string }>();
     for (const row of boqSummary.by_project) {
       const v = Number(row.total_value) || 0;
-      valueByName.set(row.project_name, (valueByName.get(row.project_name) ?? 0) + v);
+      const prev = valueByName.get(row.project_name);
+      valueByName.set(row.project_name, {
+        value: (prev?.value ?? 0) + v,
+        currency: prev?.currency ?? row.currency ?? 'EUR',
+      });
     }
-    const projectValues: { name: string; value: number }[] = Array.from(valueByName.entries())
-      .map(([name, value]) => ({ name, value }))
+    const projectValues: { name: string; value: number; currency: string }[] = Array.from(
+      valueByName.entries(),
+    )
+      .map(([name, { value, currency }]) => ({ name, value, currency }))
       .sort((a, b) => b.value - a.value);
 
     // We no longer have per-BOQ status (we'd need a BOQ list call for
@@ -2340,7 +2509,8 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
     return {
       totalProjects: projects.length,
       totalBoqs,
-      totalValue,
+      byCurrency,
+      multiCurrency,
       projectValues,
       statusCounts,
     };
@@ -2356,6 +2526,22 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
   }
 
   const maxValue = Math.max(...stats.projectValues.map((p) => p.value), 1);
+
+  // Compact money with the ISO code always attached (e.g. "1.2M EUR").
+  // Used for the per-currency Total Value subtotals and the per-project
+  // bar labels so no figure is ever shown without its currency.
+  const fmtCompact = (value: number, code: string): string => {
+    const num =
+      value >= 1_000_000
+        ? `${(value / 1_000_000).toFixed(1)}M`
+        : value >= 1_000
+          ? `${(value / 1_000).toFixed(0)}K`
+          : value.toLocaleString(getIntlLocale(), {
+              minimumFractionDigits: 0,
+              maximumFractionDigits: 0,
+            });
+    return `${num} ${code}`;
+  };
 
   // Status donut segments
 
@@ -2382,19 +2568,37 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
             </div>
           </div>
           <div className="rounded-lg bg-surface-secondary p-3 sm:col-span-2">
-            <div className="text-xs font-medium uppercase tracking-wider text-content-tertiary">
+            <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-content-tertiary">
               {t('dashboard.total_value', { defaultValue: 'Total Value' })}
+              {stats.multiCurrency && (
+                <span className="rounded bg-surface-tertiary px-1.5 py-0.5 text-2xs font-medium normal-case tracking-normal text-content-tertiary">
+                  {t('dashboard.kpi_multi_currency', { defaultValue: 'multi-currency' })}
+                </span>
+              )}
             </div>
-            <div className="mt-1 text-xl font-bold tabular-nums text-content-primary">
-              {stats.totalValue >= 1_000_000
-                ? `${(stats.totalValue / 1_000_000).toFixed(1)}M`
-                : stats.totalValue >= 1_000
-                  ? `${(stats.totalValue / 1_000).toFixed(0)}K`
-                  : stats.totalValue.toLocaleString('de-DE', {
-                      minimumFractionDigits: 0,
-                      maximumFractionDigits: 0,
-                    })}
-            </div>
+            {stats.byCurrency.length === 0 ? (
+              <div className="mt-1 text-xl font-bold tabular-nums text-content-primary">
+                {fmtCompact(0, projects[0]?.currency ?? 'EUR')}
+              </div>
+            ) : stats.multiCurrency ? (
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+                {stats.byCurrency.map((ct) => (
+                  <span
+                    key={ct.currency}
+                    className="text-base font-bold tabular-nums text-content-primary"
+                  >
+                    {fmtCompact(Number(ct.total_value) || 0, ct.currency)}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-1 text-xl font-bold tabular-nums text-content-primary">
+                {fmtCompact(
+                  Number(stats.byCurrency[0]?.total_value) || 0,
+                  stats.byCurrency[0]?.currency ?? 'EUR',
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -2408,12 +2612,7 @@ function AnalyticsSection({ projects }: { projects: ProjectSummary[] }) {
         <div className="space-y-3">
           {stats.projectValues.filter((pv) => pv.value > 0).slice(0, 10).map((pv, i) => {
             const barWidth = maxValue > 0 ? (pv.value / maxValue) * 100 : 0;
-            const formattedValue =
-              pv.value >= 1_000_000
-                ? `${(pv.value / 1_000_000).toFixed(1)}M`
-                : pv.value >= 1_000
-                  ? `${(pv.value / 1_000).toFixed(0)}K`
-                  : pv.value.toLocaleString();
+            const formattedValue = fmtCompact(pv.value, pv.currency);
             const shareLabel = `${Math.round(barWidth)}%`;
             return (
               <div key={`${pv.name}-${i}`}>
@@ -2473,7 +2672,12 @@ function SystemStatus() {
     queryKey: ['system-status'],
     queryFn: () => fetch('/api/system/status').then((r) => r.json()) as Promise<SystemStatusData>,
     retry: false,
-    refetchInterval: 15000,
+    // The vector-DB probe behind this endpoint is comparatively expensive
+    // (it pings LanceDB/Qdrant). Keep both ``['system-status']`` observers
+    // on the same cheap cadence — 60s staleTime, no aggressive polling —
+    // so they share one cached response instead of stampeding the backend.
+    staleTime: 60_000,
+    refetchInterval: 60_000,
   });
 
   const { data: modules } = useQuery({
@@ -2523,14 +2727,28 @@ function SystemStatus() {
     {
       name: t('dashboard.vector_db', { defaultValue: 'Vector DB' }),
       status: vectorStatus,
-      detail: [status?.vector_db?.engine, vectorVectors > 0 ? `${vectorVectors.toLocaleString()} vectors` : ''].filter(Boolean).join(' · '),
+      detail: [
+        status?.vector_db?.engine,
+        vectorVectors > 0
+          ? t('dashboard.status_vectors_count', {
+              defaultValue: '{{n}} vectors',
+              n: vectorVectors.toLocaleString(),
+            })
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
       icon: <Globe size={13} />,
       delay: 520,
     },
     {
       name: t('dashboard.ai_providers', { defaultValue: 'AI Providers' }),
       status: aiConfigured ? 'connected' : 'offline',
-      detail: status?.ai?.providers?.map((p) => p.name).join(', ') || (hasUserAiKey ? 'User keys' : t('dashboard.not_configured', { defaultValue: 'Not configured' })),
+      detail:
+        status?.ai?.providers?.map((p) => p.name).join(', ') ||
+        (hasUserAiKey
+          ? t('dashboard.status_user_keys', { defaultValue: 'User keys' })
+          : t('dashboard.not_configured', { defaultValue: 'Not configured' })),
       icon: <ShieldCheck size={13} />,
       delay: 580,
     },

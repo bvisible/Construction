@@ -23,7 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse, Response
 
-from app.dependencies import CurrentUserPayload, SessionDep
+from app.dependencies import CurrentUserPayload, SessionDep, verify_project_access
 from app.modules.dashboards import messages
 from app.modules.dashboards.cad2data_bridge import (
     UploadedFile,
@@ -149,6 +149,11 @@ async def create_snapshot(
             detail=f"At most {_MAX_UPLOAD_COUNT} files per snapshot.",
         )
 
+    # IDOR/RBAC guard: reject snapshot creation under a project the caller
+    # cannot access (404 on denial, team-inclusive via verify_project_access).
+    user_id = _user_id_from_payload(payload)
+    await verify_project_access(project_id, str(user_id), session)
+
     disciplines = disciplines or []
     uploaded: list[UploadedFile] = []
     for idx, f in enumerate(files):
@@ -163,7 +168,6 @@ async def create_snapshot(
             )
         )
 
-    user_id = _user_id_from_payload(payload)
     tenant_id = _tenant_id_from_payload(payload)
 
     service = SnapshotService(
@@ -203,6 +207,11 @@ async def list_snapshots(
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> SnapshotListResponse:
+    # IDOR/RBAC guard: only list snapshots for a project the caller can
+    # access (404 on denial, team-inclusive via verify_project_access).
+    user_id = _user_id_from_payload(payload)
+    await verify_project_access(project_id, str(user_id), session)
+
     tenant_id = _tenant_id_from_payload(payload)
     service = SnapshotService(repo=SnapshotRepository(session))
     rows, total = await service.list_for_project(
@@ -802,14 +811,21 @@ async def post_preset_sync_check(
     )
     try:
         row = await service.get(
-            preset_id, owner_id=user_id, tenant_id=tenant_id,
+            preset_id,
+            owner_id=user_id,
+            tenant_id=tenant_id,
         )
     except PresetError as exc:
         _raise_preset_http(exc, locale)
 
-    snapshot_id = (row.config_json or {}).get("snapshot_id") if isinstance(
-        row.config_json, dict,
-    ) else None
+    snapshot_id = (
+        (row.config_json or {}).get("snapshot_id")
+        if isinstance(
+            row.config_json,
+            dict,
+        )
+        else None
+    )
 
     report = await _build_sync_report(
         preset_id=preset_id,
@@ -851,7 +867,9 @@ async def post_preset_sync_heal(
     )
     try:
         row = await service.get(
-            preset_id, owner_id=user_id, tenant_id=tenant_id,
+            preset_id,
+            owner_id=user_id,
+            tenant_id=tenant_id,
         )
     except PresetError as exc:
         _raise_preset_http(exc, locale)
@@ -862,9 +880,14 @@ async def post_preset_sync_heal(
             detail=messages.translate("preset.access_denied", locale=locale),
         )
 
-    snapshot_id = (row.config_json or {}).get("snapshot_id") if isinstance(
-        row.config_json, dict,
-    ) else None
+    snapshot_id = (
+        (row.config_json or {}).get("snapshot_id")
+        if isinstance(
+            row.config_json,
+            dict,
+        )
+        else None
+    )
 
     report = await _build_sync_report(
         preset_id=preset_id,
@@ -887,7 +910,10 @@ async def post_preset_sync_heal(
 
 
 async def _build_sync_report(
-    *, preset_id: uuid.UUID, config: dict, snapshot_id: object,
+    *,
+    preset_id: uuid.UUID,
+    config: dict,
+    snapshot_id: object,
 ) -> SyncReport:
     """Internal helper: load the snapshot's current meta (best-effort)
     then run the probe."""
@@ -897,7 +923,9 @@ async def _build_sync_report(
         # No snapshot referenced — the preset is trivially in-sync but
         # we still hand back an empty report so the UI badge updates.
         return probe.run(
-            config, _empty_meta(), preset_id=str(preset_id),
+            config,
+            _empty_meta(),
+            preset_id=str(preset_id),
         )
 
     pool = get_duckdb_pool()
@@ -918,7 +946,9 @@ async def _build_sync_report(
         project_id = config.get("project_id")
         if not project_id:
             return probe.run(
-                config, _empty_meta(), preset_id=str(preset_id),
+                config,
+                _empty_meta(),
+                preset_id=str(preset_id),
             )
         meta = await load_current_meta(
             pool=pool,
@@ -929,12 +959,15 @@ async def _build_sync_report(
         return probe.run(config, meta, preset_id=str(preset_id))
     except Exception:
         return probe.run(
-            config, _empty_meta(), preset_id=str(preset_id),
+            config,
+            _empty_meta(),
+            preset_id=str(preset_id),
         )
 
 
 def _empty_meta():
     from app.modules.dashboards.sync_protocol import SnapshotMeta
+
     return SnapshotMeta()
 
 
@@ -949,9 +982,7 @@ def _report_to_schema(report: SyncReport) -> SyncReportOut:
         is_in_sync=report.is_in_sync,
         column_renames=[SyncIssueOut(**i.to_dict()) for i in report.column_renames],
         dropped_columns=[SyncIssueOut(**i.to_dict()) for i in report.dropped_columns],
-        dropped_filter_values=[
-            SyncIssueOut(**i.to_dict()) for i in report.dropped_filter_values
-        ],
+        dropped_filter_values=[SyncIssueOut(**i.to_dict()) for i in report.dropped_filter_values],
         dtype_changes=[SyncIssueOut(**i.to_dict()) for i in report.dtype_changes],
     )
 
@@ -1280,6 +1311,11 @@ async def get_snapshot_timeline(
         list_snapshots_for_project,
     )
 
+    # IDOR/RBAC guard: scope the timeline to a project the caller can
+    # access (404 on denial, team-inclusive via verify_project_access).
+    user_id = _user_id_from_payload(payload)
+    await verify_project_access(project_id, str(user_id), session)
+
     tenant_id = _tenant_id_from_payload(payload)
     service = SnapshotService(repo=SnapshotRepository(session))
 
@@ -1411,7 +1447,9 @@ async def get_snapshot_diff(
         columns_removed=list(diff.columns_removed),
         columns_changed=[
             SnapshotDiffColumnChangeOut(
-                name=c.name, a_dtype=c.a_dtype, b_dtype=c.b_dtype,
+                name=c.name,
+                a_dtype=c.a_dtype,
+                b_dtype=c.b_dtype,
             )
             for c in diff.columns_changed
         ],
@@ -1661,6 +1699,50 @@ def _raise_rows_http(exc: RowsIOError, locale: str) -> None:
         status_code=exc.http_status,
         detail=messages.translate(exc.message_key, locale=locale, **params),
     )
+
+
+# ── Route ordering fix (api-HIGH) ───────────────────────────────────────────
+#
+# Bug: the dynamic route ``GET /snapshots/{snapshot_id}`` is declared above the
+# literal routes ``GET /snapshots/timeline`` and ``GET /snapshots/diff``.
+# Starlette matches routes in declaration order, so "timeline"/"diff" were being
+# captured by ``{snapshot_id}`` and validated as a UUID — both literal endpoints
+# permanently returned 422 and were unreachable (the frontend's getSnapshotTimeline
+# / diffSnapshots calls always hit their error state).
+#
+# Fix without relocating the (large) handler bodies: after the router is fully
+# built, promote the literal ``/snapshots/<literal>`` routes ahead of the
+# dynamic ``/snapshots/{snapshot_id}`` route in ``router.routes``. Idempotent and
+# additive — no paths, methods, signatures or response models change, so the
+# frontend contract (which already targets these exact paths) is untouched.
+def _promote_literal_snapshot_routes() -> None:
+    routes = router.routes
+    # Index of the shadowing dynamic route.
+    dynamic_idx: int | None = None
+    for i, route in enumerate(routes):
+        if getattr(route, "path", None) == "/snapshots/{snapshot_id}":
+            dynamic_idx = i
+            break
+    if dynamic_idx is None:
+        return
+    # Pull the literal routes that the dynamic route would otherwise shadow and
+    # re-insert them immediately before it, preserving their relative order.
+    literal_paths = ("/snapshots/timeline", "/snapshots/diff")
+    to_move = [r for r in routes if getattr(r, "path", None) in literal_paths]
+    if not to_move:
+        return
+    for r in to_move:
+        routes.remove(r)
+    # Recompute the dynamic route's index — removals above may have shifted it.
+    insert_at = next(
+        (i for i, r in enumerate(routes) if getattr(r, "path", None) == "/snapshots/{snapshot_id}"),
+        len(routes),
+    )
+    for offset, r in enumerate(to_move):
+        routes.insert(insert_at + offset, r)
+
+
+_promote_literal_snapshot_routes()
 
 
 __all__ = ["router"]

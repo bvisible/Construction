@@ -83,9 +83,7 @@ router.include_router(_aliases_router)
 # ── Tenant resolution ────────────────────────────────────────────────────
 
 
-async def _resolve_tenant_id(
-    session: AsyncSession, user_id: str
-) -> uuid.UUID:
+async def _resolve_tenant_id(session: AsyncSession, user_id: str) -> uuid.UUID:
     """‌⁠‍Resolve the tenant for the current user.
 
     W0.4 (RLS) hasn't shipped yet; until then, each user is treated as
@@ -719,7 +717,18 @@ async def run_ruleset_endpoint(
     if payload.elements is not None:
         elements = payload.elements
     elif payload.model_id is not None:
-        from app.modules.bim_hub.models import BIMElement
+        from app.modules.bim_hub.models import BIMElement, BIMModel
+
+        # IDOR guard: a ruleset run can read every element of the model, so the
+        # caller must have access to the model's project — otherwise model_id
+        # is a cross-tenant read of another project's BIM data.
+        model = await session.get(BIMModel, payload.model_id)
+        if model is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"BIM model {payload.model_id} not found",
+            )
+        await verify_project_access(model.project_id, user_id, session)
 
         stmt = select(BIMElement).where(BIMElement.model_id == payload.model_id)
         rows = (await session.scalars(stmt)).all()
@@ -733,12 +742,11 @@ async def run_ruleset_endpoint(
     # Derive an idempotency key. ``updated_at`` may be None on freshly
     # created rulesets — fall back to ``created_at`` then to the epoch
     # so the hash input is always defined.
-    ruleset_ts = (
-        getattr(ruleset, "updated_at", None)
-        or getattr(ruleset, "created_at", None)
-    )
+    ruleset_ts = getattr(ruleset, "updated_at", None) or getattr(ruleset, "created_at", None)
     if ruleset_ts is None:
-        from datetime import UTC as _UTC, datetime as _dt
+        from datetime import UTC as _UTC
+        from datetime import datetime as _dt
+
         ruleset_ts = _dt(1970, 1, 1, tzinfo=_UTC)
 
     idempotency_key = compute_idempotency_key(
@@ -1121,9 +1129,7 @@ async def diff_runs_endpoint(
 
     tenant_id = await _resolve_tenant_id(session, user_id)
     try:
-        result = await diff_runs(
-            session, run_id_a, run_id_b, tenant_id=tenant_id
-        )
+        result = await diff_runs(session, run_id_a, run_id_b, tenant_id=tenant_id)
     except ExecutionError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

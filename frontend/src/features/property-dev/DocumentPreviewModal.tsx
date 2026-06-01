@@ -213,26 +213,15 @@ export function DocumentPreviewModal({
       }, 200);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      addToast({ type: 'error', title: 'Download failed', message });
+      addToast({ type: 'error', title: t('common.download_failed', { defaultValue: 'Download failed' }), message });
     }
   };
 
-  const handleEmail = () => {
-    // TODO: wire to the buyer-email automation pipeline once the
-    // notifications module exposes a templated-send endpoint. For now
-    // this is intentionally a stub so we don't ship a fake button.
-    addToast({
-      type: 'info',
-      title: t('propdev.documents.email_pending', {
-        defaultValue: 'Email automation coming soon',
-      }),
-      message: t('propdev.documents.email_pending_detail', {
-        defaultValue:
-          'Email-to-buyer wiring is tracked separately. For now, please ' +
-          'download the PDF and attach it manually.',
-      }),
-    });
-  };
+  const emailDisabledHint = t('propdev.documents.email_disabled_hint', {
+    defaultValue:
+      'Email-to-buyer is not available yet. Download the PDF and attach it ' +
+      'manually for now.',
+  });
 
   const title = t(DOC_TITLES[docType].key, {
     defaultValue: DOC_TITLES[docType].defaultValue,
@@ -258,16 +247,22 @@ export function DocumentPreviewModal({
           <Button variant="ghost" onClick={onClose}>
             {t('common.close', { defaultValue: 'Close' })}
           </Button>
-          <Button
-            variant="ghost"
-            onClick={handleEmail}
-            disabled={!preview || loading}
-            icon={<Mail className="h-4 w-4" />}
-          >
-            {t('propdev.documents.email_to_buyer', {
-              defaultValue: 'Email to buyer',
-            })}
-          </Button>
+          {/* Email-to-buyer automation is not wired yet. Render the control
+              honestly disabled with an explanatory tooltip rather than ship a
+              button that only shows a "coming soon" toast. The title lives on a
+              wrapper because a disabled button has pointer-events: none. */}
+          <span title={emailDisabledHint} className="inline-flex">
+            <Button
+              variant="ghost"
+              disabled
+              icon={<Mail className="h-4 w-4" />}
+              aria-label={emailDisabledHint}
+            >
+              {t('propdev.documents.email_to_buyer', {
+                defaultValue: 'Email to buyer',
+              })}
+            </Button>
+          </span>
           <Button
             variant="primary"
             onClick={handleDownload}

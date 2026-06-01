@@ -109,7 +109,10 @@ export interface RespondRFIPayload {
 /* ── API Functions ─────────────────────────────────────────────────────── */
 
 export async function getRFI(id: string): Promise<RFI> {
-  return apiGet<RFI>(`/v1/rfi/${id}/`);
+  // The route is GET /{rfi_id} with NO trailing slash (router.py) and the
+  // app runs with redirect_slashes=False, so a trailing slash here 404s
+  // and the detail page permanently shows "RFI not found".
+  return apiGet<RFI>(`/v1/rfi/${id}`);
 }
 
 export async function fetchRFIs(filters?: RFIFilters): Promise<RFI[]> {

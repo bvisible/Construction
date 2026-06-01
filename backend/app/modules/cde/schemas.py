@@ -135,7 +135,17 @@ class StateTransitionRequest(BaseModel):
 
 
 class RevisionCreate(BaseModel):
-    """Create a new revision within a container."""
+    """Create a new revision within a container.
+
+    Two creation modes:
+
+    - **Upload mode** — ``storage_key`` carries a real storage key for a
+      freshly-uploaded file; the service materialises a new ``Document`` row in
+      the Documents hub so the file is indexed there.
+    - **Link mode** — ``document_id`` references an *existing* ``Document``;
+      the service reuses that document's real ``file_path`` / size / mime so the
+      file remains downloadable, and never creates a duplicate Document row.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
@@ -143,6 +153,9 @@ class RevisionCreate(BaseModel):
     file_size: str | None = Field(default=None, max_length=20)
     mime_type: str | None = Field(default=None, max_length=100)
     storage_key: str | None = Field(default=None, max_length=500)
+    # When set, link an existing Documents-hub row instead of creating a new
+    # one. Mutually preferred over ``storage_key`` (see CDEService.create_revision).
+    document_id: UUID | None = Field(default=None)
     content_hash: str | None = Field(default=None, max_length=64)
     is_preliminary: bool = True
     change_summary: str | None = None

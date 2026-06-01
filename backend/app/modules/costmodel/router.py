@@ -42,11 +42,45 @@ from app.modules.costmodel.schemas import (
 )
 from app.modules.costmodel.service import CostModelService
 
-router = APIRouter()
+router = APIRouter(tags=["costmodel"])
 
 
 def _get_service(session: SessionDep) -> CostModelService:
     return CostModelService(session)
+
+
+def _str_to_float(value: object) -> float:
+    """Convert a string-stored numeric value to float, defaulting to 0.0.
+
+    Mirrors the service-layer helper so the Monte Carlo endpoint can read the
+    Decimal-as-string ``planned`` totals returned by the FX-aware aggregator
+    without re-importing a private symbol.
+    """
+    if value is None:
+        return 0.0
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+async def _distinct_budget_currencies(
+    session: SessionDep,
+    project_id: uuid.UUID,
+    budget_line_model: type,
+    select_fn: object,
+) -> set[str]:
+    """Return the distinct non-blank ISO currency codes used by a project's budget lines.
+
+    Currency-blending fix: callers use this to decide whether summing across
+    lines is safe (one currency) or whether to surface a ``mixed_currency``
+    flag (multiple currencies, which may have been blended across missing
+    fx_rates). Blank/None currencies are ignored — they are legacy rows
+    written before the multi-currency wave and are treated as project base.
+    """
+    stmt = select_fn(budget_line_model.currency).where(budget_line_model.project_id == project_id).distinct()
+    result = await session.execute(stmt)
+    return {(row[0] or "").strip().upper() for row in result.all() if (row[0] or "").strip()}
 
 
 # ── Helper: convert model → response ────────────────────────────────────────
@@ -477,6 +511,7 @@ async def run_monte_carlo(
     session: SessionDep,
     _user_id: CurrentUserId,
     iterations: int = Query(default=1000, ge=100, le=5000),
+    service: CostModelService = Depends(_get_service),
 ) -> dict:
     """Run Monte Carlo cost risk simulation.
 
@@ -486,21 +521,36 @@ async def run_monte_carlo(
     await verify_project_access(project_id, _user_id, session)
     import random
 
-    from sqlalchemy import Float, func, select
-    from sqlalchemy.sql.expression import cast
+    from sqlalchemy import select
 
     from app.modules.costmodel.models import BudgetLine
 
-    stmt = (
-        select(
-            BudgetLine.category,
-            func.sum(cast(BudgetLine.planned_amount, Float)).label("planned"),
-        )
-        .where(BudgetLine.project_id == project_id)
-        .group_by(BudgetLine.category)
-    )
-    result = await session.execute(stmt)
-    categories = [{"category": r[0], "planned": float(r[1] or 0)} for r in result.all()]
+    # ── Money correctness (currency-blending fix) ────────────────────────────
+    # Previously this aggregated planned_amount with a raw SQL
+    # ``func.sum(cast(BudgetLine.planned_amount, Float))`` grouped by category
+    # only — it ignored each line's ``currency`` and never converted through
+    # the project's fx_rates. For any multi-currency project that silently
+    # summed e.g. USD + EUR + JPY into one scalar BAC, so every derived
+    # percentile/mean/std_dev/histogram was computed on a meaningless mixed-
+    # currency number. We now reuse the FX-aware ``aggregate_by_category``
+    # (same helper the dashboard / budget summary / EVM already use), which
+    # converts every line to the project base currency before summing, and we
+    # label the whole simulation with that base ISO currency.
+    rows = await service.budget_repo.aggregate_by_category(project_id)
+    categories = [{"category": r["category"], "planned": _str_to_float(r["planned"])} for r in rows]
+
+    # Resolve the project base currency to LABEL the result. Falls back to ""
+    # (unknown) rather than hardcoding "EUR" — the UI renders a bare number
+    # for a blank/invalid code instead of mislabelling foreign money as EUR.
+    currency = await service._get_project_currency(project_id)
+
+    # Guard: if budget lines carry more than one distinct ISO currency we may
+    # have converted across missing fx_rates (foreign lines with no rate are
+    # kept in their own units by the aggregator), so surface a mixed_currency
+    # flag instead of pretending the scalar is clean. A single distinct
+    # currency (or only-base/blank rows) is treated as clean.
+    line_ccys = await _distinct_budget_currencies(session, project_id, BudgetLine, select)
+    mixed_currency = len(line_ccys) > 1
 
     bac = sum(c["planned"] for c in categories)
     if bac <= 0:
@@ -555,6 +605,11 @@ async def run_monte_carlo(
         "p95": results[min(int(n * 0.95), n - 1)],
         "std_dev": round((sum((r - mean) ** 2 for r in results) / n) ** 0.5, 2),
         "histogram": histogram,
+        # Currency-blending fix: label the simulation with the project's base
+        # ISO currency (blank when unknown — never hardcoded EUR) and flag when
+        # the underlying budget lines mixed currencies so the client can warn.
+        "currency": currency,
+        "mixed_currency": mixed_currency,
     }
 
 

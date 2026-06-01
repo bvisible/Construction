@@ -25,6 +25,14 @@ import type {
 export interface CoordinationTimelineProps {
   data: CoordinationTimelineResponse | undefined;
   isLoading?: boolean;
+  /**
+   * When `true` the component drops its own card chrome (outer border /
+   * padding / shadow) and inner title — it is being rendered inside a
+   * `GlassPanel` that already supplies them, so the standalone wrapper
+   * would double the title and nest a card-in-a-card. Standalone callers
+   * leave it `false` to keep the self-contained card.
+   */
+  embedded?: boolean;
 }
 
 function IconForType({ type }: { type: string }) {
@@ -42,9 +50,60 @@ function IconForType({ type }: { type: string }) {
   }
 }
 
+type TFn = (key: string, opts?: Record<string, unknown>) => string;
+
+/**
+ * Build the localised event label from the structured `type` + `params`
+ * payload (the server no longer ships a pre-rendered English string).
+ * Falls back to `event.summary` for any unknown event type so a new
+ * server-side event kind still renders something readable.
+ */
+function buildLabel(event: CoordinationTimelineEvent, t: TFn): string {
+  const p = event.params ?? {};
+  // Back-compat: an event without structured params (older payload or a
+  // non-UI source) keeps its pre-rendered English summary rather than
+  // rendering an empty template.
+  if (Object.keys(p).length === 0) return event.summary;
+  const name = p.name ?? '';
+  switch (event.type) {
+    case 'clash_run':
+      return p.kind === 'completed'
+        ? t('coordination.tl_clash_completed', {
+            defaultValue: "Clash run '{{name}}' completed - {{total}} clashes",
+            name,
+            total: p.total ?? 0,
+          })
+        : t('coordination.tl_clash_pending', {
+            defaultValue: "Clash run '{{name}}' - {{status}}",
+            name,
+            status: p.status ?? 'pending',
+          });
+    case 'federation_created':
+      return t('coordination.tl_federation_created', {
+        defaultValue: "Federation '{{name}}' created",
+        name,
+      });
+    case 'rule_pack_installed':
+      return t('coordination.tl_rule_pack_installed', {
+        defaultValue: "Rule pack '{{name}}' installed",
+        name,
+      });
+    case 'bcf_export':
+      return t('coordination.tl_bcf_topic', {
+        defaultValue: "BCF topic '{{name}}' ({{status}})",
+        name,
+        status: p.status ?? '',
+      });
+    default:
+      return event.summary;
+  }
+}
+
 function TimelineRow({ event }: { event: CoordinationTimelineEvent }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const clickable = Boolean(event.target);
+  const label = buildLabel(event, t);
   const handleClick = () => {
     if (event.target) navigate(event.target);
   };
@@ -67,7 +126,7 @@ function TimelineRow({ event }: { event: CoordinationTimelineEvent }) {
               : 'cursor-default text-left text-sm font-medium text-content-primary'
           }
         >
-          {event.summary}
+          {label}
         </button>
         <div className="mt-0.5 text-xs text-content-tertiary">
           <DateDisplay value={event.ts} format="relative" />
@@ -92,8 +151,37 @@ function SkeletonRow() {
 export function CoordinationTimeline({
   data,
   isLoading,
+  embedded = false,
 }: CoordinationTimelineProps) {
   const { t } = useTranslation();
+
+  const body =
+    isLoading || !data ? (
+      <ul>
+        <SkeletonRow />
+        <SkeletonRow />
+        <SkeletonRow />
+      </ul>
+    ) : data.events.length === 0 ? (
+      <EmptyState
+        title={t('coordination.timeline_empty', {
+          defaultValue: 'No coordination activity yet.',
+        })}
+        description=""
+      />
+    ) : (
+      <ul>
+        {data.events.map((event, idx) => (
+          <TimelineRow key={`${event.ts}-${event.type}-${idx}`} event={event} />
+        ))}
+      </ul>
+    );
+
+  // Embedded inside a GlassPanel: it already paints the card + title, so
+  // we drop our own chrome to avoid a card-in-a-card with a doubled title.
+  if (embedded) {
+    return <div data-testid="coordination-timeline">{body}</div>;
+  }
 
   return (
     <div
@@ -105,29 +193,7 @@ export function CoordinationTimeline({
           defaultValue: 'Recent Activity',
         })}
       </h3>
-      {isLoading || !data ? (
-        <ul>
-          <SkeletonRow />
-          <SkeletonRow />
-          <SkeletonRow />
-        </ul>
-      ) : data.events.length === 0 ? (
-        <EmptyState
-          title={t('coordination.timeline_empty', {
-            defaultValue: 'No coordination activity yet.',
-          })}
-          description=""
-        />
-      ) : (
-        <ul>
-          {data.events.map((event, idx) => (
-            <TimelineRow
-              key={`${event.ts}-${event.type}-${idx}`}
-              event={event}
-            />
-          ))}
-        </ul>
-      )}
+      {body}
     </div>
   );
 }

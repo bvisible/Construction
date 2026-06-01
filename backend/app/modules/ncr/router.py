@@ -11,6 +11,7 @@ Endpoints:
 """
 
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -23,8 +24,39 @@ from app.modules.ncr.schemas import (
 )
 from app.modules.ncr.service import NCRService
 
-router = APIRouter()
+router = APIRouter(tags=["ncr"])
 logger = logging.getLogger(__name__)
+
+# Matches a free-text cost_impact like "BRL 12000", "USD 1,250.50" or "12000".
+# Group 1 = optional leading 3-letter ISO code; group 2 = the numeric amount.
+_COST_IMPACT_RE = re.compile(r"^\s*([A-Za-z]{3})?\s*([\d.,]+)\s*$")
+
+
+def _parse_cost_impact(raw: str | None) -> tuple[str, str | None]:
+    """Best-effort split of an NCR's free-text ``cost_impact`` into amount + ISO currency.
+
+    The NCR ``cost_impact`` column is free text (e.g. ``"BRL 12000"``) — amount and
+    currency jammed into one string. ``ChangeOrder.cost_impact`` is a numeric MoneyType
+    whose ``_to_decimal`` coercion returns 0 for any non-numeric input, so passing the
+    raw string silently zeroes the escalated change order's cost.
+
+    This returns ``(numeric_amount_str, currency_or_none)``:
+      * a leading 3-letter ISO code (if present) is stripped out and returned separately;
+      * thousands separators (``,``) are removed so the numeric part survives coercion;
+      * if the string cannot be parsed, the amount falls back to ``"0"`` and currency to
+        ``None`` (the caller then uses the project currency).
+    """
+    if not raw:
+        return "0", None
+    match = _COST_IMPACT_RE.match(raw)
+    if not match:
+        # Ambiguous / unparseable free text: keep amount safe and defer currency to project.
+        return "0", None
+    code, amount = match.groups()
+    # Strip thousands separators so "12,000" -> "12000" instead of truncating to 12.
+    amount = amount.replace(",", "")
+    currency = code.upper() if code else None
+    return amount or "0", currency
 
 
 def _get_service(session: SessionDep) -> NCRService:
@@ -153,6 +185,9 @@ async def create_variation_from_ncr(
     Pre-fills the change order with the NCR title, description, and cost impact.
     """
     ncr = await service.get_ncr(ncr_id)
+    # IDOR guard: ncr.update is a global role; without this any holder could
+    # escalate an NCR in a project they cannot access into a change order.
+    await verify_project_access(ncr.project_id, str(user_id), session)
 
     if not ncr.cost_impact:
         raise HTTPException(
@@ -162,12 +197,30 @@ async def create_variation_from_ncr(
 
     # Lazy import changeorders module
     try:
+        from sqlalchemy import select
+
         from app.modules.changeorders.models import ChangeOrder
         from app.modules.changeorders.repository import ChangeOrderRepository
+        from app.modules.projects.models import Project
 
         repo = ChangeOrderRepository(session)
         count = await repo.count_for_project(ncr.project_id)
         code = f"CO-{count + 1:03d}"
+
+        # Money-correctness fix: ncr.cost_impact is free text like "BRL 12000".
+        # Passing it raw to ChangeOrder.cost_impact (a numeric MoneyType) coerces
+        # to Decimal('0'), silently dropping the cost, and the ChangeOrder.currency
+        # column was left blank — so the rollup treated the lost amount as base
+        # currency. Split a clean numeric amount + any leading ISO code here.
+        amount, parsed_currency = _parse_cost_impact(ncr.cost_impact)
+
+        # Prefer the currency parsed from the NCR's own cost_impact; otherwise fall
+        # back to the project's real currency. NEVER hardcode "EUR" — load the
+        # project's currency, and leave blank ("") if the project has none set.
+        project_currency = await session.scalar(
+            select(Project.currency).where(Project.id == ncr.project_id)
+        )
+        currency = parsed_currency or (project_currency or "")
 
         description_parts = [
             f"Variation from NCR {ncr.ncr_number}: {ncr.title}",
@@ -186,12 +239,18 @@ async def create_variation_from_ncr(
             title=f"Variation: {ncr.title}",
             description="\n".join(description_parts),
             reason_category="non_conformance",
-            cost_impact=ncr.cost_impact or "0",
+            # Numeric-only amount so the MoneyType coercion no longer rounds to 0.
+            cost_impact=amount,
+            # Set the real currency (parsed ISO code, else project currency) instead
+            # of leaving ChangeOrder.currency at its blank default.
+            currency=currency,
             schedule_impact_days=ncr.schedule_impact_days or 0,
             metadata_={
                 "source": "ncr",
                 "ncr_id": str(ncr_id),
                 "ncr_number": ncr.ncr_number,
+                # Preserve the original free-text value for traceability/audit.
+                "ncr_cost_impact_raw": ncr.cost_impact,
             },
         )
         session.add(order)
@@ -228,10 +287,15 @@ async def create_variation_from_ncr(
 @router.post("/{ncr_id}/close/", response_model=NCRResponse)
 async def close_ncr(
     ncr_id: uuid.UUID,
+    session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
     _perm: None = Depends(RequirePermission("ncr.update")),
     service: NCRService = Depends(_get_service),
 ) -> NCRResponse:
     """Close an NCR after verification."""
+    # IDOR guard: verify the caller can access the NCR's project before
+    # mutating it (ncr.update is a global role, not project-scoped).
+    ncr = await service.get_ncr(ncr_id)
+    await verify_project_access(ncr.project_id, str(user_id), session)
     ncr = await service.close_ncr(ncr_id)
     return _to_response(ncr)

@@ -7,7 +7,7 @@ A row is the *extraction rule* binding a BOQ position numeric field to
 the canonical quantities of one or more BIM model elements, plus the
 provenance of the last human-confirmed pull. The current quantity always
 lives on ``oe_boq_position``; this table never caches it — it states how
-to re-derive it when the source model revises (CLAUDE.md §7: AI/derived
+to re-derive it when the source model revises (the architecture guide §7: AI/derived
 proposes, human confirms).
 
 Idempotent: guarded by an inspector so re-running after SQLite's
@@ -101,19 +101,13 @@ def upgrade() -> None:
             nullable=False,
             server_default="active",
         ),
-        sa.Column(
-            "source_model_version", sa.String(length=20), nullable=True
-        ),
-        sa.Column(
-            "last_applied_quantity", sa.String(length=50), nullable=True
-        ),
+        sa.Column("source_model_version", sa.String(length=20), nullable=True),
+        sa.Column("last_applied_quantity", sa.String(length=50), nullable=True),
         sa.Column("last_pulled_at", sa.String(length=40), nullable=True),
         sa.Column("last_applied_at", sa.String(length=40), nullable=True),
         sa.Column("created_by", sa.String(length=36), nullable=True),
         sa.Column("applied_by", sa.String(length=36), nullable=True),
-        sa.Column(
-            "metadata", sa.JSON(), nullable=False, server_default="{}"
-        ),
+        sa.Column("metadata", sa.JSON(), nullable=False, server_default="{}"),
     )
     op.create_index(
         "ix_oe_boq_quantity_link_position_id",

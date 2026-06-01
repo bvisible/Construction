@@ -10,7 +10,7 @@
  * truthy and JS coerces it via ``.toString()`` → ``[object Object]``.
  */
 import { describe, it, expect } from 'vitest';
-import { extractErrorMessageFromBody } from './api';
+import { extractErrorMessageFromBody, getErrorMessage } from './api';
 
 describe('extractErrorMessageFromBody', () => {
   it('returns null for null/undefined', () => {
@@ -95,5 +95,43 @@ describe('extractErrorMessageFromBody', () => {
     const body = { detail: [{ type: 'missing', loc: ['body', 'x'] /* no msg */ }] };
     // Skipped silently → no parts → falls through to null.
     expect(extractErrorMessageFromBody(body)).toBeNull();
+  });
+
+  it('reads STRUCTURED detail object (message + remediation)', () => {
+    // bim_hub-style geometry error: `detail` is an object, not a string/array.
+    // Without the structured branch the caller renders "[object Object]".
+    const body = {
+      detail: {
+        error: 'geometry_pending',
+        message: '3D geometry is still being generated',
+        remediation: 'Try again shortly',
+      },
+    };
+    const msg = extractErrorMessageFromBody(body) as string;
+    expect(msg).toContain('3D geometry is still being generated');
+    expect(msg).toContain('Try again shortly');
+    expect(msg).not.toContain('[object Object]');
+  });
+});
+
+/**
+ * Anti-regression for ``getErrorMessage`` against raw thrown values.
+ *
+ * A code path that does ``throw responseBody`` (a plain object/array rather
+ * than an ``Error``) used to surface as ``[object Object]``. ``getErrorMessage``
+ * now routes such raw values through ``extractErrorMessageFromBody`` so a
+ * thrown FastAPI ``{detail: [...]}`` becomes a readable string.
+ */
+describe('getErrorMessage', () => {
+  it('normalises a thrown FastAPI 422 body (array detail) — never [object Object]', () => {
+    const thrownObject = {
+      detail: [{ loc: ['body', 'email'], msg: 'Field required', type: 'missing' }],
+    };
+    const msg = getErrorMessage(thrownObject);
+    expect(typeof msg).toBe('string');
+    expect(msg.length).toBeGreaterThan(0);
+    expect(msg).toContain('Field required');
+    // The critical regression — a thrown plain object must not coerce.
+    expect(msg).not.toContain('[object Object]');
   });
 });

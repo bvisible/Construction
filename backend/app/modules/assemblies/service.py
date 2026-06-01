@@ -42,6 +42,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
     except Exception:
         _logger_ev.debug("Event publish skipped: %s", name)
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -405,8 +406,16 @@ class AssemblyService:
         is_template: bool | None = None,
         offset: int = 0,
         limit: int = 50,
+        owner_id: uuid.UUID | None = None,
     ) -> tuple[list[Assembly], int]:
-        """Search assemblies with filters and pagination."""
+        """Search assemblies with filters and pagination.
+
+        ``owner_id`` scopes the result to a single tenant; pass ``None``
+        for an admin / unscoped listing. The list and stats endpoints
+        thread the caller's id through so a VIEWER cannot enumerate other
+        tenants' assemblies (the per-item endpoints already 404 on a
+        non-owner — this closes the matching leak in the collection).
+        """
         return await self.assembly_repo.list_all(
             q=q,
             category=category,
@@ -416,6 +425,7 @@ class AssemblyService:
             is_template=is_template,
             offset=offset,
             limit=limit,
+            owner_id=owner_id,
         )
 
     async def update_assembly(
@@ -480,10 +490,7 @@ class AssemblyService:
 
                 project_repo = ProjectRepository(self.session)
                 target_project = await project_repo.get_by_id(new_pid)
-                if (
-                    target_project is None
-                    or str(getattr(target_project, "owner_id", "")) != str(caller_user_id)
-                ):
+                if target_project is None or str(getattr(target_project, "owner_id", "")) != str(caller_user_id):
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=translate("errors.project_not_found", locale=get_locale()),
@@ -854,11 +861,7 @@ class AssemblyService:
             project = None
             project_currency = ""
 
-        if (
-            asm_currency
-            and project_currency
-            and asm_currency != project_currency
-        ):
+        if asm_currency and project_currency and asm_currency != project_currency:
             # Project ``fx_rates`` projected to {CODE: "<base units per 1
             # unit of foreign currency>"} — same convention the BOQ
             # resource rollup uses, so foreign→base is multiplication.
@@ -983,9 +986,7 @@ class AssemblyService:
             res_type = comp.resource_type or _infer_legacy(comp.description or "")
             comp_total = _str_to_float(comp.total) * fx_mult_f
             try:
-                breakdown_totals[res_type] = breakdown_totals.get(
-                    res_type, Decimal("0")
-                ) + Decimal(str(comp_total))
+                breakdown_totals[res_type] = breakdown_totals.get(res_type, Decimal("0")) + Decimal(str(comp_total))
             except (InvalidOperation, ValueError):
                 pass
 
@@ -1034,9 +1035,7 @@ class AssemblyService:
                 # When converted, the position now holds project-currency
                 # values, so its currency IS the project currency. When
                 # not converted it stays in the assembly's own currency.
-                "currency": (
-                    project_currency if currency_converted else assembly.currency
-                ),
+                "currency": (project_currency if currency_converted else assembly.currency),
                 "resources": resources,
                 # Standard key the BOQ UI reads to render the M/L/E
                 # mini-badge — see ``backend/app/modules/boq/models.py``
@@ -1046,16 +1045,8 @@ class AssemblyService:
                 # assembly currency differed from the project's — a
                 # ``currency_converted`` record (FX applied) or a
                 # non-blocking ``currency_mismatch`` flag (Issue #128).
-                **(
-                    {"currency_converted": currency_converted}
-                    if currency_converted
-                    else {}
-                ),
-                **(
-                    {"currency_mismatch": currency_warning}
-                    if currency_warning
-                    else {}
-                ),
+                **({"currency_converted": currency_converted} if currency_converted else {}),
+                **({"currency_mismatch": currency_warning} if currency_warning else {}),
             },
         )
 
@@ -1178,39 +1169,43 @@ class AssemblyService:
 
     # ── Stats ─────────────────────────────────────────────────────────────
 
-    async def get_stats(self) -> dict[str, object]:
+    async def get_stats(self, *, owner_id: uuid.UUID | None = None) -> dict[str, object]:
         """Return aggregated assembly statistics.
 
         Returns total count, category breakdown, and most-used assemblies
         (determined by the number of BOQ positions referencing each assembly).
-        """
-        from sqlalchemy import func as sqlfunc
 
-        # All active assemblies with components loaded
-        assemblies, total = await self.assembly_repo.list_all(offset=0, limit=10000)
+        ``owner_id`` scopes the totals/breakdown to a single tenant so the
+        stats banner does not leak the platform-wide count to a VIEWER;
+        pass ``None`` for an admin / unscoped roll-up.
+        """
+        # All active assemblies for this tenant
+        assemblies, total = await self.assembly_repo.list_all(offset=0, limit=10000, owner_id=owner_id)
 
         by_category: dict[str, int] = {}
         for asm in assemblies:
             cat = asm.category or "uncategorized"
             by_category[cat] = by_category.get(cat, 0) + 1
 
-        # Try to get usage counts from BOQ positions that reference assemblies
+        # Most-used: count BOQ positions that reference each assembly via
+        # their metadata (positions carry no ``assembly_id`` column — the
+        # reference lives in ``metadata_['assembly_id']``), restricted to
+        # the tenant's own assemblies so the banner never exposes another
+        # owner's recipe names.
         most_used: list[dict[str, object]] = []
         try:
-            from sqlalchemy import select as sa_select
-
-            from app.modules.boq.models import Position as BOQPosition
-
-            stmt = (
-                sa_select(Assembly.name, sqlfunc.count(BOQPosition.id).label("cnt"))
-                .join(BOQPosition, BOQPosition.assembly_id == Assembly.id)
-                .where(Assembly.is_active.is_(True))
-                .group_by(Assembly.id, Assembly.name)
-                .order_by(sqlfunc.count(BOQPosition.id).desc())
-                .limit(5)
-            )
-            rows = (await self.session.execute(stmt)).all()
-            most_used = [{"name": row[0], "usage_count": row[1]} for row in rows]
+            scoped_ids = {str(asm.id): asm.name for asm in assemblies}
+            if scoped_ids:
+                usage = await self.get_usage_counts(
+                    [asm.id for asm in assemblies],
+                    owner_id=owner_id,
+                )
+                ranked = sorted(usage.items(), key=lambda kv: kv[1], reverse=True)
+                most_used = [
+                    {"name": scoped_ids.get(aid, ""), "usage_count": cnt}
+                    for aid, cnt in ranked[:5]
+                    if cnt > 0
+                ]
         except Exception:
             # BOQ module may not exist or table not yet created
             logger.debug("Could not compute assembly usage stats from BOQ positions")
@@ -1224,7 +1219,9 @@ class AssemblyService:
     # ── Reorder ──────────────────────────────────────────────────────────
 
     async def reorder_components(
-        self, assembly_id: uuid.UUID, component_ids: list[uuid.UUID],
+        self,
+        assembly_id: uuid.UUID,
+        component_ids: list[uuid.UUID],
     ) -> None:
         """Reorder components within an assembly.
 
@@ -1254,7 +1251,9 @@ class AssemblyService:
             await self.component_repo.update_fields(cid, sort_order=idx)
 
         logger.info(
-            "Reordered %d components in assembly %s", len(component_ids), assembly_id,
+            "Reordered %d components in assembly %s",
+            len(component_ids),
+            assembly_id,
         )
 
     # ── Export / Import ──────────────────────────────────────────────────
@@ -1279,16 +1278,18 @@ class AssemblyService:
 
         export_components = []
         for comp in components:
-            export_components.append({
-                "description": comp.description,
-                "resource_type": comp.resource_type,
-                "factor": _str_to_float(comp.factor),
-                "quantity": _str_to_float(comp.quantity),
-                "unit": comp.unit,
-                "unit_cost": _str_to_float(comp.unit_cost),
-                "sort_order": comp.sort_order,
-                "metadata": dict(comp.metadata_) if comp.metadata_ else {},
-            })
+            export_components.append(
+                {
+                    "description": comp.description,
+                    "resource_type": comp.resource_type,
+                    "factor": _str_to_float(comp.factor),
+                    "quantity": _str_to_float(comp.quantity),
+                    "unit": comp.unit,
+                    "unit_cost": _str_to_float(comp.unit_cost),
+                    "sort_order": comp.sort_order,
+                    "metadata": dict(comp.metadata_) if comp.metadata_ else {},
+                }
+            )
 
         return {
             "code": assembly.code,
@@ -1305,7 +1306,9 @@ class AssemblyService:
         }
 
     async def import_assembly(
-        self, data: AssemblyExport, owner_id: str | None = None,
+        self,
+        data: AssemblyExport,
+        owner_id: str | None = None,
     ) -> Assembly:
         """Import an assembly from an exported JSON payload.
 
@@ -1332,24 +1335,12 @@ class AssemblyService:
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=f"components[{idx}]: expected an object",
                 )
-            factor_dec = _parse_import_decimal(
-                comp_data.get("factor", 1.0), "factor", idx
-            )
-            quantity_dec = _parse_import_decimal(
-                comp_data.get("quantity", 1.0), "quantity", idx
-            )
-            unit_cost_dec = _parse_import_decimal(
-                comp_data.get("unit_cost", 0.0), "unit_cost", idx
-            )
+            factor_dec = _parse_import_decimal(comp_data.get("factor", 1.0), "factor", idx)
+            quantity_dec = _parse_import_decimal(comp_data.get("quantity", 1.0), "quantity", idx)
+            unit_cost_dec = _parse_import_decimal(comp_data.get("unit_cost", 0.0), "unit_cost", idx)
             res_type_raw = comp_data.get("resource_type")
-            res_type = (
-                str(res_type_raw).lower()
-                if isinstance(res_type_raw, str) and res_type_raw
-                else None
-            )
-            comp_meta = comp_data.get("metadata") if isinstance(
-                comp_data.get("metadata"), dict
-            ) else {}
+            res_type = str(res_type_raw).lower() if isinstance(res_type_raw, str) and res_type_raw else None
+            comp_meta = comp_data.get("metadata") if isinstance(comp_data.get("metadata"), dict) else {}
             sort_raw = comp_data.get("sort_order", idx)
             parsed_components.append(
                 {
@@ -1449,7 +1440,9 @@ class AssemblyService:
     # ── Tags ─────────────────────────────────────────────────────────────
 
     async def update_tags(
-        self, assembly_id: uuid.UUID, tags: list[str],
+        self,
+        assembly_id: uuid.UUID,
+        tags: list[str],
     ) -> Assembly:
         """Update tags on an assembly.
 
@@ -1483,15 +1476,27 @@ class AssemblyService:
     # ── Usage counts ─────────────────────────────────────────────────────
 
     async def get_usage_counts(
-        self, assembly_ids: list[uuid.UUID],
+        self,
+        assembly_ids: list[uuid.UUID],
+        *,
+        owner_id: uuid.UUID | None = None,
     ) -> dict[str, int]:
         """Get BOQ position usage counts for a list of assemblies.
 
-        Checks BOQ position metadata for assembly_id references and also
-        checks positions with source='assembly'.
+        Positions carry no ``assembly_id`` column — the reference lives in
+        ``Position.metadata_['assembly_id']`` (set by ``apply_to_boq``).
+        We therefore can't ``GROUP BY`` on a column, but we DON'T need to
+        load every assembly-sourced position into Python either: a
+        ``LIKE`` over the serialised JSON metadata pre-filters in SQL to
+        only the rows that mention one of the requested assembly ids, and
+        we select just the ``metadata`` column instead of whole ORM rows.
 
         Args:
             assembly_ids: List of assembly UUIDs to check.
+            owner_id: When provided, only count positions in BOQs that
+                belong to the caller's own projects, so the usage figure
+                never reflects (and the scan never reads) another tenant's
+                BOQ positions.
 
         Returns:
             Dict mapping assembly_id (str) to usage count.
@@ -1502,18 +1507,39 @@ class AssemblyService:
         usage: dict[str, int] = {str(aid): 0 for aid in assembly_ids}
 
         try:
+            from sqlalchemy import String, or_
             from sqlalchemy import select as sa_select
 
-            from app.modules.boq.models import Position as BOQPosition
+            from app.modules.boq.models import BOQ, Position as BOQPosition
 
-            # Search positions with source='assembly' and metadata containing assembly_id
-            stmt = sa_select(BOQPosition).where(BOQPosition.source == "assembly")
+            # Pre-filter in SQL: only assembly-sourced positions whose
+            # serialised metadata mentions at least one of the requested
+            # assembly ids. ``metadata_`` is a JSON column; casting to
+            # text + LIKE is portable across SQLite and PostgreSQL and
+            # avoids pulling the full table into Python.
+            meta_text = BOQPosition.metadata_.cast(String)
+            id_clauses = [meta_text.ilike(f'%"assembly_id": "{aid}"%') for aid in assembly_ids]
+
+            stmt = sa_select(BOQPosition.metadata_).where(
+                BOQPosition.source == "assembly",
+                or_(*id_clauses),
+            )
+
+            # Tenant scope: restrict to the caller's own projects via the
+            # BOQ → project owner link so the count (and the scan) never
+            # crosses tenants.
+            if owner_id is not None:
+                from app.modules.projects.models import Project
+
+                stmt = (
+                    stmt.join(BOQ, BOQ.id == BOQPosition.boq_id)
+                    .join(Project, Project.id == BOQ.project_id)
+                    .where(Project.owner_id == owner_id)
+                )
+
             result = await self.session.execute(stmt)
-            positions = result.scalars().all()
-
-            for pos in positions:
-                meta = getattr(pos, "metadata_", None) or {}
-                ref_id = meta.get("assembly_id", "")
+            for (meta,) in result.all():
+                ref_id = (meta or {}).get("assembly_id", "")
                 if ref_id in usage:
                     usage[ref_id] += 1
         except Exception:

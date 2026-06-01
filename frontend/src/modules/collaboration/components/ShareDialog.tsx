@@ -44,6 +44,7 @@ export function ShareDialog({ roomName, isOpen, onClose }: ShareDialogProps) {
           </h3>
           <button
             onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
             className="p-1 rounded hover:bg-surface-secondary text-content-tertiary transition-colors"
           >
             <X size={16} />

@@ -195,7 +195,7 @@ export default function AddToBOQModal({
     enabled: !!firstEl && tab === 'new',
     staleTime: 5 * 60 * 1000,
     queryFn: () =>
-      apiPost<CostSuggestion[]>('/api/v1/costs/suggest-for-element/', {
+      apiPost<CostSuggestion[]>('/v1/costs/suggest-for-element/', {
         element_type: firstEl?.element_type ?? null,
         name: firstEl?.name ?? null,
         discipline: firstEl?.discipline ?? null,

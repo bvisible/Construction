@@ -27,7 +27,11 @@ ACCOMMODATION_PERMISSIONS: dict[str, Role] = {
     "accommodation.charge.update": Role.EDITOR,
     # Cross-module integrations
     "accommodation.bootstrap_from_propdev": Role.EDITOR,
-    "accommodation.suggest_from_hr": Role.VIEWER,
+    # Suggest-from-HR is EDITOR (not VIEWER): its only purpose is to drive
+    # a follow-up booking, which requires ``accommodation.booking.create``
+    # (EDITOR). Gating the suggestion at VIEWER created a dead-end flow
+    # where a viewer could request a suggestion then hit 403 on Confirm.
+    "accommodation.suggest_from_hr": Role.EDITOR,
 }
 
 

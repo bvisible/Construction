@@ -79,9 +79,7 @@ class SubmittalReviewRequest(BaseModel):
 
     status: str = Field(
         ...,
-        pattern=(
-            r"^(approved|approved_as_noted|revise_and_resubmit|rejected)$"
-        ),
+        pattern=(r"^(approved|approved_as_noted|revise_and_resubmit|rejected)$"),
     )
     notes: str | None = Field(default=None, max_length=5000)
 
@@ -99,6 +97,7 @@ class SubmittalResponse(BaseModel):
     submittal_type: str
     status: str = "draft"
     ball_in_court: str | None = None
+    ball_in_court_name: str | None = None
     current_revision: int = 1
     submitted_by_org: str | None = None
     reviewer_id: str | None = None

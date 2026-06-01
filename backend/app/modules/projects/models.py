@@ -19,7 +19,6 @@ Tables:
 # were saved with — these constants only pin the *new-row* default.
 import os as _os
 import uuid
-
 from datetime import datetime
 
 from sqlalchemy import (
@@ -33,14 +32,13 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import GUID, Base
 
-MATCH_DEFAULT_TARGET_LANGUAGE: str = _os.environ.get(
-    "MATCH_DEFAULT_TARGET_LANGUAGE", "en"
-).strip().lower() or "en"
+MATCH_DEFAULT_TARGET_LANGUAGE: str = _os.environ.get("MATCH_DEFAULT_TARGET_LANGUAGE", "en").strip().lower() or "en"
 MATCH_DEFAULT_CLASSIFIER: str = "none"
 
 
@@ -54,9 +52,7 @@ def _env_float_default(name: str, fallback: float) -> float:
         return fallback
 
 
-MATCH_DEFAULT_AUTO_LINK_THRESHOLD: float = _env_float_default(
-    "MATCH_DEFAULT_AUTO_LINK_THRESHOLD", 0.85
-)
+MATCH_DEFAULT_AUTO_LINK_THRESHOLD: float = _env_float_default("MATCH_DEFAULT_AUTO_LINK_THRESHOLD", 0.85)
 MATCH_DEFAULT_AUTO_LINK_ENABLED: bool = False
 MATCH_DEFAULT_MODE: str = "manual"
 MATCH_DEFAULT_SOURCES: tuple[str, ...] = ("bim", "pdf", "dwg", "photo")
@@ -108,10 +104,10 @@ class Project(Base):
         JSON, nullable=True
     )
     contract_value: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    planned_start_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    planned_end_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    actual_start_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    actual_end_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    planned_start_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    planned_end_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    actual_start_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    actual_end_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     budget_estimate: Mapped[str | None] = mapped_column(String(50), nullable=True)
     contingency_pct: Mapped[str | None] = mapped_column(String(10), nullable=True)
     custom_fields: Mapped[dict | None] = mapped_column(  # type: ignore[assignment]
@@ -137,7 +133,8 @@ class Project(Base):
     # 21%). NULL means "use regional default" — preserves pre-2.6 behaviour
     # for projects that never set it.
     default_vat_rate: Mapped[str | None] = mapped_column(
-        String(10), nullable=True,
+        String(10),
+        nullable=True,
     )
     # ``custom_units`` lets a project carry unit codes not in the canonical
     # frontend list (Issue #93 item 3). Plain list of strings — order matters
@@ -166,10 +163,14 @@ class Project(Base):
     # this project under ``{override}/{project_id}/<kind>/...`` instead.
     # Reads always check both paths so legacy rows keep working.
     storage_path_override: Mapped[str | None] = mapped_column(
-        String(500), nullable=True, default=None,
+        String(500),
+        nullable=True,
+        default=None,
     )
     storage_uses_default: Mapped[bool] = mapped_column(
-        nullable=False, default=True, server_default="1",
+        nullable=False,
+        default=True,
+        server_default="1",
     )
 
     # ── Relationships ────────────────────────────────────────────────────
@@ -274,8 +275,8 @@ class ProjectMilestone(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     milestone_type: Mapped[str] = mapped_column(String(50), nullable=False, default="general")
-    planned_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    actual_date: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    planned_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    actual_date: Mapped[str | None] = mapped_column(String(40), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")
     linked_payment_pct: Mapped[str | None] = mapped_column(String(10), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
@@ -416,42 +417,61 @@ class ProjectProfile(Base):
         index=True,
     )
     preset: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="custom", server_default="custom",
+        String(64),
+        nullable=False,
+        default="custom",
+        server_default="custom",
     )
     # Multi-select axes stored as JSON lists.
     activity: Mapped[list] = mapped_column(  # type: ignore[assignment]
-        JSON, nullable=False, default=list, server_default="[]",
+        JSON,
+        nullable=False,
+        default=list,
+        server_default="[]",
     )
     phases: Mapped[list] = mapped_column(  # type: ignore[assignment]
-        JSON, nullable=False, default=list, server_default="[]",
+        JSON,
+        nullable=False,
+        default=list,
+        server_default="[]",
     )
     role: Mapped[str | None] = mapped_column(String(48), nullable=True)
     size: Mapped[str | None] = mapped_column(String(24), nullable=True)
     region: Mapped[str | None] = mapped_column(String(32), nullable=True)
     language: Mapped[str | None] = mapped_column(String(8), nullable=True)
     extensions_enabled: Mapped[list] = mapped_column(  # type: ignore[assignment]
-        JSON, nullable=False, default=list, server_default="[]",
+        JSON,
+        nullable=False,
+        default=list,
+        server_default="[]",
     )
     # Master switch the sidebar honours. True = numbered route + greyed
     # non-selected modules. False = show everything normally.
     focus_mode_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="1",
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="1",
     )
     # {"wizard_steps_completed":[1,2,3,5],"skipped_steps":[4],
     #  "completion_score":0.83}
     setup_completion: Mapped[dict] = mapped_column(  # type: ignore[assignment]
-        JSON, nullable=False, default=dict, server_default="{}",
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default="{}",
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
     metadata_: Mapped[dict] = mapped_column(  # type: ignore[assignment]
-        "metadata", JSON, nullable=False, default=dict, server_default="{}",
+        "metadata",
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default="{}",
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<ProjectProfile project={self.project_id} "
-            f"preset={self.preset} focus={self.focus_mode_enabled}>"
-        )
+        return f"<ProjectProfile project={self.project_id} preset={self.preset} focus={self.focus_mode_enabled}>"
 
 
 class ProjectModule(Base):
@@ -468,7 +488,9 @@ class ProjectModule(Base):
     __tablename__ = "oe_project_module"
     __table_args__ = (
         UniqueConstraint(
-            "project_id", "module_name", name="uq_project_module_unique",
+            "project_id",
+            "module_name",
+            name="uq_project_module_unique",
         ),
         Index("ix_project_module_project", "project_id"),
         Index("ix_project_module_project_enabled", "project_id", "enabled"),
@@ -482,36 +504,49 @@ class ProjectModule(Base):
     )
     module_name: Mapped[str] = mapped_column(String(64), nullable=False)
     enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False, server_default="0",
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="0",
     )
     # must | recommended | optional | hidden
     tier: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="hidden", server_default="hidden",
+        String(16),
+        nullable=False,
+        default="hidden",
+        server_default="hidden",
     )
     score: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0",
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
     )
     phase: Mapped[str] = mapped_column(
-        String(24), nullable=False, default="construction",
+        String(24),
+        nullable=False,
+        default="construction",
         server_default="construction",
     )
     # core | region | preset | score | manual
     source: Mapped[str] = mapped_column(
-        String(16), nullable=False, default="score", server_default="score",
+        String(16),
+        nullable=False,
+        default="score",
+        server_default="score",
     )
     # Global sequential number for the numbered route; null = no number
     # (cross-cutting / disabled).
     ordinal: Mapped[int | None] = mapped_column(Integer, nullable=True)
     why: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True,
+        DateTime(timezone=True),
+        nullable=True,
+        onupdate=func.now(),
     )
 
     def __repr__(self) -> str:
-        return (
-            f"<ProjectModule project={self.project_id} "
-            f"{self.module_name} {self.tier} ord={self.ordinal}>"
-        )
+        return f"<ProjectModule project={self.project_id} {self.module_name} {self.tier} ord={self.ordinal}>"
 
 
 class ProjectWizardDraft(Base):
@@ -534,7 +569,10 @@ class ProjectWizardDraft(Base):
     # Free-form wizard answers so far; shape mirrors ProjectProfile plus
     # the in-progress project name / code / dates.
     payload: Mapped[dict] = mapped_column(  # type: ignore[assignment]
-        JSON, nullable=False, default=dict, server_default="{}",
+        JSON,
+        nullable=False,
+        default=dict,
+        server_default="{}",
     )
     created_by: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True)
 

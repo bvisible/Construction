@@ -21,21 +21,24 @@
  * Cesium viewer stays oblivious of project semantics.
  */
 
-import { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { MapPinned, AlertTriangle, ServerCrash } from 'lucide-react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { MapPinned, AlertTriangle, ServerCrash, Loader2 } from 'lucide-react';
 
 import { ApiError } from '@/shared/lib/api';
+import { useToastStore } from '@/stores/useToastStore';
 import { projectsApi } from '@/features/projects/api';
 
 import { AnchorAdjustPanel } from './AnchorAdjustPanel';
+import { useTilesetOverlayState } from './hooks/useTilesetOverlayState';
 import {
   fetchDiaryPhotoPins,
   fetchHsePins,
   fetchPunchlistPins,
   getMapConfig,
+  updateAnchor,
 } from './api';
 import type { GeoCameraState, GeoCursorCoords } from './CesiumViewer';
 import { GeoEmptyState, type GeoEmptyKind } from './GeoEmptyState';
@@ -82,6 +85,9 @@ function emptyStateFor(
 
 export function ProjectGeoPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
   const { projectId } = useParams<{ projectId: string }>();
   // Deep-link context — ``?model=<bim_model_or_federation_id>`` focuses the
   // camera onto the matching tileset's boundingSphere once it loads.
@@ -157,7 +163,21 @@ export function ProjectGeoPage() {
     [hsePinsQuery.data, punchlistPinsQuery.data, diaryPinsQuery.data],
   );
 
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set());
+  // Per-tileset visibility + opacity (localStorage-backed; per-project).
+  // The hook is the single source of truth — both the sidebar (eye + slider)
+  // and the Cesium viewer (``tileset.show`` + ``Cesium3DTileStyle``) read
+  // from the same state, so toggles are coherent across UI + render.
+  const tilesetOverlay = useTilesetOverlayState(projectId);
+  // Derive the legacy ``hiddenIds`` Set from the overlay state so the
+  // existing sidebar contract (which expects a Set + a toggler) keeps
+  // working unchanged.
+  const hiddenIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const [id, entry] of Object.entries(tilesetOverlay.state)) {
+      if (entry.visible === false) s.add(id);
+    }
+    return s;
+  }, [tilesetOverlay.state]);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [panelCollapsed, setPanelCollapsed] = useState<boolean>(
     readTilesetsCollapsed,
@@ -195,6 +215,69 @@ export function ProjectGeoPage() {
     null,
   );
   const [cameraState, setCameraState] = useState<GeoCameraState | null>(null);
+
+  // Pin clicks in the project view jump to the source module so the
+  // documented "click a pin to inspect" interaction works. HSE / punch
+  // pins open their module pages scoped to this project; diary photos
+  // open the project's daily diary.
+  const handlePinSelect = useCallback(
+    (sel: { tag: string }) => {
+      const { tag } = sel;
+      const kind = tag.split(':')[0];
+      if (!projectId) return;
+      if (kind === 'hse') {
+        navigate(`/projects/${projectId}/safety`);
+      } else if (kind === 'punch') {
+        navigate('/punchlist');
+      } else if (kind === 'diary') {
+        navigate(`/projects/${projectId}/daily-diary`);
+      }
+    },
+    [navigate, projectId],
+  );
+
+  // "Drag to adjust" map-click handler — PATCHes the anchor's lat/lon to
+  // the clicked surface coordinate, refreshes the map config, exits drag
+  // mode and toasts. Mirrors the AnchorAdjustPanel docstring's promise
+  // that the parent wires click-on-map -> PATCH.
+  const handleAnchorMapClick = useCallback(
+    async (coords: { lat: number; lon: number }) => {
+      const anchorId = data?.anchor?.id;
+      if (!anchorId) return;
+      try {
+        await updateAnchor(anchorId, {
+          lat: coords.lat.toFixed(8),
+          lon: coords.lon.toFixed(8),
+          // Mark the anchor as manually placed so the source attribution
+          // and drift indicator reflect the user's deliberate override.
+          metadata: {
+            ...(data?.anchor?.metadata ?? {}),
+            geocode_source: 'manual',
+            geocode_precision: 'address',
+          },
+        });
+        addToast({
+          type: 'success',
+          title: t('geo_hub.adjust.moved_success', {
+            defaultValue: 'Anchor moved',
+          }),
+        });
+        await queryClient.invalidateQueries({
+          queryKey: ['geo-hub', 'map-config', projectId],
+        });
+      } catch {
+        addToast({
+          type: 'error',
+          title: t('geo_hub.adjust.moved_failed', {
+            defaultValue: 'Could not move the anchor',
+          }),
+        });
+      } finally {
+        setAnchorDragMode(false);
+      }
+    },
+    [data?.anchor?.id, data?.anchor?.metadata, addToast, t, queryClient, projectId],
+  );
 
   // Apply optional ?phase / ?block / ?dev_id deep-link filters to the
   // tileset list. The map-config endpoint already returns the project's
@@ -282,7 +365,15 @@ export function ProjectGeoPage() {
     // Full-bleed layout — negate AppLayout's <main> padding (px-4 pt-6 pb-4 sm:px-7)
     // so the map fills the viewport, then claim exactly viewport-minus-header
     // height so the Cesium canvas never spills past the visible browser area.
-    <div className="-mx-4 -mt-6 -mb-4 flex h-[calc(100vh-var(--oe-header-height,52px))] w-[calc(100%+2rem)] flex-col sm:-mx-7 sm:w-[calc(100%+3.5rem)]">
+    // ``100dvh`` (not ``100vh``) so iOS Safari's collapsing URL bar
+    // doesn't paint the Cesium canvas behind the dynamic toolbar — the
+    // global Geo Hub already uses ``100dvh`` (since v4.7.2); the project-
+    // scoped view shipped with the legacy ``100vh`` and was clipped on
+    // first paint on every iOS phone. Fix is mechanical: prefer ``dvh``
+    // and rely on browsers without ``dvh`` support to fall back via the
+    // separate ``vh`` rule (Cesium target browsers — Safari >= 15.4 +
+    // Chrome >= 108 — all support ``dvh``, so no fallback chain needed).
+    <div className="-mx-4 -mt-6 -mb-4 flex h-[calc(100dvh-var(--oe-header-height,52px))] w-[calc(100%+2rem)] flex-col sm:-mx-7 sm:w-[calc(100%+3.5rem)]">
       <header
         className={[
           'flex items-center gap-4 border-b border-border bg-surface-primary',
@@ -360,10 +451,33 @@ export function ProjectGeoPage() {
           </div>
         )}
         {!error && isLoading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center text-xs text-slate-300">
-            {t('geo_hub.loading_config', {
-              defaultValue: 'Loading geo configuration...',
-            })}
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 text-xs text-slate-300"
+            role="status"
+            aria-live="polite"
+          >
+            {/* Skeleton placeholder for the tileset rail so the empty
+                glass surface doesn't read as "no projects". Two muted
+                bars approximate the panel chrome the user is about to
+                see — same width + position as the real overlay. */}
+            <div
+              aria-hidden
+              className="absolute top-3 left-3 hidden w-72 flex-col gap-2 rounded-xl border border-white/10 bg-slate-900/40 p-3 backdrop-blur-md md:flex"
+            >
+              <div className="h-3 w-1/2 rounded bg-slate-700/60 animate-pulse" />
+              <div className="h-2 w-2/3 rounded bg-slate-700/50 animate-pulse" />
+              <div className="mt-2 space-y-1.5">
+                <div className="h-8 rounded bg-slate-800/60 animate-pulse" />
+                <div className="h-8 rounded bg-slate-800/60 animate-pulse" />
+                <div className="h-8 rounded bg-slate-800/60 animate-pulse" />
+              </div>
+            </div>
+            <Loader2 size={20} className="animate-spin text-emerald-300" />
+            <span className="font-medium">
+              {t('geo_hub.loading_config', {
+                defaultValue: 'Loading geo configuration...',
+              })}
+            </span>
           </div>
         )}
         {!error && data && (
@@ -381,6 +495,10 @@ export function ProjectGeoPage() {
               mapConfig={viewerMapConfig}
               pins={pins}
               focusedTilesetId={focusedTilesetId}
+              tilesetOverlayState={tilesetOverlay.state}
+              anchorDragMode={anchorDragMode}
+              onMapClick={handleAnchorMapClick}
+              onPinSelect={handlePinSelect}
               onMouseMove={setCursorCoords}
               onCameraChange={setCameraState}
               onViewerReady={setCesiumRuntime}
@@ -401,15 +519,10 @@ export function ProjectGeoPage() {
                     isLoading={isLoading}
                     hiddenIds={hiddenIds}
                     focusedId={focusedId}
-                    onToggleVisibility={(id) =>
-                      setHiddenIds((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(id)) next.delete(id);
-                        else next.add(id);
-                        return next;
-                      })
-                    }
+                    onToggleVisibility={tilesetOverlay.toggleVisible}
                     onFocus={(ts) => setFocusedId(ts.id)}
+                    getOpacity={tilesetOverlay.getOpacity}
+                    onChangeOpacity={tilesetOverlay.setOpacity}
                   />
                   <OverlayPanel
                     projectId={projectId}

@@ -73,27 +73,50 @@ async def _resolve_project_currency(
 
     from app.modules.projects.models import Project
 
-    project = (
-        await session.execute(select(Project).where(Project.id == project_id))
-    ).scalar_one_or_none()
+    project = (await session.execute(select(Project).where(Project.id == project_id))).scalar_one_or_none()
     if project is None:
         return ""
     return project.currency or ""
 
 
-def _validate_items(raw_items: Any) -> list[dict[str, Any]]:
+def _coerce_confidence(value: Any) -> float | None:
+    """Coerce a model-supplied confidence to a float in [0, 1], else None.
+
+    The AI may emit a per-item ``confidence`` (0..1, or 0..100 percent). We
+    only keep a value we can trust as a real score; anything missing or
+    out-of-range returns None so the position stores no fake confidence.
+    """
+    if value is None:
+        return None
+    try:
+        conf = float(value)
+    except (ValueError, TypeError):
+        return None
+    if conf > 1.0:
+        # Accept a 0..100 percentage and normalise to 0..1.
+        conf = conf / 100.0
+    if conf < 0.0 or conf > 1.0:
+        return None
+    return round(conf, 2)
+
+
+def _validate_items(raw_items: Any, currency: str = "") -> list[dict[str, Any]]:
     """‌⁠‍Validate and clean AI-generated work items.
 
     Filters out invalid entries, normalises fields, and computes totals.
 
     Args:
         raw_items: Parsed JSON (expected to be a list of dicts).
+        currency: Resolved currency code the items are priced in. Stamped on
+            every item so totals/rates are never displayed without an ISO
+            currency (and never blended across currencies downstream).
 
     Returns:
         List of validated item dicts.
     """
     if not isinstance(raw_items, list):
         return []
+    currency = (currency or "").strip()
 
     valid: list[dict[str, Any]] = []
     for idx, item in enumerate(raw_items):
@@ -138,18 +161,23 @@ def _validate_items(raw_items: Any) -> list[dict[str, Any]]:
 
         total = round(quantity * unit_rate, 2)
 
-        valid.append(
-            {
-                "ordinal": ordinal,
-                "description": description,
-                "unit": unit,
-                "quantity": round(quantity, 2),
-                "unit_rate": round(unit_rate, 2),
-                "total": total,
-                "classification": classification,
-                "category": category,
-            }
-        )
+        item_out: dict[str, Any] = {
+            "ordinal": ordinal,
+            "description": description,
+            "unit": unit,
+            "quantity": round(quantity, 2),
+            "unit_rate": round(unit_rate, 2),
+            "total": total,
+            "classification": classification,
+            "category": category,
+            "currency": currency,
+        }
+        # Carry a real per-item confidence only when the model supplied a
+        # usable one — never fabricate a placeholder score.
+        confidence = _coerce_confidence(item.get("confidence"))
+        if confidence is not None:
+            item_out["confidence"] = confidence
+        valid.append(item_out)
 
     return valid
 
@@ -188,17 +216,19 @@ def _build_settings_response(settings: AISettings) -> AISettingsResponse:
     model_overrides: dict[str, str] = {}
     if isinstance(raw_overrides, dict):
         # Only surface non-empty string overrides.
-        model_overrides = {
-            str(k): str(v).strip()
-            for k, v in raw_overrides.items()
-            if isinstance(v, str) and v.strip()
-        }
+        model_overrides = {str(k): str(v).strip() for k, v in raw_overrides.items() if isinstance(v, str) and v.strip()}
 
     # Read custom base URLs for local providers from metadata_
     raw_ollama_base_url = meta.get("ollama_base_url") if isinstance(meta, dict) else None
     raw_vllm_base_url = meta.get("vllm_base_url") if isinstance(meta, dict) else None
-    ollama_base_url = str(raw_ollama_base_url).strip() if isinstance(raw_ollama_base_url, str) and raw_ollama_base_url.strip() else None
-    vllm_base_url = str(raw_vllm_base_url).strip() if isinstance(raw_vllm_base_url, str) and raw_vllm_base_url.strip() else None
+    ollama_base_url = (
+        str(raw_ollama_base_url).strip()
+        if isinstance(raw_ollama_base_url, str) and raw_ollama_base_url.strip()
+        else None
+    )
+    vllm_base_url = (
+        str(raw_vllm_base_url).strip() if isinstance(raw_vllm_base_url, str) and raw_vllm_base_url.strip() else None
+    )
 
     return AISettingsResponse(
         id=settings.id,
@@ -239,11 +269,13 @@ def _build_job_response(job: AIEstimateJob) -> EstimateJobResponse:
 
     items: list[EstimateItem] = []
     grand_total: Decimal = Decimal("0")
+    currency = ""
 
     if job.result and isinstance(job.result, list):
         for item_data in job.result:
             if not isinstance(item_data, dict):
                 continue
+            raw_conf = item_data.get("confidence")
             ei = EstimateItem(
                 ordinal=str(item_data.get("ordinal", "")),
                 description=str(item_data.get("description", "")),
@@ -253,9 +285,16 @@ def _build_job_response(job: AIEstimateJob) -> EstimateJobResponse:
                 total=float(item_data.get("total", 0)),
                 classification=item_data.get("classification", {}),
                 category=str(item_data.get("category", "General")),
+                confidence=float(raw_conf) if isinstance(raw_conf, (int, float)) else None,
             )
             items.append(ei)
             grand_total += Decimal(str(ei.total))
+            # All items in a job share one resolved currency; take the first
+            # non-empty one we see.
+            if not currency:
+                cur = item_data.get("currency")
+                if isinstance(cur, str) and cur.strip():
+                    currency = cur.strip()
 
     return EstimateJobResponse(
         id=job.id,
@@ -266,6 +305,7 @@ def _build_job_response(job: AIEstimateJob) -> EstimateJobResponse:
         input_filename=job.input_filename,
         status=job.status,
         items=items,
+        currency=currency,
         error_message=job.error_message,
         model_used=job.model_used,
         tokens_used=job.tokens_used,
@@ -490,11 +530,7 @@ class AIService:
 
         # Currency precedence: explicit request → project default →
         # empty string (LLM prompts tolerate a blank currency token).
-        currency = (
-            request.currency
-            or await _resolve_project_currency(self.session, request.project_id)
-            or ""
-        )
+        currency = request.currency or await _resolve_project_currency(self.session, request.project_id) or ""
         # No standard fallback — empty token signals "no preferred classification"
         # so the LLM is steered by the project's explicit setting (or absence).
         standard_val = request.standard or ""
@@ -524,7 +560,7 @@ class AIService:
 
             # Parse response
             parsed = extract_json(raw_response)
-            items = _validate_items(parsed)
+            items = _validate_items(parsed, currency=currency)
 
             if not items:
                 await self.job_repo.update_fields(
@@ -571,9 +607,13 @@ class AIService:
                 model_used=provider,
                 duration_ms=duration_ms,
             )
+            # Forward the precise, already-sanitized message from call_ai (e.g.
+            # "invalid key", "model rejected", "rate limit") instead of masking
+            # it — call_ai never echoes secrets, so this is safe to show and
+            # tells the user exactly what to fix.
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="AI estimation failed due to invalid input. Please check your request.",
+                detail=str(exc),
             ) from exc
         except Exception as exc:
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -672,11 +712,7 @@ class AIService:
         job_id = job.id  # Save before expire_all() in update_fields
 
         # Build prompt — currency: explicit arg → project default → blank.
-        currency_val = (
-            currency
-            or await _resolve_project_currency(self.session, project_id)
-            or ""
-        )
+        currency_val = currency or await _resolve_project_currency(self.session, project_id) or ""
         # No standard / location fallback — explicit-only avoids steering
         # the LLM toward DIN 276 / Europe on non-DACH projects.
         standard_val = standard or ""
@@ -707,7 +743,7 @@ class AIService:
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
             parsed = extract_json(raw_response)
-            items = _validate_items(parsed)
+            items = _validate_items(parsed, currency=currency_val)
 
             if not items:
                 await self.job_repo.update_fields(
@@ -753,9 +789,11 @@ class AIService:
                 model_used=provider,
                 duration_ms=duration_ms,
             )
+            # Forward the precise, already-sanitized message from call_ai
+            # instead of masking it (call_ai never echoes secrets).
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="AI photo analysis failed due to invalid input. Please check your request.",
+                detail=str(exc),
             ) from exc
         except Exception as exc:
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -858,11 +896,7 @@ class AIService:
         job_id = job.id  # Save before expire_all() in update_fields
 
         # Currency: explicit arg → project default → blank token.
-        currency_val = (
-            currency
-            or await _resolve_project_currency(self.session, project_id)
-            or ""
-        )
+        currency_val = currency or await _resolve_project_currency(self.session, project_id) or ""
         # No region/standard steering — empty tokens let the LLM rely on
         # the file's content rather than defaulting to DACH / DIN 276.
         standard_val = standard or ""
@@ -946,7 +980,9 @@ class AIService:
                     self.session.expunge(job)
                     job = await self.job_repo.get_by_id(job_id)
                     if job is None:
-                        raise HTTPException(status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale()))
+                        raise HTTPException(
+                            status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale())
+                        )
                     return _build_job_response(job)
 
             elif category == "image":
@@ -968,7 +1004,9 @@ class AIService:
             self.session.expunge(job)
             job = await self.job_repo.get_by_id(job_id)
             if job is None:
-                raise HTTPException(status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale()))
+                raise HTTPException(
+                    status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale())
+                )
             return _build_job_response(job)
 
         # ── Choose prompt and call AI ──
@@ -1024,7 +1062,7 @@ class AIService:
             duration_ms = int((time.monotonic() - start_time) * 1000)
 
             parsed = extract_json(raw_response)
-            items = _validate_items(parsed)
+            items = _validate_items(parsed, currency=currency_val)
 
             if not items:
                 await self.job_repo.update_fields(
@@ -1039,7 +1077,9 @@ class AIService:
                 self.session.expunge(job)
                 job = await self.job_repo.get_by_id(job_id)
                 if job is None:
-                    raise HTTPException(status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale()))
+                    raise HTTPException(
+                        status_code=404, detail=translate("errors.estimate_job_not_found", locale=get_locale())
+                    )
                 return _build_job_response(job)
 
             # Store metadata about the file
@@ -1073,9 +1113,11 @@ class AIService:
                 model_used=provider,
                 duration_ms=duration_ms,
             )
+            # Forward the precise, already-sanitized message from call_ai
+            # instead of masking it (call_ai never echoes secrets).
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="AI file analysis failed due to invalid input. Please check your request.",
+                detail=str(exc),
             ) from exc
         except Exception as exc:
             duration_ms = int((time.monotonic() - start_time) * 1000)
@@ -1213,6 +1255,11 @@ class AIService:
             total = round(quantity * unit_rate, 2)
             grand_total += total
 
+            # Use the model's real per-item confidence when it supplied one;
+            # otherwise leave it unset rather than fabricating a placeholder.
+            item_conf = _coerce_confidence(item_data.get("confidence"))
+            confidence_str = str(item_conf) if item_conf is not None else None
+
             position = Position(
                 boq_id=boq.id,
                 parent_id=None,
@@ -1224,7 +1271,7 @@ class AIService:
                 total=str(total),
                 classification=item_data.get("classification", {}),
                 source="ai_estimate",
-                confidence="0.7",
+                confidence=confidence_str,
                 cad_element_ids=[],
                 validation_status="pending",
                 metadata_={

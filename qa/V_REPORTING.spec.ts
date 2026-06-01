@@ -5,7 +5,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 
-const DEMO_EMAIL = process.env.OE_TEST_DEMO_EMAIL ?? 'demo@openestimator.io';
+const DEMO_EMAIL = process.env.OE_TEST_DEMO_EMAIL ?? 'demo@openconstructionerp.com';
 const DEMO_PASSWORD = process.env.OE_TEST_DEMO_PASSWORD ?? 'demo';
 const SHOTS = path.resolve(__dirname, '..', 'qa-screenshots', 'V_REPORTING');
 

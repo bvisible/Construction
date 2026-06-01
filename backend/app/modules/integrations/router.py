@@ -37,6 +37,7 @@ from app.modules.integrations.schemas import (
     IntegrationConfigListResponse,
     IntegrationConfigResponse,
     IntegrationConfigUpdate,
+    TestConnectionRequest,
     TestNotificationResponse,
     WebhookCreate,
     WebhookResponse,
@@ -44,7 +45,7 @@ from app.modules.integrations.schemas import (
 )
 from app.modules.integrations.service import WebhookService
 
-router = APIRouter()
+router = APIRouter(tags=["integrations"])
 logger = logging.getLogger(__name__)
 
 
@@ -136,6 +137,10 @@ async def update_integration_config(
         setattr(config, col, value)
 
     await session.flush()
+    # Reload server-computed columns (updated_at onupdate=func.now()) inside the
+    # async greenlet so model_validate below doesn't lazy-load them and raise
+    # MissingGreenlet.
+    await session.refresh(config)
     return IntegrationConfigResponse.model_validate(config)
 
 
@@ -155,7 +160,131 @@ async def delete_integration_config(
     await session.flush()
 
 
-@router.post("/configs/{config_id}/test/", response_model=TestNotificationResponse)
+async def _dispatch_integration_test(itype: str, cfg: dict) -> TestNotificationResponse:
+    """Send a test notification for an integration type + ad-hoc config.
+
+    Shared by the saved-config test (``/configs/{id}/test``) and the
+    pre-save Connect-modal test (``/configs/test-connection``). Outbound URLs
+    are re-validated against the SSRF deny-list right before dispatch. Never
+    raises — returns a TestNotificationResponse with the outcome.
+    """
+    title = "OpenConstructionERP Test"
+    message = "This is a test notification. If you see this, the integration is working correctly."
+    action_url = None
+    cfg = cfg or {}
+    success = False
+    try:
+        if itype == "teams":
+            from app.modules.integrations.teams import send_teams_notification
+
+            webhook_url = cfg.get("webhook_url", "")
+            if not webhook_url:
+                return TestNotificationResponse(success=False, message="Missing webhook_url in config")
+            try:
+                await resolve_and_validate_external_url(webhook_url)
+            except UnsafeUrlError as exc:
+                return TestNotificationResponse(success=False, message=f"URL blocked: {exc}")
+            success = await send_teams_notification(
+                webhook_url=webhook_url,
+                title=title,
+                message=message,
+                action_url=action_url,
+                facts=[{"title": "Status", "value": "Test delivery"}],
+            )
+
+        elif itype == "slack":
+            from app.modules.integrations.slack import send_slack_notification
+
+            webhook_url = cfg.get("webhook_url", "")
+            if not webhook_url:
+                return TestNotificationResponse(success=False, message="Missing webhook_url in config")
+            try:
+                await resolve_and_validate_external_url(webhook_url)
+            except UnsafeUrlError as exc:
+                return TestNotificationResponse(success=False, message=f"URL blocked: {exc}")
+            success = await send_slack_notification(
+                webhook_url=webhook_url,
+                title=title,
+                message=message,
+                action_url=action_url,
+                fields=[{"title": "Status", "value": "Test delivery"}],
+            )
+
+        elif itype == "telegram":
+            from app.modules.integrations.telegram import send_telegram_notification
+
+            bot_token = cfg.get("bot_token", "")
+            chat_id = cfg.get("chat_id", "")
+            if not bot_token or not chat_id:
+                return TestNotificationResponse(success=False, message="Missing bot_token or chat_id in config")
+            success = await send_telegram_notification(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                title=title,
+                message=message,
+                action_url=action_url,
+            )
+
+        elif itype == "discord":
+            from app.modules.integrations.discord import send_discord_notification
+
+            webhook_url = cfg.get("webhook_url", "")
+            if not webhook_url:
+                return TestNotificationResponse(success=False, message="Missing webhook_url in config")
+            try:
+                await resolve_and_validate_external_url(webhook_url)
+            except UnsafeUrlError as exc:
+                return TestNotificationResponse(success=False, message=f"URL blocked: {exc}")
+            success = await send_discord_notification(
+                webhook_url=webhook_url,
+                title=title,
+                message=message,
+                action_url=action_url,
+                fields=[{"name": "Status", "value": "Test delivery"}],
+            )
+
+        elif itype == "whatsapp":
+            return TestNotificationResponse(
+                success=False,
+                message="WhatsApp integration requires Meta Business verification. Coming soon.",
+            )
+
+        else:
+            return TestNotificationResponse(
+                success=False,
+                message=f"Test not supported for integration type: {itype}",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Test notification failed for integration type %s", itype)
+        return TestNotificationResponse(success=False, message=str(exc)[:500])
+
+    return TestNotificationResponse(
+        success=success,
+        message="Test notification sent successfully" if success else "Delivery failed",
+    )
+
+
+@router.post("/configs/test-connection/", response_model=TestNotificationResponse)
+async def test_connection_adhoc(
+    body: TestConnectionRequest,
+    user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("integrations.update")),
+) -> TestNotificationResponse:
+    """Test an integration with ad-hoc field values, before it is saved.
+
+    Backs the "Test Connection" button in the Connect modal, which has no
+    persisted config row yet. Rate-limited like the saved-config test.
+    """
+    allowed, _ = approval_limiter.is_allowed(str(user_id))
+    if not allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Rate limit exceeded. Try again later.",
+        )
+    return await _dispatch_integration_test(body.integration_type, body.config or {})
+
+
+@router.post("/configs/{config_id}/test", response_model=TestNotificationResponse)
 async def test_integration_config(
     config_id: uuid.UUID,
     user_id: CurrentUserId,
@@ -435,24 +564,38 @@ async def calendar_feed(
     Includes milestones, meetings, task due dates, and inspection dates.
     Subscribe in Google Calendar, Outlook, or Apple Calendar.
     """
+    import hashlib
+
     from sqlalchemy import select
 
+    from app.dependencies import verify_project_access
     from app.modules.users.models import APIKey
 
-    # Authenticate via API key token
-    # We match on key_prefix (first 8 chars) then verify full hash.
-    # For simplicity, we match the raw token against key_hash (bcrypt) or
-    # accept the prefix-based lookup.  In this implementation we accept
-    # the token if its first 8 chars match a key_prefix belonging to an
-    # active key.  This is intentionally lightweight for calendar apps.
+    # Authenticate via the FULL API-key token: compare its SHA-256 hash against
+    # APIKey.key_hash. A prefix match alone is NOT sufficient — key_prefix is
+    # the first 8 chars and is non-secret (shown in key listings), so matching
+    # on it would let anyone read the feed (auth bypass). The token is also
+    # bound to its owner, who must have access to this project.
     if len(token) < 8:
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    prefix = token[:8]
-    key_result = await session.execute(select(APIKey).where(APIKey.key_prefix == prefix, APIKey.is_active.is_(True)))
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    key_result = await session.execute(
+        select(APIKey).where(APIKey.key_hash == token_hash, APIKey.is_active.is_(True)),
+    )
     api_key = key_result.scalars().first()
     if api_key is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    expires_at = api_key.expires_at
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at < datetime.now(UTC):
+            raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Cross-project IDOR guard: the key owner must be able to read this project.
+    await verify_project_access(project_id, str(api_key.user_id), session)
 
     # Build iCal content
     from app.config import get_settings
@@ -594,6 +737,6 @@ async def calendar_feed(
         content=content,
         media_type="text/calendar; charset=utf-8",
         headers={
-            "Content-Disposition": f"attachment; filename=project-{project_id}.ics",
+            "Content-Disposition": f'attachment; filename="project-{project_id}.ics"',
         },
     )

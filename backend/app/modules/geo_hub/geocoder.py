@@ -109,6 +109,16 @@ _HTTP_TIMEOUT_SECONDS = 10.0
 # limit.
 _DEFAULT_BASE_URL = "https://nominatim.openstreetmap.org"
 
+# Photon (Komoot, https://photon.komoot.io) — OSM-based geocoder with
+# generous CORS, no documented rate limit, and Apache 2.0 / ODbL data.
+# We try Photon first for the autocomplete suggest endpoint because it
+# returns results in well under 1 s and isn't gated by Nominatim's 1
+# req/s policy, then fall back to Nominatim if Photon fails. Disabling
+# Photon (e.g. air-gapped deploys) is done by setting
+# ``OE_GEOCODER_PHOTON_DISABLED=true``; the geocoder then drops straight
+# to Nominatim.
+_DEFAULT_PHOTON_URL = "https://photon.komoot.io"
+
 # Default contact in the UA header — required by Nominatim's UA policy.
 # Falls back to the project email when no override is set.
 _DEFAULT_CONTACT_EMAIL = "info@datadrivenconstruction.io"
@@ -132,9 +142,16 @@ def _disabled() -> bool:
 
 
 def _base_url() -> str:
-    return (
-        os.environ.get("OE_GEOCODER_BASE_URL") or _DEFAULT_BASE_URL
-    ).rstrip("/")
+    return (os.environ.get("OE_GEOCODER_BASE_URL") or _DEFAULT_BASE_URL).rstrip("/")
+
+
+def _photon_url() -> str:
+    return (os.environ.get("OE_GEOCODER_PHOTON_URL") or _DEFAULT_PHOTON_URL).rstrip("/")
+
+
+def _photon_disabled() -> bool:
+    val = (os.environ.get("OE_GEOCODER_PHOTON_DISABLED") or "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
 
 
 def _user_agent(version: str | None = None) -> str:
@@ -145,9 +162,7 @@ def _user_agent(version: str | None = None) -> str:
     extra contact via ``OE_GEOCODER_USER_AGENT_CONTACT``.
     """
     ver = (version or _app_version()) or "0.0.0"
-    extra_contact = (
-        os.environ.get("OE_GEOCODER_USER_AGENT_CONTACT") or ""
-    ).strip()
+    extra_contact = (os.environ.get("OE_GEOCODER_USER_AGENT_CONTACT") or "").strip()
     contact = extra_contact or _DEFAULT_CONTACT_EMAIL
     return f"OpenConstructionERP/{ver} ({contact})"
 
@@ -216,7 +231,8 @@ def _precision_from_address(addr: ProjectAddress) -> Precision:
 
 
 def _precision_from_nominatim(
-    payload: dict[str, Any], fallback: Precision,
+    payload: dict[str, Any],
+    fallback: Precision,
 ) -> Precision:
     """Map Nominatim ``addresstype`` to our coarse precision bucket."""
     addresstype = str(payload.get("addresstype") or "").lower()
@@ -226,7 +242,12 @@ def _precision_from_nominatim(
     if addresstype in {"road", "street", "highway"}:
         return "street"
     if addresstype in {
-        "city", "town", "village", "hamlet", "municipality", "suburb",
+        "city",
+        "town",
+        "village",
+        "hamlet",
+        "municipality",
+        "suburb",
         "neighbourhood",
     }:
         return "city"
@@ -258,7 +279,9 @@ def _bbox_from_nominatim(
 
 
 async def _read_cache(
-    session: AsyncSession, *, query_hash: str,
+    session: AsyncSession,
+    *,
+    query_hash: str,
 ) -> GeocodeResult | None:
     """Return a cached result for ``query_hash`` if it exists AND is fresh.
 
@@ -285,9 +308,7 @@ async def _read_cache(
             return None
     try:
         await session.execute(
-            update(GeocodeCache)
-            .where(GeocodeCache.id == row.id)
-            .values(hit_count=(row.hit_count or 0) + 1)
+            update(GeocodeCache).where(GeocodeCache.id == row.id).values(hit_count=(row.hit_count or 0) + 1)
         )
     except Exception:  # noqa: BLE001 — best-effort hit counter
         pass
@@ -329,12 +350,13 @@ async def _write_cache(
     block that anyway).
     """
     existing_row = (
-        await session.execute(
-            select(GeocodeCache).where(GeocodeCache.query_hash == query_hash)
-        )
-    ).scalars().first()
+        (await session.execute(select(GeocodeCache).where(GeocodeCache.query_hash == query_hash))).scalars().first()
+    )
     bbox_vals: tuple[
-        Decimal | None, Decimal | None, Decimal | None, Decimal | None,
+        Decimal | None,
+        Decimal | None,
+        Decimal | None,
+        Decimal | None,
     ]
     if result.bbox is None:
         bbox_vals = (None, None, None, None)
@@ -380,7 +402,9 @@ async def _write_cache(
 
 
 async def _fetch_nominatim(
-    normalised_query: str, *, http_client: httpx.AsyncClient | None = None,
+    normalised_query: str,
+    *,
+    http_client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any] | None:
     """Hit Nominatim, returning the first result or ``None`` on any failure.
 
@@ -430,7 +454,8 @@ async def _fetch_nominatim(
 
     if res.status_code >= 500:
         logger.info(
-            "nominatim 5xx (%s) for query: %s", res.status_code,
+            "nominatim 5xx (%s) for query: %s",
+            res.status_code,
             normalised_query[:80],
         )
         return None
@@ -453,7 +478,8 @@ async def _fetch_nominatim(
 
 
 def _result_from_nominatim_payload(
-    payload: dict[str, Any], fallback_precision: Precision,
+    payload: dict[str, Any],
+    fallback_precision: Precision,
 ) -> GeocodeResult | None:
     """Build a ``GeocodeResult`` from a single Nominatim result dict."""
     try:
@@ -557,7 +583,10 @@ async def geocode_address(
         if result is None:
             return None
         await _write_cache(
-            sess, query_hash=qhash, query_text=query_text, result=result,
+            sess,
+            query_hash=qhash,
+            query_text=query_text,
+            result=result,
         )
         if own_session:
             await sess.commit()
@@ -589,33 +618,15 @@ async def cache_stats(session: AsyncSession) -> dict[str, Any]:
     from sqlalchemy import select as sql_select
 
     cutoff = datetime.now(UTC) - CACHE_TTL
-    total = (
-        await session.execute(
-            sql_select(sql_func.count()).select_from(GeocodeCache)
-        )
-    ).scalar() or 0
+    total = (await session.execute(sql_select(sql_func.count()).select_from(GeocodeCache))).scalar() or 0
     stale = (
         await session.execute(
-            sql_select(sql_func.count())
-            .select_from(GeocodeCache)
-            .where(GeocodeCache.cached_at < cutoff)
+            sql_select(sql_func.count()).select_from(GeocodeCache).where(GeocodeCache.cached_at < cutoff)
         )
     ).scalar() or 0
-    hits = (
-        await session.execute(
-            sql_select(sql_func.coalesce(sql_func.sum(GeocodeCache.hit_count), 0))
-        )
-    ).scalar() or 0
-    oldest = (
-        await session.execute(
-            sql_select(sql_func.min(GeocodeCache.cached_at))
-        )
-    ).scalar()
-    newest = (
-        await session.execute(
-            sql_select(sql_func.max(GeocodeCache.cached_at))
-        )
-    ).scalar()
+    hits = (await session.execute(sql_select(sql_func.coalesce(sql_func.sum(GeocodeCache.hit_count), 0)))).scalar() or 0
+    oldest = (await session.execute(sql_select(sql_func.min(GeocodeCache.cached_at)))).scalar()
+    newest = (await session.execute(sql_select(sql_func.max(GeocodeCache.cached_at)))).scalar()
     return {
         "total": int(total),
         "fresh": int(total) - int(stale),
@@ -710,23 +721,136 @@ def _suggestion_from_payload(item: dict[str, Any]) -> SuggestionResult | None:
             "country",
             "country_code",
         }
-        address_parts = {
-            k: str(v)
-            for k, v in addr.items()
-            if k in wanted and isinstance(v, str) and v.strip()
-        }
+        address_parts = {k: str(v) for k, v in addr.items() if k in wanted and isinstance(v, str) and v.strip()}
     return SuggestionResult(
         display_name=str(item.get("display_name") or "")[:500],
         lat=lat,
         lon=lon,
         country_code=country_code,
         bbox=_bbox_from_nominatim(item),
-        addresstype=(
-            str(item.get("addresstype")) if item.get("addresstype") else None
-        ),
+        addresstype=(str(item.get("addresstype")) if item.get("addresstype") else None),
         osm_type=str(item.get("osm_type")) if item.get("osm_type") else None,
         address_parts=address_parts or None,
     )
+
+
+def _photon_suggestion_from_feature(feature: dict[str, Any]) -> SuggestionResult | None:
+    """Build a ``SuggestionResult`` from a single Photon GeoJSON feature."""
+    try:
+        props = feature.get("properties") if isinstance(feature.get("properties"), dict) else {}
+        geom = feature.get("geometry") if isinstance(feature.get("geometry"), dict) else {}
+        coords = geom.get("coordinates") if isinstance(geom.get("coordinates"), list) else None
+        if not coords or len(coords) < 2:
+            return None
+        lon = Decimal(str(coords[0]))
+        lat = Decimal(str(coords[1]))
+    except (TypeError, ValueError, ArithmeticError):
+        return None
+    if not (Decimal("-90") <= lat <= Decimal("90")):
+        return None
+    if not (Decimal("-180") <= lon <= Decimal("180")):
+        return None
+    props = props or {}
+    # Photon flattens address parts onto the properties object (not a
+    # nested "address" object the way Nominatim does). Construct a
+    # display_name from the most specific parts available.
+    line_parts: list[str] = []
+    for key in ("street", "housenumber", "postcode", "city", "state", "country"):
+        v = props.get(key)
+        if isinstance(v, str) and v.strip():
+            line_parts.append(v.strip())
+    display_name = props.get("name") or ", ".join(line_parts) or "?"
+    if isinstance(display_name, str) and len(display_name) > 500:
+        display_name = display_name[:500]
+    cc = props.get("countrycode")
+    country_code: str | None = None
+    if isinstance(cc, str) and len(cc) == 2 and cc.isalpha():
+        country_code = cc.lower()
+    # Photon's ``extent`` is [minLon, maxLat, maxLon, minLat] when present.
+    bbox_raw = props.get("extent")
+    bbox: tuple[Decimal, Decimal, Decimal, Decimal] | None = None
+    if isinstance(bbox_raw, list) and len(bbox_raw) == 4:
+        try:
+            min_lon = Decimal(str(bbox_raw[0]))
+            max_lat = Decimal(str(bbox_raw[1]))
+            max_lon = Decimal(str(bbox_raw[2]))
+            min_lat = Decimal(str(bbox_raw[3]))
+            # SuggestionResult.bbox convention matches Nominatim:
+            # (south, north, west, east) — (minLat, maxLat, minLon, maxLon).
+            bbox = (min_lat, max_lat, min_lon, max_lon)
+        except (TypeError, ValueError, ArithmeticError):
+            bbox = None
+    # Forward only the address-part keys the client form uses, matched
+    # to the Nominatim shape so frontend doesn't need a separate branch.
+    addr_parts: dict[str, str] = {}
+    for src_key, dest_key in (
+        ("housenumber", "house_number"),
+        ("street", "road"),
+        ("postcode", "postcode"),
+        ("city", "city"),
+        ("state", "state"),
+        ("country", "country"),
+        ("countrycode", "country_code"),
+    ):
+        v = props.get(src_key)
+        if isinstance(v, str) and v.strip():
+            addr_parts[dest_key] = v.strip()
+    return SuggestionResult(
+        display_name=display_name,
+        lat=lat,
+        lon=lon,
+        country_code=country_code,
+        bbox=bbox,
+        addresstype=(str(props.get("type")) if props.get("type") else None),
+        osm_type=str(props.get("osm_type")) if props.get("osm_type") else None,
+        address_parts=addr_parts or None,
+    )
+
+
+async def _photon_suggest(
+    query: str,
+    *,
+    limit: int,
+    http_client: httpx.AsyncClient | None,
+) -> list[SuggestionResult]:
+    """Photon (Komoot) autocomplete — fast first-line provider.
+
+    Returns an empty list on any failure so the caller can transparently
+    fall back to Nominatim. Photon's API mirrors GeoJSON
+    (``{features: [...]}``) and has no documented rate limit, so we skip
+    the semaphore + sleep that protects Nominatim.
+    """
+    url = f"{_photon_url()}/api/"
+    params = {"q": query, "limit": str(limit)}
+    headers = {"User-Agent": _user_agent(), "Accept": "application/json"}
+    own_client = http_client is None
+    client = http_client or httpx.AsyncClient(timeout=_HTTP_TIMEOUT_SECONDS)
+    try:
+        res = await client.get(url, params=params, headers=headers)
+    except (httpx.HTTPError, OSError) as exc:
+        logger.info("photon suggest transport error: %s", exc)
+        return []
+    finally:
+        if own_client:
+            await client.aclose()
+    if res.status_code != 200:
+        logger.info("photon suggest non-200 (%s) for query: %s", res.status_code, query[:80])
+        return []
+    try:
+        payload = res.json()
+    except ValueError:
+        return []
+    features = payload.get("features") if isinstance(payload, dict) else None
+    if not isinstance(features, list):
+        return []
+    out: list[SuggestionResult] = []
+    for feat in features[:limit]:
+        if not isinstance(feat, dict):
+            continue
+        sug = _photon_suggestion_from_feature(feat)
+        if sug is not None:
+            out.append(sug)
+    return out
 
 
 async def suggest_addresses(
@@ -735,24 +859,38 @@ async def suggest_addresses(
     limit: int = 5,
     http_client: httpx.AsyncClient | None = None,
 ) -> list[SuggestionResult]:
-    """Search Nominatim for up to ``limit`` matches for the free-text query.
+    """Search OSM-based geocoders for up to ``limit`` matches.
 
+    Provider chain: Photon (fast, no rate limit) → Nominatim (1 req/s).
     Used by the autocomplete dropdown — *not* the auto-anchor flow (which
     keeps the structured ``geocode_address`` for cache-keying by parts).
 
     Returns an empty list on any failure (network, parse, disabled env,
     short query) so callers can render "no matches" without exception
-    handling. Respects the same 1 req/s rate limit + User-Agent as the
-    single-result fetch so we never violate Nominatim's policy.
+    handling. Respects Nominatim's 1 req/s + User-Agent policy on the
+    fallback path; Photon has no analogous gate.
     """
     if _disabled():
         return []
     query_clean = (query or "").strip()
     if len(query_clean) < 3:
-        # Nominatim returns garbage for 1-2 char queries; short-circuit
+        # Geocoders return garbage for 1-2 char queries; short-circuit
         # so we don't burn rate-limit budget on noise.
         return []
     capped = max(1, min(int(limit or 5), 10))
+
+    # ── Provider 1: Photon ────────────────────────────────────────────
+    # Generous CORS, no rate limit, sub-second response on warm cache.
+    # Skip silently if disabled by env or if it returns no hits — we
+    # don't want a flaky Photon to hide a useful Nominatim result.
+    if not _photon_disabled():
+        photon_hits = await _photon_suggest(
+            query_clean,
+            limit=capped,
+            http_client=http_client,
+        )
+        if photon_hits:
+            return photon_hits
 
     global _last_request_monotonic
     base = _base_url()
@@ -791,7 +929,8 @@ async def suggest_addresses(
     if res.status_code != 200:
         logger.info(
             "nominatim suggest non-200 (%s) for query: %s",
-            res.status_code, query_clean[:80],
+            res.status_code,
+            query_clean[:80],
         )
         return []
     try:
@@ -820,26 +959,23 @@ def project_address_from_jsonb(
     """
     if not isinstance(address_jsonb, dict):
         return None
-    country = (address_jsonb.get("country") or "").strip() if isinstance(
-        address_jsonb.get("country"), str,
-    ) else ""
+    country = (
+        (address_jsonb.get("country") or "").strip()
+        if isinstance(
+            address_jsonb.get("country"),
+            str,
+        )
+        else ""
+    )
     if not country:
         return None
     return ProjectAddress(
         country=country,
         street=address_jsonb.get("street") or None,
-        house_number=(
-            address_jsonb.get("house_number")
-            or address_jsonb.get("houseNumber")
-            or None
-        ),
+        house_number=(address_jsonb.get("house_number") or address_jsonb.get("houseNumber") or None),
         city=address_jsonb.get("city") or None,
         state=address_jsonb.get("state") or None,
-        postal_code=(
-            address_jsonb.get("postal_code")
-            or address_jsonb.get("postcode")
-            or None
-        ),
+        postal_code=(address_jsonb.get("postal_code") or address_jsonb.get("postcode") or None),
     )
 
 

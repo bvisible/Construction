@@ -53,7 +53,7 @@ establishes the platform baseline going forward.
 
 - Removed 5 archived duplicate demo projects; 6 regional demos remain
 - Removed diagnostic specs, one-off seed scripts, build artifacts
-- `.gitignore` tightened for `.claude/worktrees`, `tsconfig.tsbuildinfo`, etc.
+- `.gitignore` tightened for `agent worktrees`, `tsconfig.tsbuildinfo`, etc.
 - `ruff --fix` pass over `backend/app/` — 29 fixes across 29 files
 
 ## 📚 Full changelog

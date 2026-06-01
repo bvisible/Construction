@@ -268,21 +268,23 @@ class ModuleLoader:
         for name, manifest in self._manifests.items():
             loaded = name in self._modules
             loaded_mod = self._modules.get(name)
-            result.append({
-                "name": manifest.name,
-                "version": manifest.version,
-                "display_name": manifest.display_name,
-                "display_name_i18n": manifest.display_name_i18n,
-                "description": manifest.description,
-                "author": manifest.author,
-                "category": manifest.category,
-                "depends": manifest.depends,
-                "optional_depends": manifest.optional_depends,
-                "has_router": loaded_mod.router is not None if loaded_mod else False,
-                "loaded": loaded,
-                "enabled": name not in self._disabled,
-                "is_core": manifest.category == "core",
-            })
+            result.append(
+                {
+                    "name": manifest.name,
+                    "version": manifest.version,
+                    "display_name": manifest.display_name,
+                    "display_name_i18n": manifest.display_name_i18n,
+                    "description": manifest.description,
+                    "author": manifest.author,
+                    "category": manifest.category,
+                    "depends": manifest.depends,
+                    "optional_depends": manifest.optional_depends,
+                    "has_router": loaded_mod.router is not None if loaded_mod else False,
+                    "loaded": loaded,
+                    "enabled": name not in self._disabled,
+                    "is_core": manifest.category == "core",
+                }
+            )
 
         return result
 
@@ -328,8 +330,13 @@ class ModuleLoader:
         manifest.enabled = True
         self._disabled.discard(module_name)
 
-        # Load if not already loaded
-        if module_name not in self._modules:
+        # Load if not already loaded. Also force a reload when a stale
+        # _modules record exists but the live app route table no longer
+        # carries this module's prefix (e.g. routes were stripped by a
+        # prior disable) — otherwise the router would never be re-included
+        # and the endpoints would keep 404ing until a process restart.
+        if module_name not in self._modules or not self._has_live_routes(module_name, app):
+            self._modules.pop(module_name, None)
             await self._load_module(module_name, app)
 
         # Persist
@@ -342,6 +349,20 @@ class ModuleLoader:
             "display_name": manifest.display_name,
             "version": manifest.version,
         }
+
+    def _has_live_routes(self, module_name: str, app: FastAPI) -> bool:
+        """True if the live ASGI route table carries this module's prefix.
+
+        Mirrors the prefix derivation used by _load_module / disable_module
+        (canonical kebab-case plus the legacy underscore mirror).
+        """
+        dir_name = module_name.removeprefix("oe_")
+        kebab_name = dir_name.replace("_", "-")
+        prefixes = (f"/api/v1/{kebab_name}", f"/api/v1/{dir_name}")
+        return any(
+            hasattr(r, "path") and any(getattr(r, "path", "").startswith(p) for p in prefixes)
+            for r in app.routes
+        )
 
     async def disable_module(self, module_name: str, app: FastAPI) -> dict[str, Any]:
         """Disable a module at runtime (removes router from app).
@@ -362,20 +383,15 @@ class ModuleLoader:
         manifest = self._manifests[module_name]
 
         if manifest.category == "core":
-            raise ValueError(
-                f"Module '{module_name}' is a core module and cannot be disabled."
-            )
+            raise ValueError(f"Module '{module_name}' is a core module and cannot be disabled.")
 
         # Check that no other enabled module depends on this one
         tree = self.get_dependency_tree(module_name)
         dependents = tree.get("dependents", [])
-        enabled_dependents = [
-            d for d in dependents if d not in self._disabled
-        ]
+        enabled_dependents = [d for d in dependents if d not in self._disabled]
         if enabled_dependents:
             raise ValueError(
-                f"Cannot disable '{module_name}': required by enabled modules: "
-                f"{', '.join(enabled_dependents)}"
+                f"Cannot disable '{module_name}': required by enabled modules: {', '.join(enabled_dependents)}"
             )
 
         # Remove router from the FastAPI app — sweep both the canonical
@@ -387,19 +403,22 @@ class ModuleLoader:
             kebab_name = dir_name.replace("_", "-")
             prefixes = {f"/api/v1/{kebab_name}", f"/api/v1/{dir_name}"}
             app.routes[:] = [
-                r for r in app.routes
-                if not (
-                    hasattr(r, "path")
-                    and any(
-                        getattr(r, "path", "").startswith(p) for p in prefixes
-                    )
-                )
+                r
+                for r in app.routes
+                if not (hasattr(r, "path") and any(getattr(r, "path", "").startswith(p) for p in prefixes))
             ]
             logger.info(
                 "Removed routes for %s (prefixes %s)",
                 module_name,
                 ", ".join(sorted(prefixes)),
             )
+
+        # Drop the loaded record so a subsequent enable_module() re-runs
+        # _load_module() and re-includes the router via app.include_router.
+        # Without this, enable_module()'s `module_name not in self._modules`
+        # guard stays False, the router is never re-mounted, and every
+        # /api/v1/<module>/* route 404s until the process restarts.
+        self._modules.pop(module_name, None)
 
         # Mark as disabled
         manifest.enabled = False

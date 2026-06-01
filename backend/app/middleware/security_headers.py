@@ -41,6 +41,15 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # CSP allow-listing — without `worker-src blob:` MapLibre can't
         # boot at all, and without the connect-src hosts the map stays
         # blank with CSP violations in the console.
+        #
+        # The Geo Hub 3D globe uses CesiumJS, whose base imagery is
+        # OpenStreetMap raster tiles served from ``tile.openstreetmap.org``.
+        # Cesium fetches those tiles with ``fetch()`` (so the texture is not
+        # WebGL-tainted), which is governed by ``connect-src`` — NOT
+        # ``img-src``. Without the host on ``connect-src`` every tile request
+        # is blocked ("Connecting to ... violates ... connect-src") and the
+        # globe renders solid black, i.e. "shows only space". The legacy
+        # ``a/b/c.`` subdomains are covered by the wildcard.
         self._csp = csp or (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: "
@@ -56,7 +65,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "https://*.google-analytics.com https://*.analytics.google.com "
             "https://api.github.com "
             "https://tiles.openfreemap.org https://*.openfreemap.org "
-            "https://nominatim.openstreetmap.org; "
+            "https://nominatim.openstreetmap.org "
+            "https://tile.openstreetmap.org https://*.tile.openstreetmap.org; "
             "frame-ancestors 'none'; "
             "base-uri 'self'; "
             "form-action 'self'"

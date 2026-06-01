@@ -273,6 +273,55 @@ def compute_duration(start_date: str, end_date: str, region: str | None = None) 
     return working_days
 
 
+def _effective_activity_status(
+    *,
+    stored_status: str,
+    progress_pct: float,
+    end_date: str | None,
+    today: date,
+    region: str | None = None,
+) -> str:
+    """Derive the display status of an activity, flagging overdue ones as "delayed".
+
+    The stored status only ever carries completed / in_progress / not_started
+    (set from progress in ``update_progress``). "Delayed" is a temporal overlay
+    computed at read time: an activity that is not yet complete and whose planned
+    end date is strictly before today is considered delayed. A completed activity
+    (or one already at 100 % progress) is never delayed, regardless of dates.
+
+    Args:
+        stored_status: The persisted activity status.
+        progress_pct: Current progress percentage (0.0 - 100.0).
+        end_date: ISO planned end date string (may be empty/None).
+        today: Reference date for the overdue comparison.
+        region: Optional project region (accepted for calendar consistency).
+
+    Returns:
+        The effective status, which may be "delayed" in place of an unfinished
+        stored status.
+    """
+    if stored_status == "completed" or progress_pct >= 100.0:
+        return "completed"
+
+    if not end_date:
+        return stored_status
+
+    try:
+        planned_end = date.fromisoformat(str(end_date)[:10])
+    except (ValueError, TypeError):
+        return stored_status
+
+    # ``region`` is currently informational; the overdue test is calendar-based
+    # (planned end already in the past). Regional holidays would only ever push
+    # the delay flag later, never earlier, so a strict past-date check is a safe
+    # lower bound that never over-reports.
+    _ = region
+    if planned_end < today:
+        return "delayed"
+
+    return stored_status
+
+
 class ScheduleService:
     """Business logic for Schedule, Activity, and WorkOrder operations."""
 
@@ -514,6 +563,7 @@ class ScheduleService:
         # Self-reference is the trivial case.
         if any(p == activity_id for p in proposed_predecessors):
             from fastapi import HTTPException
+
             raise HTTPException(
                 status_code=400,
                 detail="An activity cannot depend on itself.",
@@ -522,11 +572,12 @@ class ScheduleService:
         # Load all activities in the schedule and build adjacency
         # (predecessor -> {successors}) from each activity's stored deps.
         existing_activities, _total = await self.activity_repo.list_for_schedule(
-            schedule_id, limit=10_000,
+            schedule_id,
+            limit=10_000,
         )
         adjacency: dict[uuid.UUID, set[uuid.UUID]] = {}
         for act in existing_activities:
-            for dep in (act.dependencies or []):
+            for dep in act.dependencies or []:
                 try:
                     pred_id = uuid.UUID(str(dep.get("activity_id")))
                 except (TypeError, ValueError):
@@ -553,6 +604,7 @@ class ScheduleService:
         for predecessor in proposed_predecessors:
             if predecessor in reachable_from_activity:
                 from fastapi import HTTPException
+
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -605,9 +657,7 @@ class ScheduleService:
             await self._reject_dependency_cycles(
                 activity_id=activity_id,
                 schedule_id=activity.schedule_id,
-                proposed_predecessors=[
-                    uuid.UUID(d["activity_id"]) for d in serialized
-                ],
+                proposed_predecessors=[uuid.UUID(d["activity_id"]) for d in serialized],
             )
 
         if "resources" in fields and fields["resources"] is not None:
@@ -660,6 +710,34 @@ class ScheduleService:
         )
 
         logger.info("Activity deleted: %s from schedule %s", activity_id, schedule_id)
+
+    async def clear_activities(self, schedule_id: uuid.UUID) -> int:
+        """Delete every activity (and its work orders) of a schedule at once.
+
+        Used by the schedule "Reset" action. Replaces an N+1 per-activity
+        delete loop with a single bulk statement.
+
+        Args:
+            schedule_id: Target schedule whose activities are cleared.
+
+        Returns:
+            The number of activities removed.
+
+        Raises:
+            HTTPException 404 if the schedule does not exist.
+        """
+        await self.get_schedule(schedule_id)
+
+        deleted = await self.activity_repo.delete_for_schedule(schedule_id)
+
+        await _safe_publish(
+            "schedule.activities.cleared",
+            {"schedule_id": str(schedule_id), "count": deleted},
+            source_module="oe_schedule",
+        )
+
+        logger.info("Cleared %d activity(ies) from schedule %s", deleted, schedule_id)
+        return deleted
 
     async def link_boq_position(self, activity_id: uuid.UUID, boq_position_id: uuid.UUID) -> Activity:
         """Link a BOQ position to an activity.
@@ -982,13 +1060,17 @@ class ScheduleService:
             fields["metadata_"] = fields.pop("metadata")
 
         if fields:
+            # Snapshot published attributes before update_fields expires the instance
+            # (bulk UPDATE + expire_all would force a sync lazy reload -> MissingGreenlet on asyncpg)
+            activity_id = work_order.activity_id
+
             await self.work_order_repo.update_fields(work_order_id, **fields)
 
             await _safe_publish(
                 "schedule.work_order.updated",
                 {
                     "work_order_id": str(work_order_id),
-                    "activity_id": str(work_order.activity_id),
+                    "activity_id": str(activity_id),
                     "fields": list(fields.keys()),
                 },
                 source_module="oe_schedule",
@@ -1050,7 +1132,16 @@ class ScheduleService:
         Raises:
             HTTPException 404 if schedule not found.
         """
-        await self.get_schedule(schedule_id)
+        schedule = await self.get_schedule(schedule_id)
+
+        # Resolve the project region once so the delay check honours the same
+        # regional work calendar the rest of the schedule math uses.
+        from app.modules.projects.repository import ProjectRepository
+
+        proj_repo = ProjectRepository(self.session)
+        project = await proj_repo.get_by_id(schedule.project_id)
+        project_region = project.region if project else None
+        today = datetime.now(UTC).date()
 
         activities, _ = await self.activity_repo.list_for_schedule(schedule_id)
 
@@ -1070,9 +1161,19 @@ class ScheduleService:
             # number than the rest of the UI for any multi-week activity.
             duration = act.duration_days or 0
             if not duration:
-                duration = compute_duration(
-                    str(act.start_date), str(act.end_date)
-                )
+                duration = compute_duration(str(act.start_date), str(act.end_date))
+
+            # Derive the effective status: an unfinished activity whose planned
+            # end date has already passed is "delayed". This is computed at read
+            # time (not persisted) because delay is a temporal condition that
+            # changes daily; the stored status keeps the user-set value.
+            effective_status = _effective_activity_status(
+                stored_status=act.status,
+                progress_pct=progress,
+                end_date=act.end_date,
+                today=today,
+                region=project_region,
+            )
 
             gantt_activities.append(
                 GanttActivity(
@@ -1088,16 +1189,16 @@ class ScheduleService:
                     boq_position_ids=act.boq_position_ids or [],
                     wbs_code=act.wbs_code,
                     activity_type=act.activity_type,
-                    status=act.status,
+                    status=effective_status,
                 )
             )
 
             # Count by status
-            if act.status == "completed":
+            if effective_status == "completed":
                 completed += 1
-            elif act.status == "in_progress":
+            elif effective_status == "in_progress":
                 in_progress += 1
-            elif act.status == "delayed":
+            elif effective_status == "delayed":
                 delayed += 1
             else:
                 not_started += 1
@@ -1705,9 +1806,7 @@ class ScheduleService:
 
         from app.modules.schedule.models import ScheduleRelationship
 
-        rel_stmt = select(ScheduleRelationship).where(
-            ScheduleRelationship.schedule_id == schedule_id
-        )
+        rel_stmt = select(ScheduleRelationship).where(ScheduleRelationship.schedule_id == schedule_id)
         rel_result = await self.session.execute(rel_stmt)
         seen_pairs: set[tuple[str, str]] = set()
         for r in rel_result.scalars().all():
@@ -1743,9 +1842,7 @@ class ScheduleService:
                 adj[pred_id].append(succ_id)
                 in_degree[succ_id] += 1
 
-        queue: deque[str] = deque(
-            [d["id"] for d in act_data if in_degree[d["id"]] == 0]
-        )
+        queue: deque[str] = deque([d["id"] for d in act_data if in_degree[d["id"]] == 0])
         sorted_ids: list[str] = []
         while queue:
             nid = queue.popleft()
@@ -1760,10 +1857,7 @@ class ScheduleService:
             unsorted_names = [idx[aid]["name"] or aid for aid in unsorted_ids[:5]]
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Schedule has a dependency cycle. Affected activities: "
-                    + ", ".join(unsorted_names)
-                ),
+                detail=("Schedule has a dependency cycle. Affected activities: " + ", ".join(unsorted_names)),
             )
 
         sorted_act_data: list[dict] = [idx[aid] for aid in sorted_ids]
@@ -1798,7 +1892,8 @@ class ScheduleService:
                 else:
                     logger.warning(
                         "Unknown dependency type '%s' on activity %s; treating as FS",
-                        dep_type, act_id,
+                        dep_type,
+                        act_id,
                     )
                     candidate = pred_ef + lag
                 act_es = max(act_es, candidate)
@@ -1840,7 +1935,9 @@ class ScheduleService:
                 else:
                     logger.warning(
                         "Unknown dependency type '%s' on backward pass %s → %s; treating as FS",
-                        dep_type, act_id, succ_id,
+                        dep_type,
+                        act_id,
+                        succ_id,
                     )
                     lf[act_id] = min(lf[act_id], succ_ls - lag)
             ls[act_id] = lf[act_id] - dur
@@ -2021,11 +2118,21 @@ class ScheduleService:
         from sqlalchemy import select as _select
 
         from app.modules.boq.models import Position
+        from app.modules.projects.models import Project
         from app.modules.schedule.models import Activity, Schedule
         from app.modules.schedule.schemas import (
             LaborCostByPhaseResponse,
             LaborCostByPhaseRow,
         )
+
+        # Currency bug fix: the rolled-up labour/total costs are all scoped to
+        # this one project, so they share a single ISO currency. Read the
+        # project's real currency instead of hardcoding "EUR". Fall back to
+        # blank ("unknown") — NEVER to "EUR" — when the project has no currency.
+        cur_result = await self.session.execute(
+            _select(Project.currency).where(Project.id == project_id)
+        )
+        currency = cur_result.scalar_one_or_none() or ""
 
         stmt = (
             _select(Activity)
@@ -2036,7 +2143,8 @@ class ScheduleService:
         activities: list[Activity] = list(result.scalars().all())
 
         if not activities:
-            return LaborCostByPhaseResponse()
+            # Still report the project's real currency on the empty result.
+            return LaborCostByPhaseResponse(currency=currency)
 
         # Gather linked BOQ position ids for aggregate lookup
         all_boq_ids: list[uuid.UUID] = []
@@ -2049,9 +2157,7 @@ class ScheduleService:
 
         position_totals: dict[uuid.UUID, float] = {}
         if all_boq_ids:
-            pos_stmt = _select(Position.id, Position.total).where(
-                Position.id.in_(all_boq_ids)
-            )
+            pos_stmt = _select(Position.id, Position.total).where(Position.id.in_(all_boq_ids))
             pos_result = await self.session.execute(pos_stmt)
             for pid, total in pos_result.all():
                 position_totals[pid] = _str_to_float(total)
@@ -2098,9 +2204,7 @@ class ScheduleService:
             )
             entry["activity_count"] = int(entry["activity_count"]) + 1
             entry["labor_cost"] = float(entry["labor_cost"]) + labour
-            entry["total_cost"] = (
-                float(entry["total_cost"]) + labour + linked_total
-            )
+            entry["total_cost"] = float(entry["total_cost"]) + labour + linked_total
             start = str(entry["start_date"] or "")
             end = str(entry["end_date"] or "")
             if act.start_date and (not start or act.start_date < start):
@@ -2123,4 +2227,6 @@ class ScheduleService:
             )
         ]
 
-        return LaborCostByPhaseResponse(phases=rows)
+        # Currency bug fix: label the response with the project's real
+        # currency (loaded above) instead of the previous hardcoded "EUR".
+        return LaborCostByPhaseResponse(phases=rows, currency=currency)

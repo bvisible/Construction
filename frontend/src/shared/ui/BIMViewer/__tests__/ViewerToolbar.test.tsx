@@ -208,6 +208,57 @@ describe('ViewerToolbar', () => {
     expect(screen.getByText('Reset')).toBeInTheDocument();
   });
 
+  it('shows "No geometry to clip" hint when a fit action reports no usable bounds', () => {
+    const onSectionAction = vi.fn(() => false); // host: nothing to clip
+    render(
+      <ViewerToolbar
+        sectionBox={stubs.sectionBox}
+        walkMode={stubs.walkMode}
+        measureTool={stubs.measureTool}
+        onSectionAction={onSectionAction}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('viewer-tool-section'));
+    expect(screen.queryByTestId('viewer-section-no-geometry')).toBeNull();
+    fireEvent.click(screen.getByTestId('viewer-section-fit-selection'));
+    expect(onSectionAction).toHaveBeenCalledWith('fit_selection');
+    expect(screen.getByTestId('viewer-section-no-geometry')).toBeInTheDocument();
+  });
+
+  it('hides the hint again once a fit action succeeds', () => {
+    let usable = false;
+    const onSectionAction = vi.fn(() => usable);
+    render(
+      <ViewerToolbar
+        sectionBox={stubs.sectionBox}
+        walkMode={stubs.walkMode}
+        measureTool={stubs.measureTool}
+        onSectionAction={onSectionAction}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('viewer-tool-section'));
+    fireEvent.click(screen.getByTestId('viewer-section-fit-all'));
+    expect(screen.getByTestId('viewer-section-no-geometry')).toBeInTheDocument();
+    usable = true;
+    fireEvent.click(screen.getByTestId('viewer-section-fit-all'));
+    expect(screen.queryByTestId('viewer-section-no-geometry')).toBeNull();
+  });
+
+  it('Reset always disables the section box even without a host handler', () => {
+    render(
+      <ViewerToolbar
+        sectionBox={stubs.sectionBox}
+        walkMode={stubs.walkMode}
+        measureTool={stubs.measureTool}
+      />,
+    );
+    // Activate section (enable() flips the stub's isEnabled() to true).
+    fireEvent.click(screen.getByTestId('viewer-tool-section'));
+    expect(stubs.spies.sectionEnable).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByTestId('viewer-section-reset'));
+    expect(stubs.spies.sectionDisable).toHaveBeenCalled();
+  });
+
   it('a11y: each tool button exposes aria-pressed reflecting its active state', () => {
     render(
       <ViewerToolbar

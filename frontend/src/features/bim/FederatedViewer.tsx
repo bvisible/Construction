@@ -93,12 +93,34 @@ export const FederatedViewer = forwardRef<FederatedViewerHandle, Props>(
       };
     }, []);
 
+    /* ── Dark-mode sync ──────────────────────────────────────────── */
+    useEffect(() => {
+      const scene = sceneRef.current;
+      if (!scene) return;
+      const html = document.documentElement;
+      const sync = (): void => scene.setDarkMode(html.classList.contains('dark'));
+      sync(); // initial
+      const observer = new MutationObserver(sync);
+      observer.observe(html, { attributes: true, attributeFilter: ['class'] });
+      return () => observer.disconnect();
+    // sceneRef.current is a stable object; we only need to re-run when the
+    // scene itself changes (i.e., never after mount). Empty dep array is
+    // intentional here — the MutationObserver keeps it live.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     /* ── Push newly-loaded GLBs into the scene ────────────────────── */
     useEffect(() => {
       const scene = sceneRef.current;
       if (!scene) return;
       let cancelled = false;
       (async () => {
+        // Track whether this pass actually loaded any NEW member. `members` is
+        // a fresh array reference on every render of the loader hook, so this
+        // effect re-runs on unrelated parent re-renders; framing only on a real
+        // membership growth keeps frameAll() from snapping the camera back to
+        // fit-all and discarding the user's current orbit/zoom.
+        let addedAny = false;
         for (const m of members) {
           if (cancelled) break;
           if (loadedMemberIds.current.has(m.modelId)) continue;
@@ -111,6 +133,7 @@ export const FederatedViewer = forwardRef<FederatedViewerHandle, Props>(
           try {
             await scene.addMember(payload);
             loadedMemberIds.current.add(m.modelId);
+            addedAny = true;
             setMemberVisibility((prev) =>
               m.modelId in prev ? prev : { ...prev, [m.modelId]: true },
             );
@@ -121,7 +144,7 @@ export const FederatedViewer = forwardRef<FederatedViewerHandle, Props>(
             console.warn('FederatedViewer: addMember failed', m.modelId, err);
           }
         }
-        if (!cancelled && members.length > 0) {
+        if (!cancelled && addedAny) {
           scene.frameAll();
         }
       })();
@@ -214,6 +237,10 @@ export const FederatedViewer = forwardRef<FederatedViewerHandle, Props>(
           ref={canvasRef}
           data-testid="federated-viewer-canvas"
           className="block h-full w-full"
+          role="img"
+          aria-label={t('bim.federation.viewer.canvas_aria_label', {
+            defaultValue: 'Federated BIM viewer — use mouse to orbit, zoom, and pan',
+          })}
         />
 
         {/* Toolbar — top-left */}
@@ -284,28 +311,63 @@ export const FederatedViewer = forwardRef<FederatedViewerHandle, Props>(
           </div>
         ) : null}
 
-        {/* Per-member error toasts — non-fatal */}
+        {/* Per-member state — non-fatal. We split genuine load failures
+            (red) from "no geometry yet" members (neutral/informational) so
+            a model that simply hasn't been converted doesn't look broken.
+            One member's problem never blocks the others from rendering. */}
         {errors.length > 0 ? (
           <div
             data-testid="federated-viewer-member-errors"
-            role="alert"
-            className="absolute inset-x-3 bottom-3 z-20 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+            role="status"
+            className="absolute inset-x-3 bottom-3 z-20 space-y-2"
           >
-            <div className="mb-1 font-semibold">
-              {t('bim.federation.viewer.member_errors', {
-                defaultValue: 'Some models failed to load',
-              })}
-            </div>
-            <ul className="list-inside list-disc">
-              {errors.map((e) => (
-                <li
-                  key={e.modelId}
-                  data-testid={`federated-viewer-member-error-${e.modelId}`}
-                >
-                  {e.modelId.slice(0, 8)}: {e.error.message}
-                </li>
-              ))}
-            </ul>
+            {errors.some((e) => !e.noGeometry) ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                <div className="mb-1 font-semibold">
+                  {t('bim.federation.viewer.member_errors', {
+                    defaultValue: 'Some models failed to load',
+                  })}
+                </div>
+                <ul className="list-inside list-disc">
+                  {errors
+                    .filter((e) => !e.noGeometry)
+                    .map((e) => (
+                      <li
+                        key={e.modelId}
+                        data-testid={`federated-viewer-member-error-${e.modelId}`}
+                      >
+                        {e.modelName || e.modelId.slice(0, 8)}: {e.error.message}
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            ) : null}
+            {errors.some((e) => e.noGeometry) ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
+                <div className="mb-1 font-semibold">
+                  {t('bim.federation.viewer.member_no_geometry_title', {
+                    defaultValue: 'No 3D geometry yet',
+                  })}
+                </div>
+                <ul className="list-inside list-disc">
+                  {errors
+                    .filter((e) => e.noGeometry)
+                    .map((e) => (
+                      <li
+                        key={e.modelId}
+                        data-testid={`federated-viewer-member-error-${e.modelId}`}
+                      >
+                        {t('bim.federation.viewer.member_no_geometry_item', {
+                          defaultValue: '{{model}}: no 3D geometry yet',
+                          model: e.modelName || e.modelId.slice(0, 8),
+                        })
+                          .toString()
+                          .replace('{{model}}', e.modelName || e.modelId.slice(0, 8))}
+                      </li>
+                    ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>

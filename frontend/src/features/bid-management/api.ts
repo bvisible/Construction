@@ -195,6 +195,38 @@ export interface LevelingTable {
   recommended_reason: string;
 }
 
+export interface LevelingMatrixCell {
+  bidder_id: string;
+  company_name: string;
+  unit_price: number | string;
+  quantity_priced: number | string;
+  total_price: number | string;
+  inclusion_status: string;
+  alternative_offered: boolean;
+  comment: string;
+  prevailing_wage_applicable: boolean;
+  is_low: boolean;
+}
+
+export interface LevelingMatrixRow {
+  line_item_id: string;
+  line_item_code: string;
+  description: string;
+  unit: string;
+  quantity: number | string;
+  is_mandatory: boolean;
+  cells: LevelingMatrixCell[];
+  excluded_count: number;
+  clarification_count: number;
+}
+
+export interface LevelingMatrix {
+  package_id: string;
+  bidder_ids: string[];
+  bidder_names: string[];
+  rows: LevelingMatrixRow[];
+}
+
 export interface BidAward {
   id: string;
   package_id: string;
@@ -426,6 +458,27 @@ export function deleteQA(id: string): Promise<void> {
 
 export function createComparison(data: CreateComparisonPayload): Promise<BidComparison> {
   return apiPost<BidComparison>('/v1/bid-management/comparisons/', data);
+}
+
+/** Idempotent: returns the existing comparison or creates one. */
+export function getOrCreateComparison(
+  data: CreateComparisonPayload,
+): Promise<BidComparison> {
+  return apiPost<BidComparison>('/v1/bid-management/comparisons/get-or-create', data);
+}
+
+/** Returns the package's single comparison header, or null if none yet. */
+export function getPackageComparison(packageId: string): Promise<BidComparison | null> {
+  return apiGet<BidComparison | null>(
+    `/v1/bid-management/bid-packages/${packageId}/comparison`,
+  );
+}
+
+/** Server-side, valid-only, currency-safe line×bidder leveling matrix. */
+export function levelingMatrix(packageId: string): Promise<LevelingMatrix> {
+  return apiGet<LevelingMatrix>(
+    `/v1/bid-management/bid-packages/${packageId}/leveling-matrix`,
+  );
 }
 
 export function computeLeveling(comparisonId: string): Promise<BidLevelingRow[]> {

@@ -144,7 +144,11 @@ export function ExcelPasteModal({ open, onClose, onImport, loading }: ExcelPaste
               <p className="text-xs text-content-secondary">{t('boq.paste_excel_hint', { defaultValue: 'Copy rows from Excel or Google Sheets and paste below' })}</p>
             </div>
           </div>
-          <button onClick={handleClose} className="p-1.5 rounded-lg hover:bg-surface-secondary transition-colors">
+          <button
+            onClick={handleClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="p-1.5 rounded-lg hover:bg-surface-secondary transition-colors"
+          >
             <X size={18} className="text-content-tertiary" />
           </button>
         </div>

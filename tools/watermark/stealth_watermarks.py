@@ -2,7 +2,7 @@
 Stealth watermark injector / verifier for OpenConstructionERP.
 
 Adds Layer-3 authorship fingerprints on top of the visible+stealth markers
-documented in `~/.claude/.../identity_markers.md`. The point: even if a
+documented in internal identity-marker notes. The point: even if a
 fork strips every Layer-1/2 watermark, hundreds of Layer-3 zero-width
 fingerprints survive in code that still reads identically to a human.
 

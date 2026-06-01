@@ -37,7 +37,7 @@ import {
   createSubmittal,
   updateSubmittal,
   submitSubmittal,
-  approveSubmittal,
+  submitReviewDecision,
   type Submittal,
   type SubmittalStatus,
   type SubmittalType,
@@ -73,6 +73,10 @@ const STATUS_CONFIG: Record<
     cls: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
   },
   rejected: { variant: 'error', cls: '' },
+  closed: {
+    variant: 'blue',
+    cls: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  },
 };
 
 const TYPE_LABELS: Record<SubmittalType, string> = {
@@ -93,6 +97,7 @@ const STATUS_LABELS: Record<SubmittalStatus, string> = {
   approved_as_noted: 'Approved as Noted',
   revise_and_resubmit: 'Revise & Resubmit',
   rejected: 'Rejected',
+  closed: 'Closed',
 };
 
 const LS_INFO_DISMISSED = 'oe_submittals_info_dismissed';
@@ -400,7 +405,7 @@ function ApproveModal({
                   className={clsx(
                     'rounded-lg border px-3 py-2 text-xs font-medium transition-colors text-left',
                     decision === s
-                      ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue'
+                      ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue-text'
                       : 'border-border bg-surface-primary text-content-secondary hover:bg-surface-secondary',
                   )}
                 >
@@ -709,8 +714,8 @@ export function SubmittalsPage() {
       (s) =>
         s.title.toLowerCase().includes(q) ||
         s.submittal_number.toLowerCase().includes(q) ||
-        s.spec_section.toLowerCase().includes(q) ||
-        (s.ball_in_court_name && s.ball_in_court_name.toLowerCase().includes(q)),
+        (s.spec_section?.toLowerCase().includes(q) ?? false) ||
+        (s.ball_in_court_name?.toLowerCase().includes(q) ?? false),
     );
   }, [submittals, searchQuery]);
 
@@ -772,7 +777,7 @@ export function SubmittalsPage() {
 
   const approveMut = useMutation({
     mutationFn: ({ id, data }: { id: string; data: ApproveSubmittalPayload }) =>
-      approveSubmittal(id, data),
+      submitReviewDecision(id, data),
     onSuccess: () => {
       invalidateAll();
       setReviewingSubmittal(null);

@@ -62,14 +62,19 @@ async def get_activity_feed(
         # Since details is JSON, we check for entries that have a matching
         # project_id in the details column OR the entity_type is "project"
         # and entity_id matches.
-        from sqlalchemy import or_
+        from sqlalchemy import Text, cast, or_
 
         stmt = stmt.where(
             or_(
                 # Direct project entity
                 (AuditEntry.entity_type == "project") & (AuditEntry.entity_id == project_id),
-                # Entries that reference the project in details (JSON contains)
-                AuditEntry.details.contains(project_id),
+                # Entries that reference the project anywhere in the details JSON.
+                # ``details`` is a generic JSON column → JSONB on PostgreSQL, and a
+                # bare ``.contains()`` compiles to ``details LIKE '%id%'`` which PG
+                # rejects ("operator does not exist: jsonb ~~ text"). Cast to text
+                # first so the substring search runs on the JSON serialisation on
+                # both dialects (matching the original SQLite behaviour).
+                cast(AuditEntry.details, Text).contains(project_id),
             )
         )
 
@@ -92,19 +97,21 @@ async def get_activity_feed(
         title = _build_title(entry)
         user_id_str = str(entry.user_id) if entry.user_id else None
 
-        feed.append({
-            "type": entry.action,
-            "entity_type": entry.entity_type,
-            "entity_id": entry.entity_id,
-            "title": title,
-            "action": entry.action,
-            "user_id": user_id_str,
-            "user_name": user_names.get(user_id_str, "System") if user_id_str else "System",
-            "timestamp": entry.created_at.isoformat() if entry.created_at else None,
-            "url": url,
-            "icon": icon,
-            "details": entry.details,
-        })
+        feed.append(
+            {
+                "type": entry.action,
+                "entity_type": entry.entity_type,
+                "entity_id": entry.entity_id,
+                "title": title,
+                "action": entry.action,
+                "user_id": user_id_str,
+                "user_name": user_names.get(user_id_str, "System") if user_id_str else "System",
+                "timestamp": entry.created_at.isoformat() if entry.created_at else None,
+                "url": url,
+                "icon": icon,
+                "details": entry.details,
+            }
+        )
 
     return feed
 

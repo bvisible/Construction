@@ -38,7 +38,37 @@ def _read_frappe_site_config(key, default=None):
 
 # ── Model defaults ───────────────────────────────────────────────────────────
 
-ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+# UI model-choice aliases → current Anthropic API model ids. The Settings > AI
+# dropdown (router._AI_PROVIDERS["anthropic"]["model_choices"]) and the stored
+# AISettings.preferred_model use the short aliases ("claude-sonnet" / "-opus" /
+# "-haiku"); the Anthropic API needs the full versioned id. Mapping here is the
+# single source of truth so picking Opus/Haiku in the UI actually sends
+# Opus/Haiku (previously every choice collapsed to one hardcoded Sonnet id).
+# A user free-text override that is already a real API id (e.g.
+# "claude-opus-4-8") is NOT an alias and passes through unchanged — see
+# resolve_anthropic_model().
+ANTHROPIC_MODELS: dict[str, str] = {
+    "claude-sonnet": "claude-sonnet-4-6",
+    "claude-opus": "claude-opus-4-8",
+    "claude-haiku": "claude-haiku-4-5-20251001",
+}
+
+# Default Anthropic model id (the resolved id for the "claude-sonnet" alias).
+ANTHROPIC_MODEL = ANTHROPIC_MODELS["claude-sonnet"]
+
+
+def resolve_anthropic_model(model: str | None) -> str:
+    """Resolve a UI model choice / override to a current Anthropic API id.
+
+    ``None``/blank returns the default. A known UI alias ("claude-sonnet",
+    "claude-opus", "claude-haiku") is mapped to its current versioned id.
+    Anything else (a user free-text override that is already a real API id)
+    passes through unchanged so power users keep full control.
+    """
+    choice = (model or "").strip()
+    if not choice:
+        return ANTHROPIC_MODEL
+    return ANTHROPIC_MODELS.get(choice, choice)
 # gpt-4.1 is OpenAI's current flagship general model (vision + tool-calling,
 # 1M-token context, not deprecated). gpt-4o still works but is older — using
 # the current id by default reduces "deprecated model" failures (issue #129).
@@ -73,6 +103,10 @@ DEFAULT_MODELS: dict[str, str] = {
     "cohere": "command-r-plus",
     "ai21": "jamba-1.5-large",
     "xai": "grok-2",
+    "zhipu": "glm-4-plus",
+    "baidu": "ernie-4.0-8k",
+    "yandex": "yandexgpt/latest",
+    "gigachat": "GigaChat-Pro",
     "ollama": os.environ.get("OE_OLLAMA_MODEL", "llama3.1"),
     "vllm": os.environ.get("OE_VLLM_MODEL", "meta-llama/Llama-3.1-8B-Instruct"),
     "kimi": KIMI_MODEL,
@@ -96,6 +130,9 @@ def default_model_for(provider: str) -> str:
 # specific OpenRouter naming convention (exactly the user's request).
 FALLBACK_MODELS: dict[str, str] = {
     "openrouter": "openrouter/auto",
+    # Anthropic: if a stale/over-specific id is rejected, self-heal onto the
+    # current default Sonnet id rather than dead-ending the user.
+    "anthropic": "claude-sonnet-4-6",
 }
 
 
@@ -120,6 +157,7 @@ def fallback_models_for(provider: str, attempted: str) -> list[str]:
             seen.add(c)
             out.append(c)
     return out
+
 
 # Timeout for AI API calls (2 minutes — large BOQ generation can be slow)
 AI_TIMEOUT = 120.0
@@ -175,7 +213,9 @@ async def call_anthropic(
     content.append({"type": "text", "text": prompt})
 
     payload = {
-        "model": model or ANTHROPIC_MODEL,
+        # Map the UI alias / stored preferred_model to a current Anthropic API
+        # id (or pass a real-id free-text override through unchanged).
+        "model": resolve_anthropic_model(model),
         "max_tokens": max_tokens,
         "system": system,
         "messages": [{"role": "user", "content": content}],
@@ -229,9 +269,7 @@ def _extract_openai_message_text(provider: str, data: Any) -> str:
 
     if isinstance(content, list):
         text = "".join(
-            p.get("text", "")
-            for p in content
-            if isinstance(p, dict) and p.get("type") in (None, "text", "output_text")
+            p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") in (None, "text", "output_text")
         ).strip()
     elif isinstance(content, str):
         text = content.strip()
@@ -428,6 +466,29 @@ _OPENAI_COMPAT_CONFIG = {
     "xai": {
         "url": "https://api.x.ai/v1/chat/completions",
         "model": "grok-2",
+    },
+    # Zhipu AI (GLM) — OpenAI-compatible chat completions endpoint.
+    "zhipu": {
+        "url": "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+        "model": "glm-4-plus",
+    },
+    # Baidu Qianfan (ERNIE) — OpenAI-compatible v2 endpoint.
+    "baidu": {
+        "url": "https://qianfan.baidubce.com/v2/chat/completions",
+        "model": "ernie-4.0-8k",
+    },
+    # Yandex Cloud Foundation Models — OpenAI-compatible endpoint. The
+    # model id must be the bare alias here; the user typically configures
+    # the fully-qualified ``gpt://<folder-id>/yandexgpt/latest`` id as a
+    # per-provider model override in Settings > AI.
+    "yandex": {
+        "url": "https://llm.api.cloud.yandex.net/v1/chat/completions",
+        "model": "yandexgpt/latest",
+    },
+    # Sber GigaChat — OpenAI-compatible chat completions endpoint.
+    "gigachat": {
+        "url": "https://gigachat.devices.sberbank.ru/api/v1/chat/completions",
+        "model": "GigaChat-Pro",
     },
     # Local LLM runtimes — OpenAI-compatible REST API, no key required.
     # Override base URL via OE_OLLAMA_URL / OE_VLLM_URL env vars to point at
@@ -688,13 +749,15 @@ async def call_ai(
                 except (ValueError, KeyError, httpx.HTTPError):
                     continue
                 logger.warning(
-                    "call_ai: model %r rejected by %s (HTTP %s); "
-                    "auto-recovered with fallback model %r",
-                    effective_model, provider, status_code, fb_model,
+                    "call_ai: model %r rejected by %s (HTTP %s); auto-recovered with fallback model %r",
+                    effective_model,
+                    provider,
+                    status_code,
+                    fb_model,
                 )
                 return result
             msg = (
-                f"The AI model \"{effective_model}\" was rejected by {provider} "
+                f'The AI model "{effective_model}" was rejected by {provider} '
                 f"(HTTP {status_code}) and the automatic fallbacks did not "
                 f"succeed. Providers rename and retire models over time — open "
                 f"Settings > AI, set the model name to a currently valid "
@@ -710,7 +773,7 @@ async def call_ai(
             raise ValueError(msg) from exc
         if status_code in (403,) and ("model" in low or "access" in low):
             msg = (
-                f"{provider} denied access to model \"{effective_model}\" with "
+                f'{provider} denied access to model "{effective_model}" with '
                 f"this API key. Pick a model your account/plan can use in "
                 f"Settings > AI. Provider said: {detail[:200]}"
             )
@@ -793,6 +856,74 @@ def _model_override_for(settings: Any, provider: str) -> str | None:
     return raw or None
 
 
+# Environment-variable names per provider, mirroring exactly the names that
+# app/cli.py `check_ai_provider_keys()` already probes so the doctor check and
+# the live AI path agree on where keys may live. GEMINI also honours the very
+# common GOOGLE_API_KEY alias. Ordering inside each list is precedence
+# (first match wins). The top-level list order is also the provider-inference
+# precedence — Anthropic first, per the issue request.
+_ENV_KEY_NAMES: list[tuple[str, list[str]]] = [
+    ("anthropic", ["ANTHROPIC_API_KEY"]),
+    ("openai", ["OPENAI_API_KEY"]),
+    ("gemini", ["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
+    ("openrouter", ["OPENROUTER_API_KEY"]),
+    ("mistral", ["MISTRAL_API_KEY"]),
+    ("groq", ["GROQ_API_KEY"]),
+    ("deepseek", ["DEEPSEEK_API_KEY"]),
+]
+
+
+def _key_from_env_and_config(provider: str | None) -> tuple[str, str] | None:
+    """Find an AI key in env vars / ``~/.openestimate/config.json``.
+
+    This is the fallback used when no usable key is stored in the DB. It mirrors
+    the two locations `app/cli.py check_ai_provider_keys()` reports on:
+
+    1. Environment variables (e.g. ``ANTHROPIC_API_KEY``) — see
+       :data:`_ENV_KEY_NAMES`.
+    2. ``~/.openestimate/config.json`` (CLI-managed): a flat JSON object whose
+       ``*_api_key`` entries hold provider keys (key name ``<provider>_api_key``).
+
+    Args:
+        provider: If given, only that provider's key is looked up. When ``None``,
+            the providers are scanned in :data:`_ENV_KEY_NAMES` order and the
+            first one with a key wins (Anthropic preferred).
+
+    Returns:
+        ``(provider, api_key)`` if a non-empty key is found, else ``None``.
+        Environment variables take precedence over the config file.
+    """
+    wanted = {provider} if provider else {p for p, _ in _ENV_KEY_NAMES}
+
+    # 1. Environment variables (highest precedence after the DB).
+    for prov, env_names in _ENV_KEY_NAMES:
+        if prov not in wanted:
+            continue
+        for env_name in env_names:
+            val = os.environ.get(env_name)
+            if val and val.strip():
+                return prov, val.strip()
+
+    # 2. CLI config file (~/.openestimate/config.json). Map the flat
+    #    ``<provider>_api_key`` entries back to a provider id.
+    config_path = os.path.join(os.path.expanduser("~"), ".openestimate", "config.json")
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except (OSError, ValueError):
+            cfg = None
+        if isinstance(cfg, dict):
+            for prov, _env_names in _ENV_KEY_NAMES:
+                if prov not in wanted:
+                    continue
+                raw = cfg.get(f"{prov}_api_key")
+                if isinstance(raw, str) and raw.strip():
+                    return prov, raw.strip()
+
+    return None
+
+
 def resolve_provider_and_key(
     settings,
     preferred_model=None,
@@ -849,13 +980,22 @@ def _resolve_provider_and_key_original(
         (["cohere", "command"], "cohere", "cohere_api_key"),
         (["ai21", "jamba"], "ai21", "ai21_api_key"),
         (["xai", "grok"], "xai", "xai_api_key"),
+        (["zhipu", "glm"], "zhipu", "zhipu_api_key"),
+        (["baidu", "ernie"], "baidu", "baidu_api_key"),
+        (["yandex"], "yandex", "yandex_api_key"),
+        (["gigachat"], "gigachat", "gigachat_api_key"),
         (["ollama"], "ollama", None),
         (["vllm"], "vllm", None),
         (["kimi", "moonshot"], "kimi", "kimi_api_key"),
     ]
 
+    # The provider the chosen model maps to (e.g. "anthropic" for any
+    # claude-* choice). Remembered so the env/config.json fallback can prefer
+    # this provider's key before scanning all providers.
+    matched_provider: str | None = None
     for keywords, provider_name, key_attr in _MODEL_PROVIDER_MAP:
         if any(kw in model for kw in keywords):
+            matched_provider = provider_name
             if key_attr is None:
                 return provider_name, ""
             raw = getattr(settings, key_attr, None) if settings else None
@@ -882,6 +1022,10 @@ def _resolve_provider_and_key_original(
         ("cohere", "cohere_api_key"),
         ("ai21", "ai21_api_key"),
         ("xai", "xai_api_key"),
+        ("zhipu", "zhipu_api_key"),
+        ("baidu", "baidu_api_key"),
+        ("yandex", "yandex_api_key"),
+        ("gigachat", "gigachat_api_key"),
         ("ollama", None),
         ("vllm", None),
         ("kimi", "kimi_api_key"),
@@ -899,6 +1043,17 @@ def _resolve_provider_and_key_original(
                     return provider_name, decrypted
                 undecryptable = True
 
+    # Fallback to environment variables / ~/.openestimate/config.json. Tried
+    # AFTER the DB (an explicitly-saved key wins) but BEFORE raising — a working
+    # env/config key should take effect even if a stale, undecryptable DB key
+    # exists (telling the user to "re-enter your key" would be wrong when a
+    # valid env var is present). Prefer the chosen model's provider, then scan
+    # all providers (Anthropic first). Mirrors cli.py check_ai_provider_keys().
+    for prov_hint in (matched_provider, None):
+        found = _key_from_env_and_config(prov_hint)
+        if found:
+            return found
+
     if undecryptable:
         raise ValueError(
             "Stored AI API key could not be decrypted — the backend encryption "
@@ -907,7 +1062,9 @@ def _resolve_provider_and_key_original(
         )
 
     msg = (
-        "No AI API key configured. Please add your API key in Settings > AI. "
+        "No AI API key configured. Please add your API key in Settings > AI, or "
+        "set an environment variable such as ANTHROPIC_API_KEY / OPENAI_API_KEY "
+        "(or add it to ~/.openestimate/config.json). "
         "Supported: Anthropic, OpenAI, Gemini, OpenRouter, Mistral, Groq, DeepSeek, "
         "Together, Fireworks, Perplexity, Cohere, AI21, xAI, Ollama, Kimi, vLLM."
     )
@@ -925,6 +1082,19 @@ def resolve_provider_key_model(
     model name stays user-configurable (issue #129). ``model_override`` is
     ``None`` when the user has not set one — callers pass it straight to
     :func:`call_ai`, which then falls back to the built-in default.
+
+    For Anthropic, when no explicit per-provider override is set, the UI model
+    choice stored in ``settings.preferred_model`` ("claude-sonnet" /
+    "claude-opus" / "claude-haiku") is returned so that picking Opus/Haiku in
+    the dropdown actually sends Opus/Haiku. ``call_anthropic`` maps that alias
+    to the current API id via :func:`resolve_anthropic_model`.
     """
     provider, api_key = resolve_provider_and_key(settings, preferred_model)
-    return provider, api_key, _model_override_for(settings, provider)
+    model = _model_override_for(settings, provider)
+    if model is None and provider == "anthropic":
+        # No free-text override: honour the UI dropdown choice (alias). Any
+        # unknown value passes through resolve_anthropic_model() unchanged.
+        choice = preferred_model or (getattr(settings, "preferred_model", None) if settings else None)
+        if isinstance(choice, str) and choice.strip():
+            model = choice.strip()
+    return provider, api_key, model

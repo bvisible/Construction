@@ -87,11 +87,7 @@ class ReportTemplateRepository:
 
     async def count_system(self) -> int:
         """Count system templates (for seed idempotency check)."""
-        stmt = (
-            select(func.count())
-            .select_from(ReportTemplate)
-            .where(ReportTemplate.is_system.is_(True))
-        )
+        stmt = select(func.count()).select_from(ReportTemplate).where(ReportTemplate.is_system.is_(True))
         return (await self.session.execute(stmt)).scalar_one()
 
     async def update(self, template: ReportTemplate) -> ReportTemplate:
@@ -118,9 +114,13 @@ class ReportTemplateRepository:
 
     async def list_scheduled(self) -> list[ReportTemplate]:
         """Return every template that has scheduling configured."""
-        stmt = select(ReportTemplate).where(
-            ReportTemplate.schedule_cron.is_not(None),
-        ).order_by(ReportTemplate.next_run_at.asc().nulls_last())
+        stmt = (
+            select(ReportTemplate)
+            .where(
+                ReportTemplate.schedule_cron.is_not(None),
+            )
+            .order_by(ReportTemplate.next_run_at.asc().nulls_last())
+        )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
@@ -158,4 +158,15 @@ class GeneratedReportRepository:
         """Insert a new generated report."""
         self.session.add(report)
         await self.session.flush()
+        return report
+
+    async def update(self, report: GeneratedReport) -> GeneratedReport:
+        """Persist updates to an existing generated report.
+
+        Used by ``ReportingService.generate_report`` to write back the
+        ``storage_key`` once the renderer has produced and stored the
+        HTML body.
+        """
+        await self.session.flush()
+        await self.session.refresh(report)
         return report

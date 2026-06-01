@@ -114,7 +114,7 @@ curl -s https://<host>/api/health | python -m json.tool
 Spot-check the four new surfaces (any authenticated session token works):
 
 ```bash
-TOKEN=...   # acquire via /api/v1/users/auth/demo-login/  body {"email":"demo@openestimator.io"}
+TOKEN=...   # acquire via /api/v1/users/auth/demo-login/  body {"email":"demo@openconstructionerp.com"}
 
 # 1. Accommodation (list mine)
 curl -s -H "Authorization: Bearer $TOKEN" https://<host>/api/v1/accommodation/

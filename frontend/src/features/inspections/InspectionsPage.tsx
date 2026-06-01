@@ -32,7 +32,7 @@ import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { SectionIntro } from '@/features/validation';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { apiGet, apiPost, triggerDownload } from '@/shared/lib/api';
+import { apiGet, apiPost, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -659,7 +659,7 @@ async function downloadExcelExport(url: string, fallbackFilename: string): Promi
     let detail = fallbackFilename;
     try {
       const body = await response.json();
-      detail = body.detail || 'export_failed';
+      detail = extractErrorMessageFromBody(body) ?? 'export_failed';
     } catch {
       detail = 'export_failed';
     }

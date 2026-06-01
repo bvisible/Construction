@@ -10,10 +10,12 @@
  * Pure-DOM grid hand-rolled with `date-fns` (no calendar library) per
  * the LIGHTWEIGHT principle.
  *
- * Money discipline: charge.amount is Decimal-as-string — we sum charges
- * by accumulating the string values via the Decimal-friendly fallback
- * (string concatenation through Number for display only, never for
- * persisted state). Charges that fail to parse are skipped.
+ * Money discipline: charge.amount is Decimal-as-string. We never
+ * parseFloat() a money value and never blend currencies — charges are
+ * grouped BY currency and each subtotal is rendered with its ISO code
+ * (e.g. "320.00 EUR · 50.00 USD"). Summation uses BigInt over a scaled
+ * integer so precision is preserved. For display only, never for
+ * persisted state. Charges that fail to parse are skipped.
  *
  * Performance: cells are derived from `(viewStart, viewEnd, rooms,
  * bookings)` via useMemo. We never materialise an N×M cell array — the
@@ -191,36 +193,77 @@ function bookingNights(b: Booking): number | null {
   return differenceInCalendarDays(parseISO(b.check_out), parseISO(b.check_in));
 }
 
+// Decimal scale for the BigInt string-arithmetic accumulator (max 6
+// fractional digits — covers ISO money + the module's high-precision rates).
+const _CHARGE_SCALE = 6;
+
 /**
- * Sum Decimal-as-string charge amounts. We deliberately keep the sum as
- * a string to honour money discipline. The simplest correct
- * implementation is a left-to-right accumulator that re-parses on each
- * step using string arithmetic via `BigInt` over a scaled integer.
- *
- * For display only — never feeds back into a write request. Returns
- * null when no charges are present.
+ * Render a scaled BigInt back to a Decimal string at ``_CHARGE_SCALE``,
+ * trimming trailing fractional zeros. Pure string arithmetic — never
+ * routes money through Number()/parseFloat().
  */
-function sumChargesString(charges: Charge[]): string | null {
-  if (charges.length === 0) return null;
-  // Scale every value to integer cents (max 6 decimals) using string
-  // arithmetic so we don't drop precision.
-  const SCALE = 6;
-  let totalScaled = 0n;
+function _formatScaled(totalScaled: bigint): string {
+  const negative = totalScaled < 0n;
+  const absStr = (negative ? -totalScaled : totalScaled)
+    .toString()
+    .padStart(_CHARGE_SCALE + 1, '0');
+  const intStr = absStr.slice(0, absStr.length - _CHARGE_SCALE) || '0';
+  const fracStr = absStr.slice(absStr.length - _CHARGE_SCALE).replace(/0+$/, '');
+  return `${negative ? '-' : ''}${intStr}${fracStr ? '.' + fracStr : ''}`;
+}
+
+/**
+ * Group Decimal-as-string charge amounts BY CURRENCY and return one
+ * subtotal per currency, each carrying its ISO code (money discipline:
+ * never blend amounts of different currencies into one scalar, and money
+ * must always show its ISO code).
+ *
+ * A blank ``currency`` (operator left it inherited / unset) is bucketed
+ * under a sentinel and rendered without a code so the amount is still
+ * visible. Buckets are ordered by descending magnitude so the dominant
+ * currency leads. Summation uses BigInt over a scaled integer so we
+ * never lose precision and never parseFloat() a money value.
+ *
+ * For display only — never feeds back into a write request. Returns an
+ * empty array when no parseable charges are present.
+ */
+function sumChargesByCurrency(charges: Charge[]): { currency: string; total: bigint }[] {
+  const buckets = new Map<string, bigint>();
   for (const c of charges) {
     const raw = c.amount.trim();
     if (!/^-?\d+(?:\.\d+)?$/.test(raw)) continue;
     const negative = raw.startsWith('-');
     const abs = negative ? raw.slice(1) : raw;
     const [intPart, fracPartRaw = ''] = abs.split('.');
-    const fracPart = (fracPartRaw + '0'.repeat(SCALE)).slice(0, SCALE);
+    const fracPart = (fracPartRaw + '0'.repeat(_CHARGE_SCALE)).slice(0, _CHARGE_SCALE);
     const scaled = BigInt(intPart + fracPart);
-    totalScaled += negative ? -scaled : scaled;
+    const code = (c.currency || '').trim().toUpperCase();
+    buckets.set(code, (buckets.get(code) ?? 0n) + (negative ? -scaled : scaled));
   }
-  const negative = totalScaled < 0n;
-  const absStr = (negative ? -totalScaled : totalScaled).toString().padStart(SCALE + 1, '0');
-  const intStr = absStr.slice(0, absStr.length - SCALE) || '0';
-  const fracStr = absStr.slice(absStr.length - SCALE).replace(/0+$/, '');
-  return `${negative ? '-' : ''}${intStr}${fracStr ? '.' + fracStr : ''}`;
+  return [...buckets.entries()]
+    .map(([currency, total]) => ({ currency, total }))
+    .sort((a, b) => {
+      const am = a.total < 0n ? -a.total : a.total;
+      const bm = b.total < 0n ? -b.total : b.total;
+      return am > bm ? -1 : am < bm ? 1 : a.currency.localeCompare(b.currency);
+    });
+}
+
+/**
+ * Display string for the grouped charge subtotals, e.g.
+ * ``"320.00 EUR · 50.00 USD"``. A blank-currency bucket prints the
+ * amount with no code. Returns null when there is nothing to show so the
+ * caller can fall back to an em-dash.
+ */
+function formatChargeSubtotals(charges: Charge[]): string | null {
+  const groups = sumChargesByCurrency(charges);
+  if (groups.length === 0) return null;
+  return groups
+    .map(({ currency, total }) => {
+      const amount = _formatScaled(total);
+      return currency ? `${amount} ${currency}` : amount;
+    })
+    .join(' · ');
 }
 
 /**
@@ -1381,7 +1424,7 @@ function BookingDetailDrawer({
 
   const data = detailQuery.data;
   const nights = data ? bookingNights(data) : null;
-  const totalCharges = data ? sumChargesString(data.charges) : null;
+  const totalCharges = data ? formatChargeSubtotals(data.charges) : null;
   const actions = data && !isBookingTerminal(data.status)
     ? allowedBookingTransitions(data.status)
     : [];

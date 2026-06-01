@@ -1,7 +1,7 @@
 """‌⁠‍Code-defined built-in field-report templates.
 
 These are intentionally NOT database rows: keeping them as constants
-means a fresh install needs no seed migration (CLAUDE.md principle #1 —
+means a fresh install needs no seed migration (the architecture guide principle #1 —
 lightweight), and they can never be accidentally deleted by a user.
 
 The service layer merges these in alongside the project's own custom
@@ -9,7 +9,7 @@ templates. Built-ins carry a synthetic, stable string id of the form
 ``builtin:<slug>`` and are read-only (PATCH / DELETE are rejected).
 
 Copy is generic on purpose — no country-specific standards, regulator
-names, or city names (CLAUDE.md "global copy").
+names, or city names (the architecture guide "global copy").
 """
 
 from __future__ import annotations
@@ -21,8 +21,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "builtin:daily-site-report",
         "name": "Daily Site Report",
-        "description": "General-purpose end-of-day site diary covering "
-        "progress, workforce, and conditions.",
+        "description": "General-purpose end-of-day site diary covering progress, workforce, and conditions.",
         "report_type": "daily",
         "fields": [
             {
@@ -64,8 +63,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "builtin:safety-walk",
         "name": "Safety Walk",
-        "description": "Structured safety observation walk — hazards, "
-        "corrective actions, and sign-off.",
+        "description": "Structured safety observation walk — hazards, corrective actions, and sign-off.",
         "report_type": "safety",
         "fields": [
             {
@@ -113,8 +111,7 @@ BUILTIN_TEMPLATES: list[dict[str, Any]] = [
     {
         "id": "builtin:progress-report",
         "name": "Progress Report",
-        "description": "Periodic progress snapshot — percent complete, "
-        "milestones, and forecast.",
+        "description": "Periodic progress snapshot — percent complete, milestones, and forecast.",
         "report_type": "inspection",
         "fields": [
             {

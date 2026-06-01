@@ -14,7 +14,7 @@ async function login(page: Page) {
   await page.goto(`${BASE}/login`);
   // Pre-set tour as completed BEFORE login to prevent it from appearing
   await page.evaluate(() => localStorage.setItem('oe_tour_completed', 'true'));
-  await page.getByRole('textbox', { name: 'Email' }).fill('demo@openestimator.io');
+  await page.getByRole('textbox', { name: 'Email' }).fill('demo@openconstructionerp.com');
   await page.getByRole('textbox', { name: 'Password' }).fill('DemoPass1234!');
   await page.getByRole('button', { name: 'Sign in' }).click();
   await page.waitForURL(`${BASE}/`);
@@ -39,7 +39,7 @@ test.describe('1. Authentication', () => {
     await expect(page.getByRole('textbox', { name: 'Password' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
     await expect(page.getByText('Create account')).toBeVisible();
-    await expect(page.getByText('demo@openestimator.io')).toBeVisible();
+    await expect(page.getByText('demo@openconstructionerp.com')).toBeVisible();
   });
 
   test('Login with demo credentials works', async ({ page }) => {
@@ -49,7 +49,7 @@ test.describe('1. Authentication', () => {
 
   test('Wrong password stays on login', async ({ page }) => {
     await page.goto(`${BASE}/login`);
-    await page.getByRole('textbox', { name: 'Email' }).fill('demo@openestimator.io');
+    await page.getByRole('textbox', { name: 'Email' }).fill('demo@openconstructionerp.com');
     await page.getByRole('textbox', { name: 'Password' }).fill('wrongpassword');
     await page.getByRole('button', { name: 'Sign in' }).click();
     await page.waitForTimeout(2000);

@@ -397,6 +397,7 @@ export default function GAEBExchangeModule() {
                   </span>
                   <button
                     onClick={handleClearImport}
+                    aria-label={t('gaeb.clear_file', { defaultValue: 'Clear file' })}
                     className="ml-2 p-1 rounded hover:bg-surface-secondary"
                   >
                     <X size={14} className="text-content-tertiary" />

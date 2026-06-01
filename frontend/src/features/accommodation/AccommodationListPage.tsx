@@ -33,6 +33,7 @@ import {
 import {
   Card,
   Badge,
+  BetaBanner,
   Button,
   EmptyState,
   RecoveryCard,
@@ -151,6 +152,7 @@ export function AccommodationListPage() {
   return (
     <div className="space-y-4 pb-20 sm:pb-0">
       <Breadcrumb items={[{ label: t('accommodation.title', { defaultValue: 'Accommodation' }) }]} />
+      <BetaBanner moduleKey="accommodation" className="mt-3" />
 
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-3">

@@ -1,11 +1,12 @@
 /** API client for the project file manager (Issue #109). */
 
-import { apiDelete, apiGet, apiPost } from '@/shared/lib/api';
+import { apiDelete, apiGet, apiPost, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useAuthStore } from '@/stores/useAuthStore';
 import type {
   EmailLinkResponse,
   ExportOptions,
   ExportPreview,
+  FileFavorite,
   FileFilters,
   FileKind,
   FileListResponse,
@@ -124,7 +125,7 @@ export async function validateImport(file: File): Promise<ImportPreview> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Bundle is invalid (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Bundle is invalid (${res.status})`);
   }
   return (await res.json()) as ImportPreview;
 }
@@ -147,7 +148,7 @@ export async function commitImport(opts: {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Import failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Import failed (${res.status})`);
   }
   return (await res.json()) as ImportResult;
 }
@@ -199,7 +200,7 @@ export async function revokeShareLink(
   );
   if (!res.ok && res.status !== 204) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Revoke failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Revoke failed (${res.status})`);
   }
 }
 
@@ -214,7 +215,7 @@ export async function fetchShareLinkInfo(
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Link not found (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Link not found (${res.status})`);
   }
   return (await res.json()) as ShareLinkPublicInfo;
 }
@@ -259,7 +260,7 @@ export async function revokeFolderPermission(
   );
   if (!res.ok && res.status !== 204) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Revoke failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Revoke failed (${res.status})`);
   }
 }
 
@@ -283,9 +284,58 @@ export async function accessShareLink(
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body?.detail || `Access failed (${res.status})`);
+    throw new Error(extractErrorMessageFromBody(body) ?? `Access failed (${res.status})`);
   }
   return (await res.json()) as ShareLinkAccessResponse;
+}
+
+/* ── Per-user favourites / pins ──────────────────────────────────────── */
+
+const FAVORITES_BASE = '/v1/file-favorites';
+
+/** List the current user's favourites for a project (pinned first). */
+export async function fetchFavorites(
+  projectId: string,
+  opts: { onlyPinned?: boolean } = {},
+): Promise<FileFavorite[]> {
+  const params = new URLSearchParams({ project_id: projectId });
+  if (opts.onlyPinned) params.set('only_pinned', 'true');
+  return apiGet<FileFavorite[]>(`${FAVORITES_BASE}/?${params.toString()}`);
+}
+
+/** Star (or update the pin flag of) a file for the current user.
+ * Idempotent on ``(file_kind, file_id)`` — posting twice flips the pin. */
+export async function starFile(
+  projectId: string,
+  kind: FileKind,
+  fileId: string,
+  pinned = false,
+): Promise<FileFavorite> {
+  return apiPost<FileFavorite, {
+    project_id: string;
+    file_kind: FileKind;
+    file_id: string;
+    pinned: boolean;
+  }>(`${FAVORITES_BASE}/`, {
+    project_id: projectId,
+    file_kind: kind,
+    file_id: fileId,
+    pinned,
+  });
+}
+
+/** Remove a favourite. Idempotent — a missing row still resolves. */
+export async function unstarFile(
+  projectId: string,
+  kind: FileKind,
+  fileId: string,
+): Promise<void> {
+  const params = new URLSearchParams({
+    project_id: projectId,
+    file_kind: kind,
+    file_id: fileId,
+  });
+  await apiDelete(`${FAVORITES_BASE}/?${params.toString()}`);
 }
 
 /* ── Per-kind delete helpers (bulk-delete dispatcher) ────────────────── */

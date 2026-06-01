@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from app.core.file_signature import (
     SIGNATURE_BYTES_REQUIRED,
     FileSignatureMismatch,
+)
+from app.core.file_signature import (
     require as require_signature,
 )
 
@@ -27,9 +29,7 @@ from app.core.file_signature import (
 # an XML signature, and HTML payloads served back out (even with a benign
 # Content-Type) have repeatedly been XSS sinks in audited modules. Real
 # correspondence attachments are PDFs, images, and Office docs (ZIP/OLE).
-ALLOWED_ATTACHMENT_TYPES = frozenset(
-    {"pdf", "png", "jpeg", "gif", "webp", "zip", "ole"}
-)
+ALLOWED_ATTACHMENT_TYPES = frozenset({"pdf", "png", "jpeg", "gif", "webp", "zip", "ole"})
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.correspondence.schemas import (
     CorrespondenceCreate,
@@ -38,7 +38,7 @@ from app.modules.correspondence.schemas import (
 )
 from app.modules.correspondence.service import CorrespondenceService
 
-router = APIRouter()
+router = APIRouter(tags=["correspondence"])
 logger = logging.getLogger(__name__)
 
 # On-disk storage for correspondence attachments. Path layout mirrors

@@ -342,7 +342,13 @@ class RiskService:
             if item.impact_severity in ("high", "critical"):
                 high_critical_count += 1
 
-            if item.status in ("mitigating", "closed"):
+            # A risk counts as "mitigated" once a mitigation is in flight or
+            # complete. Beyond the in-flight "mitigating" and terminal
+            # "closed" states, the canonical vocabulary (schemas.STATUS_VALUES)
+            # and seed data also use the explicit "mitigated" state plus
+            # "monitoring" (mitigation applied, now being watched) — both were
+            # previously excluded, understating the Mitigated stat card.
+            if item.status in ("mitigating", "mitigated", "monitoring", "closed"):
                 mitigated_count += 1
 
             # Mitigation tracking

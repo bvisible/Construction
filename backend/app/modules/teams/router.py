@@ -25,7 +25,7 @@ from app.modules.teams.schemas import (
 )
 from app.modules.teams.service import TeamService
 
-router = APIRouter()
+router = APIRouter(tags=["teams"])
 logger = logging.getLogger(__name__)
 
 

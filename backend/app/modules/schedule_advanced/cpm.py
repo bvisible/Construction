@@ -190,10 +190,21 @@ class TaskNetwork:
                     stack.append((child_id, list(self._succs[child_id])))
                 elif colour[child_id] == GREY:
                     # Cycle: child_id → ... → node → child_id.
+                    # Walk the parent chain from `node` back to `child_id`.
+                    # Guard: when `child_id` is the DFS-tree root it has no
+                    # entry in ``parent``; the old ``cur in parent`` guard
+                    # terminated early and left the first node of the cycle
+                    # out of the path (producing A → B → A instead of the
+                    # correct A → B → C → A when A was the root). We now
+                    # stop when we either reach `child_id` again OR exhaust
+                    # the parent chain — the closing ``child_id`` appended
+                    # below always completes the ring regardless.
                     cycle = [child_id]
                     cur = node
-                    while cur != child_id and cur in parent:
+                    while cur != child_id:
                         cycle.append(cur)
+                        if cur not in parent:
+                            break
                         cur = parent[cur]
                     cycle.append(child_id)
                     cycle.reverse()
@@ -318,9 +329,7 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
         # immediate successor's ES. For a sink it's the slack to its
         # component finish.
         fs_succs = [
-            es[s_id] - int(lag)
-            for s_id, dep_type, lag in network.successors(aid)
-            if dep_type == "FS" and s_id in es
+            es[s_id] - int(lag) for s_id, dep_type, lag in network.successors(aid) if dep_type == "FS" and s_id in es
         ]
         if fs_succs:
             free_float = min(fs_succs) - ef[aid]
@@ -333,7 +342,12 @@ def compute_cpm(network: TaskNetwork) -> dict[Any, CPMResult]:
             lf=lf[aid],
             total_float=max(0, total_float),
             free_float=max(0, free_float),
-            is_critical=(total_float == 0),
+            # Use <= 0 (not == 0) so activities with negative total float
+            # (possible when lag constraints push a successor earlier than
+            # the predecessor's EF) are correctly marked critical. Using
+            # == 0 silently misses these activities and produces an
+            # incomplete / wrong critical path.
+            is_critical=(total_float <= 0),
         )
     return results
 

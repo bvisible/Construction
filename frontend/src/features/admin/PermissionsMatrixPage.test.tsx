@@ -101,6 +101,18 @@ function renderWithProviders() {
   );
 }
 
+/**
+ * Module groups are COLLAPSED by default now, so individual permission
+ * cells are not in the DOM until a group is expanded. Most cell-level
+ * assertions click "Expand all" first to reveal every row. (The control
+ * is disabled while a search query is active because search force-
+ * expands matching groups on its own.)
+ */
+async function expandAllGroups() {
+  const toggleAll = await screen.findByTestId('permissions-matrix-toggle-all');
+  fireEvent.click(toggleAll);
+}
+
 describe('PermissionsMatrixPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -127,6 +139,9 @@ describe('PermissionsMatrixPage', () => {
 
     expect(screen.getByTestId('module-toggle-projects')).toBeInTheDocument();
     expect(screen.getByTestId('module-toggle-system')).toBeInTheDocument();
+
+    // Cells live inside collapsed groups by default — expand to reveal.
+    await expandAllGroups();
 
     expect(
       screen.getByTestId('cell-viewer-projects.create').getAttribute('data-state'),
@@ -175,6 +190,9 @@ describe('PermissionsMatrixPage', () => {
     // baseline-allowed row that should drop out.
     fireEvent.change(roleFilter, { target: { value: 'viewer' } });
 
+    // Reveal the rows (groups collapsed by default).
+    await expandAllGroups();
+
     await waitFor(() => {
       // projects.read is allowed for viewer → its cell should disappear
       // after the role filter rewrites the visible matrix.
@@ -189,6 +207,7 @@ describe('PermissionsMatrixPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
     );
+    await expandAllGroups();
 
     // Edit mode is off by default — clicking a cell does nothing.
     let cell = screen.getByTestId('cell-viewer-projects.create');
@@ -224,6 +243,7 @@ describe('PermissionsMatrixPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
     );
+    await expandAllGroups();
 
     fireEvent.click(screen.getByTestId('permissions-matrix-edit-toggle'));
 
@@ -253,6 +273,7 @@ describe('PermissionsMatrixPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
     );
+    await expandAllGroups();
 
     fireEvent.click(screen.getByTestId('permissions-matrix-edit-toggle'));
 
@@ -274,6 +295,7 @@ describe('PermissionsMatrixPage', () => {
     await waitFor(() =>
       expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
     );
+    await expandAllGroups();
 
     // No edit-toggle button is rendered for non-admins.
     expect(
@@ -290,5 +312,111 @@ describe('PermissionsMatrixPage', () => {
     (fetchPermissionsMatrix as any).mockReturnValue(new Promise(() => {}));
     renderWithProviders();
     expect(screen.getByTestId('permissions-matrix-loading')).toBeInTheDocument();
+  });
+
+  // ── Grouping UX (collapse default / expand-all / summary / search) ──
+
+  it('collapses every module group by default and expand-all reveals cells', async () => {
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
+    );
+
+    // Headers are present, but cells are hidden until expanded.
+    expect(screen.getByTestId('module-toggle-projects')).toBeInTheDocument();
+    expect(screen.queryByTestId('cell-viewer-projects.create')).not.toBeInTheDocument();
+
+    await expandAllGroups();
+    expect(screen.getByTestId('cell-viewer-projects.create')).toBeInTheDocument();
+
+    // Collapse-all hides them again.
+    fireEvent.click(screen.getByTestId('permissions-matrix-toggle-all'));
+    await waitFor(() =>
+      expect(screen.queryByTestId('cell-viewer-projects.create')).not.toBeInTheDocument(),
+    );
+  });
+
+  it('auto-expands matching groups while searching (no manual expand needed)', async () => {
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
+    );
+
+    // Without expanding, type a query — the matching group's rows appear.
+    fireEvent.change(screen.getByTestId('permissions-matrix-search'), {
+      target: { value: 'audit' },
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('cell-manager-audit.view')).toBeInTheDocument();
+      // Non-matching module disappears entirely.
+      expect(screen.queryByTestId('module-toggle-projects')).not.toBeInTheDocument();
+    });
+  });
+
+  it('switches the summary to the "granted" variant once a role is selected', async () => {
+    // NOTE: the test i18n mock returns the raw defaultValue template
+    // WITHOUT interpolating {{...}}, so we assert on which template is
+    // rendered (the granted variant uniquely contains the word
+    // "granted"), not on the interpolated counts.
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
+    );
+
+    // "All roles" → module/permission totals; not the granted template.
+    const summary = screen.getByTestId('permissions-matrix-summary');
+    expect(summary.textContent).not.toMatch(/granted/i);
+
+    fireEvent.change(screen.getByTestId('permissions-matrix-role-filter'), {
+      target: { value: 'editor' },
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('permissions-matrix-summary').textContent).toMatch(
+        /granted/i,
+      ),
+    );
+  });
+
+  it('per-group tri-state checkbox bulk-grants a module to the selected role', async () => {
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
+    );
+
+    // Enter edit mode and pick a role so the bulk checkbox is actionable.
+    fireEvent.click(screen.getByTestId('permissions-matrix-edit-toggle'));
+    fireEvent.change(screen.getByTestId('permissions-matrix-role-filter'), {
+      target: { value: 'viewer' },
+    });
+
+    // Click the projects group "grant all / none" checkbox.
+    const groupCheckbox = await screen.findByTestId('module-selectall-projects');
+    fireEvent.click(groupCheckbox);
+
+    // Confirm dialog appears → confirm → fans out one PATCH per
+    // not-yet-granted key (projects.create + projects.delete; read is
+    // already allowed for viewer).
+    const confirmBtn = await screen.findByTestId('confirm-dialog-confirm');
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(updatePermissionMinRole).toHaveBeenCalledWith('projects.create', 'viewer');
+      expect(updatePermissionMinRole).toHaveBeenCalledWith('projects.delete', 'viewer');
+    });
+    // projects.read was already granted for viewer → not re-patched.
+    expect(updatePermissionMinRole).not.toHaveBeenCalledWith('projects.read', 'viewer');
+  });
+
+  it('disables the per-group checkbox until edit mode + a role are chosen', async () => {
+    renderWithProviders();
+    await waitFor(() =>
+      expect(screen.getByTestId('permissions-matrix-table')).toBeInTheDocument(),
+    );
+
+    // Edit off, role "all" → checkbox present but disabled, clicking is a no-op.
+    const groupCheckbox = screen.getByTestId('module-selectall-projects');
+    expect(groupCheckbox).toBeDisabled();
+    fireEvent.click(groupCheckbox);
+    expect(screen.queryByTestId('confirm-dialog-confirm')).not.toBeInTheDocument();
   });
 });

@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import type { SceneManager } from './SceneManager';
+import type { BIMQualityMode } from '@/stores/useBIMViewerStore';
 
 // Module-level in-flight buffer fetches, shared across ElementManager
 // instances. React StrictMode's dev double-mount creates two managers
@@ -644,6 +645,12 @@ export class ElementManager {
    *  Used so `hasHidden()` returns the intuitive answer when "everything
    *  but X" is the current state. */
   private isolateActive = false;
+  /** Categories hidden via the Layers tab (`setCategoryVisible(cat, false)`).
+   *  Kept separate from `hiddenElementIds` (context-menu Hide / isolate) so
+   *  the two visibility systems don't corrupt each other's counts — a
+   *  category hide must not bump the hide/isolate badge, and un-hiding a
+   *  category must not reveal an element the user hid individually. */
+  private hiddenCategorySet = new Set<string>();
   /** Subscribers for hidden-count changes — wired by BIMViewer to drive a
    *  small "{n} hidden — Show all" badge above the canvas. */
   private hiddenCountSubscribers = new Set<(count: number) => void>();
@@ -860,10 +867,17 @@ export class ElementManager {
             status?: number;
             diagnostic?: unknown;
             requestId?: string | null;
+            expected?: boolean;
           };
           err.status = resp.status;
           err.diagnostic = detail;
           err.requestId = requestId;
+          // A 404 here means the model simply has no 3D mesh artifact
+          // (lightweight install / showcase / metadata-only model). That is
+          // an expected empty state the viewer already handles gracefully —
+          // it is NOT a bug. Flag it so the global error logger drops it and
+          // the auto bug-reporter never files a false report (#168).
+          err.expected = resp.status === 404;
           throw err;
         }
         const total = Number(resp.headers.get('content-length')) || 0;
@@ -1990,6 +2004,131 @@ export class ElementManager {
     return this.wireframeEnabled;
   }
 
+  /**
+   * Apply a render-quality preset to every material this manager owns,
+   * and toggle CAD-style edge overlays for the Visual preset.
+   *
+   * The four modes are designed to be VISUALLY distinct, not just to flip
+   * one flag:
+   *
+   *   fast   — flatShading + rough matte + opaque (including glass).
+   *            Lighting calcs simplified to vertex-flat normals → up to
+   *            2× fragment perf on shaded geometry; opaque glass kills
+   *            alpha-sort.
+   *   default — current behaviour (PBR standard, translucent everything,
+   *            full lighting). Migration-safe.
+   *   visual  — PBR + glass alone stays transparent + per-mesh edge
+   *            overlay (LineSegments built from EdgesGeometry) gives a
+   *            CAD-render look. The opaque non-glass surface lets the
+   *            edges read crisply against the geometry.
+   *   walk    — flat shaded + opaque everything for top-rate fps while
+   *            navigating in first-person.
+   */
+  applyQualityMode(mode: BIMQualityMode): void {
+    // Per-mode property targets.
+    const baseOpaque = mode !== 'default';
+    const baseFlat = mode === 'fast' || mode === 'walk';
+    const baseRoughness = mode === 'visual' ? 0.5 : baseFlat ? 1.0 : 0.7;
+    const baseMetalness = mode === 'visual' ? 0.15 : baseFlat ? 0.0 : 0.1;
+
+    // Glass: opaque tinted panel in fast/walk; cleanest pane in visual;
+    // current 0.28 in default.
+    const glassOpaque = mode === 'fast' || mode === 'walk';
+    const glassOpacity = glassOpaque ? 1.0 : mode === 'visual' ? 0.2 : 0.28;
+    const glassRoughness = mode === 'visual' ? 0.02 : 0.05;
+
+    // Build a uuid set of glass materials so we can route each material
+    // down the correct branch when sweeping `createdMaterials`.
+    const glassUuids = new Set<string>();
+    for (const g of this.glassMaterials.values()) glassUuids.add(g.uuid);
+
+    const applyBase = (mat: THREE.Material | null | undefined): void => {
+      if (!mat) return;
+      if (glassUuids.has(mat.uuid)) return;
+      const m = mat as THREE.MeshStandardMaterial & {
+        flatShading?: boolean;
+      };
+      m.transparent = !baseOpaque;
+      m.opacity = baseOpaque ? 1.0 : 0.85;
+      if ('flatShading' in m) m.flatShading = baseFlat;
+      if ('roughness' in m) m.roughness = baseRoughness;
+      if ('metalness' in m) m.metalness = baseMetalness;
+      // flatShading swap regenerates normals → must mark for full recompile.
+      mat.needsUpdate = true;
+    };
+
+    const applyGlass = (mat: THREE.Material): void => {
+      const m = mat as THREE.MeshStandardMaterial;
+      m.transparent = !glassOpaque;
+      m.opacity = glassOpacity;
+      // Opaque glass needs depthWrite ON; transparent glass keeps it OFF
+      // so panes behind it render correctly. The constructor sets `false`
+      // for the transparent path — we mirror that here per mode.
+      m.depthWrite = glassOpaque;
+      if ('roughness' in m) m.roughness = glassRoughness;
+      mat.needsUpdate = true;
+    };
+
+    for (const mat of this.baseMaterials.values()) applyBase(mat);
+    for (const mat of this.createdMaterials) {
+      if (glassUuids.has(mat.uuid)) applyGlass(mat);
+      else applyBase(mat);
+    }
+    for (const mat of this.glassMaterials.values()) applyGlass(mat);
+
+    // CAD-style edge silhouettes are the signature of the Visual preset.
+    // Toggling is idempotent — _enableEdgeOverlay() short-circuits when
+    // overlays already exist, and _disableEdgeOverlay() is a no-op on an
+    // empty map.
+    if (mode === 'visual') this._enableEdgeOverlay();
+    else this._disableEdgeOverlay();
+
+    this.sceneManager.requestRender();
+  }
+
+  /** LineSegments overlays drawn on top of every mesh in Visual mode to
+   *  give the model a CAD-documentation look. Keyed by element id so we
+   *  can tear them down cleanly on mode change without disturbing the
+   *  underlying meshes. */
+  private _edgeOverlays = new Map<string, THREE.LineSegments>();
+  /** Shared LineBasicMaterial used by every overlay — one allocation,
+   *  one disposal in `dispose()` via `createdMaterials`. */
+  private _edgeMaterial: THREE.LineBasicMaterial | null = null;
+
+  private _enableEdgeOverlay(): void {
+    if (this._edgeOverlays.size > 0) return;
+    if (!this._edgeMaterial) {
+      this._edgeMaterial = new THREE.LineBasicMaterial({
+        color: 0x1f2937,
+        transparent: true,
+        opacity: 0.55,
+      });
+      this.createdMaterials.add(this._edgeMaterial);
+    }
+    // 25° threshold — emits the strong silhouette lines you want in a CAD
+    // render without exploding draw-count on curved DAE surfaces. For a
+    // 5 000-mesh federation this is the line between "looks crisp" and
+    // "kills the GPU".
+    const THRESHOLD_DEG = 25;
+    for (const [id, mesh] of this.meshMap) {
+      if (!mesh.geometry) continue;
+      const edges = new THREE.EdgesGeometry(mesh.geometry, THRESHOLD_DEG);
+      const lines = new THREE.LineSegments(edges, this._edgeMaterial);
+      lines.renderOrder = 1;
+      lines.frustumCulled = mesh.frustumCulled;
+      mesh.add(lines);
+      this._edgeOverlays.set(id, lines);
+    }
+  }
+
+  private _disableEdgeOverlay(): void {
+    for (const lines of this._edgeOverlays.values()) {
+      if (lines.parent) lines.parent.remove(lines);
+      if (lines.geometry) lines.geometry.dispose();
+    }
+    this._edgeOverlays.clear();
+  }
+
   /** Set visibility of elements by discipline. */
   setDisciplineVisible(discipline: string, visible: boolean): void {
     // #153 guard — RVT elements without an IFC discipline arrive with
@@ -2174,6 +2313,7 @@ export class ElementManager {
     }
     this.hiddenElementIds.clear();
     this.isolateActive = false;
+    this.hiddenCategorySet.clear();
     this.notifyHiddenCount();
     this.sceneManager.requestRender();
   }
@@ -2381,10 +2521,15 @@ export class ElementManager {
     this.hideElements(new Set(ids));
   }
 
-  /** Returns true when at least one element is hidden by `hide()`
-   *  or `isolate()`. Used to gate the "Show all" affordance. */
+  /** Returns true when at least one element is hidden by `hide()`,
+   *  `isolate()`, or a Layers-tab category toggle. Used to gate the
+   *  "Show all" affordance so it appears for category hides too. */
   hasHidden(): boolean {
-    return this.hiddenElementIds.size > 0 || this.isolateActive;
+    return (
+      this.hiddenElementIds.size > 0 ||
+      this.isolateActive ||
+      this.hiddenCategorySet.size > 0
+    );
   }
 
   /** Current count of hidden elements (driven by hide/isolate, not by
@@ -2588,6 +2733,53 @@ export class ElementManager {
       m.transparent = clamped < 1;
       m.needsUpdate = true;
     }
+    this.sceneManager.requestRender();
+  }
+
+  /**
+   * Show or hide every mesh whose category (`element_type || 'Unknown'`)
+   * matches `category`. Drives the Layers-tab visibility toggles.
+   *
+   * Bidirectional and batched-aware: it uses the same `batchHandle`
+   * pattern as `applyFilter` / `hideElements` so it works on BatchedMesh
+   * instances (which ignore `mesh.visible`) as well as standalone meshes.
+   *
+   * When revealing (`visible === true`) it never un-hides an element that
+   * the user hid individually via `hide()` / context-menu Hide. While an
+   * `isolate()` is active, isolation owns visibility and this method only
+   * updates the tracked hidden-category set without touching any mesh — so
+   * a category toggle can't stomp the isolated subset. The set of hidden
+   * categories is tracked so `hasHidden()` and the Show-all affordance
+   * reflect Layers-tab hides too.
+   */
+  setCategoryVisible(category: string, visible: boolean): void {
+    if (visible) {
+      this.hiddenCategorySet.delete(category);
+    } else {
+      this.hiddenCategorySet.add(category);
+    }
+    // Isolation is the higher-priority visibility owner: leave meshes alone
+    // and just record intent. `showAll()`/exiting isolate re-derives the
+    // correct state, and a later category toggle outside isolation applies.
+    if (this.isolateActive) {
+      this.notifyHiddenCount();
+      return;
+    }
+    for (const [elementId, mesh] of this.meshMap) {
+      const el = this.elementDataMap.get(elementId);
+      if (!el) continue;
+      const cat = el.element_type || 'Unknown';
+      if (cat !== category) continue;
+      // Never reveal an element the user hid individually — that hide wins.
+      const shouldShow = visible && !this.hiddenElementIds.has(elementId);
+      const handle = (mesh.userData as { batchHandle?: { batched: THREE.BatchedMesh; instanceId: number } }).batchHandle;
+      if (handle) {
+        handle.batched.setVisibleAt(handle.instanceId, shouldShow);
+      } else {
+        mesh.visible = shouldShow;
+      }
+    }
+    this.notifyHiddenCount();
     this.sceneManager.requestRender();
   }
 
@@ -2814,9 +3006,14 @@ export class ElementManager {
     // drop them so a fresh model doesn't try to restore stale materials.
     this.ghostedIds.clear();
     // W6.6: hidden / isolate / color-by-property state is per-model — wipe.
-    if (this.hiddenElementIds.size > 0 || this.isolateActive) {
+    if (
+      this.hiddenElementIds.size > 0 ||
+      this.isolateActive ||
+      this.hiddenCategorySet.size > 0
+    ) {
       this.hiddenElementIds.clear();
       this.isolateActive = false;
+      this.hiddenCategorySet.clear();
       this.notifyHiddenCount();
     }
     this.colorByPropertyConfig = null;

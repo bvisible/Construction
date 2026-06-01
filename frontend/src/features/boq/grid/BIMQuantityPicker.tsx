@@ -251,6 +251,7 @@ export function BIMQuantityPicker({
         </div>
         <button
           onClick={onClose}
+          aria-label="Close"
           className="h-5 w-5 flex items-center justify-center rounded text-content-tertiary
                      hover:text-content-primary hover:bg-surface-tertiary transition-colors"
         >

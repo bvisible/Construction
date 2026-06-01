@@ -106,6 +106,15 @@ export class FederatedViewerScene {
   private _needsRender = true;
   private _isVisible = true;
   private _disposed = false;
+  /** True between a `webglcontextlost` event and its `webglcontextrestored`
+   *  partner. While set, the animation loop skips rendering. */
+  private _contextLost = false;
+  /** Bound WebGL context-loss handlers, kept so dispose() can detach them. */
+  private _onContextLost: ((e: Event) => void) | null = null;
+  private _onContextRestored: (() => void) | null = null;
+  /** Optional host callback fired with `true` on context loss / `false` on
+   *  restore — wired to a non-fatal recovery banner (pdf11). */
+  private _onContextStateChange: ((lost: boolean) => void) | null = null;
 
   /** modelId → member root group. */
   private members = new Map<string, THREE.Group>();
@@ -146,8 +155,30 @@ export class FederatedViewerScene {
     this.renderer.shadowMap.enabled = false;
     this.updateSize();
 
+    // WebGL context-loss handling — a federated scene composes several fat
+    // IFC/RVT GLBs and is a prime candidate for a driver reset / VRAM-pressure
+    // context drop. preventDefault() on the loss event lets the browser
+    // restore the context; we pause rendering until it does (pdf11).
+    this._onContextLost = (e: Event) => {
+      e.preventDefault();
+      this._contextLost = true;
+      this._onContextStateChange?.(true);
+    };
+    this._onContextRestored = () => {
+      this._contextLost = false;
+      this._needsRender = true;
+      this._onContextStateChange?.(false);
+    };
+    canvas.addEventListener('webglcontextlost', this._onContextLost as EventListener, false);
+    canvas.addEventListener('webglcontextrestored', this._onContextRestored, false);
+
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xf0f2f5);
+    this.scene.background = new THREE.Color(
+      typeof document !== 'undefined' &&
+      document.documentElement.classList.contains('dark')
+        ? 0x1a1a2e
+        : 0xf0f2f5,
+    );
 
     const aspect = this.container.clientWidth / Math.max(this.container.clientHeight, 1);
     this.camera = new THREE.PerspectiveCamera(45, aspect, 0.01, 1_000_000);
@@ -229,6 +260,9 @@ export class FederatedViewerScene {
     if (this._disposed) return;
     this.animationId = requestAnimationFrame(this.animate);
     if (!this._isVisible) return;
+    // Skip while the GL context is lost — render() would throw against a
+    // dead context. Resumes on `webglcontextrestored`.
+    if (this._contextLost) return;
     const dampingDirty = this.controls.update();
     if (dampingDirty) this._needsRender = true;
     if (this._needsRender) {
@@ -239,6 +273,27 @@ export class FederatedViewerScene {
 
   /** Mark dirty so the next animation tick re-renders. */
   requestRender(): void {
+    this._needsRender = true;
+  }
+
+  /** Register a callback notified when the WebGL context is lost (`true`)
+   *  or restored (`false`). Pass `null` to clear. Fires immediately with the
+   *  current state so a listener attached after a loss still sees it. */
+  onContextStateChange(cb: ((lost: boolean) => void) | null): void {
+    this._onContextStateChange = cb;
+    if (cb) cb(this._contextLost);
+  }
+
+  /** True while the WebGL context is lost (between contextlost / restored). */
+  isContextLost(): boolean {
+    return this._contextLost;
+  }
+
+  /** Swap the scene background between dark and light mode.
+   *  Call this whenever the host detects a theme change so the canvas
+   *  background matches the surrounding UI. */
+  setDarkMode(dark: boolean): void {
+    (this.scene.background as THREE.Color).set(dark ? 0x1a1a2e : 0xf0f2f5);
     this._needsRender = true;
   }
 
@@ -397,9 +452,22 @@ export class FederatedViewerScene {
         const mats = Array.isArray(state.override) ? state.override : [state.override];
         for (const m of mats) m.dispose();
       }
-      state.override = null;
-      state.cloned = false;
+      // Fully evict the per-mesh state from the WeakMap, not just null out its
+      // fields. If the stale state object lingered, applyOverrideColor's
+      // `if (!state)` branch would be skipped on the next enable, so the mesh
+      // would be re-tinted but never re-added to overriddenMeshes — leaving the
+      // sweep set empty and breaking the following disable (off→on→off would
+      // get stuck tinted). Deleting the entry makes re-enabling rebuild state
+      // from scratch, so repeated toggling is idempotent.
+      this.meshOverrides.delete(mesh);
     }
+    // Clear the sweep set now that all overrides are reverted. Without this
+    // the set would accumulate stale mesh refs across add/remove cycles —
+    // each removeMember() call already deletes entries via disposeGroup(),
+    // but meshes from members that were never removed (just uncolored)
+    // would stay until the next disposeGroup / dispose(). Clearing here
+    // keeps the set bounded to the currently-overridden meshes only.
+    this.overriddenMeshes.clear();
   }
 
   /* ── Isolation ─────────────────────────────────────────────────── */
@@ -522,6 +590,16 @@ export class FederatedViewerScene {
       this.intersectionObserver.disconnect();
       this.intersectionObserver = null;
     }
+    // Detach the WebGL context-loss listeners.
+    if (this._onContextLost) {
+      this.canvas.removeEventListener('webglcontextlost', this._onContextLost as EventListener, false);
+      this._onContextLost = null;
+    }
+    if (this._onContextRestored) {
+      this.canvas.removeEventListener('webglcontextrestored', this._onContextRestored, false);
+      this._onContextRestored = null;
+    }
+    this._onContextStateChange = null;
     this.clear();
     this.controls.dispose();
     this.renderer.dispose();

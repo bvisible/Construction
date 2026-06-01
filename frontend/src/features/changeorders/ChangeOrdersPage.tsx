@@ -50,11 +50,16 @@ interface ChangeOrderItem {
   change_order_id: string;
   description: string;
   change_type: string;
-  original_quantity: number;
-  new_quantity: number;
-  original_rate: number;
-  new_rate: number;
-  cost_delta: number;
+  // Money / quantity fields are serialized by the backend as canonical
+  // decimal STRINGS (NUMERIC(18,6) / String(50)) — never JS numbers. Typing
+  // them as `string` here forces every use site to coerce explicitly with
+  // `Number(...)` before arithmetic / `.toFixed`, which is the root-cause
+  // fix for the Export-CSV crash and any future blended math.
+  original_quantity: string;
+  new_quantity: string;
+  original_rate: string;
+  new_rate: string;
+  cost_delta: string;
   unit: string;
   sort_order: number;
   metadata: Record<string, unknown>;
@@ -74,7 +79,9 @@ interface ChangeOrder {
   approved_by: string | null;
   submitted_at: string | null;
   approved_at: string | null;
-  cost_impact: number;
+  // Backend emits cost_impact as a canonical decimal string (see schemas.py
+  // ChangeOrderResponse.cost_impact:str). Coerce with Number(...) at use.
+  cost_impact: string;
   schedule_impact_days: number;
   currency: string;
   metadata: Record<string, unknown>;
@@ -118,9 +125,15 @@ interface Summary {
   submitted_count: number;
   approved_count: number;
   rejected_count: number;
-  total_cost_impact: number;
+  // Decimal string from the backend (ChangeOrderSummary.total_cost_impact:str).
+  total_cost_impact: string;
   total_schedule_impact_days: number;
+  // The project BASE currency — the only currency total_cost_impact is in.
   currency: string;
+  // Approved COs in a foreign currency with no FX rate, grouped by ISO code
+  // as decimal strings, e.g. { USD: '5000.00' }. These are NOT folded into
+  // total_cost_impact (no blending currencies without conversion).
+  unconverted_by_currency?: Record<string, string>;
 }
 
 /* ── Helpers ───────────────────────────────────────────────────────────── */
@@ -158,23 +171,42 @@ function formatCurrency(amount: number, currency?: string): string {
   // NEVER hard-fallback to 'EUR' (task #217): a project priced in BRL/USD
   // must not render its change-order amounts with a Euro sign. When the
   // currency is unknown, show a plain decimal number with no symbol.
+  //
+  // Cents matter for contractual change-order amounts (task: a 1250.50
+  // impact must not collapse to "1,251"). We drop the explicit fraction
+  // overrides so Intl applies the currency's own minor-unit count (2 for
+  // EUR/USD, 0 for JPY, 3 for KWD, …) — that's the correct behaviour for
+  // every currency without hard-coding it.
+  const safe = Number.isFinite(amount) ? amount : 0;
   const code = (currency || '').trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(code)) {
     return new Intl.NumberFormat(getIntlLocale(), {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(safe);
   }
   try {
     return new Intl.NumberFormat(getIntlLocale(), {
       style: 'currency',
       currency: code,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
+    }).format(safe);
   } catch {
-    return `${amount.toFixed(0)} ${code}`;
+    return `${safe.toFixed(2)} ${code}`;
   }
+}
+
+/**
+ * Format a numeric quantity stored as a NUMERIC(18,6) decimal string.
+ *
+ * The backend serializes quantities verbatim ('5.000000'), so rendering
+ * them raw reads as '5.000000 m2'. We trim trailing zeros (up to 6
+ * fraction digits) so a clean integer reads '5 m2' while a genuine
+ * fractional quantity (e.g. '5.250000') still shows as '5.25 m2'.
+ */
+function formatQuantity(value: string | number): string {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return String(value);
+  return n.toLocaleString(getIntlLocale(), { maximumFractionDigits: 6 });
 }
 
 function formatDate(iso: string | null): string {
@@ -638,7 +670,7 @@ function WorkflowStepper({ status, t }: { status: string; t: (key: string, opts?
                   : isCompleted
                     ? 'border-semantic-success bg-semantic-success-bg text-semantic-success'
                     : isActive
-                      ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue'
+                      ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue-text'
                       : 'border-border-light bg-surface-secondary text-content-tertiary'
               }`}>
                 {showRejected ? '\u2715' : isCompleted ? '\u2713' : i + 1}
@@ -872,7 +904,14 @@ function DetailView({
                 {t('changeorders.submit', { defaultValue: 'Submit' })}
               </Button>
             )}
-            {order.status === 'submitted' && (
+            {/* Single-step Approve/Reject only applies to PLAIN change orders
+                (no multi-step approval chain). Once an admin starts a chain,
+                `approve_order` rejects this legacy path with HTTP 409 — so we
+                hide these buttons and drive the decision through the
+                ApprovalTimeline instead. */}
+            {order.status === 'submitted' &&
+              !order.current_approval_step &&
+              approvals.length === 0 && (
               canApprove ? (
                 <>
                   <Button variant="primary" size="sm" onClick={async () => {
@@ -935,9 +974,14 @@ function DetailView({
           <p className="text-xs text-content-tertiary uppercase tracking-wide">
             {t('changeorders.cost_impact', { defaultValue: 'Cost Impact' })}
           </p>
-          <p className={`mt-1 text-sm font-semibold ${order.cost_impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-            {order.cost_impact >= 0 ? '+' : ''}{formatCurrency(order.cost_impact, order.currency)}
-          </p>
+          {(() => {
+            const impact = Number(order.cost_impact);
+            return (
+              <p className={`mt-1 text-sm font-semibold ${impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                {impact >= 0 ? '+' : ''}{formatCurrency(impact, order.currency)}
+              </p>
+            );
+          })()}
           <p className="mt-1 text-2xs text-content-tertiary leading-snug">
             {order.status === 'approved'
               ? t('changeorders.cost_impact_applied', {
@@ -1095,7 +1139,9 @@ function DetailView({
                 </tr>
               </thead>
               <tbody>
-                {order.items.map((item) => (
+                {order.items.map((item) => {
+                  const costDelta = Number(item.cost_delta);
+                  return (
                   <tr key={item.id} className="border-b border-border last:border-0 hover:bg-surface-secondary/30">
                     <td className="px-4 py-3 text-content-primary">{item.description}</td>
                     <td className="px-4 py-3">
@@ -1104,13 +1150,13 @@ function DetailView({
                       </Badge>
                     </td>
                     <td className="px-4 py-3 text-right text-content-secondary tabular-nums">
-                      {item.original_quantity} {item.unit}
+                      {formatQuantity(item.original_quantity)} {item.unit}
                     </td>
                     <td className="px-4 py-3 text-right text-content-secondary tabular-nums">
-                      {item.new_quantity} {item.unit}
+                      {formatQuantity(item.new_quantity)} {item.unit}
                     </td>
-                    <td className={`px-4 py-3 text-right font-medium tabular-nums ${item.cost_delta >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                      {item.cost_delta >= 0 ? '+' : ''}{formatCurrency(item.cost_delta, order.currency)}
+                    <td className={`px-4 py-3 text-right font-medium tabular-nums ${costDelta >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                      {costDelta >= 0 ? '+' : ''}{formatCurrency(costDelta, order.currency)}
                     </td>
                     {canEdit && (
                       <td className="px-4 py-3 text-center">
@@ -1134,7 +1180,8 @@ function DetailView({
                       </td>
                     )}
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1217,26 +1264,51 @@ export function ChangeOrdersPage() {
 
   const handleExportCSV = useCallback(() => {
     if (!filteredOrders.length) return;
-    const headers = ['Code', 'Title', 'Status', 'Reason', 'Cost Impact', 'Schedule Days', 'Items', 'Created'];
-    const rows = filteredOrders.map(o => [
-      o.code,
-      `"${o.title.replace(/"/g, '""')}"`,
-      o.status,
-      getReasonLabels(t)[o.reason_category] || o.reason_category,
-      o.cost_impact.toFixed(2),
-      String(o.schedule_impact_days),
-      String(o.item_count),
-      o.created_at?.slice(0, 10) || '',
-    ].join(','));
-    const csv = [headers.join(','), ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `change_orders_${project?.name || 'export'}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [filteredOrders, project, t]);
+    try {
+      // Quote any field that may contain a comma / quote so a translated
+      // reason label (some locales use commas) can't shift columns.
+      const csvCell = (v: string) => `"${String(v).replace(/"/g, '""')}"`;
+      const reasonLabels = getReasonLabels(t);
+      const headers = [
+        t('changeorders.code', { defaultValue: 'Code' }),
+        t('common.title', { defaultValue: 'Title' }),
+        t('common.status', { defaultValue: 'Status' }),
+        t('changeorders.reason', { defaultValue: 'Reason' }),
+        t('changeorders.cost_impact', { defaultValue: 'Cost Impact' }),
+        t('changeorders.schedule_days', { defaultValue: 'Schedule Days' }),
+        t('changeorders.items', { defaultValue: 'Line Items' }),
+        t('common.created', { defaultValue: 'Created' }),
+      ];
+      const rows = filteredOrders.map((o) =>
+        [
+          csvCell(o.code),
+          csvCell(o.title),
+          csvCell(translateStatus(o.status, t)),
+          csvCell(reasonLabels[o.reason_category] || o.reason_category),
+          // cost_impact is a decimal STRING — coerce before toFixed or it
+          // throws "toFixed is not a function" and aborts the whole export.
+          Number(o.cost_impact).toFixed(2),
+          String(o.schedule_impact_days),
+          String(o.item_count),
+          o.created_at?.slice(0, 10) || '',
+        ].join(','),
+      );
+      const csv = [headers.map(csvCell).join(','), ...rows].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `change_orders_${project?.name || 'export'}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('changeorders.export_failed', { defaultValue: 'Export failed' }),
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, [filteredOrders, project, t, addToast]);
 
   // Detail view
   if (selectedOrderId) {
@@ -1328,9 +1400,31 @@ export function ChangeOrdersPage() {
                 <p className="text-2xs text-content-tertiary uppercase tracking-wide">
                   {t('changeorders.approved_impact', { defaultValue: 'Approved Impact' })}
                 </p>
-                <p className={`text-lg font-semibold ${summary.total_cost_impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                  {summary.total_cost_impact >= 0 ? '+' : ''}{formatCurrency(summary.total_cost_impact, currency)}
-                </p>
+                {(() => {
+                  const totalImpact = Number(summary.total_cost_impact);
+                  const unconverted = Object.entries(summary.unconverted_by_currency ?? {});
+                  return (
+                    <>
+                      <p className={`text-lg font-semibold ${totalImpact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                        {totalImpact >= 0 ? '+' : ''}{formatCurrency(totalImpact, summary.currency || currency)}
+                      </p>
+                      {unconverted.length > 0 && (
+                        <p
+                          className="mt-0.5 text-2xs text-content-tertiary leading-snug"
+                          title={t('changeorders.unconverted_hint', {
+                            defaultValue:
+                              'Approved in a currency with no exchange rate. Add the rate in Project Settings to include it in the total.',
+                          })}
+                        >
+                          {t('changeorders.plus_unconverted', { defaultValue: 'plus' })}{' '}
+                          {unconverted
+                            .map(([code, amount]) => `${formatCurrency(Number(amount), code)}`)
+                            .join(', ')}
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           </Card>
@@ -1443,7 +1537,9 @@ export function ChangeOrdersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredOrders.map((order) => (
+                  {filteredOrders.map((order) => {
+                    const impact = Number(order.cost_impact);
+                    return (
                     <tr
                       key={order.id}
                       className="border-b border-border last:border-0 hover:bg-surface-secondary/30 cursor-pointer"
@@ -1461,8 +1557,8 @@ export function ChangeOrdersPage() {
                           defaultValue: getReasonLabels(t)[order.reason_category] || order.reason_category,
                         })}
                       </td>
-                      <td className={`px-4 py-3 text-right font-medium tabular-nums ${order.cost_impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
-                        {order.cost_impact >= 0 ? '+' : ''}{formatCurrency(order.cost_impact, order.currency)}
+                      <td className={`px-4 py-3 text-right font-medium tabular-nums ${impact >= 0 ? 'text-semantic-error' : 'text-semantic-success'}`}>
+                        {impact >= 0 ? '+' : ''}{formatCurrency(impact, order.currency)}
                       </td>
                       <td className="px-4 py-3 text-right text-content-secondary tabular-nums">
                         {order.schedule_impact_days > 0
@@ -1501,7 +1597,8 @@ export function ChangeOrdersPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

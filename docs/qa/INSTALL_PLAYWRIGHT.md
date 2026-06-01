@@ -112,7 +112,7 @@ See `frontend/tests/e2e/README.md` for the full variable list.
 - **Windows Defender slowing tests:** add `frontend\node_modules\@playwright`
   and `frontend\test-results` to Defender exclusions (Settings → Virus
   & threat protection → Exclusions). Same workaround as Qdrant per
-  [qdrant_windows_defender_snapshot.md](../../.claude/projects/.../qdrant_windows_defender_snapshot.md).
+  the internal Qdrant/Windows-Defender snapshot note.
 - **Symlink errors during npm install:** run the shell as Administrator,
   or set npm to use junctions: `npm config set bin-links false`.
 

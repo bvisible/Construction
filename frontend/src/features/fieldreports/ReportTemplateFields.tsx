@@ -396,7 +396,11 @@ export function ReportAttachments({
                       <FileText size={14} className="shrink-0" />
                     )}
                     <span className="truncate">{d.name}</span>
-                    <Badge variant="neutral">{d.category}</Badge>
+                    <Badge variant="neutral">
+                      {t(`documents.cat_${d.category}`, {
+                        defaultValue: d.category.charAt(0).toUpperCase() + d.category.slice(1),
+                      })}
+                    </Badge>
                   </a>
                   <button
                     type="button"

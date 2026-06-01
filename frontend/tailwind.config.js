@@ -11,6 +11,11 @@ export default {
           'blue-active': 'var(--oe-blue-active)',
           'blue-dark': 'var(--oe-blue-dark)',
           'blue-subtle': 'var(--oe-blue-subtle)',
+          // Theme-aware blue intended for use as TEXT on tinted/lifted
+          // surfaces. Resolves to a deeper hue in light mode and to a
+          // brighter hue in dark mode so the same class clears WCAG-AA
+          // 4.5:1 in both themes. See index.css `--oe-blue-text`.
+          'blue-text': 'var(--oe-blue-text)',
         },
         surface: {
           primary: 'var(--oe-bg)',
@@ -33,12 +38,16 @@ export default {
         semantic: {
           success: 'var(--oe-success)',
           'success-bg': 'var(--oe-success-bg)',
+          'success-vivid': 'var(--oe-success-vivid)',
           warning: 'var(--oe-warning)',
           'warning-bg': 'var(--oe-warning-bg)',
+          'warning-vivid': 'var(--oe-warning-vivid)',
           error: 'var(--oe-error)',
           'error-bg': 'var(--oe-error-bg)',
+          'error-vivid': 'var(--oe-error-vivid)',
           info: 'var(--oe-info)',
           'info-bg': 'var(--oe-info-bg)',
+          'info-vivid': 'var(--oe-info-vivid)',
         },
       },
       fontFamily: {

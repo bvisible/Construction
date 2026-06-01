@@ -106,7 +106,8 @@ import {
   acceptWarrantyClaim,
   rejectWarrantyClaim,
   closeWarrantyClaim,
-  warrantyClaimPdfUrl,
+  updateWarrantyClaim,
+  downloadWarrantyClaimPdf,
   listLeads,
   createLead,
   updateLead,
@@ -678,6 +679,7 @@ export function PropertyDevPage() {
               <input
                 type="text"
                 placeholder={t('common.search', { defaultValue: 'Search…' })}
+                aria-label={t('common.search', { defaultValue: 'Search' })}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 className={clsx(inputCls, 'pl-8')}
@@ -4643,9 +4645,16 @@ function WarrantyTab({
   const addToast = useToastStore((s) => s.addToast);
 
   const action = useMutation({
-    mutationFn: async ({ id, kind }: { id: string; kind: 'accept' | 'reject' | 'close' }) => {
+    mutationFn: async ({
+      id,
+      kind,
+    }: {
+      id: string;
+      kind: 'accept' | 'reject' | 'close' | 'review';
+    }) => {
       if (kind === 'accept') return acceptWarrantyClaim(id);
       if (kind === 'reject') return rejectWarrantyClaim(id);
+      if (kind === 'review') return updateWarrantyClaim(id, { status: 'under_review' });
       return closeWarrantyClaim(id);
     },
     onSuccess: () => {
@@ -4654,6 +4663,25 @@ function WarrantyTab({
         type: 'success',
         title: t('propdev.warranty_updated', { defaultValue: 'Claim updated' }),
       });
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
+  // The PDF endpoint is bearer-token guarded, so a plain ``<a href>``
+  // navigation 401s. Fetch the blob with the auth header and trigger a
+  // temporary download anchor instead.
+  const pdfMut = useMutation({
+    mutationFn: (id: string) => downloadWarrantyClaimPdf(id),
+    onSuccess: (blob, id) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `warranty-claim-${id}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Revoke after a tick so the navigation/download has started.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
     },
     onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
   });
@@ -4788,8 +4816,12 @@ function WarrantyTab({
                     <tr key={c.id} className="border-t border-border-light">
                       <td className="px-4 py-2 text-xs">{plot?.plot_number ?? '—'}</td>
                       <td className="px-4 py-2 text-xs">{buyer?.full_name ?? '—'}</td>
-                      <td className="px-4 py-2 text-xs uppercase">{c.category}</td>
-                      <td className="px-4 py-2 text-xs uppercase">
+                      <td className="px-4 py-2 text-xs">
+                        {t(`propdev.warranty.cat_${c.category}`, {
+                          defaultValue: c.category,
+                        })}
+                      </td>
+                      <td className="px-4 py-2 text-xs">
                         <Badge
                           variant={
                             c.severity === 'critical'
@@ -4800,7 +4832,9 @@ function WarrantyTab({
                           }
                           dot
                         >
-                          {c.severity}
+                          {t(`propdev.warranty.severity_${c.severity}`, {
+                            defaultValue: c.severity,
+                          })}
                         </Badge>
                       </td>
                       <td className="px-4 py-2 max-w-[320px] truncate" title={c.description}>
@@ -4808,7 +4842,9 @@ function WarrantyTab({
                       </td>
                       <td className="px-4 py-2">
                         <Badge variant={WARRANTY_VARIANT[c.status]} dot>
-                          {c.status}
+                          {t(`propdev.warranty.status_${c.status}`, {
+                            defaultValue: c.status,
+                          })}
                         </Badge>
                       </td>
                       <td className="px-4 py-2 text-xs">
@@ -4822,19 +4858,21 @@ function WarrantyTab({
                       </td>
                       <td className="px-4 py-2 text-right">
                         <div className="inline-flex gap-1 items-center">
-                          <a
-                            href={warrantyClaimPdfUrl(c.id)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-oe-blue hover:underline px-2 py-1"
+                          <Button
+                            variant="ghost"
+                            onClick={() => pdfMut.mutate(c.id)}
+                            disabled={pdfMut.isPending && pdfMut.variables === c.id}
                             title={t('propdev.warranty.pdf', { defaultValue: 'Download PDF' })}
                           >
                             PDF
-                          </a>
+                          </Button>
                           {c.status === 'raised' && (
                             <>
                               <Button variant="secondary" onClick={() => action.mutate({ id: c.id, kind: 'accept' })}>
                                 {t('propdev.accept', { defaultValue: 'Accept' })}
+                              </Button>
+                              <Button variant="ghost" onClick={() => action.mutate({ id: c.id, kind: 'review' })}>
+                                {t('propdev.warranty.triage', { defaultValue: 'Triage' })}
                               </Button>
                               <Button variant="ghost" onClick={() => action.mutate({ id: c.id, kind: 'reject' })}>
                                 {t('propdev.reject', { defaultValue: 'Reject' })}

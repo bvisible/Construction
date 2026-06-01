@@ -4,7 +4,7 @@ Each ``compute_*`` function executes ONE query (or a small fixed number)
 across all of the caller's accessible projects, replacing the per-project
 ``Promise.all`` fan-out the frontend used to do (50 projects = 50 HTTP
 calls per widget). Money fields are returned as Decimal-as-string per
-CLAUDE.md §10.
+the architecture guide §10.
 
 Imports of sibling-module models are done **inside** each function so the
 dashboard module stays loadable even when an optional dependency module
@@ -30,18 +30,33 @@ logger = logging.getLogger(__name__)
 
 # Canonical widget IDs the rollup endpoint understands. Mirrors
 # ``DASHBOARD_WIDGETS`` (wave 2) in the frontend registry.
-KNOWN_WIDGETS: frozenset[str] = frozenset({
-    "boq_summary",
-    "validation_score",
-    "clash_health",
-    "schedule_critical",
-    "risk_top",
-    "hse_scorecard",
-    "procurement_pipeline",
-    "budget_variance",
-    "change_orders",
-    "weather_site",
-})
+KNOWN_WIDGETS: frozenset[str] = frozenset(
+    {
+        # Wave-2 dashboard widgets (cross-project rollups on /dashboard surface).
+        "boq_summary",
+        "validation_score",
+        "clash_health",
+        "schedule_critical",
+        "risk_top",
+        "hse_scorecard",
+        "procurement_pipeline",
+        "budget_variance",
+        "change_orders",
+        "weather_site",
+        # Project-detail widgets (W23 P0 — single-project rollups on
+        # /projects/:id; each scoped to the requested project_id via the same
+        # rollup endpoint). Replaces the per-widget useQuery fan-out that
+        # used to cause 502 spikes on project-page load.
+        "project_rfi_inbox",
+        "project_change_orders_pulse",
+        "project_daily_diary",
+        "project_hse_incidents",
+        "project_variations",
+        "project_quality_ncr",
+        "project_compliance_summary",
+        "project_budget_burn",
+    }
+)
 
 
 # ─── Access control ─────────────────────────────────────────────────────────
@@ -129,6 +144,8 @@ async def compute_boq_summary(
             "total_boqs": 0,
             "active_boqs": 0,
             "total_value_eur": "0.00",
+            "by_currency": [],
+            "multi_currency": False,
             "position_count": 0,
             "positions_missing_quantity": 0,
             "positions_zero_price": 0,
@@ -152,9 +169,7 @@ async def compute_boq_summary(
     active_count = 0
     latest_boq: dict[str, Any] | None = None
     latest_ts: float = float("-inf")
-    project_currency_by_id = {
-        p.id: getattr(p, "currency", "EUR") or "EUR" for p in projects
-    }
+    project_currency_by_id = {p.id: getattr(p, "currency", "EUR") or "EUR" for p in projects}
     project_name_by_id = {p.id: p.name for p in projects}
 
     for boq_id, project_id, boq_name, status_, updated_at in boq_meta_rows:
@@ -174,9 +189,7 @@ async def compute_boq_summary(
                 ts = None
         if ts is not None and ts > latest_ts:
             latest_ts = ts
-            iso = (
-                updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at)
-            )
+            iso = updated_at.isoformat() if isinstance(updated_at, datetime) else str(updated_at)
             latest_boq = {
                 "id": str(boq_id),
                 "name": boq_name or "—",
@@ -238,30 +251,46 @@ async def compute_boq_summary(
     overall_positions = 0
     overall_missing = 0
     overall_zero_price = 0
+    # Group BOQ value by the owning project's currency. There is no
+    # cross-project rate table, so summing EUR + GBP + USD into one scalar
+    # is financially meaningless — keep per-currency subtotals and flag
+    # ``multi_currency`` (mirrors projects/router.py budget rollup).
+    totals_by_currency_map: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
 
     for p in projects:
-        bucket = per_project.get(p.id, {
-            "total": Decimal("0"),
-            "positions": 0,
-            "missing_qty": 0,
-            "zero_price": 0,
-        })
+        bucket = per_project.get(
+            p.id,
+            {
+                "total": Decimal("0"),
+                "positions": 0,
+                "missing_qty": 0,
+                "zero_price": 0,
+            },
+        )
+        currency = getattr(p, "currency", "EUR") or "EUR"
         by_project.append(
             {
                 "project_id": str(p.id),
                 "project_name": p.name,
                 "boq_count": boq_count_by_project.get(p.id, 0),
                 "total_value": _money(bucket["total"]),
-                "currency": getattr(p, "currency", "EUR") or "EUR",
+                "currency": currency,
                 "position_count": bucket["positions"],
                 "positions_missing_quantity": bucket["missing_qty"],
                 "positions_zero_price": bucket["zero_price"],
             },
         )
+        totals_by_currency_map[currency] += bucket["total"]
         overall_total += bucket["total"]
         overall_positions += bucket["positions"]
         overall_missing += bucket["missing_qty"]
         overall_zero_price += bucket["zero_price"]
+
+    by_currency = [
+        {"currency": cur, "total_value": _money(total)}
+        for cur, total in sorted(totals_by_currency_map.items())
+    ]
+    multi_currency = len(totals_by_currency_map) > 1
 
     if latest_boq is not None:
         try:
@@ -276,7 +305,12 @@ async def compute_boq_summary(
     return {
         "total_boqs": sum(boq_count_by_project.values()),
         "active_boqs": active_count,
+        # Legacy flat scalar kept for backward compatibility. When
+        # ``multi_currency`` is true it mixes currencies and must NOT be
+        # rendered as a single headline figure — use ``by_currency``.
         "total_value_eur": _money(overall_total),
+        "by_currency": by_currency,
+        "multi_currency": multi_currency,
         "position_count": overall_positions,
         "positions_missing_quantity": overall_missing,
         "positions_zero_price": overall_zero_price,
@@ -302,10 +336,12 @@ async def compute_validation_score(
             "by_project": [],
         }
 
-    # Pull all reports for these projects — small payload (no `results`
-    # column needed) and SQLite can't always do correlated subqueries
-    # for "latest per group" cheaply. We pick the latest per project in
-    # Python.
+    # Pull the most-recent N reports per project set — small payload (no
+    # ``results`` column) ordered DESC so the Python "first-seen = latest"
+    # shortcut works.  Cap at 10 × project count (at most ~500 for a
+    # large install) so a project with thousands of historical reports
+    # doesn't drag in megabytes of rows just to find its latest score.
+    _report_cap = max(len(project_ids) * 10, 100)
     stmt = (
         select(
             ValidationReport.id,
@@ -316,6 +352,7 @@ async def compute_validation_score(
         )
         .where(ValidationReport.project_id.in_(project_ids))
         .order_by(ValidationReport.created_at.desc())
+        .limit(_report_cap)
     )
     rows = (await session.execute(stmt)).all()
 
@@ -335,9 +372,7 @@ async def compute_validation_score(
         # First time we see this project (rows ordered DESC) → latest.
         if project_id not in latest_score_by_project:
             try:
-                latest_score_by_project[project_id] = (
-                    float(score_s) if score_s is not None else None
-                )
+                latest_score_by_project[project_id] = float(score_s) if score_s is not None else None
             except (ValueError, TypeError):
                 latest_score_by_project[project_id] = None
 
@@ -386,18 +421,20 @@ async def compute_clash_health(
     project_ids = [p.id for p in projects]
     if not project_ids:
         return {
-            "total": 0, "open": 0, "high": 0, "medium": 0, "low": 0,
-            "pct_resolved": 0, "by_project": [],
+            "total": 0,
+            "open": 0,
+            "high": 0,
+            "medium": 0,
+            "low": 0,
+            "pct_resolved": 0,
+            "by_project": [],
         }
 
-    stmt = (
-        select(
-            ClashIssue.project_id,
-            ClashIssue.status,
-            ClashIssue.priority,
-        )
-        .where(ClashIssue.project_id.in_(project_ids))
-    )
+    stmt = select(
+        ClashIssue.project_id,
+        ClashIssue.status,
+        ClashIssue.priority,
+    ).where(ClashIssue.project_id.in_(project_ids))
     rows = (await session.execute(stmt)).all()
 
     per_project: dict[uuid.UUID, dict[str, int]] = defaultdict(
@@ -475,6 +512,11 @@ async def compute_schedule_critical(
     )
     total_schedules = int((await session.execute(sched_count_stmt)).scalar() or 0)
 
+    # Cap at 1000 rows — the dashboard only ever shows the top-5 critical
+    # activities. Without a limit, large schedules (5K+ activities per
+    # project × 50 projects) pull megabytes of data into Python just to
+    # sort and slice [:5]. Ordering by is_critical DESC puts flagged rows
+    # first so the early cutoff still surfaces the most relevant ones.
     stmt = (
         select(
             Activity.id,
@@ -488,6 +530,8 @@ async def compute_schedule_critical(
         )
         .join(Schedule, Schedule.id == Activity.schedule_id)
         .where(Schedule.project_id.in_(project_ids))
+        .order_by(Activity.is_critical.desc())
+        .limit(1000)
     )
     rows = (await session.execute(stmt)).all()
 
@@ -605,8 +649,12 @@ async def compute_hse_scorecard(
     project_ids = [p.id for p in projects]
     if not project_ids:
         return {
-            "total": 0, "last_30d": 0, "near_miss": 0, "recordables": 0,
-            "days_since_last": None, "by_project": [],
+            "total": 0,
+            "last_30d": 0,
+            "near_miss": 0,
+            "recordables": 0,
+            "days_since_last": None,
+            "by_project": [],
         }
 
     stmt = select(
@@ -623,8 +671,11 @@ async def compute_hse_scorecard(
 
     per_project: dict[uuid.UUID, dict[str, Any]] = defaultdict(
         lambda: {
-            "total": 0, "last_30d": 0, "near_miss": 0,
-            "recordables": 0, "last_date": None,
+            "total": 0,
+            "last_30d": 0,
+            "near_miss": 0,
+            "recordables": 0,
+            "last_date": None,
         },
     )
     serious_severities = {"moderate", "major", "critical", "fatal"}
@@ -660,14 +711,18 @@ async def compute_hse_scorecard(
     overall_last_date: datetime | None = None
 
     for p in projects:
-        bucket = per_project.get(p.id, {
-            "total": 0, "last_30d": 0, "near_miss": 0,
-            "recordables": 0, "last_date": None,
-        })
-        last_date: datetime | None = bucket["last_date"]
-        days_since_last = (
-            (now - last_date).days if last_date is not None else None
+        bucket = per_project.get(
+            p.id,
+            {
+                "total": 0,
+                "last_30d": 0,
+                "near_miss": 0,
+                "recordables": 0,
+                "last_date": None,
+            },
         )
+        last_date: datetime | None = bucket["last_date"]
+        days_since_last = (now - last_date).days if last_date is not None else None
         by_project.append(
             {
                 "project_id": str(p.id),
@@ -686,9 +741,7 @@ async def compute_hse_scorecard(
         if last_date and (overall_last_date is None or last_date > overall_last_date):
             overall_last_date = last_date
 
-    overall_days_since = (
-        (now - overall_last_date).days if overall_last_date is not None else None
-    )
+    overall_days_since = (now - overall_last_date).days if overall_last_date is not None else None
     return {
         "total": total,
         "last_30d": total_30d,
@@ -741,9 +794,7 @@ async def compute_budget_variance(
         return {"over_budget_count": 0, "top_over": []}
 
     project_name_by_id = {p.id: p.name for p in projects}
-    project_currency_by_id = {
-        p.id: getattr(p, "currency", "EUR") or "EUR" for p in projects
-    }
+    project_currency_by_id = {p.id: getattr(p, "currency", "EUR") or "EUR" for p in projects}
 
     stmt = select(
         ProjectBudget.project_id,
@@ -776,11 +827,7 @@ async def compute_budget_variance(
         variance = bucket["actual"] - bucket["planned"]
         if variance <= 0:
             continue
-        pct = (
-            int(round(100 * variance / bucket["planned"]))
-            if bucket["planned"] > 0
-            else 0
-        )
+        pct = int(round(100 * variance / bucket["planned"])) if bucket["planned"] > 0 else 0
         enriched.append(
             {
                 "project_id": str(project_id),
@@ -806,17 +853,22 @@ async def compute_change_orders(
 
     project_ids = [p.id for p in projects]
     project_name_by_id = {p.id: p.name for p in projects}
-    fallback_currency = (
-        getattr(projects[0], "currency", "EUR") if projects else "EUR"
-    ) or "EUR"
+    fallback_currency = (getattr(projects[0], "currency", "EUR") if projects else "EUR") or "EUR"
 
     if not project_ids:
         return {
             "open_count": 0,
             "total_impact": "0.00",
             "currency": fallback_currency,
+            "by_currency": [],
+            "multi_currency": False,
             "top_pending": [],
         }
+
+    # Each change-order row may carry its own currency; fall back to the
+    # owning project's real currency (never a hardcoded "EUR") when the row
+    # didn't stamp one.
+    project_currency_by_id = {p.id: getattr(p, "currency", "") or "" for p in projects}
 
     stmt = select(
         ChangeOrder.id,
@@ -832,15 +884,39 @@ async def compute_change_orders(
     closed_statuses = {"approved", "rejected", "closed"}
     open_rows = [r for r in rows if r[4] not in closed_statuses]
 
+    # Money bug fix: ChangeOrder.cost_impact rows can be in different ISO
+    # currencies (BRL, EUR, USD ...). There is no cross-project FX table
+    # here, so blending them into one ``total_impact`` scalar and stamping
+    # it with projects[0].currency is financially meaningless. We keep the
+    # legacy ``total_impact`` scalar for back-compat (flagged by
+    # ``multi_currency`` so the UI knows not to render it as a headline)
+    # and add an FX-correct per-currency breakdown — same shape as
+    # ``compute_boq_summary``.
     total_impact = Decimal("0")
+    impact_by_currency: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     for r in open_rows:
-        total_impact += _to_decimal(r[5])
+        impact = _to_decimal(r[5])
+        total_impact += impact
+        # Use the row's own currency, else the project's real currency.
+        row_currency = r[6] or project_currency_by_id.get(r[1], "") or fallback_currency
+        impact_by_currency[row_currency] += impact
+
+    by_currency = [
+        {"currency": cur, "total_impact": _money(total)}
+        for cur, total in sorted(impact_by_currency.items())
+    ]
+    multi_currency = len(impact_by_currency) > 1
 
     top_pending = open_rows[:3]
     return {
         "open_count": len(open_rows),
+        # Legacy flat scalar kept for backward compatibility. When
+        # ``multi_currency`` is true it mixes ISO currencies and must NOT
+        # be rendered as a single headline figure — use ``by_currency``.
         "total_impact": _money(total_impact),
         "currency": fallback_currency,
+        "by_currency": by_currency,
+        "multi_currency": multi_currency,
         "top_pending": [
             {
                 "id": str(r[0]),
@@ -850,7 +926,9 @@ async def compute_change_orders(
                 "title": r[3],
                 "status": r[4],
                 "cost_impact": _money(_to_decimal(r[5])),
-                "currency": r[6] or fallback_currency,
+                # Per-row currency, real project currency, or last-resort
+                # fallback — never a hardcoded "EUR".
+                "currency": r[6] or project_currency_by_id.get(r[1], "") or fallback_currency,
             }
             for r in top_pending
         ],
@@ -872,7 +950,8 @@ async def compute_weather_site(
     # Pick the first project with any address coords for the header card.
     first_geo = next(
         (
-            p for p in projects
+            p
+            for p in projects
             if isinstance(getattr(p, "address", None), dict)
             and p.address.get("lat") is not None
             and p.address.get("lng") is not None
@@ -899,9 +978,7 @@ async def compute_weather_site(
     )
     row = (await session.execute(stmt)).scalar_one_or_none()
 
-    address: dict[str, Any] = (
-        getattr(first_geo, "address", None) or {}
-    )
+    address: dict[str, Any] = getattr(first_geo, "address", None) or {}
     city = address.get("city") if isinstance(address, dict) else None
 
     if row is None:
@@ -918,11 +995,484 @@ async def compute_weather_site(
         "project_id": str(first_geo.id),
         "project_name": first_geo.name,
         "city": city,
-        "temperature_c": (
-            float(row.temperature_c) if row.temperature_c is not None else None
-        ),
+        "temperature_c": (float(row.temperature_c) if row.temperature_c is not None else None),
         "conditions": row.conditions_text,
         "source": row.source,
+    }
+
+
+# ─── Project-detail widget aggregators (W23 P0) ─────────────────────────────
+#
+# These widgets sit on /projects/:id and used to do their own ``useQuery``
+# in ProjectWidgets.tsx — one HTTP call per widget = ~8 parallel requests
+# on every project-page load. The aggregators below mirror each widget's
+# original endpoint contract closely enough that the frontend can swap to
+# them without changing its render logic.
+#
+# Per-widget the function signature is ``(session, projects)`` — the
+# rollup router scopes ``projects`` to the single requested project via
+# the ``project_ids=<id>`` query param, so these aggregators just operate
+# on whatever ``projects`` list they receive (1 element on /projects/:id,
+# N elements if a caller ever calls them in cross-project mode).
+
+
+async def compute_project_rfi_inbox(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Open RFIs for the given project(s), latest first, capped at 5.
+
+    Mirrors ``GET /v1/rfi/?project_id=X&status=open&limit=5``. The widget
+    expects an array shape, so we return ``{"items": [...]}`` and the
+    frontend reads ``data.items``.
+    """
+    from app.modules.rfi.models import RFI  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"items": []}
+
+    stmt = (
+        select(
+            RFI.id,
+            RFI.rfi_number,
+            RFI.subject,
+            RFI.status,
+            RFI.created_at,
+            RFI.response_due_date,
+        )
+        .where(RFI.project_id.in_(project_ids))
+        .where(RFI.status.in_(("draft", "open", "pending", "awaiting_response")))
+        .order_by(RFI.created_at.desc())
+        .limit(5)
+    )
+    rows = (await session.execute(stmt)).all()
+
+    items: list[dict[str, Any]] = []
+    for rid, number, subject, status_, created_at, due_date in rows:
+        items.append(
+            {
+                "id": str(rid),
+                "number": number,
+                "subject": subject,
+                "status": status_,
+                "created_at": (
+                    created_at.isoformat()
+                    if isinstance(created_at, datetime)
+                    else (str(created_at) if created_at else None)
+                ),
+                "due_date": due_date,
+            },
+        )
+    return {"items": items}
+
+
+async def compute_project_change_orders_pulse(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Open / pending / approved counts + approved value for change orders.
+
+    Mirrors ``GET /v1/changeorders/summary/?project_id=X``. Money returned
+    as Decimal-as-string.
+    """
+    from app.modules.changeorders.models import ChangeOrder  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    fallback_currency = (getattr(projects[0], "currency", "EUR") if projects else "EUR") or "EUR"
+
+    if not project_ids:
+        return {
+            "open_count": 0,
+            "pending_count": 0,
+            "approved_count": 0,
+            "total_value": "0.00",
+            "approved_value": "0.00",
+            "currency": fallback_currency,
+        }
+
+    stmt = select(
+        ChangeOrder.status,
+        ChangeOrder.cost_impact,
+        ChangeOrder.currency,
+    ).where(ChangeOrder.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    open_count = 0
+    pending_count = 0
+    approved_count = 0
+    total_value = Decimal("0")
+    approved_value = Decimal("0")
+    closed_states = {"approved", "rejected", "closed"}
+    pending_states = {"submitted", "in_review", "pending"}
+    currency_seen = ""
+
+    for status_, cost_impact, currency in rows:
+        impact = _to_decimal(cost_impact)
+        total_value += impact
+        if currency and not currency_seen:
+            currency_seen = currency
+        if status_ not in closed_states:
+            open_count += 1
+        if status_ in pending_states:
+            pending_count += 1
+        if status_ == "approved":
+            approved_count += 1
+            approved_value += impact
+
+    return {
+        "open_count": open_count,
+        "pending_count": pending_count,
+        "approved_count": approved_count,
+        "total_value": _money(total_value),
+        "approved_value": _money(approved_value),
+        "currency": currency_seen or fallback_currency,
+    }
+
+
+async def compute_project_daily_diary(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Latest diary entry across the requested projects.
+
+    Mirrors ``GET /v1/daily-diary/diaries/?project_id=X&limit=1``. The
+    widget reads ``data[0]`` (array shape) so we return a single-element
+    list to preserve the contract.
+    """
+    from app.modules.daily_diary.models import DailyDiary  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"items": []}
+
+    stmt = (
+        select(
+            DailyDiary.id,
+            DailyDiary.diary_date,
+            DailyDiary.status,
+            DailyDiary.weather_summary,
+            DailyDiary.labour_count,
+            DailyDiary.notes,
+        )
+        .where(DailyDiary.project_id.in_(project_ids))
+        .order_by(DailyDiary.diary_date.desc())
+        .limit(1)
+    )
+    row = (await session.execute(stmt)).first()
+    if row is None:
+        return {"items": []}
+
+    diary_id, diary_date, status_, weather, labour, notes = row
+    return {
+        "items": [
+            {
+                "id": str(diary_id),
+                "diary_date": diary_date,
+                "status": status_,
+                "weather_summary": weather,
+                # ``manpower_total`` is the frontend's field name; the DB
+                # stores it as ``labour_count``.
+                "manpower_total": labour,
+                "narrative": notes,
+            },
+        ],
+    }
+
+
+async def compute_project_hse_incidents(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Open HSE incident investigations for the project(s).
+
+    Mirrors ``GET /v1/hse/investigations/?project_id=X&limit=20``. The
+    widget computes severity counts client-side; we pre-aggregate to
+    keep the payload tiny.
+
+    Investigations key on ``incident_ref`` (a SafetyIncident UUID) rather
+    than directly on ``project_id`` — same approach as
+    ``HSEAdvancedRepository.list_for_project``. Failures (e.g. safety
+    module disabled) degrade to zero counts, matching the dashboard
+    module's general "don't break the page" posture.
+    """
+    from sqlalchemy import text  # noqa: PLC0415
+
+    from app.modules.hse_advanced.models import (  # noqa: PLC0415
+        HSEIncidentInvestigation,
+    )
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"items": [], "high": 0, "medium": 0, "low": 0, "total": 0}
+
+    # Resolve incident_ids belonging to these projects through the safety
+    # table without coupling to its ORM model.
+    try:
+        placeholders = ",".join(f":pid_{i}" for i in range(len(project_ids)))
+        params = {f"pid_{i}": str(pid) for i, pid in enumerate(project_ids)}
+        result = await session.execute(
+            text(
+                f"SELECT id, severity FROM oe_safety_incident WHERE project_id IN ({placeholders})",
+            ),
+            params,
+        )
+        incident_severity_by_id: dict[str, str | None] = {str(row[0]): row[1] for row in result.all()}
+    except Exception:
+        # safety module missing — keep the page rendering with empty data.
+        return {"items": [], "high": 0, "medium": 0, "low": 0, "total": 0}
+
+    if not incident_severity_by_id:
+        return {"items": [], "high": 0, "medium": 0, "low": 0, "total": 0}
+
+    stmt = select(
+        HSEIncidentInvestigation.id,
+        HSEIncidentInvestigation.incident_ref,
+        HSEIncidentInvestigation.status,
+    ).where(
+        HSEIncidentInvestigation.incident_ref.in_(
+            list(incident_severity_by_id.keys()),
+        ),
+    )
+    rows = (await session.execute(stmt)).all()
+
+    counts = {"high": 0, "medium": 0, "low": 0, "total": 0}
+    items: list[dict[str, Any]] = []
+    closed = {"closed", "archived"}
+    for inv_id, ref, status_ in rows:
+        if status_ in closed:
+            continue
+        counts["total"] += 1
+        sev = (incident_severity_by_id.get(str(ref)) or "").lower()
+        if "high" in sev or "crit" in sev or "fatal" in sev:
+            counts["high"] += 1
+        elif "med" in sev or "moderate" in sev:
+            counts["medium"] += 1
+        else:
+            counts["low"] += 1
+        items.append(
+            {
+                "id": str(inv_id),
+                "status": status_,
+                "severity": incident_severity_by_id.get(str(ref)),
+            },
+        )
+    return {**counts, "items": items}
+
+
+async def compute_project_variations(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Open variation requests + disputed value rollup.
+
+    Mirrors ``GET /v1/variations/variation-requests/?project_id=X``.
+    Frontend reads ``stats.open`` (counts) and ``stats.disputedValue`` —
+    we pre-compute both. ``disputed`` is read from the row's metadata
+    JSON (``metadata_.disputed``); pre-W23 the widget assumed a column
+    of that name, but the model only carries it as a metadata flag.
+    """
+    from app.modules.variations.models import VariationRequest  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    fallback_currency = (getattr(projects[0], "currency", "EUR") if projects else "EUR") or "EUR"
+
+    if not project_ids:
+        return {
+            "open": 0,
+            "disputed_value": "0.00",
+            "currency": fallback_currency,
+            "items": [],
+        }
+
+    stmt = select(
+        VariationRequest.id,
+        VariationRequest.status,
+        VariationRequest.estimated_cost_impact,
+        VariationRequest.currency,
+        VariationRequest.metadata_,
+    ).where(VariationRequest.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    closed = {"closed", "rejected", "approved", "withdrawn"}
+    open_count = 0
+    disputed_value = Decimal("0")
+    currency_seen = ""
+    items: list[dict[str, Any]] = []
+    for vr_id, status_, est_value, currency, meta in rows:
+        if status_ not in closed:
+            open_count += 1
+        if currency and not currency_seen:
+            currency_seen = currency
+        disputed = bool(isinstance(meta, dict) and meta.get("disputed"))
+        impact = _to_decimal(est_value)
+        if disputed:
+            disputed_value += impact
+        items.append(
+            {
+                "id": str(vr_id),
+                "status": status_,
+                "estimated_value": _money(impact),
+                "disputed": disputed,
+            },
+        )
+
+    return {
+        "open": open_count,
+        "disputed_value": _money(disputed_value),
+        "currency": currency_seen or fallback_currency,
+        "items": items,
+    }
+
+
+async def compute_project_quality_ncr(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Open NCR counts + severity breakdown.
+
+    Mirrors ``GET /v1/qms/ncrs/?project_id=X``. The widget computes
+    counts client-side; we pre-aggregate.
+    """
+    from app.modules.qms.models import QMSNCR  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"open": 0, "major": 0, "minor": 0, "items": []}
+
+    stmt = select(
+        QMSNCR.id,
+        QMSNCR.status,
+        QMSNCR.severity,
+    ).where(QMSNCR.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    closed = {"closed", "verified"}
+    counts = {"open": 0, "major": 0, "minor": 0}
+    items: list[dict[str, Any]] = []
+    for ncr_id, status_, severity in rows:
+        if status_ in closed:
+            continue
+        counts["open"] += 1
+        sev = (severity or "").lower()
+        if "maj" in sev or "crit" in sev or "high" in sev:
+            counts["major"] += 1
+        else:
+            counts["minor"] += 1
+        items.append(
+            {"id": str(ncr_id), "status": status_, "severity": severity},
+        )
+    return {**counts, "items": items}
+
+
+async def compute_project_compliance_summary(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Compliance-doc bucket counts: active / expiring / expired.
+
+    Mirrors ``GET /v1/compliance-docs/?project_id=X``. The model already
+    persists a derived ``status`` column so we just bucket by that, with
+    a manual ``expires_at`` re-check (the persisted value can be stale
+    until the next write).
+    """
+    from app.modules.compliance_docs.models import ComplianceDoc  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    if not project_ids:
+        return {"active": 0, "expiring": 0, "expired": 0, "items": []}
+
+    stmt = select(
+        ComplianceDoc.id,
+        ComplianceDoc.status,
+        ComplianceDoc.expires_at,
+        ComplianceDoc.doc_type,
+    ).where(ComplianceDoc.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    now = datetime.now(UTC).date()
+    in30 = now + timedelta(days=30)
+
+    counts = {"active": 0, "expiring": 0, "expired": 0}
+    items: list[dict[str, Any]] = []
+    for doc_id, status_, expires_at, doc_type in rows:
+        # Trust the persisted status when present, but re-derive on the
+        # fly so the dashboard reflects today's date even if the row was
+        # last written months ago.
+        bucket: str
+        try:
+            if expires_at and expires_at < now:
+                bucket = "expired"
+            elif expires_at and expires_at < in30:
+                bucket = "expiring"
+            else:
+                bucket = "active"
+        except TypeError:
+            bucket = status_ or "active"
+
+        counts[bucket] = counts.get(bucket, 0) + 1
+        items.append(
+            {
+                "id": str(doc_id),
+                "status": status_,
+                "expires_at": (expires_at.isoformat() if expires_at is not None else None),
+                "doc_type": doc_type,
+            },
+        )
+    return {**counts, "items": items}
+
+
+async def compute_project_budget_burn(
+    session: AsyncSession,
+    projects: list[Project],
+) -> dict[str, Any]:
+    """Planned-vs-actual totals for the project budget.
+
+    Mirrors ``GET /v1/costmodel/projects/X/5d/dashboard/`` at the level
+    of detail the widget actually uses (totals + currency; the spark
+    series is left empty because the same N+1 fan-out concerns apply to
+    EVM snapshots — a dedicated time-series endpoint can light it up
+    later without changing the contract here). Money fields are Decimal-
+    as-string per the architecture guide §10.
+    """
+    from app.modules.finance.models import ProjectBudget  # noqa: PLC0415
+
+    project_ids = [p.id for p in projects]
+    fallback_currency = (getattr(projects[0], "currency", "EUR") if projects else "EUR") or "EUR"
+
+    if not project_ids:
+        return {
+            "planned_total": "0.00",
+            "actual_total": "0.00",
+            "currency": fallback_currency,
+            "series": [],
+        }
+
+    stmt = select(
+        ProjectBudget.currency_code,
+        ProjectBudget.original_budget,
+        ProjectBudget.revised_budget,
+        ProjectBudget.actual,
+    ).where(ProjectBudget.project_id.in_(project_ids))
+    rows = (await session.execute(stmt)).all()
+
+    planned = Decimal("0")
+    actual = Decimal("0")
+    currency_seen = ""
+    for currency_code, orig, rev, actual_v in rows:
+        rev_d = _to_decimal(rev)
+        plan_line = rev_d if rev_d > 0 else _to_decimal(orig)
+        planned += plan_line
+        actual += _to_decimal(actual_v)
+        if currency_code and not currency_seen:
+            currency_seen = currency_code
+
+    return {
+        "planned_total": _money(planned),
+        "actual_total": _money(actual),
+        "currency": currency_seen or fallback_currency,
+        # Time series is intentionally empty for v1 — see docstring.
+        "series": [],
     }
 
 
@@ -940,6 +1490,15 @@ _COMPUTE_MAP: dict[str, Any] = {
     "budget_variance": compute_budget_variance,
     "change_orders": compute_change_orders,
     "weather_site": compute_weather_site,
+    # Project-detail widgets (W23 P0).
+    "project_rfi_inbox": compute_project_rfi_inbox,
+    "project_change_orders_pulse": compute_project_change_orders_pulse,
+    "project_daily_diary": compute_project_daily_diary,
+    "project_hse_incidents": compute_project_hse_incidents,
+    "project_variations": compute_project_variations,
+    "project_quality_ncr": compute_project_quality_ncr,
+    "project_compliance_summary": compute_project_compliance_summary,
+    "project_budget_burn": compute_project_budget_burn,
 }
 
 
@@ -964,9 +1523,19 @@ async def compute_rollup(
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "Dashboard widget %s aggregation failed: %s",
-                widget_id, exc,
+                widget_id,
+                exc,
                 exc_info=True,
             )
+            # On PostgreSQL a failed statement aborts the whole transaction;
+            # without rolling back, every later widget on the shared session
+            # would die with InFailedSQLTransactionError and return nothing.
+            # Roll back to a clean state so one missing optional table only
+            # drops its own widget.
+            try:
+                await session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
             # Skip — frontend treats absence as "module not available".
             continue
     return result

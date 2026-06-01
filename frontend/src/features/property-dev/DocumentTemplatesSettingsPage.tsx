@@ -75,13 +75,17 @@ import { getErrorMessage } from '@/shared/lib/api';
 import {
   customDocumentTemplateDownloadUrl,
   deleteCustomDocumentTemplate,
+  deleteDocumentTemplateLocaleOverride,
   getCustomDocumentTemplateContent,
+  getDocumentTemplateLocale,
   listDocumentTemplates,
+  putDocumentTemplateLocale,
   sampleDocumentPreview,
   saveTextCustomDocumentTemplate,
   uploadCustomDocumentTemplate,
   type CustomTemplateTextContentType,
   type DocumentTemplateEntry,
+  type DocumentTemplateLocaleStatus,
   type DocumentTemplateVariableGroup,
   type PropDevDocType,
 } from './api';
@@ -204,6 +208,7 @@ export function DocumentTemplatesSettingsPage() {
   const { t } = useTranslation();
   const [variablesOpen, setVariablesOpen] = useState(false);
   const [editorSession, setEditorSession] = useState<EditorSession | null>(null);
+  const [localeEditor, setLocaleEditor] = useState<string | null>(null);
   const [activeDevId, setActiveDevId] = useState<string | null>(
     () => readActiveDevelopmentId(),
   );
@@ -270,27 +275,45 @@ export function DocumentTemplatesSettingsPage() {
           </Button>
         </div>
         {dataQ.data && (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <div className="text-xs text-content-tertiary">
-              {t('property_dev.doc_templates.locales_supported', {
-                defaultValue: 'Locales:',
-              })}
+          <div className="mt-3 space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs text-content-tertiary">
+                {t('property_dev.doc_templates.locales_supported', {
+                  defaultValue: 'Locales:',
+                })}
+              </div>
+              <LocaleStatusList
+                statuses={dataQ.data.locale_status}
+                fallback={dataQ.data.locales}
+                onEdit={(code) => setLocaleEditor(code)}
+              />
+              <button
+                type="button"
+                onClick={() => setLocaleEditor('__new__')}
+                className="ml-1 rounded-full border border-dashed border-oe-blue/40 px-2 py-0.5 text-[11px] font-medium text-oe-blue hover:bg-oe-blue/5"
+                data-testid="open-locale-editor-new"
+                title={t('property_dev.doc_templates.add_locale_hint', {
+                  defaultValue:
+                    'Upload a tenant-owned JSON to override or add a new translation.',
+                })}
+              >
+                {t('property_dev.doc_templates.add_locale', {
+                  defaultValue: '+ Add / edit translation',
+                })}
+              </button>
             </div>
-            {dataQ.data.locales.map((l) => (
-              <Badge key={l} variant="blue">
-                {l.toUpperCase()}
-              </Badge>
-            ))}
-            <div className="ml-3 text-xs text-content-tertiary">
-              {t('property_dev.doc_templates.regulators_supported', {
-                defaultValue: 'Regulators:',
-              })}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-xs text-content-tertiary">
+                {t('property_dev.doc_templates.regulators_supported', {
+                  defaultValue: 'Regulators:',
+                })}
+              </div>
+              {dataQ.data.regulators.map((r) => (
+                <Badge key={r} variant="neutral">
+                  {r}
+                </Badge>
+              ))}
             </div>
-            {dataQ.data.regulators.map((r) => (
-              <Badge key={r} variant="neutral">
-                {r}
-              </Badge>
-            ))}
           </div>
         )}
         {/* Active development context — used by the per-dev "set as default" toggles */}
@@ -473,6 +496,18 @@ export function DocumentTemplatesSettingsPage() {
           onClose={() => setEditorSession(null)}
           onSaved={() => {
             setEditorSession(null);
+            dataQ.refetch();
+          }}
+        />
+      )}
+
+      {localeEditor && (
+        <LocaleEditorModal
+          initialCode={localeEditor === '__new__' ? null : localeEditor}
+          statuses={dataQ.data?.locale_status ?? []}
+          onClose={() => setLocaleEditor(null)}
+          onSaved={() => {
+            setLocaleEditor(null);
             dataQ.refetch();
           }}
         />
@@ -1794,6 +1829,392 @@ function VariablesModal({
             </WideModalSection>
           ))
         )}
+      </div>
+    </WideModal>
+  );
+}
+
+/**
+ * Renders one chip per supported locale with native+English names and a
+ * translation-source badge. Each chip is clickable — opens the locale
+ * editor so the user can read/upload/delete the tenant override.
+ */
+function LocaleStatusList({
+  statuses,
+  fallback,
+  onEdit,
+}: {
+  statuses?: DocumentTemplateLocaleStatus[];
+  fallback: string[];
+  onEdit: (code: string) => void;
+}) {
+  const { t } = useTranslation();
+  if (statuses && statuses.length > 0) {
+    return (
+      <>
+        {statuses.map((s) => {
+          const variant: 'success' | 'blue' | 'warning' =
+            s.source === 'override'
+              ? 'success'
+              : s.source === 'bundled' && s.is_translated
+                ? 'blue'
+                : 'warning';
+          const title =
+            s.source === 'override'
+              ? t('property_dev.doc_templates.locale_source_override', {
+                  defaultValue:
+                    'Tenant override active ({{n}} keys). Click to edit or revert.',
+                  n: s.key_count,
+                })
+              : s.source === 'bundled' && s.is_translated
+                ? t('property_dev.doc_templates.locale_source_bundled', {
+                    defaultValue:
+                      'Built-in translation ({{n}} keys). Click to override.',
+                    n: s.key_count,
+                  })
+                : t('property_dev.doc_templates.locale_source_fallback', {
+                    defaultValue:
+                      'No translation found — PDF falls back to English. Click to add.',
+                  });
+          const label = `${s.native_name} (${s.english_name})`;
+          return (
+            <button
+              key={s.code}
+              type="button"
+              onClick={() => onEdit(s.code)}
+              title={title}
+              className="group inline-flex items-center gap-1"
+              data-testid={`locale-chip-${s.code}`}
+            >
+              <Badge variant={variant}>
+                <span className="font-semibold">{s.code.toUpperCase()}</span>
+                <span className="ml-1 text-[10px] font-normal opacity-80">
+                  {label}
+                </span>
+              </Badge>
+            </button>
+          );
+        })}
+      </>
+    );
+  }
+  // Legacy fallback when older API doesn't return locale_status.
+  return (
+    <>
+      {fallback.map((l) => (
+        <button key={l} type="button" onClick={() => onEdit(l)}>
+          <Badge variant="blue">{l.toUpperCase()}</Badge>
+        </button>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Modal to inspect / upload / delete tenant locale-override JSON. PUT
+ * stores the JSON under ``uploads/property_dev/document_locales/<code>.json``
+ * and the next PDF render picks it up automatically.
+ */
+function LocaleEditorModal({
+  initialCode,
+  statuses,
+  onClose,
+  onSaved,
+}: {
+  initialCode: string | null;
+  statuses: DocumentTemplateLocaleStatus[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { t } = useTranslation();
+  const addToast = useToastStore((s) => s.addToast);
+  const [code, setCode] = useState<string>(initialCode ?? '');
+  const [jsonText, setJsonText] = useState<string>('');
+  const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [activeStatus, setActiveStatus] = useState<
+    DocumentTemplateLocaleStatus | null
+  >(null);
+
+  // Load the current merged JSON whenever the picked code changes.
+  useEffect(() => {
+    const trimmed = code.trim().toLowerCase();
+    if (!trimmed) {
+      setJsonText('');
+      setActiveStatus(null);
+      return;
+    }
+    setLoading(true);
+    getDocumentTemplateLocale(trimmed)
+      .then((payload) => {
+        setJsonText(JSON.stringify(payload.data, null, 2));
+        const match = statuses.find((s) => s.code === trimmed);
+        setActiveStatus(match ?? null);
+      })
+      .catch((err) => {
+        addToast({
+          type: 'error',
+          title: t('common.error', { defaultValue: 'Error' }),
+          message: getErrorMessage(err),
+        });
+        setJsonText('');
+      })
+      .finally(() => setLoading(false));
+  }, [code, statuses, addToast, t]);
+
+  const save = async () => {
+    const trimmed = code.trim().toLowerCase();
+    if (!trimmed) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch {
+      addToast({
+        type: 'error',
+        title: t('property_dev.doc_templates.locale_invalid_json_title', {
+          defaultValue: 'Invalid JSON',
+        }),
+        message: t('property_dev.doc_templates.locale_invalid_json_msg', {
+          defaultValue: 'Fix the JSON syntax before saving.',
+        }),
+      });
+      return;
+    }
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      Array.isArray(parsed)
+    ) {
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: t('property_dev.doc_templates.locale_invalid_shape', {
+          defaultValue: 'Locale JSON must be an object at the top level.',
+        }),
+      });
+      return;
+    }
+    setBusy(true);
+    try {
+      await putDocumentTemplateLocale(trimmed, parsed);
+      addToast({
+        type: 'success',
+        title: t('common.saved', { defaultValue: 'Saved' }),
+        message: t('property_dev.doc_templates.locale_saved_msg', {
+          defaultValue: 'Tenant override stored — PDFs will use it on next render.',
+        }),
+      });
+      onSaved();
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: getErrorMessage(err),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revert = async () => {
+    const trimmed = code.trim().toLowerCase();
+    if (!trimmed) return;
+    setBusy(true);
+    try {
+      await deleteDocumentTemplateLocaleOverride(trimmed);
+      addToast({
+        type: 'success',
+        title: t('property_dev.doc_templates.locale_reverted', {
+          defaultValue: 'Override removed',
+        }),
+        message: t('property_dev.doc_templates.locale_reverted_msg', {
+          defaultValue: 'Back to the bundled translation (or English fallback).',
+        }),
+      });
+      onSaved();
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: getErrorMessage(err),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadStarter = async () => {
+    setBusy(true);
+    try {
+      const en = await getDocumentTemplateLocale('en');
+      setJsonText(JSON.stringify(en.data, null, 2));
+      addToast({
+        type: 'info',
+        title: t('property_dev.doc_templates.locale_starter_loaded', {
+          defaultValue: 'Loaded English as starter',
+        }),
+        message: t('property_dev.doc_templates.locale_starter_loaded_msg', {
+          defaultValue: 'Translate the values, keep the keys.',
+        }),
+      });
+    } catch (err) {
+      addToast({
+        type: 'error',
+        title: t('common.error', { defaultValue: 'Error' }),
+        message: getErrorMessage(err),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <WideModal
+      open
+      onClose={onClose}
+      title={t('property_dev.doc_templates.locale_editor_title', {
+        defaultValue: 'Document-template translations',
+      })}
+      size="xl"
+    >
+      <div className="space-y-3 p-4 text-sm">
+        <p className="text-content-secondary">
+          {t('property_dev.doc_templates.locale_editor_intro', {
+            defaultValue:
+              'Built-in JSON ships with the platform; uploading an override here stores a tenant-owned copy that wins at PDF render time. Delete the override to revert.',
+          })}
+        </p>
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex-1 min-w-[240px]">
+            <label
+              htmlFor="locale-editor-code"
+              className="block text-[11px] font-medium uppercase tracking-wide text-content-tertiary mb-1"
+            >
+              {t('property_dev.doc_templates.locale_code_label', {
+                defaultValue: 'Locale code (e.g. de, ja, pt-BR)',
+              })}
+            </label>
+            <input
+              id="locale-editor-code"
+              type="text"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="de"
+              autoFocus={!initialCode}
+              className="h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
+            />
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={downloadStarter}
+            disabled={busy}
+            icon={<Download size={14} />}
+          >
+            {t('property_dev.doc_templates.locale_load_en', {
+              defaultValue: 'Load English as starter',
+            })}
+          </Button>
+        </div>
+        {activeStatus && (
+          <div className="rounded-md bg-surface-secondary px-3 py-2 text-xs text-content-secondary">
+            <div className="font-medium text-content-primary">
+              {activeStatus.native_name}{' '}
+              <span className="text-content-tertiary">
+                ({activeStatus.english_name})
+              </span>
+            </div>
+            <div className="mt-1">
+              {t('property_dev.doc_templates.locale_source', {
+                defaultValue: 'Source',
+              })}
+              :{' '}
+              <strong>
+                {activeStatus.source === 'override'
+                  ? t('property_dev.doc_templates.locale_source_override_short', {
+                      defaultValue: 'tenant override',
+                    })
+                  : activeStatus.source === 'bundled'
+                    ? t('property_dev.doc_templates.locale_source_bundled_short', {
+                        defaultValue: 'bundled (built-in)',
+                      })
+                    : t(
+                        'property_dev.doc_templates.locale_source_fallback_short',
+                        { defaultValue: 'falls back to English' },
+                      )}
+              </strong>{' '}
+              · {activeStatus.key_count} / {activeStatus.en_key_count}{' '}
+              {t('property_dev.doc_templates.locale_keys', {
+                defaultValue: 'keys',
+              })}
+              {activeStatus.rtl && (
+                <>
+                  {' '}
+                  · <Badge variant="neutral">RTL</Badge>
+                </>
+              )}
+            </div>
+          </div>
+        )}
+        <div>
+          <label
+            htmlFor="locale-editor-json"
+            className="block text-[11px] font-medium uppercase tracking-wide text-content-tertiary mb-1"
+          >
+            {t('property_dev.doc_templates.locale_json_label', {
+              defaultValue: 'Translation JSON',
+            })}
+          </label>
+          <textarea
+            id="locale-editor-json"
+            value={jsonText}
+            onChange={(e) => setJsonText(e.target.value)}
+            disabled={loading || busy}
+            rows={20}
+            spellCheck={false}
+            className="w-full rounded-lg border border-border bg-surface-primary p-3 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue"
+            placeholder={
+              loading
+                ? t('common.loading', { defaultValue: 'Loading…' })
+                : '{\n  "labels": {\n    "buyer": "Käufer"\n  }\n}'
+            }
+          />
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[11px] text-content-tertiary max-w-md">
+            {t('property_dev.doc_templates.locale_hint', {
+              defaultValue:
+                'Tip: load English as a starter, translate the leaf values, keep the keys, then save. Empty keys silently fall back to English at render time.',
+            })}
+          </p>
+          <div className="flex items-center gap-2">
+            {activeStatus?.source === 'override' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={revert}
+                disabled={busy}
+                icon={<Trash2 size={14} />}
+              >
+                {t('property_dev.doc_templates.locale_revert', {
+                  defaultValue: 'Remove override',
+                })}
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              {t('common.cancel', { defaultValue: 'Cancel' })}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={save}
+              disabled={busy || !code.trim() || !jsonText.trim()}
+              loading={busy}
+            >
+              {t('common.save', { defaultValue: 'Save' })}
+            </Button>
+          </div>
+        </div>
       </div>
     </WideModal>
   );

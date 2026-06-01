@@ -4,7 +4,7 @@ Server-backed, persistent BCF Topic / Comment / Viewpoint storage with a
 full ``.bcfzip`` roundtrip for both the BCF-XML **2.1** and **3.0**
 schemas. XML is hand-rolled with the stdlib (``xml.etree`` + ``zipfile``)
 — there is NO IfcOpenShell / xBIM runtime dependency, in line with the
-platform's CAD-agnostic constraint (CLAUDE.md §3).
+platform's CAD-agnostic constraint (the architecture guide §3).
 """
 
 

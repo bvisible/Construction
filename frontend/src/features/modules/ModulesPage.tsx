@@ -29,6 +29,8 @@ import {
   Users,
   Layers,
   Server,
+  ExternalLink,
+  Mail,
   type LucideIcon,
 } from 'lucide-react';
 import { Card, Badge, Button, Input, InfoHint, Breadcrumb, ConfirmDialog } from '@/shared/ui';
@@ -37,6 +39,7 @@ import { useTabKeyboardNav } from '@/shared/hooks/useTabKeyboardNav';
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useModuleStore } from '@/stores/useModuleStore';
+import { useAuthStore } from '@/stores/useAuthStore';
 import { getModulesByCategory } from '@/modules/_registry';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
@@ -81,13 +84,46 @@ interface CompanyPresetAPI {
   module_count: number;
 }
 
+interface PartnerPackBranding {
+  primary_color: string;
+  accent_color: string | null;
+  has_logo: boolean;
+  has_favicon: boolean;
+  powered_by_text: string;
+}
+
+interface PartnerPackManifestAPI {
+  slug: string;
+  partner_name: string;
+  partner_url: string | null;
+  pack_version: string;
+  description: string;
+  default_locale: string;
+  additional_locales: string[];
+  cwicr_regions: string[];
+  default_currency: string;
+  default_tax_template: string | null;
+  validation_rule_packs: string[];
+  default_modules: string[];
+  hidden_modules: string[];
+  branding: PartnerPackBranding;
+  has_onboarding_script: boolean;
+  metadata: Record<string, unknown>;
+}
+
+interface PartnerPacksResponse {
+  active_slug: string | null;
+  installed: PartnerPackManifestAPI[];
+}
+
 /* ── Tab definitions ───────────────────────────────────────────────────── */
 
-const MODULE_TAB_IDS = ['profiles', 'data-packages', 'system'] as const;
+const MODULE_TAB_IDS = ['profiles', 'partner-packs', 'data-packages', 'system'] as const;
 type TabKey = (typeof MODULE_TAB_IDS)[number];
 
 const TABS: { key: TabKey; labelKey: string; defaultLabel: string; icon: LucideIcon }[] = [
   { key: 'profiles', labelKey: 'modules.tab_profiles', defaultLabel: 'Company Profiles', icon: Users },
+  { key: 'partner-packs', labelKey: 'modules.tab_partner_packs', defaultLabel: 'Partner Packs', icon: Building2 },
   { key: 'data-packages', labelKey: 'modules.tab_data_packages', defaultLabel: 'Data Packages', icon: Layers },
   { key: 'system', labelKey: 'modules.tab_system', defaultLabel: 'System Modules', icon: Server },
 ];
@@ -291,6 +327,7 @@ export function ModulesPage() {
         aria-labelledby={`modules-tab-${activeTab}`}
       >
         {activeTab === 'profiles' && <CompanyProfilesTab />}
+        {activeTab === 'partner-packs' && <PartnerPacksTab />}
         {activeTab === 'data-packages' && <DataPackagesTab />}
         {activeTab === 'system' && <SystemModulesTab />}
       </div>
@@ -346,27 +383,33 @@ function CompanyProfilesTab() {
     if (!switchingTo) return;
     setIsSwitching(true);
     try {
-      // Apply module toggles
-      const enabledSet = new Set(switchingTo.enabled_modules);
-      // For full_enterprise, enable everything
+      // ── Single authoritative write path ──────────────────────────────
+      // The onboarding endpoint persists company_type + completed AND syncs
+      // module_preferences server-side from `enabled_modules`. We deliberately
+      // do NOT optimistically loop setModuleEnabled() here: that scheduled a
+      // second, debounced PATCH to /me/module-preferences/ which raced this
+      // POST on the SAME metadata.module_preferences JSON (last writer won,
+      // sometimes with the stale store snapshot). One awaited write, then a
+      // read-back, keeps the two in lockstep.
       const isFullEnterprise = switchingTo.key === 'full_enterprise';
+      const enabledModules = isFullEnterprise
+        ? Object.values(getModulesByCategory()).flatMap((mods) => mods.map((m) => m.id))
+        : switchingTo.enabled_modules;
 
-      // Get all toggleable modules from the grouped registry
-      const grouped = getModulesByCategory();
-      for (const mods of Object.values(grouped)) {
-        for (const mod of mods) {
-          const shouldEnable = isFullEnterprise || enabledSet.has(mod.id);
-          setModuleEnabled(mod.id, shouldEnable);
-        }
-      }
-
-      // Persist to server
       await apiPost('/v1/users/me/onboarding/', {
         company_type: switchingTo.key,
-        enabled_modules: switchingTo.enabled_modules,
+        enabled_modules: enabledModules,
         interface_mode: 'advanced',
         completed: true,
       });
+
+      // Reconcile the local module store from the server's canonical
+      // module_preferences (set by the POST above). syncFromServer() updates
+      // localStorage + the reactive store WITHOUT scheduling another server
+      // write, so the sidebar reflects the new profile immediately and there
+      // is no trailing debounced PATCH to race. We await it before the toast
+      // so success only shows once everything has actually landed.
+      await syncFromServer();
 
       // Store profile key locally
       localStorage.setItem('oe_company_type', switchingTo.key);
@@ -389,7 +432,7 @@ function CompanyProfilesTab() {
       setIsSwitching(false);
       setSwitchingTo(null);
     }
-  }, [switchingTo, setModuleEnabled, addToast, t]);
+  }, [switchingTo, syncFromServer, addToast, t]);
 
   const activePreset = presets?.find((p) => p.key === activeProfileKey);
   const activeModuleCount = activePreset?.module_count ?? 0;
@@ -541,6 +584,276 @@ function CompanyProfilesTab() {
         loading={isSwitching}
       />
     </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* ── Tab: Partner Packs ──────────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════════════════════════════ */
+
+function PartnerPacksTab() {
+  const { t } = useTranslation();
+
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
+    queryKey: ['partner-packs'],
+    queryFn: () => apiGet<PartnerPacksResponse>('/v1/partner-pack/installed'),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const packs = data?.installed ?? [];
+  const activeSlug = data?.active_slug ?? null;
+
+  return (
+    <div className="animate-card-in" style={{ animationDelay: '60ms' }}>
+      <div className="mb-4">
+        <h2 className="text-sm font-semibold text-content-secondary uppercase tracking-wider mb-0.5">
+          {t('modules.partner_packs_title', { defaultValue: 'Partner Packs' })}
+        </h2>
+        <p className="text-xs text-content-tertiary">
+          {t('modules.partner_packs_desc', {
+            defaultValue:
+              'Country- and partner-specific presets — currency, tax templates, validation standards, and co-branding. Activate one by setting OE_PARTNER_PACK.',
+          })}
+        </p>
+      </div>
+
+      {isLoading ? (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Card key={i} className="animate-pulse" padding="sm">
+              <div className="flex items-start gap-3">
+                <div className="h-10 w-10 rounded-lg bg-surface-secondary" />
+                <div className="flex-1 space-y-2">
+                  <div className="h-4 w-2/3 rounded bg-surface-secondary" />
+                  <div className="h-3 w-full rounded bg-surface-secondary" />
+                  <div className="h-3 w-1/2 rounded bg-surface-secondary" />
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      ) : isError ? (
+        <div className="py-16 text-center">
+          <AlertTriangle size={40} className="mx-auto mb-3 text-semantic-warning" strokeWidth={1.5} />
+          <p className="text-sm font-medium text-content-secondary">
+            {t('modules.partner_packs_load_failed', { defaultValue: 'Failed to load partner packs' })}
+          </p>
+          <p className="mt-1 text-xs text-content-tertiary">
+            {t('modules.partner_packs_load_failed_hint', {
+              defaultValue: 'Check your connection and try again.',
+            })}
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<RefreshCw size={14} />}
+            onClick={() => void refetch()}
+            className="mt-4"
+          >
+            {t('common.retry', { defaultValue: 'Retry' })}
+          </Button>
+        </div>
+      ) : packs.length === 0 ? (
+        <div className="py-16 text-center">
+          <Building2 size={40} className="mx-auto mb-3 text-content-tertiary" />
+          <p className="text-sm font-medium text-content-secondary">
+            {t('modules.no_partner_packs', { defaultValue: 'No partner packs available' })}
+          </p>
+          <p className="mt-1 text-xs text-content-tertiary">
+            {t('modules.no_partner_packs_hint', {
+              defaultValue:
+                'Partner packs ship pre-configured regional settings, validation standards, and branding for a specific market or partner.',
+            })}
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {packs.map((pack, i) => (
+            <PartnerPackCard
+              key={pack.slug}
+              pack={pack}
+              index={i}
+              isActive={activeSlug === pack.slug}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Partner Pack Card ─────────────────────────────────────────────────── */
+
+interface PartnerPackCardProps {
+  pack: PartnerPackManifestAPI;
+  index: number;
+  isActive: boolean;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((v): v is string => typeof v === 'string');
+}
+
+/* Renders the partner's real logo (served per-slug from the pack package).
+   Falls back to a brand-coloured monogram + name if the pack ships no logo. */
+function PartnerPackLogo({ pack }: { pack: PartnerPackManifestAPI }) {
+  const [errored, setErrored] = useState(false);
+
+  if (errored) {
+    return (
+      <div className="flex items-center gap-2 min-w-0">
+        <div
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-white shadow-xs"
+          style={{ backgroundColor: pack.branding.primary_color }}
+        >
+          <Building2 size={18} strokeWidth={1.75} />
+        </div>
+        <span className="text-sm font-semibold text-content-primary truncate">
+          {pack.partner_name}
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={`/api/v1/partner-pack/logo/${encodeURIComponent(pack.slug)}`}
+      alt={`${pack.partner_name} logo`}
+      className="h-9 max-w-[180px] object-contain object-left"
+      loading="lazy"
+      onError={() => setErrored(true)}
+    />
+  );
+}
+
+function PartnerPackCard({ pack, index, isActive }: PartnerPackCardProps) {
+  const { t } = useTranslation();
+
+  const countryName =
+    typeof pack.metadata.country_name_en === 'string'
+      ? pack.metadata.country_name_en
+      : null;
+  const supportEmail =
+    typeof pack.metadata.support_email === 'string'
+      ? pack.metadata.support_email
+      : null;
+  const regulatorRefs = asStringArray(pack.metadata.regulator_refs);
+
+  // Prefer human-readable regulator refs; fall back to raw rule-pack slugs.
+  const standards = regulatorRefs.length > 0 ? regulatorRefs : pack.validation_rule_packs;
+
+  const accent = pack.branding.accent_color ?? pack.branding.primary_color;
+
+  return (
+    <Card
+      hoverable
+      className="animate-card-in group relative overflow-hidden"
+      style={{ animationDelay: `${80 + index * 30}ms` }}
+    >
+      {/* Brand accent — left border strip distinguishes each company */}
+      <span
+        aria-hidden
+        className="absolute inset-y-0 left-0 w-1 rounded-l-xl"
+        style={{ backgroundColor: pack.branding.primary_color }}
+      />
+
+      <div className="pl-2">
+        {/* Logo plate — the partner's real logo on a subtle brand-tinted ground */}
+        <div
+          className="mb-2.5 flex h-14 items-center gap-2 rounded-lg px-3"
+          style={{ backgroundColor: `${pack.branding.primary_color}14` }}
+        >
+          <PartnerPackLogo pack={pack} />
+          {isActive && (
+            <Badge variant="success" size="sm" className="ml-auto shrink-0">
+              <Check size={10} className="mr-0.5" />
+              {t('modules.active', { defaultValue: 'Active' })}
+            </Badge>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5 text-2xs text-content-tertiary flex-wrap">
+          <span className="font-medium text-content-secondary">{pack.partner_name}</span>
+          <span className="text-border">|</span>
+          <span className="font-mono">{pack.slug}</span>
+          <span className="text-border">|</span>
+          <span className="font-mono">v{pack.pack_version}</span>
+        </div>
+
+        {/* Region / currency badges */}
+        <div className="mt-3 flex items-center gap-1.5 flex-wrap">
+          {countryName && (
+            <Badge variant="blue" size="sm">
+              <Globe size={10} className="mr-0.5" />
+              {countryName}
+            </Badge>
+          )}
+          <Badge variant="neutral" size="sm">{pack.default_currency}</Badge>
+          {pack.default_tax_template && (
+            <Badge variant="neutral" size="sm">{pack.default_tax_template}</Badge>
+          )}
+        </div>
+
+        {pack.description && (
+          <p className="mt-2.5 text-xs text-content-secondary line-clamp-3 leading-relaxed">
+            {pack.description}
+          </p>
+        )}
+
+        {/* Validation standards */}
+        {standards.length > 0 && (
+          <div className="mt-3">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <ShieldCheck size={12} className="text-content-tertiary" style={{ color: accent }} />
+              <span className="text-2xs font-semibold text-content-tertiary uppercase tracking-wider">
+                {t('modules.partner_pack_standards', { defaultValue: 'Standards' })}
+              </span>
+            </div>
+            <div className="flex items-center gap-1 flex-wrap">
+              {standards.slice(0, 6).map((std) => (
+                <Badge key={std} variant="neutral" size="sm">{std}</Badge>
+              ))}
+              {standards.length > 6 && (
+                <Badge variant="neutral" size="sm">+{standards.length - 6}</Badge>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Links */}
+        {(pack.partner_url || supportEmail) && (
+          <div className="mt-3 flex items-center gap-3 text-2xs">
+            {pack.partner_url && (
+              <a
+                href={pack.partner_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 font-medium hover:underline"
+                style={{ color: accent }}
+              >
+                <ExternalLink size={12} />
+                {t('modules.partner_pack_website', { defaultValue: 'Website' })}
+              </a>
+            )}
+            {supportEmail && (
+              <a
+                href={`mailto:${supportEmail}`}
+                className="inline-flex items-center gap-1 text-content-tertiary hover:text-content-secondary hover:underline"
+              >
+                <Mail size={12} />
+                {supportEmail}
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -827,21 +1140,39 @@ function DataPackagesTab() {
 
         try {
           const status = await apiGet<{ backend: string; connected: boolean; can_restore_snapshots: boolean; can_generate_locally: boolean }>('/v1/costs/vector/status/');
+          let vecRes: { restored?: boolean; indexed?: number; database?: string; duration_seconds?: number } | undefined;
           if (status.can_restore_snapshots) {
-            await apiPost<{ restored?: boolean; indexed?: number; database?: string; duration_seconds?: number }>(`/v1/costs/vector/restore-snapshot/${dbId}`);
+            vecRes = await apiPost<{ restored?: boolean; indexed?: number; database?: string; duration_seconds?: number }>(`/v1/costs/vector/restore-snapshot/${dbId}`);
           } else if (status.connected) {
-            await apiPost<{ restored?: boolean; indexed?: number; database?: string; duration_seconds?: number }>(`/v1/costs/vector/load-github/${dbId}`);
+            vecRes = await apiPost<{ restored?: boolean; indexed?: number; database?: string; duration_seconds?: number }>(`/v1/costs/vector/load-github/${dbId}`);
           } else {
             throw new Error(t('marketplace.no_vector_backend', { defaultValue: 'No vector database available. Install LanceDB (pip install lancedb) or start Qdrant (docker run -p 6333:6333 qdrant/qdrant)' }));
           }
-          addToast({
-            type: 'success',
-            title: t('marketplace.vector_imported', { defaultValue: 'Vector index loaded' }),
-            message: t('marketplace.vector_ready_message', {
-              defaultValue: 'Vector index ready for {{region}}',
-              region: dbId,
-            }),
-          });
+          // The POST can return ``indexed: 0`` when the backend is reachable but
+          // could not actually build the index (no embedding model, or an empty
+          // snapshot). Reflect that truthfully instead of always claiming success.
+          const vecIndexed = vecRes?.indexed ?? 0;
+          if (vecIndexed > 0) {
+            addToast({
+              type: 'success',
+              title: t('marketplace.vector_imported', { defaultValue: 'Vector index loaded' }),
+              message: t('marketplace.vector_ready_count', {
+                defaultValue: '{{count}} vectors ready for {{region}}',
+                count: vecIndexed,
+                region: dbId,
+              }),
+            });
+          } else {
+            addToast({
+              type: 'info',
+              title: t('marketplace.vector_no_index', { defaultValue: 'No vectors indexed' }),
+              message: t('marketplace.vector_no_index_message', {
+                defaultValue:
+                  'The vector backend is reachable but indexed 0 vectors for {{region}}. The embedding model is likely unavailable here, so semantic cost search stays limited until vectors are generated.',
+                region: dbId,
+              }),
+            });
+          }
           queryClient.invalidateQueries({ queryKey: ['marketplace'] });
           queryClient.invalidateQueries({ queryKey: ['vector-status'] });
         } catch (err) {
@@ -1218,9 +1549,12 @@ function DataPackagesTab() {
 function SystemModulesTab() {
   const { t } = useTranslation();
   const addToast = useToastStore((s) => s.addToast);
+  const queryClient = useQueryClient();
+  const userRole = useAuthStore((s) => s.userRole);
+  const isAdmin = userRole === 'admin';
   const [togglingModule, setTogglingModule] = useState<string | null>(null);
 
-  const { data: systemModules, refetch, isError: systemError } = useQuery({
+  const { data: systemModules, refetch, isLoading, isError: systemError } = useQuery({
     queryKey: ['system-modules'],
     queryFn: () => apiGet<SystemModule[]>('/v1/modules/'),
     staleTime: 30 * 1000,
@@ -1230,6 +1564,19 @@ function SystemModulesTab() {
   const enabledCount = systemModules?.filter((m) => m.enabled).length ?? 0;
 
   async function handleBackendToggle(mod: SystemModule): Promise<void> {
+    // Enabling/disabling a backend module is admin-only on the server
+    // (RequirePermission("admin")). Guard here so non-admins never fire a
+    // request that 403s — the toggle is also disabled in the UI for them.
+    if (!isAdmin) {
+      addToast({
+        type: 'warning',
+        title: t('modules.admin_only', { defaultValue: 'Admin only' }),
+        message: t('modules.admin_only_modules', {
+          defaultValue: 'Only administrators can enable or disable system modules.',
+        }),
+      });
+      return;
+    }
     if (mod.is_core) {
       addToast({
         type: 'warning',
@@ -1251,7 +1598,11 @@ function SystemModulesTab() {
           ? t('modules.enabled', { defaultValue: '{{name}} enabled', name: mod.display_name })
           : t('modules.disabled', { defaultValue: '{{name}} disabled', name: mod.display_name }),
       });
-      void refetch();
+      // Invalidate the shared ['system-modules'] query so BOTH this tab and
+      // the Sidebar (which reads the same key to gate routes for disabled
+      // backend modules) refetch and stay in sync — without this, disabling
+      // a module left its sidebar route live and broken.
+      void queryClient.invalidateQueries({ queryKey: ['system-modules'] });
     } catch (err) {
       addToast({
         type: 'error',
@@ -1283,6 +1634,33 @@ function SystemModulesTab() {
     );
   }
 
+  // Loading skeleton — keeps the empty-state ("No system modules loaded")
+  // from flashing during the initial fetch.
+  if (isLoading) {
+    return (
+      <div className="animate-card-in" style={{ animationDelay: '60ms' }}>
+        <div className="mb-4 space-y-1.5">
+          <div className="h-4 w-32 rounded bg-surface-secondary animate-pulse" />
+          <div className="h-3 w-2/3 rounded bg-surface-secondary animate-pulse" />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 9 }).map((_, i) => (
+            <Card key={i} className="animate-pulse" padding="sm">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 shrink-0 rounded-lg bg-surface-secondary" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="h-3 w-2/3 rounded bg-surface-secondary" />
+                  <div className="h-2.5 w-1/3 rounded bg-surface-secondary" />
+                </div>
+                <div className="h-5 w-9 shrink-0 rounded-full bg-surface-secondary" />
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (!systemModules || systemModules.length === 0) {
     return (
       <div className="py-16 text-center animate-card-in">
@@ -1308,6 +1686,14 @@ function SystemModulesTab() {
             defaultValue: 'System modules are backend plugins loaded from the server. Toggle non-core modules to enable or disable them.',
           })}
         />
+        {!isAdmin && (
+          <p className="mt-1.5 inline-flex items-center gap-1.5 text-2xs text-content-tertiary">
+            <ShieldCheck size={12} className="shrink-0" />
+            {t('modules.system_admin_only_hint', {
+              defaultValue: 'Only administrators can enable or disable system modules.',
+            })}
+          </p>
+        )}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1364,15 +1750,27 @@ function SystemModulesTab() {
               {!mod.is_core && (
                 <button
                   onClick={() => void handleBackendToggle(mod)}
-                  disabled={togglingModule === mod.name}
+                  disabled={togglingModule === mod.name || !isAdmin}
                   role="switch"
                   aria-checked={mod.enabled}
-                  aria-label={t('modules.toggle_module', {
-                    defaultValue: '{{action}} {{name}}',
-                    action: mod.enabled ? t('common.disable', { defaultValue: 'Disable' }) : t('common.enable', { defaultValue: 'Enable' }),
-                    name: mod.display_name,
-                  })}
-                  className="shrink-0"
+                  title={
+                    isAdmin
+                      ? undefined
+                      : t('modules.admin_only', { defaultValue: 'Admin only' })
+                  }
+                  aria-label={
+                    isAdmin
+                      ? t('modules.toggle_module', {
+                          defaultValue: '{{action}} {{name}}',
+                          action: mod.enabled ? t('common.disable', { defaultValue: 'Disable' }) : t('common.enable', { defaultValue: 'Enable' }),
+                          name: mod.display_name,
+                        })
+                      : t('modules.toggle_module_admin_only', {
+                          defaultValue: '{{name}} — admin only',
+                          name: mod.display_name,
+                        })
+                  }
+                  className={clsx('shrink-0', !isAdmin && 'cursor-not-allowed opacity-50')}
                 >
                   {togglingModule === mod.name ? (
                     <Loader2 size={16} className="animate-spin text-content-tertiary" />
@@ -1443,7 +1841,7 @@ function ModuleToggleCard({
       <div
         className={clsx(
           'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors',
-          enabled ? 'bg-oe-blue-subtle text-oe-blue' : 'bg-surface-tertiary text-content-quaternary',
+          enabled ? 'bg-oe-blue-subtle text-oe-blue-text' : 'bg-surface-tertiary text-content-quaternary',
         )}
       >
         <Icon size={15} />
@@ -1529,7 +1927,7 @@ function MarketplaceCard({ module: mod, index, isInstalling, onInstall, isDemoIn
             mod.category === 'resource_catalog'
               ? 'bg-semantic-warning-bg text-semantic-warning'
               : mod.category === 'cost_database'
-                ? 'bg-oe-blue-subtle text-oe-blue'
+                ? 'bg-oe-blue-subtle text-oe-blue-text'
                 : mod.category === 'vector_index'
                   ? 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400'
                   : mod.category === 'language'

@@ -70,6 +70,11 @@ from app.modules.qms.router import router as qms_router  # noqa: E402
 from app.modules.qms.schemas import NCRActionCreate, NCRCreate, NCRUpdate  # noqa: E402
 from app.modules.qms.service import QMSService  # noqa: E402
 from app.modules.users.models import APIKey, User  # noqa: E402
+from app.modules.variations.models import (  # noqa: E402
+    Notice,
+    VariationOrder,
+    VariationRequest,
+)
 
 _ALL_TABLES = [
     User.__table__,
@@ -89,6 +94,11 @@ _ALL_TABLES = [
     QMSAuditFinding.__table__,
     QMSAuditLog.__table__,
     QMSCalibration.__table__,
+    # Escalation links an NCR to an existing VariationOrder (plus the
+    # request/notice tables it FK-references).
+    Notice.__table__,
+    VariationRequest.__table__,
+    VariationOrder.__table__,
 ]
 
 _PROJECT_ID = uuid.uuid4()
@@ -175,7 +185,8 @@ async def test_ncr_full_lifecycle_open_to_closed(svc: QMSService) -> None:
 
     # Assign corrective action (NCR advances to action_pending)
     a1 = await svc.assign_ncr_action(
-        ncr.id, NCRActionCreate(description="Replace rebar with correct size"),
+        ncr.id,
+        NCRActionCreate(description="Replace rebar with correct size"),
     )
     ncr_ap = await svc.repo.get_ncr(ncr.id)
     assert ncr_ap is not None
@@ -183,7 +194,8 @@ async def test_ncr_full_lifecycle_open_to_closed(svc: QMSService) -> None:
 
     # Second action
     a2 = await svc.assign_ncr_action(
-        ncr.id, NCRActionCreate(description="Update site-delivery checklist"),
+        ncr.id,
+        NCRActionCreate(description="Update site-delivery checklist"),
     )
 
     # Verify first — NCR still action_pending (second action outstanding)
@@ -229,9 +241,7 @@ async def test_idempotent_close_raises_on_second_call(svc: QMSService) -> None:
 
     # Audit trail must NOT have grown
     log_after = await svc.repo.list_audit_log(ncr.id, entity_type="ncr")
-    assert len(log_after) == len(log_before), (
-        "Audit log grew despite idempotent-close rejection"
-    )
+    assert len(log_after) == len(log_before), "Audit log grew despite idempotent-close rejection"
 
 
 # ── Audit trail completeness ─────────────────────────────────────────────
@@ -317,8 +327,7 @@ async def test_ncr_cost_impact_serialised_as_string(
     body = resp.json()
     # Must be a string, not a float
     assert isinstance(body["cost_impact_amount"], str), (
-        f"Expected str, got {type(body['cost_impact_amount']).__name__}: "
-        f"{body['cost_impact_amount']!r}"
+        f"Expected str, got {type(body['cost_impact_amount']).__name__}: {body['cost_impact_amount']!r}"
     )
     assert body["cost_impact_amount"] == "9999999.99"
 
@@ -330,7 +339,21 @@ async def test_ncr_cost_impact_serialised_as_string(
 async def test_ncr_escalation_publishes_decimal_as_string(
     svc: QMSService,
 ) -> None:
-    """escalate_ncr_to_variation publishes cost_impact as a string."""
+    """escalate_ncr_to_variation publishes cost_impact as a string.
+
+    Mirrors the product flow: an existing VariationOrder in the same
+    project is supplied via ``variation_id`` (the QMS module never
+    fabricates one).
+    """
+    # A real owner + project so the VariationOrder FK is satisfied
+    # (the process-wide SQLite listener enables foreign_keys=ON).
+    owner = User(email=f"u{uuid.uuid4().hex[:6]}@test.com", hashed_password="x")
+    svc.session.add(owner)
+    await svc.session.flush()
+    project = Project(id=_PROJECT_ID, name="Escalation Test", owner_id=owner.id)
+    svc.session.add(project)
+    await svc.session.flush()
+
     ncr = await svc.raise_ncr(
         NCRCreate(
             project_id=_PROJECT_ID,
@@ -341,9 +364,13 @@ async def test_ncr_escalation_publishes_decimal_as_string(
             cost_impact_amount=Decimal("125000.50"),
         ),
     )
+    variation = VariationOrder(project_id=_PROJECT_ID, code="VO-0001")
+    svc.session.add(variation)
+    await svc.session.flush()
+
     spy = MagicMock()
     with patch("app.modules.qms.service.event_bus.publish_detached", spy):
-        await svc.escalate_ncr_to_variation(ncr.id)
+        await svc.escalate_ncr_to_variation(ncr.id, variation_id=variation.id)
 
     assert spy.called
     event_name = spy.call_args.args[0]

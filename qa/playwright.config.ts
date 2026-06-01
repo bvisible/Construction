@@ -9,7 +9,7 @@ import { defineConfig, devices } from '@playwright/test';
  * Env vars:
  *   QA_BASE_URL     — vite dev URL (default per-wave; see spec headers)
  *   QA_API_URL      — backend URL (default per-wave)
- *   QA_DEMO_EMAIL   — defaults to demo@openestimator.io
+ *   QA_DEMO_EMAIL   — defaults to demo@openconstructionerp.com
  *   QA_DEMO_PASSWORD — defaults to demo (real password generated per install)
  */
 export default defineConfig({

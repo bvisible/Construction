@@ -738,7 +738,9 @@ export function PunchListPage() {
         type: 'success',
         title: t('punch.status_updated', {
           defaultValue: 'Status updated to {{status}}',
-          status: vars.status.replace('_', ' '),
+          status: t(`punch.status_${vars.status}`, {
+            defaultValue: vars.status.replace('_', ' '),
+          }),
         }),
       });
     },

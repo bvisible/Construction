@@ -201,6 +201,29 @@ describe('useFederatedGeometryLoader', () => {
     expect(result.current.members[0].modelId).toBe('mod-struct');
     expect(result.current.errors[0].modelId).toBe('mod-arch');
     expect(result.current.errors[0].error.message).toMatch(/404|mock/);
+    // A 404 is flagged as "no geometry yet" (informational), not a hard
+    // failure, and carries a display name for the viewer.
+    expect(result.current.errors[0].noGeometry).toBe(true);
+    expect(result.current.errors[0].error.message).toMatch(/no 3D geometry yet/);
+    expect(result.current.errors[0].modelName).toBe('mod-arch'.slice(0, 8));
+  });
+
+  it('a non-404 geometry error stays a hard failure (noGeometry=false)', async () => {
+    server.use(
+      http.get(DETAIL_URL, () => HttpResponse.json(DETAIL)),
+      geometryHandler('mod-arch', GEOM_URL_ARCH, { status: 500 }),
+      geometryHandler('mod-struct', GEOM_URL_STRUCT),
+    );
+    const { result } = renderHook(() => useFederatedGeometryLoader(FED_ID), {
+      wrapper: wrap(),
+    });
+    await waitFor(() => {
+      expect(result.current.members.length).toBe(1);
+      expect(result.current.errors.length).toBe(1);
+    });
+    expect(result.current.errors[0].modelId).toBe('mod-arch');
+    expect(result.current.errors[0].noGeometry).toBe(false);
+    expect(result.current.errors[0].error.message).toMatch(/failed/i);
   });
 
   it('attaches Authorization: Bearer to every geometry query when a token is present', async () => {

@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import clsx from 'clsx';
 import type { FileTreeNode, FileKind } from '../types';
+import { KIND_TONE } from '../kindModule';
 
 const KIND_ICON: Record<FileKind, LucideIcon> = {
   document: FileText,
@@ -50,62 +51,8 @@ const KIND_EMPTY_HINT: Record<FileKind, string> = {
   markup: 'Create PDF markups and review sessions',
 };
 
-// One tone per kind. The square sits behind the icon and gives each
-// folder an at-a-glance identity. Same colour family as FileGrid tiles
-// so the card → grid transition feels continuous.
-const KIND_TONE: Record<
-  FileKind,
-  { tile: string; icon: string; ring: string; bar: string }
-> = {
-  document: {
-    tile: 'bg-sky-50 dark:bg-sky-950/30',
-    icon: 'text-sky-600 dark:text-sky-400',
-    ring: 'group-hover:ring-sky-500/30',
-    bar: 'bg-sky-500',
-  },
-  photo: {
-    tile: 'bg-emerald-50 dark:bg-emerald-950/30',
-    icon: 'text-emerald-600 dark:text-emerald-400',
-    ring: 'group-hover:ring-emerald-500/30',
-    bar: 'bg-emerald-500',
-  },
-  sheet: {
-    tile: 'bg-amber-50 dark:bg-amber-950/30',
-    icon: 'text-amber-600 dark:text-amber-400',
-    ring: 'group-hover:ring-amber-500/30',
-    bar: 'bg-amber-500',
-  },
-  bim_model: {
-    tile: 'bg-violet-50 dark:bg-violet-950/30',
-    icon: 'text-violet-600 dark:text-violet-400',
-    ring: 'group-hover:ring-violet-500/30',
-    bar: 'bg-violet-500',
-  },
-  dwg_drawing: {
-    tile: 'bg-orange-50 dark:bg-orange-950/30',
-    icon: 'text-orange-600 dark:text-orange-400',
-    ring: 'group-hover:ring-orange-500/30',
-    bar: 'bg-orange-500',
-  },
-  takeoff: {
-    tile: 'bg-cyan-50 dark:bg-cyan-950/30',
-    icon: 'text-cyan-600 dark:text-cyan-400',
-    ring: 'group-hover:ring-cyan-500/30',
-    bar: 'bg-cyan-500',
-  },
-  report: {
-    tile: 'bg-pink-50 dark:bg-pink-950/30',
-    icon: 'text-pink-600 dark:text-pink-400',
-    ring: 'group-hover:ring-pink-500/30',
-    bar: 'bg-pink-500',
-  },
-  markup: {
-    tile: 'bg-rose-50 dark:bg-rose-950/30',
-    icon: 'text-rose-600 dark:text-rose-400',
-    ring: 'group-hover:ring-rose-500/30',
-    bar: 'bg-rose-500',
-  },
-};
+// Per-kind accent tones (icon chip + share bar) live in `kindModule.ts`
+// so the folder grid and the storage stats strip stay colour-consistent.
 
 function fmtBytes(bytes: number): string {
   if (!bytes) return '0 B';

@@ -28,7 +28,7 @@ import {
 import { Button, Card, Badge, Input, InfoHint, SkeletonTable, Breadcrumb, GanttChart as SVGGanttChart, ViewInBIMButton, ConfirmDialog } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import type { GanttActivity as SVGGanttActivity, GanttViewMode } from '@/shared/ui';
-import { apiGet, apiDelete } from '@/shared/lib/api';
+import { apiGet } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -138,7 +138,8 @@ const WORK_CALENDAR_INFO: Record<string, { hours: number; days: number }> = {
   US: { hours: 8, days: 5 },
   GULF: { hours: 10, days: 6 },
   RU: { hours: 8, days: 5 },
-  NORDIC: { hours: 7.5, days: 5 },
+  // Backend maps NORDIC -> DACH (8h/5d); keep the fallback in sync.
+  NORDIC: { hours: 8, days: 5 },
   FRANCE: { hours: 7, days: 5 },
   BRAZIL: { hours: 8, days: 6 },
   CHINA: { hours: 8, days: 6 },
@@ -689,7 +690,7 @@ function GanttChart({
             const sc = isCritical
               ? { bg: 'bg-semantic-error/20', fill: 'bg-semantic-error', text: 'text-semantic-error', variant: 'error' as const }
               : cpActive
-                ? { bg: 'bg-oe-blue-subtle', fill: 'bg-oe-blue/30', text: 'text-oe-blue', variant: 'neutral' as const }
+                ? { bg: 'bg-oe-blue-subtle', fill: 'bg-oe-blue/30', text: 'text-oe-blue-text', variant: 'neutral' as const }
                 : statusColor(activity.status);
             const isMilestone = activity.activity_type === 'milestone';
             const isSummary = activity.activity_type === 'summary';
@@ -775,7 +776,7 @@ function GanttChart({
                 const sc = isCritical
                   ? { bg: 'bg-semantic-error/20', fill: 'bg-semantic-error', text: 'text-semantic-error', variant: 'error' as const }
                   : cpActive
-                    ? { bg: 'bg-oe-blue-subtle', fill: 'bg-oe-blue/30', text: 'text-oe-blue', variant: 'neutral' as const }
+                    ? { bg: 'bg-oe-blue-subtle', fill: 'bg-oe-blue/30', text: 'text-oe-blue-text', variant: 'neutral' as const }
                     : statusColor(activity.status);
                 const barStyle = getBarStyle(activity);
                 const isMilestone = activity.activity_type === 'milestone';
@@ -1025,7 +1026,25 @@ function ScheduleDetail({
     queryFn: () => apiGet<{ id: string; region: string }>(`/v1/projects/${projectId}`),
     staleTime: 300_000,
   });
-  const calInfo = WORK_CALENDAR_INFO[projectData?.region ?? ''] ?? WORK_CALENDAR_INFO['DACH'] ?? { hours: 8, days: 5 };
+  // Resolve the work calendar from the backend so the badge matches the
+  // hours-per-day / days-per-week the schedule math actually uses. The
+  // client-side WORK_CALENDAR_INFO map only covers 12 exact keys and diverges
+  // for stored region values like "Middle East" / "United States" / "DE_BERLIN"
+  // / "NORDIC"; it is kept only as a pre-fetch fallback.
+  const { data: workCalendar } = useQuery({
+    queryKey: ['work-calendar', projectId],
+    queryFn: () =>
+      apiGet<{ region: string | null; hours_per_day: number; work_days_per_week: number; label: string }>(
+        `/v1/schedule/work-calendar/?project_id=${projectId}`,
+      ),
+    enabled: !!projectId,
+    staleTime: 300_000,
+  });
+  const fallbackCal =
+    WORK_CALENDAR_INFO[projectData?.region ?? ''] ?? WORK_CALENDAR_INFO['DACH'] ?? { hours: 8, days: 5 };
+  const calInfo = workCalendar
+    ? { hours: workCalendar.hours_per_day, days: workCalendar.work_days_per_week }
+    : fallbackCal;
 
   const { data: ganttData, isLoading } = useQuery({
     queryKey: ['gantt', schedule.id],
@@ -1180,12 +1199,7 @@ function ScheduleDetail({
   );
 
   const resetSchedule = useMutation({
-    mutationFn: async () => {
-      const activities = ganttData?.activities ?? [];
-      for (const a of activities) {
-        await apiDelete(`/v1/schedule/activities/${a.id}`);
-      }
-    },
+    mutationFn: () => scheduleApi.clearActivities(schedule.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['gantt', schedule.id] });
       setCpmResult(null);
@@ -1390,7 +1404,7 @@ function ScheduleDetail({
                 onClick={async () => {
                   const ok = await confirm({
                     title: t('schedule.confirm_reset_title', { defaultValue: 'Reset schedule?' }),
-                    message: t('schedule.confirm_reset', { defaultValue: 'Delete all activities and regenerate? This cannot be undone.' }),
+                    message: t('schedule.confirm_reset', { defaultValue: 'Delete all activities in this schedule? This cannot be undone. You can regenerate them afterwards from a BOQ.' }),
                   });
                   if (ok) resetSchedule.mutate();
                 }}
@@ -1564,7 +1578,7 @@ function ScheduleDetail({
                     onClick={() => setShowGenerateBOQ(true)}
                     className="group flex flex-col items-center gap-3 rounded-xl border-2 border-dashed border-border-light bg-surface-secondary/30 p-6 transition-all hover:border-oe-blue/50 hover:bg-oe-blue-subtle/30"
                   >
-                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue transition-transform group-hover:scale-110">
+                    <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text transition-transform group-hover:scale-110">
                       <FileBarChart size={24} />
                     </div>
                     <div>
@@ -1673,7 +1687,7 @@ function ScheduleDetail({
                   onClick={() => setActivityForm((f) => ({ ...f, activity_type: type }))}
                   className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium capitalize transition-all ${
                     activityForm.activity_type === type
-                      ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue'
+                      ? 'border-oe-blue bg-oe-blue-subtle text-oe-blue-text'
                       : 'border-border bg-surface-primary text-content-secondary hover:bg-surface-secondary'
                   }`}
                 >
@@ -1966,7 +1980,7 @@ function ProjectSchedules({
               onClick={() => setSelectedSchedule(schedule)}
             >
               <div className="flex items-center gap-3 px-5 py-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text">
                   <CalendarDays size={18} strokeWidth={1.75} />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -2169,7 +2183,7 @@ export function SchedulePage() {
               onClick={() => setActiveProject(project.id, project.name)}
             >
               <div className="flex items-center gap-3 px-5 py-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue font-bold">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text font-bold">
                   {project.name.charAt(0).toUpperCase()}
                 </div>
                 <div className="min-w-0 flex-1">

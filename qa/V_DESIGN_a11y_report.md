@@ -4,7 +4,7 @@
 **Base commit**: `f86d2dfe` (current main HEAD post-V10 LanguageSwitcher fix)
 **Date**: 2026-05-25
 **Verified against**: backend on 8021 + vite dev server on 5191, demo
-tenant (demo@openestimator.io), Playwright `@axe-core/playwright`
+tenant (demo@openconstructionerp.com), Playwright `@axe-core/playwright`
 scanning WCAG 2A/2AA/2.1A/2.1AA tags.
 
 Scope: cross-cutting axe-core violations that V1, V5, V6, V7, V8, V9, V10

@@ -23,7 +23,7 @@ fs.mkdirSync(OUT, { recursive: true });
 
 const FRONTEND = 'http://localhost:5180';
 const BACKEND = 'http://localhost:8000';
-const USER = { email: 'demo@openestimator.io', password: 'DemoPass1234!' };
+const USER = { email: 'demo@openconstructionerp.com', password: 'DemoPass1234!' };
 
 interface Project {
   id: string;

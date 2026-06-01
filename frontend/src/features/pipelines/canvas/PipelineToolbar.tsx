@@ -8,11 +8,11 @@
  */
 import clsx from 'clsx';
 import {
+  EyeOff,
   Maximize2,
   Redo2,
   Save,
   Sparkles,
-  Square,
   Undo2,
   Play,
 } from 'lucide-react';
@@ -47,16 +47,18 @@ interface TBtnProps {
   onClick?: () => void;
   disabled?: boolean;
   variant?: 'default' | 'primary' | 'danger';
+  /** Optional tooltip override; defaults to `label`. */
+  title?: string;
 }
 
-function TBtn({ label, testId, icon, onClick, disabled, variant = 'default' }: TBtnProps) {
+function TBtn({ label, testId, icon, onClick, disabled, variant = 'default', title }: TBtnProps) {
   return (
     <button
       type="button"
       data-testid={testId}
       onClick={onClick}
       disabled={disabled}
-      title={label}
+      title={title ?? label}
       aria-label={label}
       className={clsx(
         'inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium',
@@ -158,11 +160,15 @@ export function PipelineToolbar({
       />
       {running ? (
         <TBtn
-          label={t('pipeline.toolbar.stop', { defaultValue: 'Stop' })}
+          label={t('pipeline.toolbar.detach', { defaultValue: 'Detach' })}
+          title={t('pipeline.toolbar.detach_hint', {
+            defaultValue:
+              'Hide this run from the canvas. The run keeps going in the background.',
+          })}
           testId="pipeline-stop"
-          icon={<Square size={14} aria-hidden="true" />}
+          icon={<EyeOff size={14} aria-hidden="true" />}
           onClick={onStop}
-          variant="danger"
+          variant="default"
         />
       ) : (
         <TBtn

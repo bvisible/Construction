@@ -122,7 +122,7 @@ class CashFlow(Base):
         nullable=False,
         index=True,
     )
-    period: Mapped[str] = mapped_column(String(10), nullable=False, doc="YYYY-MM format")
+    period: Mapped[str] = mapped_column(String(20), nullable=False, doc="YYYY-MM format or sentinel bucket")
     category: Mapped[str] = mapped_column(String(100), nullable=False, default="total")
     planned_inflow: Mapped[str] = mapped_column(String(50), nullable=False, default="0")
     planned_outflow: Mapped[str] = mapped_column(String(50), nullable=False, default="0")

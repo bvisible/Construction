@@ -49,6 +49,7 @@ async def _safe_publish(name: str, data: dict, source_module: str = "") -> None:
     except Exception:
         _logger_ev.debug("Event publish skipped: %s", name)
 
+
 logger = logging.getLogger(__name__)
 
 
@@ -128,9 +129,7 @@ class CostModelService:
                 ``(project_id, period)``.
         """
         # ── Duplicate-period guard (R5 audit) ────────────────────────────
-        existing = await self.snapshot_repo.get_for_project_period(
-            data.project_id, data.period
-        )
+        existing = await self.snapshot_repo.get_for_project_period(data.project_id, data.period)
         if existing is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -700,17 +699,14 @@ class CostModelService:
                     total_days = (end - start).days
                     if total_days > 0:
                         elapsed_days = (today - start).days
-                        time_elapsed_pct = max(
-                            0.0, min(100.0, (elapsed_days / total_days) * 100.0)
-                        )
+                        time_elapsed_pct = max(0.0, min(100.0, (elapsed_days / total_days) * 100.0))
                         schedule_known = True
                 except (ValueError, TypeError) as exc:
                     # Log explicitly instead of swallowing silently. Bad schedule
                     # dates are a data-quality issue worth surfacing to ops —
                     # previously this bug masqueraded as "on track" projects.
                     logger.warning(
-                        "Unparseable schedule dates on schedule_id=%s "
-                        "(start=%r, end=%r): %s",
+                        "Unparseable schedule dates on schedule_id=%s (start=%r, end=%r): %s",
                         getattr(primary_schedule, "id", "<unknown>"),
                         primary_schedule.start_date,
                         primary_schedule.end_date,
@@ -1060,8 +1056,7 @@ class CostModelService:
 
         if not lines:
             logger.info(
-                "generate_budget_from_boq: every BOQ position already wired "
-                "(project=%s boq=%s); no-op.",
+                "generate_budget_from_boq: every BOQ position already wired (project=%s boq=%s); no-op.",
                 project_id,
                 boq_id,
             )
@@ -1144,8 +1139,9 @@ class CostModelService:
                     p = start[:7]
                     period_outflows[p] = period_outflows.get(p, Decimal("0")) + amount
             else:
-                # No schedule — use a generic unscheduled bucket
-                period_outflows["unscheduled"] = period_outflows.get("unscheduled", Decimal("0")) + amount
+                # No schedule — use a generic unscheduled bucket.
+                # Keep the sentinel <= 10 chars to fit the period column (varchar(10)).
+                period_outflows["unsched"] = period_outflows.get("unsched", Decimal("0")) + amount
 
         # Build cash flow entries with running cumulative
         entries: list[CashFlow] = []
@@ -1237,9 +1233,7 @@ class CostModelService:
                 current += total
 
         variance_abs = round(current - budget, 2)
-        variance_pct = (
-            round((current - budget) / budget * 100, 2) if budget > 0 else 0.0
-        )
+        variance_pct = round((current - budget) / budget * 100, 2) if budget > 0 else 0.0
 
         return VarianceResponse(
             budget=round(budget, 2),

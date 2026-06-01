@@ -26,7 +26,7 @@ from app.modules.collaboration.schemas import (
 )
 from app.modules.collaboration.service import CollaborationService
 
-router = APIRouter()
+router = APIRouter(tags=["collaboration"])
 logger = logging.getLogger(__name__)
 
 
@@ -71,10 +71,7 @@ def _validate_entity_type(entity_type: str) -> None:
     if entity_type not in _ALLOWED_ENTITY_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"Unsupported entity_type '{entity_type}'. "
-                f"Allowed: {sorted(_ALLOWED_ENTITY_TYPES)}"
-            ),
+            detail=(f"Unsupported entity_type '{entity_type}'. Allowed: {sorted(_ALLOWED_ENTITY_TYPES)}"),
         )
 
 

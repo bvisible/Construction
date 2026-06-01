@@ -137,6 +137,16 @@
       "fail": "Invalid SINAPI code '{code}' in position {ordinal}"
     }
   },
+  "nbr": {
+    "classification_required": {
+      "fail": "Position {ordinal} missing NBR 12721 section",
+      "suggestion": "Tag the position with an NBR 12721 section (S1 = preliminares, S2 = infra-estrutura, ..., S11 = serviços complementares)"
+    },
+    "valid_section": {
+      "fail": "NBR 12721 section '{code}' in position {ordinal} is not one of S1..S11",
+      "suggestion": "Use codes S1 through S11 (e.g., S3 for supra-estrutura)"
+    }
+  },
   "gesn": {
     "code_required": {
       "fail": "Position {ordinal} missing ГЭСН/ФЕР code",

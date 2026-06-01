@@ -42,6 +42,7 @@ interface FakeScene {
   isolateClass: ReturnType<typeof vi.fn>;
   setDisciplineColoringEnabled: ReturnType<typeof vi.fn>;
   setMemberVisible: ReturnType<typeof vi.fn>;
+  setDarkMode: ReturnType<typeof vi.fn>;
   dispose: ReturnType<typeof vi.fn>;
 }
 
@@ -55,6 +56,7 @@ function makeFakeScene(): FakeScene {
     isolateClass: vi.fn(),
     setDisciplineColoringEnabled: vi.fn(),
     setMemberVisible: vi.fn(),
+    setDarkMode: vi.fn(),
     dispose: vi.fn(),
   };
   lastFakeScene = f;

@@ -1,4 +1,5 @@
-import { useState, useCallback, useEffect, useRef, Fragment } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { CustomBranding } from './CustomBranding';
 import { useTranslation } from 'react-i18next';
@@ -79,6 +80,7 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useModuleStore } from '@/stores/useModuleStore';
+import { apiGet } from '@/shared/lib/api';
 import { UpdateNotification } from '@/shared/ui/UpdateChecker';
 import { useViewModeStore } from '@/stores/useViewModeStore';
 import { useRecentStore } from '@/stores/useRecentStore';
@@ -471,27 +473,29 @@ const navGroups: NavGroup[] = [
 // flow. Role-gated items (audit log, permissions matrix) only render
 // for admin/manager JWTs — backend `RequirePermission` remains
 // authoritative; the client gate just keeps the grid tidy.
+// Admin / setup surfaces — one 2-column button grid, ordered
+// most-important → least-important. Permissions, Approval Routes and
+// Validation Rules used to be three separate tiles here; they now share
+// one "Governance" surface (/governance, three /modules-style tabs), so
+// a single Governance tile sits right after Modules in the flow.
+// Integrations is intentionally absent: it lives under Settings →
+// Integrations, so a tile would duplicate it.
 const adminGridItems: NavItem[] = [
+  { labelKey: 'sidebar.admin_grid.settings', to: '/settings', icon: Settings },
   { labelKey: 'sidebar.admin_grid.users', to: '/users', icon: Users },
+  { labelKey: 'sidebar.admin_grid.modules', to: '/modules', icon: Package },
+  {
+    labelKey: 'sidebar.admin_grid.governance',
+    to: '/governance',
+    icon: Scale,
+    roleGate: ['admin', 'manager'],
+  },
   {
     labelKey: 'sidebar.admin_grid.audit',
     to: '/admin/audit-log',
     icon: ScrollText,
     roleGate: ['admin', 'manager'],
   },
-  {
-    labelKey: 'sidebar.admin_grid.permissions',
-    to: '/admin/permissions',
-    icon: ShieldCheck,
-    roleGate: ['admin', 'manager'],
-  },
-  {
-    labelKey: 'sidebar.admin_grid.validation_rules',
-    to: '/admin/validation-rules',
-    icon: ShieldCheck,
-  },
-  { labelKey: 'sidebar.admin_grid.modules', to: '/modules', icon: Package },
-  { labelKey: 'sidebar.admin_grid.settings', to: '/settings', icon: Settings },
   { labelKey: 'sidebar.admin_grid.about', to: '/about', icon: Info },
 ];
 
@@ -505,6 +509,98 @@ const ALL_NAV_ITEMS: Record<string, NavItem> = (() => {
   for (const item of adminGridItems) map[item.to] = item;
   return map;
 })();
+
+/** Minimal shape of a backend module entry returned by `GET /v1/modules/`.
+ *  We only read the fields needed to reconcile sidebar visibility with the
+ *  server-side enabled/disabled state set on the System Modules tab. */
+interface BackendModuleState {
+  name: string;
+  enabled: boolean;
+  is_core: boolean;
+}
+
+/** Maps a sidebar route (`NavItem.to`, query string stripped) to the backend
+ *  module manifest name (`oe_*`) that powers it. When that backend module is
+ *  *explicitly* disabled on the System Modules tab, the route below is hidden
+ *  so the sidebar never links to a 404/blank surface (the two enable systems
+ *  — frontend `useModuleStore` and the backend module loader — were
+ *  previously unreconciled, leaving disabled-backend routes live and broken).
+ *
+ *  Only optional (non-core) modules that own a sidebar route need an entry;
+ *  core modules (Dashboard, Projects, BOQ, Costs, Settings, Modules, Users)
+ *  can never be disabled and are intentionally absent. Routes not listed here
+ *  are never gated by backend state (fail-open). */
+const ROUTE_BACKEND_MODULE: Record<string, string> = {
+  // Takeoff
+  '/takeoff': 'oe_takeoff',
+  '/dwg-takeoff': 'oe_dwg_takeoff',
+  '/bim': 'oe_bim_hub',
+  '/data-explorer': 'oe_cad',
+  // Model coordination
+  '/coordination': 'oe_coordination_hub',
+  '/bim/federations': 'oe_bim_hub',
+  '/clash': 'oe_clash',
+  '/bim/rules': 'oe_bim_requirements',
+  '/requirements/matrix': 'oe_requirements',
+  '/geo': 'oe_geo_hub',
+  // AI & tools
+  '/ai-agents': 'oe_ai_agents',
+  '/advisor': 'oe_ai',
+  '/chat': 'oe_erp_chat',
+  // Commercial
+  '/crm': 'oe_crm',
+  '/contracts': 'oe_contracts',
+  '/subcontractors': 'oe_subcontractors',
+  '/bid-management': 'oe_bid_management',
+  '/tendering': 'oe_tendering',
+  '/variations': 'oe_variations',
+  '/supplier-catalogs': 'oe_supplier_catalogs',
+  // Real estate development
+  '/property-dev': 'oe_property_dev',
+  '/accommodation': 'oe_accommodation',
+  // Planning
+  '/schedule': 'oe_schedule',
+  '/schedule-advanced': 'oe_schedule_advanced',
+  '/tasks': 'oe_tasks',
+  '/5d': 'oe_costmodel',
+  '/risks': 'oe_risk',
+  // Field operations
+  '/daily-diary': 'oe_daily_diary',
+  '/field-reports': 'oe_fieldreports',
+  '/equipment': 'oe_equipment',
+  '/resources': 'oe_resources',
+  '/service': 'oe_service',
+  '/portal': 'oe_portal',
+  // Quality
+  '/validation': 'oe_validation',
+  '/inspections': 'oe_inspections',
+  '/ncr': 'oe_ncr',
+  '/punchlist': 'oe_punchlist',
+  '/qms': 'oe_qms',
+  // Safety & HSE
+  '/safety': 'oe_safety',
+  '/hse-advanced': 'oe_hse_advanced',
+  '/carbon': 'oe_carbon',
+  // Communication
+  '/contacts': 'oe_contacts',
+  '/meetings': 'oe_meetings',
+  '/rfi': 'oe_rfi',
+  '/submittals': 'oe_submittals',
+  '/transmittals': 'oe_transmittals',
+  '/correspondence': 'oe_correspondence',
+  // Documentation
+  '/cde': 'oe_cde',
+  '/markups': 'oe_markups',
+  // Finance & procurement
+  '/finance': 'oe_finance',
+  '/procurement': 'oe_procurement',
+  '/changeorders': 'oe_changeorders',
+  // Analytics & reports
+  '/reports': 'oe_reporting',
+  '/bi-dashboards': 'oe_bi_dashboards',
+  '/reporting': 'oe_reporting',
+  '/architecture': 'oe_architecture_map',
+};
 
 // localStorage key for collapsed state
 const COLLAPSED_KEY = 'oe_sidebar_collapsed';
@@ -654,6 +750,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   const location = useLocation();
   const { isModuleEnabled } = useModuleStore();
   const isAdvanced = useViewModeStore((s) => s.isAdvanced);
+  const setViewMode = useViewModeStore((s) => s.setMode);
   const badgeCounts = useSidebarBadges();
   const modulePresence = useModulePresence();
   const openSearch = useGlobalSearchStore((s) => s.openModal);
@@ -661,6 +758,40 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   const toggleIconified = useSidebarCollapseStore((s) => s.toggle);
   const isRTL = useIsRTL();
   const userRole = useAuthStore((s) => s.userRole);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+
+  // Backend module enabled-state. The System Modules tab disables/enables
+  // server-side plugins; without this, a backend-disabled module's sidebar
+  // route stayed live and broke on click. We share the `['system-modules']`
+  // query key with the Modules page so a successful toggle there invalidates
+  // this query and the sidebar updates immediately. Fail-open: if the fetch
+  // errors or is still loading, no route is hidden.
+  const { data: backendModules } = useQuery({
+    queryKey: ['system-modules'],
+    queryFn: () => apiGet<BackendModuleState[]>('/v1/modules/'),
+    enabled: isAuthenticated,
+    staleTime: 30 * 1000,
+    gcTime: 5 * 60 * 1000,
+  });
+
+  // Set of backend module names that are EXPLICITLY disabled (non-core).
+  const disabledBackendModules = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of backendModules ?? []) {
+      if (!m.is_core && !m.enabled) set.add(m.name);
+    }
+    return set;
+  }, [backendModules]);
+
+  // True when the sidebar route's backing backend module is disabled.
+  const isRouteBackendDisabled = useCallback(
+    (to: string) => {
+      const path = to.split('?')[0]!;
+      const moduleName = ROUTE_BACKEND_MODULE[path];
+      return moduleName ? disabledBackendModules.has(moduleName) : false;
+    },
+    [disabledBackendModules],
+  );
 
   // Role-gate the admin grid. Items without a `roleGate` always show;
   // gated items only render when the current JWT role matches. The
@@ -764,6 +895,28 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
     setCollapsed((prev) => ({ ...prev, [groupId]: !prev[groupId] }));
   }, []);
 
+  // ── Product-tour reveal bridge ──────────────────────────────────────
+  // The global tour spotlights rows that live inside collapsible groups
+  // (e.g. "property" / "cad_bim_analytics"). Those groups are collapsed by
+  // default — and some are hidden entirely in simple view — so the target
+  // row is unmounted and the tour can't measure it. When the tour hits such
+  // a step it dispatches `oe:tour-reveal` with the group id; we force that
+  // group expanded and switch to advanced view if the group is gated behind
+  // it, so the row mounts and the spotlight can latch on.
+  useEffect(() => {
+    const onReveal = (evt: Event) => {
+      const groupId = (evt as CustomEvent<{ groupId?: string }>).detail?.groupId;
+      if (!groupId) return;
+      setCollapsed((prev) => ({ ...prev, [groupId]: false }));
+      const group = navGroups.find((g) => g.id === groupId);
+      if (group?.hideInSimple && useViewModeStore.getState().mode !== 'advanced') {
+        setViewMode('advanced');
+      }
+    };
+    window.addEventListener('oe:tour-reveal', onReveal);
+    return () => window.removeEventListener('oe:tour-reveal', onReveal);
+  }, [setViewMode]);
+
   const togglePin = useCallback((route: string) => {
     setPinned((prev) =>
       prev.includes(route) ? prev.filter((p) => p !== route) : [...prev, route],
@@ -842,6 +995,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
   const pinnedItems: NavItem[] = pinned
     .map((route) => ALL_NAV_ITEMS[route])
     .filter((item): item is NavItem => Boolean(item))
+    .filter((item) => !isRouteBackendDisabled(item.to))
     .filter((item) => editMode || !hiddenModules.includes(item.to));
 
   // Pick a single winning route for highlighting. Without this, both
@@ -1040,7 +1194,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
           the nav region (WCAG 2.4.1 + 1.3.1, Round 2 Wave D audit). */}
       <nav
         role="navigation"
-        aria-label="Main navigation"
+        aria-label={t('sidebar.main_navigation', { defaultValue: 'Main navigation' })}
         className={clsx(
           'flex-1 overflow-y-auto pt-2 pb-3',
           iconified ? 'px-2' : 'px-3',
@@ -1125,6 +1279,10 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
               (!item.moduleKey || isModuleEnabled(item.moduleKey)) &&
               (!item.advancedOnly || isAdvanced) &&
               (!item.adminOnly || userRole === 'admin') &&
+              // Backend-disabled gate — a System Module switched off on the
+              // Modules page hides its sidebar route here so we never link
+              // to a broken/blank surface.
+              !isRouteBackendDisabled(item.to) &&
               // Menu-editor filter — in normal mode, drop user-hidden
               // rows; in edit mode `effectiveHidden` is empty so every
               // row renders (muted via the editingHidden state below).
@@ -1404,8 +1562,8 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
               href="https://github.com/datadrivenconstruction/OpenConstructionERP"
               target="_blank"
               rel="noopener noreferrer"
-              title={`GitHub repository (v${APP_VERSION})`}
-              aria-label="GitHub repository"
+              title={`${t('sidebar.github_repo', { defaultValue: 'GitHub repository' })} (v${APP_VERSION})`}
+              aria-label={t('sidebar.github_repo', { defaultValue: 'GitHub repository' })}
               className="flex h-8 w-8 items-center justify-center rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated transition-all"
             >
               <Github size={13} strokeWidth={1.75} className="text-content-secondary" />
@@ -1415,7 +1573,7 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
               target="_blank"
               rel="noopener noreferrer"
               title={t('sidebar.community_title', { defaultValue: 'Community' })}
-              aria-label="Telegram community"
+              aria-label={t('sidebar.telegram_community', { defaultValue: 'Telegram community' })}
               className="flex h-8 w-8 items-center justify-center rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated transition-all"
             >
               <svg viewBox="0 0 24 24" fill="currentColor" className="h-[13px] w-[13px] text-content-secondary" aria-hidden>
@@ -1439,8 +1597,8 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                 href="https://github.com/datadrivenconstruction/OpenConstructionERP"
                 target="_blank"
                 rel="noopener noreferrer"
-                title="GitHub repository"
-                aria-label="GitHub repository"
+                title={t('sidebar.github_repo', { defaultValue: 'GitHub repository' })}
+                aria-label={t('sidebar.github_repo', { defaultValue: 'GitHub repository' })}
                 className="flex items-center justify-center gap-1.5 rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated hover:border-border-medium px-2 py-1.5 transition-all"
               >
                 <Github size={13} strokeWidth={1.75} className="text-content-secondary" />
@@ -1450,8 +1608,8 @@ export function Sidebar({ onClose }: { onClose?: () => void }) {
                 href="https://t.me/datadrivenconstruction"
                 target="_blank"
                 rel="noopener noreferrer"
-                title="Join the Telegram community"
-                aria-label="Telegram community"
+                title={t('sidebar.join_telegram', { defaultValue: 'Join the Telegram community' })}
+                aria-label={t('sidebar.telegram_community', { defaultValue: 'Telegram community' })}
                 className="flex items-center justify-center gap-1.5 rounded-md border border-border-light bg-surface-primary hover:bg-surface-elevated hover:border-border-medium px-2 py-1.5 transition-all"
               >
                 <svg viewBox="0 0 24 24" fill="currentColor" className="h-[13px] w-[13px] text-content-secondary" aria-hidden>
@@ -1719,7 +1877,7 @@ function SidebarItem({
               'shrink-0 flex h-4 min-w-[1rem] items-center justify-center rounded-full px-1 text-[10px] font-bold tabular-nums transition-colors',
               isActive
                 ? 'bg-oe-blue text-white'
-                : 'bg-oe-blue-subtle text-oe-blue',
+                : 'bg-oe-blue-subtle text-oe-blue-text',
             )}
             aria-hidden
           >

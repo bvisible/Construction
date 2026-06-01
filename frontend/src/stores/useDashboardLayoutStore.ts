@@ -53,6 +53,14 @@ interface ServerLayoutPayload {
 }
 
 /**
+ * Widgets hidden out of the box. `weather_site` is an opt-in field widget
+ * surfaced via dashboard Customize, not part of the default dashboard, so a
+ * fresh layout ships with it hidden. It stays in the registry (and the
+ * Customize manager) so the user can add it back in one click.
+ */
+const DEFAULT_HIDDEN: readonly string[] = ['weather_site'];
+
+/**
  * Suppression flag so the server-driven hydration doesn't immediately
  * fire a PUT back. We flip it ON before calling ``_setFromServer`` and
  * OFF in a microtask, so the debounced syncer (registered via
@@ -65,7 +73,7 @@ export const useDashboardLayoutStore = create<DashboardLayoutState>()(
   persist(
     (set) => ({
       order: [],
-      hidden: [],
+      hidden: [...DEFAULT_HIDDEN],
       hydrated: false,
 
       setOrder: (ids) => set({ order: ids }),
@@ -78,7 +86,7 @@ export const useDashboardLayoutStore = create<DashboardLayoutState>()(
       show: (id) => set((s) => ({ hidden: s.hidden.filter((x) => x !== id) })),
       hide: (id) =>
         set((s) => (s.hidden.includes(id) ? s : { hidden: [...s.hidden, id] })),
-      reset: () => set({ order: [], hidden: [] }),
+      reset: () => set({ order: [], hidden: [...DEFAULT_HIDDEN] }),
 
       _setFromServer: (order, hidden) => {
         suppressSync = true;
@@ -92,6 +100,25 @@ export const useDashboardLayoutStore = create<DashboardLayoutState>()(
     }),
     {
       name: 'oe.dashboard-layout',
+      // v1 (2026-05-29): `weather_site` became opt-in. Existing users — who
+      // never had it in `hidden` because it used to be visible by default —
+      // get it folded into their hidden set so they stop seeing it too. We
+      // only ADD `weather_site`; their order + any widgets they themselves
+      // hid are preserved untouched, so a genuinely customised layout is not
+      // wiped. They can re-add it from Customize.
+      version: 1,
+      migrate: (persisted, version) => {
+        const state = (persisted ?? {}) as Partial<DashboardLayoutState>;
+        const order = Array.isArray(state.order) ? state.order : [];
+        const hidden = Array.isArray(state.hidden) ? state.hidden : [];
+        if (version < 1) {
+          const merged = hidden.includes('weather_site')
+            ? hidden
+            : [...hidden, 'weather_site'];
+          return { ...state, order, hidden: merged } as DashboardLayoutState;
+        }
+        return { ...state, order, hidden } as DashboardLayoutState;
+      },
       // ``hydrated`` is runtime-only state, never persist it to localStorage.
       partialize: (state) => ({ order: state.order, hidden: state.hidden }),
     },
@@ -134,6 +161,30 @@ export function reconcileOrder(
 let hydrationStarted = false;
 let pendingTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSentPayload = '';
+
+/**
+ * One-time marker for the v1 `weather_site` fold against the server-side
+ * layout (see `hydrateDashboardLayoutFromServer`). Stored in localStorage so
+ * the fold runs at most once per browser — after which a deliberate re-add of
+ * the weather widget via Customize is respected and never re-hidden.
+ */
+const WEATHER_FOLD_KEY = 'oe.dashboard-layout.weather-fold-v1';
+
+function serverWeatherFoldDone(): boolean {
+  try {
+    return localStorage.getItem(WEATHER_FOLD_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function markServerWeatherFoldDone(): void {
+  try {
+    localStorage.setItem(WEATHER_FOLD_KEY, '1');
+  } catch {
+    /* storage unavailable — fold may re-run; harmless and idempotent. */
+  }
+}
 
 async function syncToServer(state: DashboardLayoutState): Promise<void> {
   const payload: ServerLayoutPayload = {
@@ -199,17 +250,34 @@ export async function hydrateDashboardLayoutFromServer(): Promise<void> {
     const remoteHasContent =
       (remote?.order?.length ?? 0) > 0 || (remote?.hidden?.length ?? 0) > 0;
     if (remoteHasContent) {
-      useDashboardLayoutStore
-        .getState()
-        ._setFromServer(remote.order ?? [], remote.hidden ?? []);
-      lastSentPayload = JSON.stringify({
-        order: remote.order ?? [],
-        hidden: remote.hidden ?? [],
-      });
+      const order = remote.order ?? [];
+      let hidden = remote.hidden ?? [];
+      // One-time v1 fold (2026-05-29): `weather_site` became opt-in. A
+      // cross-device user whose server layout predates this change has it
+      // visible (absent from `hidden`); fold it in once and push the
+      // corrected layout back up. Guarded by a localStorage marker so a
+      // later deliberate re-add via Customize is never re-hidden.
+      let pushBack = false;
+      if (!serverWeatherFoldDone() && !hidden.includes('weather_site')) {
+        hidden = [...hidden, 'weather_site'];
+        pushBack = true;
+      }
+      markServerWeatherFoldDone();
+      useDashboardLayoutStore.getState()._setFromServer(order, hidden);
+      lastSentPayload = JSON.stringify({ order, hidden });
+      if (pushBack) {
+        // Persist the corrected layout for the user's other devices. Bypass
+        // the dedupe guard we just primed by clearing lastSentPayload.
+        lastSentPayload = '';
+        void syncToServer({ ...useDashboardLayoutStore.getState(), order, hidden });
+      }
       return;
     }
-    // Server is empty: if we have a local customisation, push it up so this
-    // is the layout the next browser sees.
+    // Server is empty: the local default (already has `weather_site` hidden
+    // via the persist migration) stands. Mark the v1 fold done so we never
+    // retro-hide it on a later boot, and push the local layout up so this is
+    // what the user's next browser sees.
+    markServerWeatherFoldDone();
     const local = useDashboardLayoutStore.getState();
     if (local.order.length > 0 || local.hidden.length > 0) {
       void syncToServer(local);

@@ -1,0 +1,206 @@
+"""NCR cross-module event subscribers (HSE/QMS/Risk wave).
+
+These handlers wire the standalone NCR module to upstream events without
+import-time coupling. Registered idempotently via
+:func:`register_subscribers` from ``app.modules.ncr.__init__``.
+
+Subscriptions:
+
+* ``qms.audit.finding_raised`` whose payload requests a corrective action →
+  mirror as an NCR in the NCR module so non-conformances detected during a
+  QMS audit appear on the project NCR dashboard. Idempotent via the
+  ``source_finding_id`` marker stored in ``NCR.metadata_``.
+
+* ``ncr.closed_with_cost_impact`` → publish ``moc.candidate_from_ncr`` so
+  the MoC module (or any subscriber) can auto-propose a Management-of-
+  Change entry for scope-affecting NCRs. Cheap fan-out — no DB write here.
+
+All handlers are fail-soft: any exception is swallowed at debug. Cross-
+session writes are SQLite-deadlock-gated via :func:`_can_open_isolated_session`.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+
+from sqlalchemy import select
+
+from app.core.events import Event, event_bus
+from app.database import async_session_factory
+from app.modules.ncr.models import NCR
+
+logger = logging.getLogger(__name__)
+
+
+_SUBSCRIBED_FLAG = "_ncr_subscribers_registered"
+
+
+async def _can_open_isolated_session() -> bool:
+    """Return True only when we can safely write from a subscriber.
+
+    Mirrors the QMS/risk gates: SQLite has a single-writer lock, so opening
+    a second session inside an event handler while the publisher still
+    holds the request transaction deadlocks. We only auto-materialise on
+    PostgreSQL.
+    """
+    try:
+        async with async_session_factory() as probe:
+            bind = probe.get_bind()
+            dialect = getattr(getattr(bind, "dialect", None), "name", "") or ""
+        return dialect == "postgresql"
+    except Exception:
+        return False
+
+
+# ── qms.audit.finding_raised → standalone-NCR row ───────────────────────
+
+
+_FINDING_SEVERITY_TO_NCR_SEVERITY = {
+    "major_nc": "major",
+    "minor_nc": "minor",
+    "observation": "observation",
+    "opportunity": "observation",
+}
+
+
+async def _on_qms_finding_raised(event: Event) -> None:
+    """``qms.audit.finding_raised`` → mirror as an NCR row.
+
+    Only major / minor non-conformances are mirrored — observations and
+    improvement opportunities are kept inside QMS to avoid noise on the
+    NCR dashboard. Idempotent on ``source_finding_id``.
+    """
+    if not await _can_open_isolated_session():
+        return
+    data = event.data or {}
+    finding_id = data.get("finding_id")
+    audit_id = data.get("audit_id")
+    project_id_raw = data.get("project_id")
+    finding_type = (data.get("finding_type") or "").lower()
+    if not (finding_id and audit_id and project_id_raw):
+        return
+    if finding_type not in {"major_nc", "minor_nc"}:
+        # Observations / opportunities don't warrant an NCR row.
+        return
+    try:
+        project_id = uuid.UUID(str(project_id_raw))
+    except (ValueError, TypeError):
+        return
+
+    try:
+        async with async_session_factory() as session:
+            # Idempotency — check for an existing NCR with this finding marker.
+            stmt = select(NCR).where(NCR.project_id == project_id)
+            existing = (await session.execute(stmt)).scalars().all()
+            finding_id_s = str(finding_id)
+            for row in existing:
+                md = row.metadata_ if isinstance(row.metadata_, dict) else {}
+                if md.get("source_finding_id") == finding_id_s:
+                    return
+
+            from app.modules.ncr.repository import NCRRepository
+
+            repo = NCRRepository(session)
+            ncr_number = await repo.next_ncr_number(project_id)
+            severity = _FINDING_SEVERITY_TO_NCR_SEVERITY.get(finding_type, "minor")
+            ncr = NCR(
+                project_id=project_id,
+                ncr_number=ncr_number,
+                title=f"QMS audit finding → NCR ({finding_type})"[:500],
+                description=(
+                    f"Auto-mirrored from QMS audit {audit_id}, "
+                    f"finding {finding_id_s}. "
+                    f"Type: {finding_type}."
+                )[:10000],
+                ncr_type="documentation",
+                severity=severity,
+                status="identified",
+                metadata_={
+                    "source": "qms",
+                    "source_event": "qms.audit.finding_raised",
+                    "source_finding_id": finding_id_s,
+                    "source_audit_id": str(audit_id),
+                },
+            )
+            session.add(ncr)
+            await session.commit()
+            logger.info(
+                "ncr: auto-mirrored QMS finding %s → NCR %s (%s)",
+                finding_id_s,
+                ncr.id,
+                ncr_number,
+            )
+            event_bus.publish_detached(
+                "ncr.mirrored_from_qms_finding",
+                {
+                    "source_finding_id": finding_id_s,
+                    "source_audit_id": str(audit_id),
+                    "ncr_id": str(ncr.id),
+                    "ncr_number": ncr_number,
+                    "project_id": str(project_id),
+                    "severity": severity,
+                },
+                source_module="ncr",
+            )
+    except Exception:
+        logger.debug("ncr: _on_qms_finding_raised failed", exc_info=True)
+
+
+# ── ncr.closed_with_cost_impact → MoC candidate fan-out ─────────────────
+
+
+async def _on_ncr_closed_with_cost_impact(event: Event) -> None:
+    """``ncr.closed_with_cost_impact`` → ``moc.candidate_from_ncr`` fan-out.
+
+    The MoC module decides whether the cost is scope-affecting (its own
+    threshold + policy) and whether to auto-create a MoC entry. We only
+    re-emit so loose coupling is preserved. Also publishes a BI nudge for
+    the COPQ / scope-creep gauges.
+    """
+    data = event.data or {}
+    ncr_id = data.get("ncr_id")
+    project_id = data.get("project_id")
+    if not (ncr_id and project_id):
+        return
+    try:
+        event_bus.publish_detached(
+            "moc.candidate_from_ncr",
+            {
+                "source_event": "ncr.closed_with_cost_impact",
+                "ncr_id": str(ncr_id),
+                "ncr_number": data.get("ncr_number") or "",
+                "project_id": str(project_id),
+                "title": data.get("title") or "",
+                "cost_impact": data.get("cost_impact") or "",
+                "schedule_impact_days": data.get("schedule_impact_days") or 0,
+            },
+            source_module="ncr",
+        )
+    except Exception:
+        logger.debug("ncr: moc.candidate_from_ncr emit failed", exc_info=True)
+
+    try:
+        event_bus.publish_detached(
+            "bi_dashboards.kpi_recompute",
+            {
+                "source_module": "ncr",
+                "source_event": "ncr.closed_with_cost_impact",
+                "project_id": str(project_id),
+                "kpi_codes": ["ncr_closed_count", "scope_creep_value"],
+                "reason": "ncr_closed_with_cost",
+            },
+            source_module="ncr",
+        )
+    except Exception:
+        logger.debug("ncr: kpi_recompute emit failed", exc_info=True)
+
+
+def register_subscribers() -> None:
+    """Idempotently subscribe NCR cross-module handlers."""
+    if getattr(event_bus, _SUBSCRIBED_FLAG, False):
+        return
+    event_bus.subscribe("qms.audit.finding_raised", _on_qms_finding_raised)
+    event_bus.subscribe("ncr.closed_with_cost_impact", _on_ncr_closed_with_cost_impact)
+    setattr(event_bus, _SUBSCRIBED_FLAG, True)
+    logger.info("NCR: 2 cross-module subscriber(s) registered")

@@ -50,7 +50,7 @@ import { RequiresProject } from '@/shared/auth/RequiresProject';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useCreateShortcut } from '@/shared/hooks/useCreateShortcut';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
-import { apiGet, triggerDownload } from '@/shared/lib/api';
+import { apiGet, extractErrorMessageFromBody, triggerDownload } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -1497,7 +1497,7 @@ async function downloadMeetingPdf(meetingId: string): Promise<void> {
     let detail = 'PDF export failed';
     try {
       const body = await response.json();
-      detail = body.detail || 'PDF export failed';
+      detail = extractErrorMessageFromBody(body) ?? 'PDF export failed';
     } catch {
       // ignore parse error
     }

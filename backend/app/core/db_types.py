@@ -33,11 +33,11 @@ raises at bind time, not in downstream code.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from sqlalchemy import Date, Numeric, String, TypeDecorator
+from sqlalchemy import Date, DateTime, Numeric, String, TypeDecorator
 
 
 class MoneyType(TypeDecorator):
@@ -70,9 +70,7 @@ class MoneyType(TypeDecorator):
             return dialect.type_descriptor(Numeric(self.precision, self.scale))
         return dialect.type_descriptor(String(50))
 
-    def process_bind_param(
-        self, value: Decimal | str | int | float | None, dialect: Any
-    ) -> Decimal | str | None:
+    def process_bind_param(self, value: Decimal | str | int | float | None, dialect: Any) -> Decimal | str | None:
         if value is None:
             return None
         try:
@@ -85,9 +83,7 @@ class MoneyType(TypeDecorator):
         # SQLite: canonical string form (no scientific notation, no trailing junk).
         return format(normalised, "f")
 
-    def process_result_value(
-        self, value: Decimal | str | None, dialect: Any
-    ) -> Decimal | None:
+    def process_result_value(self, value: Decimal | str | None, dialect: Any) -> Decimal | None:
         if value is None:
             return None
         if isinstance(value, Decimal):
@@ -130,9 +126,7 @@ class SafeDate(TypeDecorator):
             return date.fromisoformat(head)
         raise ValueError(f"SafeDate: cannot coerce {value!r} to date")
 
-    def process_bind_param(
-        self, value: date | datetime | str | None, dialect: Any
-    ) -> date | str | None:
+    def process_bind_param(self, value: date | datetime | str | None, dialect: Any) -> date | str | None:
         if value is None:
             return None
         normalised = self._to_date(value)
@@ -140,11 +134,58 @@ class SafeDate(TypeDecorator):
             return normalised
         return normalised.isoformat()
 
-    def process_result_value(
-        self, value: date | str | None, dialect: Any
-    ) -> date | None:
+    def process_result_value(self, value: date | str | None, dialect: Any) -> date | None:
         if value is None:
             return None
         if isinstance(value, date) and not isinstance(value, datetime):
             return value
         return self._to_date(value)
+
+
+class AwareDateTime(TypeDecorator):
+    """‌⁠‍Timezone-aware timestamp column that tolerates loose inputs.
+
+    Stores ``TIMESTAMP WITH TIME ZONE`` (``DateTime(timezone=True)``) on both
+    backends, but coerces the bound value to a timezone-aware ``datetime`` first:
+
+    * an ISO-8601 *string* (``"2026-05-30T00:00:00Z"`` / ``"...+05:30"`` / a bare
+      ``"2026-05-30T00:00:00"``) is parsed;
+    * a *naive* ``datetime`` is assumed UTC.
+
+    This matters on PostgreSQL: asyncpg refuses to bind a naive ``datetime`` — or
+    any ``str`` — to a ``TIMESTAMPTZ`` parameter and raises ``DataError``. SQLite
+    silently stored whatever it was given, so loose callers (weather auto-fetch
+    writing ISO strings, API payloads with offset-less timestamps) only broke on
+    PG. Normalising at bind time keeps those call sites working on both dialects.
+
+    Always reads back a timezone-aware ``datetime`` (or ``None``).
+    """
+
+    impl = DateTime(timezone=True)
+    cache_ok = True
+
+    @staticmethod
+    def _to_aware(value: datetime | str) -> datetime:
+        if isinstance(value, str):
+            text = value.strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            value = datetime.fromisoformat(text)
+        if not isinstance(value, datetime):
+            raise ValueError(f"AwareDateTime: cannot coerce {value!r} to datetime")
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value
+
+    def process_bind_param(self, value: datetime | str | None, dialect: Any) -> datetime | None:
+        if value is None:
+            return None
+        return self._to_aware(value)
+
+    def process_result_value(self, value: datetime | str | None, dialect: Any) -> datetime | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        # SQLite may hand back a stored ISO string for legacy rows.
+        return self._to_aware(value)

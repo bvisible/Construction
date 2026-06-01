@@ -88,7 +88,7 @@ Trace zip kept at `frontend/.tests-artifacts/r6/property_dev/buyer_edit/_playwri
 
 1. **Email uniqueness within a development** — currently NOT enforced at the schema level. `test_update_buyer_email_collision` accepts `(200, 409)`. If the product decides duplicates are a bug, add a `UniqueConstraint("development_id", "email")` and an alembic migration; the test will tighten automatically.
 2. **Sister endpoints lack the IDOR guard**: plots, selections, handovers, snags, warranty-claims. Each is a single-helper change but cumulatively a Round-7 candidate.
-3. **Viewer-role Playwright leg** is skipped — no `demo-viewer@openestimator.io` seed exists. The seeded demos are `demo`, `estimator`, `manager`. Either ship a viewer demo or remove the leg.
+3. **Viewer-role Playwright leg** is skipped — no `demo-viewer@openconstructionerp.com` seed exists. The seeded demos are `demo`, `estimator`, `manager`. Either ship a viewer demo or remove the leg.
 4. **Onboarding tour overlay**: the Playwright spec dismisses it via localStorage; if the tour gains a server-side completion flag, the dismissal helper will need updating.
 5. **i18n keys** (`propdev.edit.*` namespace) currently fall back to English `defaultValue` strings. Translation backfill into the 27 locales is a follow-up sweep.
 6. **`/property-dev` route name**: confirmed via the running dev server (`http://localhost:5173/property-dev`). The route slug isn't a constant in the codebase — if it ever changes, the Playwright spec's `await page.goto('/property-dev')` will need updating.

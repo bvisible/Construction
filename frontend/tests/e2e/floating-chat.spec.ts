@@ -12,7 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DEMO_EMAIL = 'demo@openestimator.io';
+const DEMO_EMAIL = 'demo@openconstructionerp.com';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..', '..');
 const TODAY = new Date().toISOString().slice(0, 10);

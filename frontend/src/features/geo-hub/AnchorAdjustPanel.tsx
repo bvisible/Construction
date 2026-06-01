@@ -92,10 +92,16 @@ export function AnchorAdjustPanel({
       : null;
   const sourceLabel =
     sourceRaw === 'cache'
-      ? 'OSM Nominatim (cached)'
+      ? t('geo_hub.adjust.source_cached', {
+          defaultValue: 'OSM Nominatim (cached)',
+        })
       : sourceRaw === 'manual'
-        ? 'Manually placed'
-        : 'OSM Nominatim';
+        ? t('geo_hub.adjust.source_manual', {
+            defaultValue: 'Manually placed',
+          })
+        : t('geo_hub.adjust.source_nominatim', {
+            defaultValue: 'OSM Nominatim',
+          });
 
   async function reGeocode() {
     if (isRegeocoding) return;

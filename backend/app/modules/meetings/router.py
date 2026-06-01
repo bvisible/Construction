@@ -17,7 +17,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import StreamingResponse
 
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
@@ -40,7 +40,7 @@ from app.modules.meetings.schemas import (
 )
 from app.modules.meetings.service import MeetingService
 
-router = APIRouter()
+router = APIRouter(tags=["meetings"])
 logger = logging.getLogger(__name__)
 
 
@@ -95,9 +95,7 @@ async def list_meetings(
         max_length=200,
         description="Free-text search across title, agenda, minutes, and meeting number.",
     ),
-    sort_by: str | None = Query(
-        default=None, description="Sort field: date, meeting_date, status, created_at"
-    ),
+    sort_by: str | None = Query(default=None, description="Sort field: date, meeting_date, status, created_at"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
     service: MeetingService = Depends(_get_service),
 ) -> list[MeetingResponse]:
@@ -906,6 +904,34 @@ async def import_meeting_summary(
     if not content:
         raise HTTPException(status_code=400, detail="File is empty")
 
+    # Magic-byte sniff — filename is hostile-supplied. Reject any payload
+    # whose first bytes don't match the declared format before we hand
+    # the buffer to python-docx / PyMuPDF / VTT/SRT parsers. Plain-text
+    # transcripts (txt/vtt/srt) have no canonical signature, so we use a
+    # denylist of known-binary prefixes instead.
+    head = content[:8]
+    if ext == "pdf":
+        # Allow a few bytes of leading whitespace/BOM (some scanners).
+        stripped = head.lstrip(b"\x00\xef\xbb\xbf \t\r\n")
+        if not stripped.startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="File does not look like a valid PDF (missing %PDF- signature).",
+            )
+    elif ext == "docx":
+        if not head.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                detail="File does not look like a valid .docx (missing ZIP signature).",
+            )
+    else:  # txt / vtt / srt — text-only formats
+        for sig in (b"MZ", b"\x7fELF", b"\xca\xfe\xba\xbe", b"PK\x03\x04", b"\xd0\xcf\x11\xe0", b"%PDF-"):
+            if head.startswith(sig):
+                raise HTTPException(
+                    status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                    detail="File does not look like a plain-text transcript (binary signature detected).",
+                )
+
     # Extract text
     text_content = await _extract_text_from_file(content, file.filename)
     if not text_content.strip():
@@ -1230,7 +1256,9 @@ async def materialize_meeting_series(
         )
     until_dt = datetime.strptime(body.until, "%Y-%m-%d").replace(tzinfo=UTC)
     new_occurrences = await service.generate_occurrences(
-        str(master.id), until_dt, user_id=str(user_id) if user_id else None,
+        str(master.id),
+        until_dt,
+        user_id=str(user_id) if user_id else None,
     )
     return MeetingSeriesResponse(
         series_id=master.id,
@@ -1309,7 +1337,8 @@ async def record_external_attendee(
     meeting = await service.get_meeting(meeting_id)
     await verify_project_access(meeting.project_id, str(user_id), session)
     row = await service.record_external_attendee(
-        meeting_id, body.name,
+        meeting_id,
+        body.name,
         signature_image_data=body.signature_image_data,
     )
     return _attendance_to_row(row)

@@ -206,3 +206,25 @@ export interface FileFilters {
   limit?: number;
   offset?: number;
 }
+
+/* ── Per-user favourites / pins ──────────────────────────────────────── */
+
+/** One ``user × file`` favourite row. Mirrors the backend
+ * ``FavoriteResponse`` schema in
+ * backend/app/modules/file_favorites/schemas.py. */
+export interface FileFavorite {
+  id: string;
+  user_id: string;
+  project_id: string;
+  file_kind: FileKind;
+  file_id: string;
+  pinned: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Stable lookup key for a favourite — matches the backend's
+ * ``(file_kind, file_id)`` uniqueness scope. */
+export function favoriteKey(kind: FileKind, fileId: string): string {
+  return `${kind}:${fileId}`;
+}

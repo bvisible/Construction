@@ -22,7 +22,12 @@ vi.mock('@/shared/lib/api', () => ({
 
 vi.mock('../api', () => ({
   previewYaml: vi.fn().mockResolvedValue({ pack: { rules: [] } }),
-  installYaml: vi.fn().mockResolvedValue({ pack_id: 'pack', installed_rule_count: 0 }),
+  installYaml: vi.fn().mockResolvedValue({
+    requirement_set_id: 'rs-1',
+    pack_id: 'pack',
+    rules_installed: 0,
+    rule_ids: [],
+  }),
 }));
 
 import { RulePackLibrary } from '../RulePackLibrary';

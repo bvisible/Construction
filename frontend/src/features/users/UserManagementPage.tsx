@@ -426,7 +426,11 @@ function ModuleAccessPanel({
               {user.full_name} ({user.email})
             </p>
           </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-surface-secondary">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="p-1 rounded hover:bg-surface-secondary"
+          >
             <X size={16} />
           </button>
         </div>

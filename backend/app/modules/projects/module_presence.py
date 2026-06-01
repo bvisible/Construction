@@ -12,8 +12,9 @@ Design constraints
 * **Cheap probes only.** Each module check is a single
   ``SELECT 1 FROM <table> WHERE project_id = :pid LIMIT 1`` — no
   ``COUNT(*)``, no joins. Index hit per row, O(1) per probe.
-* **Concurrent.** All probes run via :func:`asyncio.gather` so the total
-  latency is dominated by the slowest single probe, not the sum.
+* **Sequential + isolated.** Probes run one-by-one (an ``AsyncSession`` is not
+  concurrency-safe); each rolls back on failure so one bad probe can't abort the
+  shared PostgreSQL transaction and cascade the rest into false negatives.
 * **Defensive.** A missing table (fresh DB, alembic not yet run) yields
   ``False`` — never a 500. ``OperationalError`` / ``ProgrammingError``
   are swallowed silently per-probe; nothing else is.
@@ -32,7 +33,6 @@ sidebar slug with a SQL fragment. Adding a new module is one line.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
@@ -112,8 +112,7 @@ PRESENCE_PROBES: tuple[Probe, ...] = (
     Probe("assemblies", _project_probe("oe_assemblies_assembly")),
     Probe(
         "smart_views",
-        "SELECT 1 FROM oe_smart_view "
-        "WHERE scope_type = 'project' AND scope_id = :pid LIMIT 1",
+        "SELECT 1 FROM oe_smart_view WHERE scope_type = 'project' AND scope_id = :pid LIMIT 1",
     ),
     Probe("bim_requirements", _project_probe("oe_bim_requirement_set")),
     Probe("bcf", _project_probe("oe_bcf_topic")),
@@ -122,7 +121,12 @@ PRESENCE_PROBES: tuple[Probe, ...] = (
     Probe("tasks", _project_probe("oe_tasks_task")),
     # 5D = BOQ × Schedule combined; sidebar lights it up only when
     # the schedule has activities (BOQ alone is a 2D check).
-    Probe("5d", _project_probe("oe_schedule_activity")),
+    # Schedule activities link to a project via their parent Schedule, not
+    # directly — so probe the project-scoped ``oe_schedule_schedule`` table.
+    # (Probing oe_schedule_activity.project_id raised "column does not exist" on
+    # PostgreSQL, which aborted the shared probe transaction and cascaded every
+    # subsequent probe to a false negative — dimming unrelated sidebar modules.)
+    Probe("5d", _project_probe("oe_schedule_schedule")),
     Probe("risk", _project_probe("oe_risk_register")),
     Probe("field_reports", _project_probe("oe_fieldreports_report")),
     Probe("daily_diary", _project_probe("oe_daily_diary_diary")),
@@ -144,13 +148,21 @@ PRESENCE_PROBES: tuple[Probe, ...] = (
     Probe("contracts", _project_probe("oe_contracts_contract")),
     Probe("subcontractors", _project_probe("oe_subcontractors_subcontractor")),
     Probe("bid_management", _project_probe("oe_bid_management_package")),
-    Probe("variations", _project_probe("oe_variations_request")),
+    # A project has variations activity if it has either a variation request or
+    # an executed variation order (demo data seeds orders), so probe both.
+    Probe(
+        "variations",
+        "SELECT 1 FROM oe_variations_order WHERE project_id = :pid "
+        "UNION ALL SELECT 1 FROM oe_variations_request WHERE project_id = :pid LIMIT 1",  # noqa: S608
+    ),
     # Supplier catalogs are vendor-scoped (global); sidebar treats them
     # as present only if vendor records exist at all (cheap proxy).
     Probe("supplier_catalogs", "SELECT 1 FROM oe_supplier_catalogs_vendor LIMIT 1"),
     Probe("property_dev", _project_probe("oe_property_dev_development")),
     # ── Communication & Docs ───────────────────────────────────────────
-    Probe("contacts", _project_probe("oe_contacts_contact")),
+    # Contacts are an org-wide address book (the table has no project_id), so
+    # probe org-wide presence like supplier_catalogs rather than per-project.
+    Probe("contacts", "SELECT 1 FROM oe_contacts_contact LIMIT 1"),  # noqa: S608
     Probe("meetings", _project_probe("oe_meetings_meeting")),
     Probe("rfi", _project_probe("oe_rfi_rfi")),
     Probe("submittals", _project_probe("oe_submittals_submittal")),
@@ -193,9 +205,14 @@ async def _run_one_probe(
 ) -> tuple[str, bool]:
     """Execute a single probe; missing table or any DB-shape issue → False.
 
-    Returns ``(module_key, has_data)``. Errors are deliberately swallowed
-    at DEBUG level — a 500 here would dim the whole sidebar for a single
-    unwired module, which is a much worse UX than a stale ``False``.
+    Returns ``(module_key, has_data)``. On PostgreSQL a failed statement aborts
+    the *whole* transaction, so a single probe against a table that lacks a
+    ``project_id`` column (or doesn't exist yet) would otherwise cascade every
+    later probe into ``InFailedSQLTransactionError`` and dim half the sidebar.
+    To prevent that we roll the (read-only) session back to a clean state on any
+    error — safe because the caller now runs probes sequentially, not on a shared
+    concurrent session. Errors stay swallowed: a 500 here would dim the whole
+    sidebar for one unwired module, a much worse UX than a stale ``False``.
     """
     try:
         # ``str(uuid)`` works for both PostgreSQL UUID columns (cast by
@@ -207,18 +224,17 @@ async def _run_one_probe(
     except (OperationalError, ProgrammingError):
         # Missing table / column. Expected on fresh DBs or before
         # migrations land. Don't log at WARNING — too noisy.
+        await _safe_rollback(session)
         logger.debug(
             "module_presence: probe %s skipped (table missing or schema mismatch)",
             probe.module_key,
         )
         return probe.module_key, False
     except InFailedSQLTransactionError:
-        # The session's transaction was aborted by a prior concurrent probe.
-        # We cannot safely rollback on a shared session — other probes are
-        # still executing concurrently. Just return False; the caller gets a
-        # fresh session on the next request.
-        logger.warning(
-            "module_presence: probe %s skipped (transaction aborted by prior probe)",
+        # A prior probe aborted the transaction. Clear it and carry on.
+        await _safe_rollback(session)
+        logger.debug(
+            "module_presence: probe %s skipped (transaction was aborted)",
             probe.module_key,
         )
         return probe.module_key, False
@@ -226,11 +242,20 @@ async def _run_one_probe(
         # Anything else (e.g. dialect-specific cast failure) — still
         # return False so the endpoint stays a 200. Log loudly so we
         # notice in CI.
+        await _safe_rollback(session)
         logger.exception(
             "module_presence: probe %s raised unexpected error",
             probe.module_key,
         )
         return probe.module_key, False
+
+
+async def _safe_rollback(session: AsyncSession) -> None:
+    """Roll back an aborted (read-only) probe transaction so the next probe runs."""
+    try:
+        await session.rollback()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def probe_project_modules(
@@ -241,9 +266,13 @@ async def probe_project_modules(
 ) -> dict[str, bool]:
     """Return ``{module_key: has_data}`` for every probe in the registry.
 
-    All probes run concurrently via ``asyncio.gather`` so total latency
-    ≈ slowest single probe (typically <20 ms with an index). The result
-    is cached per ``project_id`` for ``_PRESENCE_TTL_SECONDS``.
+    Probes run **sequentially** (not via ``asyncio.gather``): an ``AsyncSession``
+    is not safe for concurrent operations, and on PostgreSQL one failing probe
+    aborts the shared transaction and would cascade the rest into false
+    negatives. ``_run_one_probe`` rolls back on error so a bad probe can't poison
+    its neighbours. Each probe is a fast indexed ``SELECT 1 ... LIMIT 1`` and the
+    whole result is cached per ``project_id`` for ``_PRESENCE_TTL_SECONDS``, so
+    the sequential cost is paid at most once a minute.
 
     The returned dict keys match the sidebar slugs (``"5d"`` rather
     than ``"five_d"``); the router maps those to schema field aliases
@@ -256,10 +285,10 @@ async def probe_project_modules(
             if time.monotonic() - ts < _PRESENCE_TTL_SECONDS:
                 return dict(payload)  # defensive copy
 
-    pairs = await asyncio.gather(
-        *(_run_one_probe(session, probe, project_id) for probe in PRESENCE_PROBES),
-    )
-    payload: dict[str, bool] = dict(pairs)
+    payload: dict[str, bool] = {}
+    for probe in PRESENCE_PROBES:
+        key, has_data = await _run_one_probe(session, probe, project_id)
+        payload[key] = has_data
 
     if use_cache:
         _PRESENCE_CACHE[project_id] = (dict(payload), time.monotonic())

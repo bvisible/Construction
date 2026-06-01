@@ -21,7 +21,7 @@
 import { useMemo } from 'react';
 import { useQuery, useQueries } from '@tanstack/react-query';
 
-import { apiGet } from '@/shared/lib/api';
+import { apiGet, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { useAuthStore } from '@/stores/useAuthStore';
 
 /* ── Types ─────────────────────────────────────────────────────────── */
@@ -62,6 +62,28 @@ export interface LoadedMember {
 export interface MemberLoadError {
   modelId: string;
   error: Error;
+  /** True when the member simply has no 3D geometry available yet (HTTP
+   *  404 from the geometry endpoint) rather than a genuine fetch failure.
+   *  The viewer renders this as an informational "no geometry yet" note
+   *  instead of a red error. */
+  noGeometry: boolean;
+  /** Best-effort display label (short model-id slice). */
+  modelName: string;
+}
+
+/** Error raised when a member's geometry endpoint returns 404 — i.e. the
+ *  model exists but has not produced a GLB yet (conversion pending, or the
+ *  source had no renderable geometry). Carries the status so existing
+ *  diagnostics keep working; the UI keys off `noGeometry` rather than the
+ *  raw message. */
+export class NoGeometryError extends Error {
+  readonly noGeometry = true;
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'NoGeometryError';
+    this.status = status;
+  }
 }
 
 export interface UseFederatedGeometryLoaderResult {
@@ -91,19 +113,36 @@ async function fetchMemberGeometry(
   };
   if (token) headers.Authorization = `Bearer ${token}`;
   const url = `/api/v1/bim-hub/models/${encodeURIComponent(args.modelId)}/geometry/`;
+  const modelName = args.modelId.slice(0, 8);
   const resp = await fetch(url, { headers });
   if (!resp.ok) {
     let detail = '';
     try {
       const ct = resp.headers.get('content-type') ?? '';
       if (ct.includes('application/json')) {
-        const body = (await resp.json()) as { detail?: string };
-        detail = body?.detail ?? '';
+        // The geometry endpoint returns a STRUCTURED detail object on error
+        // ({error, category, message, remediation, ...}). Normalise it to a
+        // string so the messages below never interpolate "[object Object]".
+        const body = (await resp.json()) as unknown;
+        detail = extractErrorMessageFromBody(body) ?? '';
       } else {
         detail = (await resp.text()).slice(0, 240);
       }
     } catch {
       /* ignore */
+    }
+    // 404 is not a real failure: the model is known but has no GLB yet
+    // (conversion still pending, or the source carried no 3D geometry).
+    // Surface it as an informational per-member state so the federation
+    // keeps rendering its other members. The status stays in the message
+    // for diagnostics; the UI keys off the `noGeometry` flag.
+    if (resp.status === 404) {
+      throw new NoGeometryError(
+        detail
+          ? `${modelName}: no 3D geometry yet (404): ${detail}`
+          : `${modelName}: no 3D geometry yet (404)`,
+        404,
+      );
     }
     throw new Error(
       detail
@@ -176,11 +215,16 @@ export function useFederatedGeometryLoader(
     const args = memberArgs[i];
     if (!q || !args) continue;
     if (q.data) members.push(q.data);
-    if (q.error)
+    if (q.error) {
+      const error =
+        q.error instanceof Error ? q.error : new Error(String(q.error));
       errors.push({
         modelId: args.modelId,
-        error: q.error instanceof Error ? q.error : new Error(String(q.error)),
+        error,
+        noGeometry: error instanceof NoGeometryError,
+        modelName: args.modelId.slice(0, 8),
       });
+    }
   }
 
   const isLoading =

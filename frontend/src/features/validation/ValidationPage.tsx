@@ -1,6 +1,6 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ShieldCheck,
@@ -66,7 +66,165 @@ interface ValidationReportData {
   results: ValidationResultItem[];
 }
 
+/* ── Backend wire shapes (validation module) ──────────────────────────── */
+
+/** Single result item as returned by POST /v1/validation/run/. */
+interface RunValidationResultItem {
+  rule_id: string;
+  status: string; // "pass" | "warning" | "error" | "info"
+  message: string;
+  element_ref: string | null;
+  details: Record<string, unknown> | null;
+  suggestion: string | null;
+}
+
+/** Response body of POST /v1/validation/run/. */
+interface RunValidationResponse {
+  report_id: string;
+  status: string;
+  score: number | null;
+  total_rules: number;
+  passed_count: number;
+  warning_count: number;
+  error_count: number;
+  info_count: number;
+  rule_sets: string[];
+  duration_ms: number;
+  results: RunValidationResultItem[];
+}
+
+/**
+ * Stored result item embedded in a persisted ValidationReport. Richer than
+ * the run-response item — it carries `rule_name`, `severity` and `passed`
+ * because the server keeps the full engine output in `results`.
+ */
+interface StoredResultItem {
+  rule_id: string;
+  rule_name?: string;
+  severity?: string;
+  status?: string;
+  passed?: boolean;
+  message: string;
+  element_ref?: string | null;
+  details?: Record<string, unknown> | null;
+  suggestion?: string | null;
+}
+
+/** Response body of GET /v1/validation/reports/{id} and the list endpoint. */
+interface ValidationReportResponse {
+  id: string;
+  project_id: string;
+  target_type: string;
+  target_id: string;
+  rule_set: string;
+  status: string;
+  score: string | null;
+  total_rules: number;
+  passed_count: number;
+  error_count: number;
+  warning_count: number;
+  results: StoredResultItem[];
+  created_at: string | null;
+  metadata: { duration_ms?: number; rule_sets?: string[] } | null;
+}
+
 type FilterMode = 'all' | 'errors' | 'warnings' | 'info' | 'passed';
+
+/* ── Rule-set resolution ──────────────────────────────────────────────── */
+
+/**
+ * Resolve which rule sets a project validates against, from its
+ * classification standard. `boq_quality` is universal and always applied;
+ * the classification-specific sets are layered on top. This mirrors the
+ * engine's registered rule sets and is the exact list sent to /run/.
+ */
+function resolveRuleSets(classificationStandard: string | undefined): string[] {
+  const sets = ['boq_quality'];
+  const std = (classificationStandard ?? '').trim().toLowerCase();
+  switch (std) {
+    case 'din276':
+      sets.push('din276', 'gaeb');
+      break;
+    case 'nrm':
+      sets.push('nrm');
+      break;
+    case 'masterformat':
+      sets.push('masterformat');
+      break;
+    default:
+      break;
+  }
+  return sets;
+}
+
+/** Normalise an engine severity/status string to the UI severity union. */
+function toSeverity(value: string | undefined): 'error' | 'warning' | 'info' {
+  if (value === 'error') return 'error';
+  if (value === 'info') return 'info';
+  return 'warning';
+}
+
+/** Map a POST /v1/validation/run/ response into the page's report shape. */
+function mapRunResponse(data: RunValidationResponse): ValidationReportData {
+  return {
+    id: data.report_id,
+    status: data.status as ValidationReportData['status'],
+    score: data.score ?? 0,
+    counts: {
+      total: data.total_rules,
+      passed: data.passed_count,
+      errors: data.error_count,
+      warnings: data.warning_count,
+      infos: data.info_count,
+    },
+    rule_sets: data.rule_sets,
+    duration_ms: data.duration_ms,
+    results: data.results.map((r) => {
+      const passed = r.status === 'pass';
+      return {
+        rule_id: r.rule_id,
+        rule_name: r.rule_id,
+        severity: toSeverity(r.status),
+        passed,
+        message: r.message,
+        element_ref: r.element_ref,
+        suggestion: r.suggestion,
+      };
+    }),
+  };
+}
+
+/** Map a persisted ValidationReport into the page's report shape. */
+function mapStoredReport(report: ValidationReportResponse): ValidationReportData {
+  const results: ValidationResultItem[] = report.results.map((r) => {
+    const passed = r.passed ?? r.status === 'pass';
+    return {
+      rule_id: r.rule_id,
+      rule_name: r.rule_name ?? r.rule_id,
+      severity: toSeverity(r.severity ?? r.status),
+      passed,
+      message: r.message,
+      element_ref: r.element_ref ?? null,
+      suggestion: r.suggestion ?? null,
+    };
+  });
+  const infos = results.filter((r) => !r.passed && r.severity === 'info').length;
+  return {
+    id: report.id,
+    status: report.status as ValidationReportData['status'],
+    score: report.score !== null && report.score !== '' ? Number(report.score) : 0,
+    counts: {
+      total: report.total_rules,
+      passed: report.passed_count,
+      errors: report.error_count,
+      warnings: report.warning_count,
+      infos,
+    },
+    rule_sets: report.metadata?.rule_sets ?? (report.rule_set ? report.rule_set.split('+') : []),
+    duration_ms: report.metadata?.duration_ms ?? 0,
+    results,
+  };
+}
 
 /* ── Rule descriptions for tooltips ───────────────────────────────────── */
 
@@ -472,6 +630,7 @@ export function ValidationPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { activeProjectId, setActiveProject } = useProjectContextStore();
   const addToast = useToastStore((s) => s.addToast);
 
@@ -494,18 +653,82 @@ export function ValidationPage() {
     enabled: !!selectedProjectId,
   });
 
-  // Validation report state (stored from mutation result)
+  const selectedProject = useMemo(
+    () => projects?.find((p) => p.id === selectedProjectId),
+    [projects, selectedProjectId],
+  );
+
+  // Rule sets the engine will apply to this project — derived from its
+  // classification standard. Shown as chips and sent verbatim to /run/.
+  const resolvedRuleSets = useMemo(
+    () => resolveRuleSets(selectedProject?.classification_standard),
+    [selectedProject],
+  );
+
+  // Validation report state (from a run, or restored from the latest
+  // persisted report for the selected BOQ).
   const [report, setReport] = useState<ValidationReportData | null>(null);
 
-  // Run validation mutation
+  const reportIdParam = searchParams.get('report');
+
+  // Restore the latest persisted report for the selected BOQ so re-entering
+  // the page (or following a ?report= link) shows the result instead of an
+  // empty state. Prefers an explicit ?report= id; otherwise picks the newest
+  // report whose target is the selected BOQ.
+  const { data: restoredReport } = useQuery({
+    queryKey: ['validation', 'latest', selectedProjectId, selectedBoqId, reportIdParam],
+    queryFn: async (): Promise<ValidationReportResponse | null> => {
+      if (reportIdParam) {
+        return apiGet<ValidationReportResponse>(`/v1/validation/reports/${reportIdParam}`);
+      }
+      const reports = await apiGet<ValidationReportResponse[]>(
+        `/v1/validation/reports/?project_id=${selectedProjectId}&target_type=boq`,
+      );
+      const match = reports.find((r) => r.target_id === selectedBoqId);
+      return match ?? null;
+    },
+    enabled: !!selectedProjectId && !!selectedBoqId,
+    staleTime: 30_000,
+  });
+
+  // Hydrate the page report from a restored persisted report (only when the
+  // user has not just produced a fresher one via a run).
+  useEffect(() => {
+    if (!restoredReport) return;
+    if (restoredReport.target_id !== selectedBoqId) return;
+    setReport((prev) => {
+      if (prev && prev.id === restoredReport.id) return prev;
+      return mapStoredReport(restoredReport);
+    });
+  }, [restoredReport, selectedBoqId]);
+
+  // Run validation mutation — persists a server-side ValidationReport via
+  // the validation module (RBAC: validation.create) instead of the
+  // throwaway BOQ-side validate endpoint.
   const runValidation = useMutation({
     mutationFn: () =>
-      apiPost<ValidationReportData>(`/v1/boq/boqs/${selectedBoqId}/validate/`),
+      apiPost<RunValidationResponse, { project_id: string; boq_id: string; rule_sets: string[] }>(
+        '/v1/validation/run/',
+        {
+          project_id: selectedProjectId,
+          boq_id: selectedBoqId,
+          rule_sets: resolvedRuleSets,
+        },
+      ),
     onSuccess: (data) => {
-      setReport(data);
+      setReport(mapRunResponse(data));
       setFilter('all');
       setExpandedResults(new Set());
-      queryClient.invalidateQueries({ queryKey: ['validation', selectedBoqId] });
+      // Persist the report id in the URL so re-entry restores this result.
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('report', data.report_id);
+          return next;
+        },
+        { replace: true },
+      );
+      queryClient.invalidateQueries({ queryKey: ['validation'] });
     },
     onError: (err: Error) => {
       addToast({ type: 'error', title: t('validation.run_failed', { defaultValue: 'Validation failed' }), message: err.message });
@@ -523,14 +746,35 @@ export function ValidationPage() {
       }
       setSelectedBoqId('');
       setReport(null);
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('report');
+          return next;
+        },
+        { replace: true },
+      );
     },
-    [projects, setActiveProject],
+    [projects, setActiveProject, setSearchParams],
   );
 
-  const handleBoqChange = useCallback((boqId: string) => {
-    setSelectedBoqId(boqId);
-    setReport(null);
-  }, []);
+  const handleBoqChange = useCallback(
+    (boqId: string) => {
+      setSelectedBoqId(boqId);
+      setReport(null);
+      // Drop any stale ?report= so the latest-report restore can re-resolve
+      // for the newly selected BOQ.
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('report');
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
 
   // Filter results
   const filteredResults = useMemo(() => {
@@ -583,8 +827,11 @@ export function ValidationPage() {
     });
   }, []);
 
+  const [pdfPending, setPdfPending] = useState(false);
+
   const handleExportPdf = useCallback(async () => {
-    if (!selectedBoqId) return;
+    if (!selectedBoqId || pdfPending) return;
+    setPdfPending(true);
     try {
       const token = useAuthStore.getState().accessToken;
       const response = await fetch(`/api/v1/boq/boqs/${selectedBoqId}/export/pdf/`, {
@@ -599,12 +846,15 @@ export function ValidationPage() {
         title: t('validation.export_failed', { defaultValue: 'Export failed' }),
         message: err instanceof Error ? err.message : undefined,
       });
+    } finally {
+      setPdfPending(false);
     }
-  }, [selectedBoqId, addToast, t]);
+  }, [selectedBoqId, pdfPending, addToast, t]);
 
-  // Validation findings are produced on-the-fly (this run is not persisted as
-  // a server-side ValidationReport, so there is no SARIF/PDF artefact for it).
-  // A faithful CSV is generated client-side from exactly what the user sees.
+  // The validation findings are persisted server-side as a ValidationReport
+  // (see /v1/validation/run/). This CSV is generated client-side from exactly
+  // what the user sees so the export always mirrors the on-screen results and
+  // applied filters' source data.
   const handleExportCsv = useCallback(() => {
     if (!report) return;
     const esc = (v: string) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -733,6 +983,28 @@ export function ValidationPage() {
             </span>
           </div>
         </div>
+
+        {/* Resolved rule sets — shown before running so the user knows
+            exactly which checks will be applied to this project. */}
+        {selectedProjectId && (
+          <div className="mt-4 flex flex-wrap items-center gap-1.5 border-t border-border-light pt-3">
+            <span className="text-xs text-content-tertiary">
+              {t('validation.will_check_with', { defaultValue: 'Will check with' })}:
+            </span>
+            {resolvedRuleSets.map((rs) => (
+              <span key={rs} title={getRuleSetDescription(rs, t)} className="inline-flex">
+                <Badge variant="blue" size="sm">
+                  {rs}
+                </Badge>
+              </span>
+            ))}
+            <span className="text-xs text-content-tertiary">
+              {t('validation.rule_sets_from_standard', {
+                defaultValue: 'derived from the project’s classification standard',
+              })}
+            </span>
+          </div>
+        )}
       </Card>
 
       {/* No selection state */}
@@ -877,8 +1149,12 @@ export function ValidationPage() {
               size="md"
               icon={<Download size={16} />}
               onClick={handleExportPdf}
+              loading={pdfPending}
+              disabled={pdfPending}
             >
-              {t('validation.export_boq_pdf', { defaultValue: 'Export BOQ PDF' })}
+              {pdfPending
+                ? t('validation.export_boq_pdf_pending', { defaultValue: 'Preparing BOQ PDF…' })
+                : t('validation.export_priced_boq_pdf', { defaultValue: 'Export priced BOQ (PDF)' })}
             </Button>
             {(report.counts.warnings > 0 || report.counts.errors > 0) && (
               <Button

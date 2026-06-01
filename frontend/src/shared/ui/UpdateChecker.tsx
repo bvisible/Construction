@@ -27,9 +27,29 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
   Sparkles, X, ExternalLink, Copy, Check,
-  Plus, Wrench, Palette,
+  Plus, Wrench, Palette, Loader2, Download, RotateCcw,
 } from 'lucide-react';
 import { APP_VERSION } from '@/shared/lib/version';
+import { apiPost, ApiError } from '@/shared/lib/api';
+
+/* ── One-click upgrade — runs `pip install --upgrade` server-side ──── */
+
+interface UpgradeResult {
+  ok: boolean;
+  exit_code: number;
+  command: string;
+  stdout: string;
+  stderr: string;
+  installed_version: string;
+  running_version: string;
+  restart_required: boolean;
+  restart_hint: string;
+}
+
+async function runRuntimeUpgrade(version?: string): Promise<UpgradeResult> {
+  const qs = version ? `?version=${encodeURIComponent(version)}` : '';
+  return apiPost<UpgradeResult>(`/system/upgrade${qs}`, {});
+}
 
 const CURRENT_VERSION = APP_VERSION;
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;       // 1 hour between polls
@@ -473,6 +493,40 @@ function UpdateFullModal({
 }) {
   const { t } = useTranslation();
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  /** One-click upgrade state. ``idle`` is the default; ``running`` shows a
+   *  spinner; ``done`` shows the post-pip result + restart hint; ``error``
+   *  shows the captured stderr so the user can copy it into a bug report.
+   *
+   *  Backed by ``POST /api/system/upgrade`` which gates on
+   *  ``ALLOW_RUNTIME_UPGRADE`` — managed installs (VPS, SaaS) keep the
+   *  copy-paste path while localhost / Windows installer users get the
+   *  one-click button working out of the box. */
+  const [upgradeStatus, setUpgradeStatus] = useState<'idle' | 'running' | 'done' | 'error'>('idle');
+  const [upgradeResult, setUpgradeResult] = useState<UpgradeResult | null>(null);
+  const [upgradeError, setUpgradeError] = useState<string | null>(null);
+
+  const handleApplyUpgrade = useCallback(async () => {
+    setUpgradeStatus('running');
+    setUpgradeError(null);
+    try {
+      const res = await runRuntimeUpgrade(release.version);
+      setUpgradeResult(res);
+      setUpgradeStatus(res.ok ? 'done' : 'error');
+      if (!res.ok) {
+        setUpgradeError(res.stderr || res.stdout || `pip exited ${res.exit_code}`);
+      }
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setUpgradeError(err.message);
+        // 403 → runtime upgrade disabled on this install (e.g. managed VPS).
+        // Surface that explicitly so the user copies the command instead of
+        // hammering the button.
+      } else {
+        setUpgradeError(String(err));
+      }
+      setUpgradeStatus('error');
+    }
+  }, [release.version]);
 
   const copy = useCallback(async (key: string, text: string) => {
     try {
@@ -631,6 +685,95 @@ function UpdateFullModal({
               </div>
             </section>
           )}
+
+          {/* One-click upgrade — server-side ``pip install --upgrade`` in the
+              same venv as the running uvicorn. The 403 fallback below shows
+              when ALLOW_RUNTIME_UPGRADE is off (managed installs). */}
+          <section>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-3">
+              {t('update.apply_now', { defaultValue: 'Apply update' })}
+            </h3>
+            <div className="rounded-xl border border-sky-400/50 dark:border-sky-500/40 bg-gradient-to-br from-sky-50 to-blue-50 dark:from-sky-950/40 dark:to-blue-950/30 p-4">
+              {upgradeStatus === 'idle' && (
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-semibold text-content-primary">
+                      {t('update.one_click_title', {
+                        defaultValue: 'Install v{{version}} now',
+                        version: release.version,
+                      })}
+                    </div>
+                    <div className="text-2xs text-content-tertiary mt-0.5">
+                      {t('update.one_click_sub', {
+                        defaultValue:
+                          'Runs pip in the active venv. Restart the launcher once the install completes.',
+                      })}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleApplyUpgrade}
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-br from-sky-500 to-blue-600 hover:from-sky-600 hover:to-blue-700 px-3 py-2 text-sm font-semibold text-white shadow-sm shadow-blue-500/30 transition-all"
+                  >
+                    <Download size={14} />
+                    {t('update.apply_now_button', { defaultValue: 'Apply update' })}
+                  </button>
+                </div>
+              )}
+              {upgradeStatus === 'running' && (
+                <div className="flex items-center gap-3">
+                  <Loader2 size={18} className="animate-spin text-sky-600 dark:text-sky-400" />
+                  <div className="text-sm text-content-primary">
+                    {t('update.running', {
+                      defaultValue: 'Running pip install — this can take a minute on first download…',
+                    })}
+                  </div>
+                </div>
+              )}
+              {upgradeStatus === 'done' && upgradeResult && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                    <Check size={16} />
+                    {t('update.installed', {
+                      defaultValue: 'Installed v{{version}}',
+                      version: upgradeResult.installed_version,
+                    })}
+                  </div>
+                  {upgradeResult.restart_required && (
+                    <div className="rounded-lg bg-amber-500/15 px-3 py-2 text-2xs text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                      <RotateCcw size={12} className="mt-0.5 shrink-0" />
+                      <span>{upgradeResult.restart_hint}</span>
+                    </div>
+                  )}
+                  {upgradeResult.stdout && (
+                    <details className="text-2xs">
+                      <summary className="cursor-pointer text-content-tertiary">
+                        {t('update.show_log', { defaultValue: 'Show pip log' })}
+                      </summary>
+                      <pre className="mt-1 max-h-40 overflow-auto rounded-md bg-surface-secondary/60 p-2 text-[10px] leading-snug font-mono whitespace-pre-wrap">
+                        {upgradeResult.stdout.slice(-2000)}
+                      </pre>
+                    </details>
+                  )}
+                </div>
+              )}
+              {upgradeStatus === 'error' && (
+                <div className="space-y-2">
+                  <div className="text-sm font-semibold text-rose-700 dark:text-rose-300">
+                    {t('update.error', { defaultValue: 'Upgrade failed' })}
+                  </div>
+                  <pre className="max-h-40 overflow-auto rounded-md bg-rose-500/10 p-2 text-[10px] leading-snug font-mono text-rose-700 dark:text-rose-300 whitespace-pre-wrap">
+                    {upgradeError ?? 'unknown error'}
+                  </pre>
+                  <div className="text-2xs text-content-tertiary">
+                    {t('update.error_hint', {
+                      defaultValue:
+                        'Copy the command below and run it from your terminal — the same pip install works there.',
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
 
           {/* Install commands */}
           <section>

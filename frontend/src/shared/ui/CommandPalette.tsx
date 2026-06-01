@@ -132,7 +132,7 @@ const PAGE_RESULTS: SearchResult[] = [
   { id: 'page-settings', type: 'page', labelKey: 'nav.settings', icon: Settings, path: '/settings' },
   // Quick actions
   { id: 'action-new-project', type: 'page', labelKey: 'command_palette.action_new_project', description: 'Ctrl+N', icon: FolderPlus, path: '/projects/new' },
-  { id: 'action-new-boq', type: 'page', labelKey: 'command_palette.action_new_boq', description: 'Ctrl+Shift+N', icon: FilePlus2, path: '/boq/new' },
+  { id: 'action-new-boq', type: 'page', labelKey: 'command_palette.action_new_boq', description: 'Ctrl+Shift+N', icon: FilePlus2, path: '/boq' },
   { id: 'action-validate', type: 'page', labelKey: 'command_palette.action_run_validation', description: 'Ctrl+Shift+V', icon: ShieldCheck, path: '/validation' },
   { id: 'action-import-db', type: 'page', labelKey: 'command_palette.action_import_database', icon: Download, path: '/costs/import' },
 ];
@@ -602,7 +602,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                       'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left',
                       'text-sm transition-colors',
                       isActive
-                        ? 'bg-oe-blue-subtle text-oe-blue'
+                        ? 'bg-oe-blue-subtle text-oe-blue-text'
                         : 'text-content-primary hover:bg-surface-secondary',
                     )}
                   >

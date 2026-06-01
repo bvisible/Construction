@@ -40,6 +40,7 @@ function makeHubMarkup(overrides: Partial<Markup> = {}): Markup {
     line_width: 2,
     opacity: 1,
     author_id: 'alice',
+    assignee_id: null,
     status: 'active',
     label: 'Cloud 1',
     measurement_value: null,

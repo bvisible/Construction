@@ -59,7 +59,7 @@ Only shown when `po.status === 'draft'`. Fires `POST /v1/procurement/{po_id}/iss
 
 - Backend: `python -m uvicorn --factory app.main:create_app --port 8025` (health=degraded, 112 modules loaded, version 4.8.0).
 - Frontend: `VITE_API_TARGET=http://127.0.0.1:8025 npx vite --port 5195 --host 127.0.0.1`.
-- Auth: `POST /api/v1/users/auth/demo-login/ {"email":"demo@openestimator.io"}` — magic-link, no password.
+- Auth: `POST /api/v1/users/auth/demo-login/ {"email":"demo@openconstructionerp.com"}` — magic-link, no password.
 - Screenshots: `qa-screenshots/V_PROCUREMENT/01_landing.png` (desktop empty-state), `03_mobile.png` (mobile empty-state). Pipeline screenshot skipped because the demo project list was empty in this sandbox; both render-path tests succeeded headlessly.
 
 ## Files

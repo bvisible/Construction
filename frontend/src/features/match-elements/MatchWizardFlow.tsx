@@ -36,6 +36,7 @@ import {
   FileSpreadsheet,
   Info,
   Layers,
+  Library,
   Loader2,
   MessageSquarePlus,
   PlayCircle,
@@ -44,6 +45,7 @@ import {
   Search,
   SlidersHorizontal,
   Sparkles,
+  Wrench,
 } from 'lucide-react';
 
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -64,7 +66,20 @@ import { QdrantHealthCard } from './QdrantHealthCard';
 import { MatchProgressCard, type MatchProgressStatus } from './MatchProgressCard';
 import { MatchDetailPanel } from './MatchDetailPanel';
 import { GroupingPanel } from './GroupingPanel';
-import { fetchCatalogues, type Catalogue } from './CataloguesPanelCard';
+import {
+  CataloguesPanelCard,
+  fetchCatalogues,
+  type Catalogue,
+} from './CataloguesPanelCard';
+// dead_button fix: these panels were built, styled and unit-tested but
+// nothing reachable from the /match-elements route imported them, so the
+// in-app paths the wizard's own copy points at (install a catalogue,
+// install the embedder, view §10 analytics, manage the template library)
+// led nowhere. They are now mounted in a collapsible "Setup & tools"
+// section below so every documented control actually works.
+import { EmbedderStatusCard } from './EmbedderStatusCard';
+import { MatchAnalyticsCard } from './MatchAnalyticsCard';
+import { TemplatesPanel } from './TemplatesPanel';
 
 // ─────────────────────────────────────────────────────────────────────────
 //  Stage model — the single source of truth for the one-and-only rail
@@ -317,6 +332,10 @@ export function MatchWizardFlow() {
   const [matchError, setMatchError] = useState<string | null>(null);
   const [matchStarted, setMatchStarted] = useState(false);
   const [detailGroup, setDetailGroup] = useState<GroupSummary | null>(null);
+  // dead_button fix: the tenant-scoped template library (TemplatesPanel)
+  // had no in-app trigger — this state opens it from the "Setup & tools"
+  // section. Slide-over closes itself on Escape / backdrop click.
+  const [showTemplates, setShowTemplates] = useState(false);
   const [applyResult, setApplyResult] = useState<{
     written: boolean;
     boqId: string | null;
@@ -775,6 +794,44 @@ export function MatchWizardFlow() {
       <div className="mb-3">
         <QdrantHealthCard />
       </div>
+
+      {/* Setup & tools — dead_button fix. These panels were built and
+          tested but never reachable from the route: the embedder install
+          card, the cost-catalogue install panel (the very place the
+          wizard's stage-3 copy and the Qdrant toast tell users to go),
+          the §10 match-analytics dashboard, and a launcher for the
+          tenant-scoped template library. Collapsed by default so the
+          first-screen wizard stays tidy; one click reveals every
+          previously-orphaned control. */}
+      <details className="group mb-3 rounded-xl border border-border-light bg-surface-primary">
+        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium text-content-primary">
+          <Wrench className="h-4 w-4 shrink-0 text-oe-blue" />
+          {t('match.wizard.setupTools', {
+            defaultValue: 'Setup & tools — language model, catalogues, analytics, templates',
+          })}
+          <ChevronRight className="ml-auto h-4 w-4 text-content-tertiary transition-transform group-open:rotate-90" />
+        </summary>
+        <div className="space-y-3 border-t border-border-light px-4 py-3">
+          {/* Free language-model (BGE-M3) readiness + one-command install. */}
+          <EmbedderStatusCard />
+          {/* Cost-catalogue install — pinned to the active project's region
+              so the matching catalogue is one click away. */}
+          <CataloguesPanelCard preferredRegion={project?.region ?? null} />
+          {/* §10 production observability for matches in this project. */}
+          <MatchAnalyticsCard projectId={projectId} />
+          {/* Launcher for the tenant-scoped template library slide-over. */}
+          <button
+            type="button"
+            onClick={() => setShowTemplates(true)}
+            className="inline-flex items-center gap-2 rounded-lg border border-border-light bg-surface-primary px-3 py-2 text-sm font-medium text-content-primary transition-colors hover:bg-surface-muted"
+          >
+            <Library className="h-4 w-4 text-indigo-500" />
+            {t('match.wizard.openTemplateLibrary', {
+              defaultValue: 'Open template library',
+            })}
+          </button>
+        </div>
+      </details>
 
       {/* Plain-language "how it works" — collapsed by default to keep the
           first-screen wizard tidy; one click opens the full 8-stage tour. */}
@@ -1471,6 +1528,11 @@ export function MatchWizardFlow() {
           }}
         />
       )}
+
+      {/* Template-library slide-over — dead_button fix: TemplatesPanel was
+          orphaned (no route, no trigger). It is opened from the
+          "Setup & tools" section and closes on Escape / backdrop. */}
+      {showTemplates && <TemplatesPanel onClose={() => setShowTemplates(false)} />}
     </div>
   );
 }

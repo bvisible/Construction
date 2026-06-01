@@ -194,7 +194,7 @@ export async function importContactsFile(file: File): Promise<ImportResult> {
     let detail = 'Import failed';
     try {
       const body = await response.json();
-      detail = body.detail || detail;
+      detail = extractErrorMessageFromBody(body) ?? detail;
     } catch {
       // ignore parse error
     }

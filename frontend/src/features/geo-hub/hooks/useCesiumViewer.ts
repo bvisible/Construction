@@ -62,7 +62,7 @@ export function useCesiumViewer(_mapConfig?: MapConfig) {
           // OSM base imagery — Cesium >= 1.107 falls back to Ion-backed
           // Bing Maps when baseLayer is unset, which silently 401s
           // without an ion token. Explicit OSM keeps the viewer working
-          // out of the box per CLAUDE.md "no vendor lock-in".
+          // out of the box per the architecture guide "no vendor lock-in".
           baseLayer: new cesium.ImageryLayer(
             new cesium.UrlTemplateImageryProvider({
               url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',

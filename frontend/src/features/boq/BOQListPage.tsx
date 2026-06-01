@@ -55,6 +55,17 @@ const currencyFmt = new Intl.NumberFormat(getIntlLocale(), {
   maximumFractionDigits: 0,
 });
 
+/**
+ * Compact money for the stat cards: 1.2M / 340K / 9,500 — always paired
+ * with its ISO currency code by the caller (money rule: a figure is never
+ * shown without its currency).
+ */
+function compactMoney(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(0)}K`;
+  return currencyFmt.format(value);
+}
+
 /* ── Compare Modal ───────────────────────────────────────────────────── */
 
 interface CompareModalProps {
@@ -71,8 +82,13 @@ function fmtDiff(diff: number, currency: string): string {
 }
 
 function fmtPct(a: number, b: number): string {
-  if (a === 0) return b === 0 ? '0%' : '+100%';
-  const pct = ((b - a) / Math.abs(a)) * 100;
+  // Coerce defensively — `grand_total` arrives as Decimal-as-string, so a
+  // strict `a === 0` would never match the string "0" and would feed NaN
+  // into the ratio below. Number() the boundary before any arithmetic.
+  const na = Number(a);
+  const nb = Number(b);
+  if (na === 0) return nb === 0 ? '0%' : '+100%';
+  const pct = ((nb - na) / Math.abs(na)) * 100;
   const sign = pct >= 0 ? '+' : '';
   return `${sign}${pct.toFixed(1)}%`;
 }
@@ -170,7 +186,17 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  const currency = currencyA || currencyB || 'EUR';
+  // The two BOQs may live in different projects with different base
+  // currencies. There is NO cross-project FX rate table (rates are scoped
+  // WITHIN a project), so a blended diff would be financially meaningless.
+  // Block the numeric comparison and tell the user, but still show each
+  // side's own total labelled with its own ISO code.
+  const currencyMismatch = !!currencyA && !!currencyB && currencyA !== currencyB;
+
+  // v3 §10 contract: `grand_total` arrives as Decimal-as-string. Coerce at
+  // the modal boundary so every figure/diff/format below is a finite number.
+  const totalA = boqA ? Number(boqA.grand_total) : 0;
+  const totalB = boqB ? Number(boqB.grand_total) : 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-lg animate-fade-in" onClick={onClose}>
@@ -181,12 +207,16 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border-light px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text">
               <GitCompareArrows size={18} />
             </div>
             <h2 className="text-lg font-bold text-content-primary">{t('boq.compare_title', { defaultValue: 'BOQ Comparison' })}</h2>
           </div>
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-secondary transition-colors">
+          <button
+            onClick={onClose}
+            aria-label={t('common.close', { defaultValue: 'Close' })}
+            className="flex h-8 w-8 items-center justify-center rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-secondary transition-colors"
+          >
             <X size={18} />
           </button>
         </div>
@@ -209,8 +239,8 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
                   <div className="text-xs font-medium text-content-tertiary uppercase tracking-wider mb-1">A</div>
                   <div className="text-sm font-bold text-content-primary truncate">{boqA.name}</div>
                   <div className="mt-2 flex items-baseline gap-2">
-                    <span className="text-xl font-bold text-content-primary tabular-nums">{currencyFmt.format(boqA.grand_total)}</span>
-                    <span className="text-xs text-content-tertiary">{currency}</span>
+                    <span className="text-xl font-bold text-content-primary tabular-nums">{currencyFmt.format(totalA)}</span>
+                    <span className="text-xs text-content-tertiary">{currencyA || '--'}</span>
                   </div>
                   <div className="mt-1 text-xs text-content-tertiary">{boqA.positions.length} {t('boq.positions_label', { defaultValue: 'positions' })}</div>
                 </div>
@@ -220,27 +250,46 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
                   <div className="text-xs font-medium text-content-tertiary uppercase tracking-wider mb-1">B</div>
                   <div className="text-sm font-bold text-content-primary truncate">{boqB.name}</div>
                   <div className="mt-2 flex items-baseline gap-2">
-                    <span className="text-xl font-bold text-content-primary tabular-nums">{currencyFmt.format(boqB.grand_total)}</span>
-                    <span className="text-xs text-content-tertiary">{currency}</span>
+                    <span className="text-xl font-bold text-content-primary tabular-nums">{currencyFmt.format(totalB)}</span>
+                    <span className="text-xs text-content-tertiary">{currencyB || '--'}</span>
                   </div>
                   <div className="mt-1 text-xs text-content-tertiary">{boqB.positions.length} {t('boq.positions_label', { defaultValue: 'positions' })}</div>
                 </div>
               </div>
 
-              {/* Difference banner */}
-              {(() => {
-                const diff = boqB.grand_total - boqA.grand_total;
-                return (
-                  <div className={`rounded-xl border p-4 text-center ${diff > 0 ? 'border-semantic-error/30 bg-semantic-error-bg' : diff < 0 ? 'border-semantic-success/30 bg-semantic-success-bg' : 'border-border-light bg-surface-secondary'}`}>
-                    <div className="text-xs font-medium text-content-tertiary uppercase tracking-wider mb-1">
-                      {t('boq.compare_difference', { defaultValue: 'Difference (B vs A)' })}
-                    </div>
-                    <div className={`text-lg font-bold tabular-nums ${diffColor(diff)}`}>
-                      {fmtDiff(diff, currency)} ({fmtPct(boqA.grand_total, boqB.grand_total)})
-                    </div>
+              {/* Difference banner — only when both sides share a currency.
+                  Across currencies there is no cross-project FX rate, so we
+                  never blend them into one diff (money rule b). */}
+              {currencyMismatch ? (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-50 dark:bg-amber-950/30 p-4 text-center">
+                  <div className="text-xs font-medium text-content-tertiary uppercase tracking-wider mb-1">
+                    {t('boq.compare_difference', { defaultValue: 'Difference (B vs A)' })}
                   </div>
-                );
-              })()}
+                  <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                    {t('boq.compare_currency_mismatch', {
+                      defaultValue:
+                        'These estimates use different currencies ({{currencyA}} vs {{currencyB}}), so totals cannot be subtracted. Compare each side in its own currency above.',
+                      currencyA,
+                      currencyB,
+                    })}
+                  </div>
+                </div>
+              ) : (
+                (() => {
+                  const diff = totalB - totalA;
+                  const currency = currencyA || currencyB || 'EUR';
+                  return (
+                    <div className={`rounded-xl border p-4 text-center ${diff > 0 ? 'border-semantic-error/30 bg-semantic-error-bg' : diff < 0 ? 'border-semantic-success/30 bg-semantic-success-bg' : 'border-border-light bg-surface-secondary'}`}>
+                      <div className="text-xs font-medium text-content-tertiary uppercase tracking-wider mb-1">
+                        {t('boq.compare_difference', { defaultValue: 'Difference (B vs A)' })}
+                      </div>
+                      <div className={`text-lg font-bold tabular-nums ${diffColor(diff)}`}>
+                        {fmtDiff(diff, currency)} ({fmtPct(totalA, totalB)})
+                      </div>
+                    </div>
+                  );
+                })()
+              )}
 
               {/* Section-by-section breakdown */}
               {comparison.paired.length > 0 && (
@@ -249,12 +298,17 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
                     {t('boq.compare_by_section', { defaultValue: 'By Section' })}
                   </h3>
                   <div className="rounded-xl border border-border-light overflow-hidden">
-                    {/* Table header */}
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 bg-surface-secondary px-4 py-2.5 text-2xs font-medium text-content-tertiary uppercase tracking-wider">
+                    {/* Table header — drop the Diff column when the two BOQs
+                        use different currencies (no valid cross-currency
+                        subtraction). The A/B columns are labelled with each
+                        side's own ISO code so figures stay unambiguous. */}
+                    <div className={`grid ${currencyMismatch ? 'grid-cols-[1fr_auto_auto]' : 'grid-cols-[1fr_auto_auto_auto]'} gap-2 bg-surface-secondary px-4 py-2.5 text-2xs font-medium text-content-tertiary uppercase tracking-wider`}>
                       <div>{t('boq.section', { defaultValue: 'Section' })}</div>
-                      <div className="w-28 text-right">A</div>
-                      <div className="w-28 text-right">B</div>
-                      <div className="w-24 text-right">{t('boq.compare_diff', { defaultValue: 'Diff' })}</div>
+                      <div className="w-28 text-right">A{currencyA ? ` (${currencyA})` : ''}</div>
+                      <div className="w-28 text-right">B{currencyB ? ` (${currencyB})` : ''}</div>
+                      {!currencyMismatch && (
+                        <div className="w-24 text-right">{t('boq.compare_diff', { defaultValue: 'Diff' })}</div>
+                      )}
                     </div>
                     {/* Rows */}
                     {comparison.paired.map((row, i) => {
@@ -262,7 +316,7 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
                       return (
                         <div
                           key={row.key}
-                          className={`grid grid-cols-[1fr_auto_auto_auto] gap-2 px-4 py-2.5 text-sm ${i % 2 === 0 ? 'bg-surface-primary' : 'bg-surface-elevated/50'}`}
+                          className={`grid ${currencyMismatch ? 'grid-cols-[1fr_auto_auto]' : 'grid-cols-[1fr_auto_auto_auto]'} gap-2 px-4 py-2.5 text-sm ${i % 2 === 0 ? 'bg-surface-primary' : 'bg-surface-elevated/50'}`}
                         >
                           <div className="text-content-primary truncate font-medium">
                             {row.nameA !== '--' ? row.nameA : row.nameB}
@@ -273,11 +327,13 @@ function CompareModal({ boqIdA, boqIdB, currencyA, currencyB, onClose }: Compare
                           <div className="w-28 text-right tabular-nums text-content-secondary">
                             {row.totalB > 0 ? currencyFmt.format(row.totalB) : '--'}
                           </div>
-                          <div className={`w-24 text-right tabular-nums font-medium ${diffColor(diff)}`}>
-                            {row.totalA === 0 && row.totalB === 0
-                              ? '--'
-                              : `${diff >= 0 ? '+' : ''}${currencyFmt.format(diff)}`}
-                          </div>
+                          {!currencyMismatch && (
+                            <div className={`w-24 text-right tabular-nums font-medium ${diffColor(diff)}`}>
+                              {row.totalA === 0 && row.totalB === 0
+                                ? '--'
+                                : `${diff >= 0 ? '+' : ''}${currencyFmt.format(diff)}`}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -386,7 +442,19 @@ export function BOQListPage() {
       setCompareMode(true);
       setSelectedForCompare({ id: boqId, currency });
     } else if (selectedForCompare && selectedForCompare.id !== boqId) {
-      // Second selection — open modal
+      // Second selection — open modal. Warn up-front when the two BOQs use
+      // different currencies: there is no cross-project FX rate, so the
+      // modal can only compare each side in its own currency (money rule b).
+      if (selectedForCompare.currency && currency && selectedForCompare.currency !== currency) {
+        addToast({
+          type: 'warning',
+          title: t('boq.compare_currency_mismatch_toast', {
+            defaultValue: 'Comparing different currencies ({{currencyA}} vs {{currencyB}}); totals are shown side by side, not subtracted.',
+            currencyA: selectedForCompare.currency,
+            currencyB: currency,
+          }),
+        });
+      }
       setCompareTarget({
         idA: selectedForCompare.id,
         idB: boqId,
@@ -394,7 +462,7 @@ export function BOQListPage() {
         currencyB: currency,
       });
     }
-  }, [compareMode, selectedForCompare]);
+  }, [compareMode, selectedForCompare, addToast, t]);
 
   const { data: projects, isLoading: projLoading } = useQuery({
     queryKey: ['projects'],
@@ -500,6 +568,8 @@ export function BOQListPage() {
     return list;
   }, [allBoqs, searchQuery, statusFilter, projectFilter, sortField, sortAsc]);
 
+  const isFiltered = !!(searchQuery || statusFilter || projectFilter);
+
   // Reset page when filters/search/sort change
   useEffect(() => {
     setPage(1);
@@ -514,14 +584,34 @@ export function BOQListPage() {
 
   /* ── Stats ────────────────────────────────────────────────────────── */
 
+  // Stats are computed from the SAME filtered set the list below renders, so
+  // the cards never contradict the visible rows. Money is grouped by ISO
+  // currency: there is no cross-project FX table, so we never blend
+  // currencies into one scalar (money rule b). When every visible BOQ
+  // shares a currency the UI shows one labelled total; otherwise it shows
+  // per-currency chips.
   const stats = useMemo(() => {
     if (!allBoqs) return null;
-    const totalValue = allBoqs.reduce((s, b) => s + b.grandTotal, 0);
-    const totalPositions = allBoqs.reduce((s, b) => s + b.positionCount, 0);
-    const drafts = allBoqs.filter((b) => b.status === 'draft').length;
-    const finals = allBoqs.filter((b) => b.status === 'final').length;
-    return { totalValue, totalPositions, drafts, finals };
-  }, [allBoqs]);
+    const byCurrency = new Map<string, number>();
+    for (const b of filtered) {
+      const code = b.currency || 'UNKNOWN';
+      byCurrency.set(code, (byCurrency.get(code) ?? 0) + b.grandTotal);
+    }
+    const totalsByCurrency = [...byCurrency.entries()]
+      .map(([currency, total]) => ({ currency, total }))
+      .sort((a, b) => b.total - a.total);
+    const totalPositions = filtered.reduce((s, b) => s + b.positionCount, 0);
+    const drafts = filtered.filter((b) => b.status === 'draft').length;
+    const finals = filtered.filter((b) => b.status === 'final').length;
+    return {
+      totalsByCurrency,
+      multiCurrency: byCurrency.size > 1,
+      totalPositions,
+      drafts,
+      finals,
+      count: filtered.length,
+    };
+  }, [allBoqs, filtered]);
 
   /* ── Mutations ────────────────────────────────────────────────────── */
 
@@ -564,6 +654,24 @@ export function BOQListPage() {
       case 'draft': return 'blue';
       case 'in_review': return 'warning';
       default: return 'neutral';
+    }
+  }
+
+  // Translate the BOQ status enum for display. Known statuses go through
+  // i18n; unknown server-side values fall back to a title-cased token so the
+  // badge/filter never shows a raw snake_case key.
+  function statusLabel(status: string): string {
+    switch (status) {
+      case 'draft': return t('boq.status_draft', { defaultValue: 'Draft' });
+      case 'in_review': return t('boq.status_in_review', { defaultValue: 'In Review' });
+      case 'final': return t('boq.status_final', { defaultValue: 'Final' });
+      case 'approved': return t('boq.status_approved', { defaultValue: 'Approved' });
+      case 'archived': return t('boq.status_archived', { defaultValue: 'Archived' });
+      default:
+        return status
+          .split('_')
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+          .join(' ');
     }
   }
 
@@ -646,12 +754,17 @@ export function BOQListPage() {
         </Button>
       </div>
 
-      {/* Stats cards */}
+      {/* Stats cards — scoped to the SAME filtered set the list renders.
+          When a filter narrows the set, an inline scope label says so. */}
       {stats && allBoqs && allBoqs.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
           <div className="rounded-xl bg-surface-elevated border border-border-light p-3">
-            <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wider">{t('boq.total_estimates', { defaultValue: 'Total Estimates' })}</div>
-            <div className="mt-1 text-xl font-bold text-content-primary tabular-nums">{allBoqs.length}</div>
+            <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wider">
+              {isFiltered
+                ? t('boq.matching_estimates', { defaultValue: 'Matching Estimates' })
+                : t('boq.total_estimates', { defaultValue: 'Total Estimates' })}
+            </div>
+            <div className="mt-1 text-xl font-bold text-content-primary tabular-nums">{stats.count}</div>
           </div>
           <div className="rounded-xl bg-surface-elevated border border-border-light p-3">
             <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wider">{t('boq.total_positions', { defaultValue: 'Total Positions' })}</div>
@@ -659,13 +772,28 @@ export function BOQListPage() {
           </div>
           <div className="rounded-xl bg-surface-elevated border border-border-light p-3">
             <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wider">{t('boq.total_value', { defaultValue: 'Total Value' })}</div>
-            <div className="mt-1 text-xl font-bold text-content-primary tabular-nums">
-              {stats.totalValue >= 1_000_000
-                ? `${(stats.totalValue / 1_000_000).toFixed(1)}M`
-                : stats.totalValue >= 1_000
-                  ? `${(stats.totalValue / 1_000).toFixed(0)}K`
-                  : currencyFmt.format(stats.totalValue)}
-            </div>
+            {/* Money rule: never blend currencies into one scalar. One
+                labelled total when all share a currency; per-currency chips
+                otherwise. ISO code always shown. */}
+            {stats.totalsByCurrency.length === 0 ? (
+              <div className="mt-1 text-xl font-bold text-content-primary tabular-nums">--</div>
+            ) : stats.multiCurrency ? (
+              <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                {stats.totalsByCurrency.map((c) => (
+                  <span key={c.currency} className="text-sm font-bold text-content-primary tabular-nums">
+                    {compactMoney(c.total)}
+                    <span className="ml-0.5 text-2xs font-medium text-content-tertiary">{c.currency}</span>
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-1 text-xl font-bold text-content-primary tabular-nums">
+                {compactMoney(stats.totalsByCurrency[0]!.total)}
+                <span className="ml-1 text-xs font-medium text-content-tertiary">
+                  {stats.totalsByCurrency[0]!.currency}
+                </span>
+              </div>
+            )}
           </div>
           <div className="rounded-xl bg-surface-elevated border border-border-light p-3">
             <div className="text-2xs font-medium text-content-tertiary uppercase tracking-wider">{t('boq.status', { defaultValue: 'Status' })}</div>
@@ -730,7 +858,7 @@ export function BOQListPage() {
                 >
                   <option value="">{t('boq.all_statuses', { defaultValue: 'All statuses' })}</option>
                   {uniqueStatuses.map((s) => (
-                    <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
+                    <option key={s} value={s}>{statusLabel(s)}</option>
                   ))}
                 </select>
                 <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2.5 text-content-tertiary">
@@ -751,7 +879,7 @@ export function BOQListPage() {
                   onClick={() => handleSort(field)}
                   className={`flex items-center gap-1 rounded-md px-2 py-1.5 text-2xs font-medium transition-colors ${
                     sortField === field
-                      ? 'bg-oe-blue-subtle text-oe-blue'
+                      ? 'bg-oe-blue-subtle text-oe-blue-text'
                       : 'text-content-tertiary hover:text-content-secondary hover:bg-surface-secondary'
                   }`}
                 >
@@ -817,13 +945,13 @@ export function BOQListPage() {
               }}
             >
               <div className="flex items-center gap-4 px-5 py-3.5">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text">
                   <Table2 size={18} strokeWidth={1.75} />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-content-primary truncate">{boq.name}</span>
-                    <Badge variant={statusVariant(boq.status)} size="sm" dot>{boq.status}</Badge>
+                    <Badge variant={statusVariant(boq.status)} size="sm" dot>{statusLabel(boq.status)}</Badge>
                     {isCollabEnabled && <PresenceAvatars boqId={boq.id} />}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-content-tertiary">
@@ -849,8 +977,8 @@ export function BOQListPage() {
                     onClick={(e) => { e.stopPropagation(); handleCompareClick(boq.id, boq.currency); }}
                     className={`flex h-7 w-7 items-center justify-center rounded-md transition-all ${
                       selectedForCompare?.id === boq.id
-                        ? 'text-oe-blue bg-oe-blue-subtle'
-                        : 'text-content-tertiary hover:text-oe-blue hover:bg-oe-blue-subtle'
+                        ? 'text-oe-blue-text bg-oe-blue-subtle'
+                        : 'text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle'
                     }`}
                     title={
                       compareMode && selectedForCompare?.id === boq.id
@@ -864,7 +992,7 @@ export function BOQListPage() {
                   <button
                     onClick={(e) => { e.stopPropagation(); duplicateMutation.mutate(boq.id); }}
                     disabled={duplicateMutation.isPending}
-                    className="flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-oe-blue hover:bg-oe-blue-subtle transition-all disabled:opacity-40"
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-content-tertiary hover:text-oe-blue-text hover:bg-oe-blue-subtle transition-all disabled:opacity-40"
                     title={t('boq.duplicate', { defaultValue: 'Duplicate' })}
                   >
                     <Copy size={13} />

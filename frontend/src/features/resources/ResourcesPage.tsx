@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import {
   useQuery,
-  useQueries,
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -31,6 +30,11 @@ import {
   Flame,
   AlertOctagon,
   ArrowRight,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Download,
+  Filter,
 } from 'lucide-react';
 import {
   Button,
@@ -47,14 +51,14 @@ import {
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { MoneyDisplay } from '@/shared/ui/MoneyDisplay';
 import { useToastStore } from '@/stores/useToastStore';
-import { getErrorMessage } from '@/shared/lib/api';
+import { getErrorMessage, ApiError } from '@/shared/lib/api';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { usePreferencesStore } from '@/stores/usePreferencesStore';
 import {
   listResources,
   getResourceDashboard,
-  listAssignmentsForResource,
+  getBoard,
   listBoardConflicts,
   confirmAssignment,
   cancelAssignment,
@@ -65,17 +69,21 @@ import {
   listWindows,
   listRequests,
   createResource,
+  updateResource,
+  deleteResource,
   createRequest,
   updateRequest,
   deleteRequest,
   fulfillRequest,
   type Resource,
   type ResourceType,
+  type ResourceStatus,
   type ResourceRequest,
   type RequestStatus,
   type RequestPriority,
   type Assignment,
   type AssignmentStatus,
+  type WindowType,
   type BoardConflict,
   type Skill,
 } from './api';
@@ -97,6 +105,112 @@ const ASSIGN_VARIANT: Record<AssignmentStatus, 'neutral' | 'blue' | 'success' | 
   completed: 'neutral',
   cancelled: 'error',
 };
+
+/* ─── Enum → i18n label helpers ───────────────────────────────────────────
+ *
+ * Badges across this page were rendering raw snake_case enum tokens
+ * (e.g. 'in_progress', 'subcontractor', 'on_leave') verbatim, so non-English
+ * locales and screen readers saw machine identifiers instead of human text.
+ * These helpers route each enum value through the SAME i18n keys the adjacent
+ * <select> options already use, falling back to the raw value for any
+ * unmapped token so nothing ever renders blank.
+ */
+type TFn = (key: string, opts?: Record<string, unknown>) => string;
+
+function resourceTypeLabel(t: TFn, v: ResourceType | string): string {
+  const map: Record<string, string> = {
+    person: t('resources.type_person', { defaultValue: 'Person' }),
+    crew: t('resources.type_crew', { defaultValue: 'Crew' }),
+    equipment: t('resources.type_equipment', { defaultValue: 'Equipment' }),
+    subcontractor: t('resources.type_subcontractor', { defaultValue: 'Subcontractor' }),
+  };
+  return map[v] ?? v;
+}
+
+function resourceStatusLabel(t: TFn, v: ResourceStatus | string): string {
+  const map: Record<string, string> = {
+    active: t('resources.status_active', { defaultValue: 'Active' }),
+    on_leave: t('resources.status_on_leave', { defaultValue: 'On leave' }),
+    inactive: t('resources.status_inactive', { defaultValue: 'Inactive' }),
+  };
+  return map[v] ?? v;
+}
+
+function assignmentStatusLabel(t: TFn, v: AssignmentStatus | string): string {
+  const map: Record<string, string> = {
+    proposed: t('resources.status_proposed', { defaultValue: 'Proposed' }),
+    confirmed: t('resources.status_confirmed', { defaultValue: 'Confirmed' }),
+    in_progress: t('resources.status_in_progress', { defaultValue: 'In progress' }),
+    completed: t('resources.status_completed', { defaultValue: 'Completed' }),
+    cancelled: t('resources.status_cancelled', { defaultValue: 'Cancelled' }),
+  };
+  return map[v] ?? v;
+}
+
+function requestStatusLabel(t: TFn, v: RequestStatus | string): string {
+  const map: Record<string, string> = {
+    open: t('resources.req_status_open', { defaultValue: 'Open' }),
+    fulfilled: t('resources.req_status_fulfilled', { defaultValue: 'Fulfilled' }),
+    cancelled: t('resources.req_status_cancelled', { defaultValue: 'Cancelled' }),
+  };
+  return map[v] ?? v;
+}
+
+function requestPriorityLabel(t: TFn, v: RequestPriority | string): string {
+  const map: Record<string, string> = {
+    low: t('resources.priority_low', { defaultValue: 'Low' }),
+    med: t('resources.priority_med', { defaultValue: 'Medium' }),
+    high: t('resources.priority_high', { defaultValue: 'High' }),
+    critical: t('resources.priority_critical', { defaultValue: 'Critical' }),
+  };
+  return map[v] ?? v;
+}
+
+function windowTypeLabel(t: TFn, v: WindowType | string): string {
+  const map: Record<string, string> = {
+    available: t('resources.window_available', { defaultValue: 'Available' }),
+    unavailable: t('resources.window_unavailable', { defaultValue: 'Unavailable' }),
+    holiday: t('resources.window_holiday', { defaultValue: 'Holiday' }),
+    sick: t('resources.window_sick', { defaultValue: 'Sick leave' }),
+  };
+  return map[v] ?? v;
+}
+
+function certStatusLabel(t: TFn, v: string): string {
+  const map: Record<string, string> = {
+    valid: t('resources.cert_status_valid', { defaultValue: 'Valid' }),
+    expired: t('resources.cert_status_expired', { defaultValue: 'Expired' }),
+    revoked: t('resources.cert_status_revoked', { defaultValue: 'Revoked' }),
+  };
+  return map[v] ?? v;
+}
+
+/**
+ * Resolve a display message from a propose/fulfill error.
+ *
+ * The propose_assignment / fulfill_request endpoints return their conflict
+ * (409) and skill-mismatch (422) details as an OBJECT detail
+ * (`{ message, conflicts }` / `{ message, missing }`). The shared error
+ * extractor only understands string/array `detail`, so it discards the rich
+ * message and the toast falls back to a generic "this conflicts with existing
+ * data". Read the object detail's `message` here so the user sees the real,
+ * actionable reason; fall back to the shared resolver for everything else.
+ */
+function resourceErrorMessage(err: unknown): string {
+  if (err instanceof ApiError && err.body && typeof err.body === 'object') {
+    const detail = (err.body as { detail?: unknown }).detail;
+    if (
+      detail &&
+      typeof detail === 'object' &&
+      !Array.isArray(detail) &&
+      typeof (detail as { message?: unknown }).message === 'string'
+    ) {
+      const msg = (detail as { message: string }).message;
+      if (msg.trim().length > 0) return msg;
+    }
+  }
+  return getErrorMessage(err);
+}
 
 const inputCls =
   'h-9 w-full rounded-lg border border-border bg-surface-primary px-3 text-sm focus:outline-none focus:ring-2 focus:ring-oe-blue/30 focus:border-oe-blue';
@@ -138,7 +252,7 @@ function WorkflowIntro() {
   return (
     <Card padding="md" className="border-oe-blue/20 bg-oe-blue-subtle/10">
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue">
+        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-oe-blue-subtle text-oe-blue-text">
           <Users size={16} />
         </div>
         <div className="min-w-0 flex-1">
@@ -200,20 +314,200 @@ function WorkflowIntro() {
 
 /* ─── Page ─── */
 
+/* ─── Persisted sort/filter state ─────────────────────────────────────
+ *
+ * Each user gets their preferred sort key/direction and status filter
+ * sticky across navigations. We use sessionStorage (not localStorage)
+ * so a fresh tab starts clean, mirroring how the requests-tab sort
+ * works elsewhere on this page.
+ */
+type ResourceSortKey = 'code' | 'name' | 'resource_type' | 'status' | 'default_cost_rate';
+type SortDir = 'asc' | 'desc';
+
+const RES_SORT_STORAGE_KEY = 'oe.res.sort';
+const RES_STATUS_STORAGE_KEY = 'oe.res.statusFilter';
+const RES_CURRENCY_STORAGE_KEY = 'oe.res.currencyFilter';
+
+function loadStoredSort(): { key: ResourceSortKey; dir: SortDir } {
+  try {
+    const raw = sessionStorage.getItem(RES_SORT_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { key: ResourceSortKey; dir: SortDir };
+      if (parsed && parsed.key && parsed.dir) return parsed;
+    }
+  } catch {
+    /* ignore — corrupt JSON falls through to default */
+  }
+  return { key: 'code', dir: 'asc' };
+}
+
+function buildResourcesCsv(rows: Resource[]): string {
+  // Minimal, locale-safe CSV — escape quotes and wrap every cell, RFC-4180.
+  const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const header = ['code', 'name', 'type', 'status', 'rate', 'currency', 'notes'];
+  const lines = [header.map(esc).join(',')];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.code,
+        r.name,
+        r.resource_type,
+        r.status,
+        r.default_cost_rate,
+        r.currency,
+        r.notes,
+      ]
+        .map(esc)
+        .join(','),
+    );
+  }
+  return lines.join('\r\n');
+}
+
+function downloadCsv(filename: string, csv: string) {
+  // BOM ensures Excel opens UTF-8 correctly (German / Russian / Greek
+  // umlauts in code/name would otherwise mojibake). Use the U+FEFF escape
+  // rather than a literal BOM char so the zero-width-guard CI scan passes.
+  const blob = new Blob(['\uFEFF', csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export function ResourcesPage() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('resources');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<ResourceType | ''>('');
+  const [statusFilter, setStatusFilter] = useState<ResourceStatus | ''>(() => {
+    try {
+      return (
+        (sessionStorage.getItem(RES_STATUS_STORAGE_KEY) as ResourceStatus | '') ?? ''
+      );
+    } catch {
+      return '';
+    }
+  });
+  const [currencyFilter, setCurrencyFilter] = useState<string>(() => {
+    try {
+      return sessionStorage.getItem(RES_CURRENCY_STORAGE_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [sortState, setSortState] = useState<{ key: ResourceSortKey; dir: SortDir }>(
+    () => loadStoredSort(),
+  );
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [proposeOpen, setProposeOpen] = useState(false);
+  // Per-row edit / delete state. Lifted up here so the modal / confirm
+  // dialog sit at page-root and survive table re-renders.
+  const [editTarget, setEditTarget] = useState<Resource | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Resource | null>(null);
+
+  // Persist sort + filters across remounts.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(RES_SORT_STORAGE_KEY, JSON.stringify(sortState));
+    } catch {
+      /* storage quota / disabled — non-fatal */
+    }
+  }, [sortState]);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(RES_STATUS_STORAGE_KEY, statusFilter);
+    } catch {
+      /* non-fatal */
+    }
+  }, [statusFilter]);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(RES_CURRENCY_STORAGE_KEY, currencyFilter);
+    } catch {
+      /* non-fatal */
+    }
+  }, [currencyFilter]);
   // Requests tab — lifted up so the page-header "New Request" button can open
   // the modal owned by the tab. Persisted across tab switches.
   const [newRequestOpen, setNewRequestOpen] = useState(false);
+  const qc = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
   const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
   const activeProjectName = useProjectContextStore((s) => s.activeProjectName);
   const setActiveProject = useProjectContextStore((s) => s.setActiveProject);
+
+  const deleteResourceMut = useMutation({
+    mutationFn: (id: string) => deleteResource(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['resources', 'list'] });
+      addToast({
+        type: 'success',
+        title: t('resources.deleted_ok', { defaultValue: 'Resource deleted' }),
+      });
+      setDeleteTarget(null);
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
+
+  /* Inline rate edit — optimistically PATCH a single field. Errors roll
+     back via invalidate (we don't need a manual snapshot because the
+     query has staleTime 0). */
+  const inlineRateMut = useMutation({
+    mutationFn: ({ id, rate }: { id: string; rate: number }) =>
+      updateResource(id, { default_cost_rate: rate }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['resources', 'list'] });
+    },
+    onError: (err) => {
+      addToast({ type: 'error', title: getErrorMessage(err) });
+      qc.invalidateQueries({ queryKey: ['resources', 'list'] });
+    },
+  });
+
+  /* Bulk delete — mirrors AssignmentsTab pattern. Promise.allSettled
+     so a single 409 doesn't kill the others. */
+  const bulkDeleteMut = useMutation({
+    mutationFn: async (ids: string[]) => {
+      const results = await Promise.allSettled(ids.map((id) => deleteResource(id)));
+      return {
+        total: ids.length,
+        failed: results.filter((r) => r.status === 'rejected').length,
+      };
+    },
+    onSuccess: ({ total, failed }) => {
+      qc.invalidateQueries({ queryKey: ['resources', 'list'] });
+      setSelectedIds(new Set());
+      setBulkDeleteOpen(false);
+      if (failed === 0) {
+        addToast({
+          type: 'success',
+          title: t('resources.bulk_delete_resources_ok', {
+            defaultValue: '{{count}} resources deleted',
+            count: total,
+          }),
+        });
+      } else {
+        addToast({
+          type: 'warning',
+          title: t('resources.bulk_delete_partial', {
+            defaultValue: '{{ok}} of {{total}} deleted, {{failed}} failed',
+            ok: total - failed,
+            total,
+            failed,
+          }),
+        });
+      }
+    },
+    onError: (err) => addToast({ type: 'error', title: getErrorMessage(err) }),
+  });
   const [requestsProjectId, setRequestsProjectId] = useState<string>(
     activeProjectId ?? '',
   );
@@ -243,10 +537,22 @@ export function ResourcesPage() {
 
   const allResources: Resource[] = resourcesQ.data ?? [];
 
+  // Distinct currencies in the loaded set — drives the currency-filter
+  // dropdown. Sorted for stable order across renders.
+  const availableCurrencies = useMemo(() => {
+    const seen = new Set<string>();
+    for (const r of allResources) {
+      if (r.currency) seen.add(r.currency);
+    }
+    return Array.from(seen).sort();
+  }, [allResources]);
+
   const filteredResources = useMemo(() => {
-    const s = search.toLowerCase();
-    return allResources.filter((r) => {
+    const s = search.trim().toLowerCase();
+    const filtered = allResources.filter((r) => {
       if (typeFilter && r.resource_type !== typeFilter) return false;
+      if (statusFilter && r.status !== statusFilter) return false;
+      if (currencyFilter && r.currency !== currencyFilter) return false;
       if (!s) return true;
       return (
         r.name.toLowerCase().includes(s) ||
@@ -254,7 +560,48 @@ export function ResourcesPage() {
         r.notes.toLowerCase().includes(s)
       );
     });
-  }, [allResources, search, typeFilter]);
+    const dir = sortState.dir === 'asc' ? 1 : -1;
+    const { key } = sortState;
+    return filtered.slice().sort((a, b) => {
+      let cmp = 0;
+      if (key === 'default_cost_rate') {
+        cmp = (Number(a.default_cost_rate) || 0) - (Number(b.default_cost_rate) || 0);
+      } else {
+        // Locale-aware string sort — handles diacritics & non-Latin codes
+        // (CWICR has Cyrillic/CJK in some seeds).
+        cmp = String(a[key] ?? '').localeCompare(String(b[key] ?? ''), undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        });
+      }
+      return cmp * dir;
+    });
+  }, [allResources, search, typeFilter, statusFilter, currencyFilter, sortState]);
+
+  // Drop selections that fall outside the visible filtered set so the
+  // "Selected: N" counter never lies and the bulk-delete confirmation
+  // always matches the rendered checkboxes.
+  useEffect(() => {
+    const visible = new Set(filteredResources.map((r) => r.id));
+    setSelectedIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (visible.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
+  }, [filteredResources]);
+
+  const hasActiveFilters =
+    !!search || !!typeFilter || !!statusFilter || !!currencyFilter;
+  const clearAllFilters = () => {
+    setSearch('');
+    setTypeFilter('');
+    setStatusFilter('');
+    setCurrencyFilter('');
+  };
 
   const isLoading = tab === 'resources' && resourcesQ.isLoading;
 
@@ -346,8 +693,13 @@ export function ResourcesPage() {
                 type="button"
                 onClick={() => {
                   setTab(tabItem.id);
+                  // Search resets per-tab (each tab has its own logical
+                  // search scope). Type/status/currency stay because the
+                  // user explicitly persisted them via sessionStorage.
                   setSearch('');
-                  setTypeFilter('');
+                  if (tabItem.id !== 'resources') {
+                    setTypeFilter('');
+                  }
                 }}
                 className={clsx(
                   'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
@@ -366,24 +718,49 @@ export function ResourcesPage() {
 
       {tab === 'resources' && (
         <>
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Filter toolbar — search + type + status + currency + clear */}
+          <div
+            className="flex flex-wrap items-center gap-2"
+            role="search"
+            aria-label={t('resources.filter_toolbar_aria', {
+              defaultValue: 'Filter resources',
+            })}
+          >
             <div className="relative flex-1 min-w-[200px] max-w-md">
               <Search
                 size={14}
                 className="absolute left-3 top-1/2 -translate-y-1/2 text-content-tertiary"
+                aria-hidden="true"
               />
               <input
                 type="text"
-                placeholder={t('common.search', { defaultValue: 'Search…' })}
+                placeholder={t('resources.search_placeholder', {
+                  defaultValue: 'Search code, name or notes…',
+                })}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                className={clsx(inputCls, 'pl-8')}
+                className={clsx(inputCls, 'pl-8 pr-8')}
+                aria-label={t('common.search', { defaultValue: 'Search' })}
+                data-testid="resources-search"
               />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  aria-label={t('common.clear', { defaultValue: 'Clear' })}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-content-tertiary hover:bg-surface-secondary hover:text-content-primary"
+                  data-testid="resources-search-clear"
+                >
+                  <X size={12} />
+                </button>
+              )}
             </div>
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value as ResourceType | '')}
-              className={clsx(inputCls, 'max-w-[200px]')}
+              className={clsx(inputCls, 'max-w-[180px]')}
+              aria-label={t('resources.filter_type', { defaultValue: 'Filter by type' })}
+              data-testid="resources-type-filter"
             >
               <option value="">
                 {t('resources.all_types', { defaultValue: 'All types' })}
@@ -401,6 +778,83 @@ export function ResourcesPage() {
                 {t('resources.type_subcontractor', { defaultValue: 'Subcontractor' })}
               </option>
             </select>
+            <select
+              value={statusFilter}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as ResourceStatus | '')
+              }
+              className={clsx(inputCls, 'max-w-[180px]')}
+              aria-label={t('resources.filter_status', {
+                defaultValue: 'Filter by status',
+              })}
+              data-testid="resources-status-filter"
+            >
+              <option value="">
+                {t('resources.all_statuses', { defaultValue: 'All statuses' })}
+              </option>
+              <option value="active">
+                {t('resources.status_active', { defaultValue: 'Active' })}
+              </option>
+              <option value="on_leave">
+                {t('resources.status_on_leave', { defaultValue: 'On leave' })}
+              </option>
+              <option value="inactive">
+                {t('resources.status_inactive', { defaultValue: 'Inactive' })}
+              </option>
+            </select>
+            {availableCurrencies.length > 1 && (
+              <select
+                value={currencyFilter}
+                onChange={(e) => setCurrencyFilter(e.target.value)}
+                className={clsx(inputCls, 'max-w-[140px]')}
+                aria-label={t('resources.filter_currency', {
+                  defaultValue: 'Filter by currency',
+                })}
+                data-testid="resources-currency-filter"
+              >
+                <option value="">
+                  {t('resources.all_currencies', {
+                    defaultValue: 'All currencies',
+                  })}
+                </option>
+                {availableCurrencies.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            )}
+            {hasActiveFilters && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Filter size={12} />}
+                onClick={clearAllFilters}
+                data-testid="resources-clear-filters"
+                aria-label={t('resources.clear_filters_aria', {
+                  defaultValue: 'Clear all filters',
+                })}
+              >
+                {t('resources.clear_filters', { defaultValue: 'Clear filters' })}
+              </Button>
+            )}
+            <div
+              className="ms-auto text-xs tabular-nums text-content-tertiary"
+              aria-live="polite"
+              role="status"
+              data-testid="resources-result-count"
+            >
+              {hasActiveFilters
+                ? t('resources.result_count_filtered', {
+                    defaultValue: '{{shown}} of {{total}}',
+                    shown: filteredResources.length,
+                    total: allResources.length,
+                  })
+                : t('resources.result_count', {
+                    defaultValue: '{{count}} resources',
+                    count: allResources.length,
+                  })}
+            </div>
           </div>
 
           <Card padding="none">
@@ -421,11 +875,101 @@ export function ResourcesPage() {
                 }}
               />
             ) : (
-              <ResourceTable
-                rows={filteredResources}
-                onSelect={(id) => setSelectedId(id)}
-                emptyAction={() => setCreateOpen(true)}
-              />
+              <>
+                {/* Bulk action bar — visible when at least one row is selected */}
+                {selectedIds.size > 0 && (
+                  <div
+                    className="flex items-center gap-2 border-b border-border-light bg-oe-blue-subtle/40 px-4 py-2 text-xs"
+                    data-testid="resources-bulk-bar"
+                  >
+                    <span className="font-medium">
+                      {t('resources.selected_count', {
+                        defaultValue: '{{count}} selected',
+                        count: selectedIds.size,
+                      })}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIds(new Set())}
+                      className="text-content-tertiary hover:text-content-primary"
+                    >
+                      {t('common.clear', { defaultValue: 'Clear' })}
+                    </button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="ms-auto"
+                      icon={<Download size={12} />}
+                      onClick={() => {
+                        const selectedRows = filteredResources.filter((r) =>
+                          selectedIds.has(r.id),
+                        );
+                        const stamp = new Date().toISOString().slice(0, 10);
+                        downloadCsv(
+                          `resources-${stamp}.csv`,
+                          buildResourcesCsv(selectedRows),
+                        );
+                      }}
+                      data-testid="resources-bulk-export"
+                    >
+                      {t('resources.bulk_export_csv', {
+                        defaultValue: 'Export CSV',
+                      })}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="!text-rose-600 hover:!bg-rose-50"
+                      icon={<Trash2 size={12} />}
+                      onClick={() => setBulkDeleteOpen(true)}
+                      data-testid="resources-bulk-delete"
+                      disabled={bulkDeleteMut.isPending}
+                    >
+                      {t('resources.bulk_delete', { defaultValue: 'Delete selected' })}
+                    </Button>
+                  </div>
+                )}
+                <ResourceTable
+                  rows={filteredResources}
+                  total={allResources.length}
+                  hasActiveFilters={hasActiveFilters}
+                  search={search}
+                  selectedIds={selectedIds}
+                  onToggleOne={(id) =>
+                    setSelectedIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(id)) next.delete(id);
+                      else next.add(id);
+                      return next;
+                    })
+                  }
+                  onToggleAll={() =>
+                    setSelectedIds((prev) =>
+                      prev.size === filteredResources.length
+                        ? new Set()
+                        : new Set(filteredResources.map((r) => r.id)),
+                    )
+                  }
+                  sortKey={sortState.key}
+                  sortDir={sortState.dir}
+                  onSort={(key) =>
+                    setSortState((prev) =>
+                      prev.key === key
+                        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+                        : { key, dir: 'asc' },
+                    )
+                  }
+                  onSelect={(id) => setSelectedId(id)}
+                  onEdit={(r) => setEditTarget(r)}
+                  onDelete={(r) => setDeleteTarget(r)}
+                  emptyAction={() => setCreateOpen(true)}
+                  onClearFilters={clearAllFilters}
+                  onInlineRateSave={(id, rate) =>
+                    inlineRateMut.mutate({ id, rate })
+                  }
+                  pendingRateId={inlineRateMut.variables?.id ?? null}
+                />
+              </>
             )}
           </Card>
         </>
@@ -459,6 +1003,51 @@ export function ResourcesPage() {
 
       {createOpen && <CreateResourceModal onClose={() => setCreateOpen(false)} />}
 
+      {editTarget && (
+        <EditResourceModal
+          resource={editTarget}
+          onClose={() => setEditTarget(null)}
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title={t('resources.delete_resource_title', {
+          defaultValue: 'Delete this resource?',
+        })}
+        message={t('resources.delete_resource_msg', {
+          defaultValue:
+            'This permanently removes the resource. Active assignments referencing it will be blocked — cancel or reassign them first.',
+        })}
+        confirmLabel={t('common.delete', { defaultValue: 'Delete' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        variant="danger"
+        loading={deleteResourceMut.isPending}
+        onConfirm={() => {
+          if (deleteTarget) deleteResourceMut.mutate(deleteTarget.id);
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        title={t('resources.bulk_delete_resources_title', {
+          defaultValue: 'Delete {{count}} resources?',
+          count: selectedIds.size,
+        })}
+        message={t('resources.bulk_delete_resources_msg', {
+          defaultValue:
+            'This permanently removes {{count}} resources. Any active assignments referencing them will block their delete — those rows stay and a warning will be shown.',
+          count: selectedIds.size,
+        })}
+        confirmLabel={t('common.delete', { defaultValue: 'Delete' })}
+        cancelLabel={t('common.cancel', { defaultValue: 'Cancel' })}
+        variant="danger"
+        loading={bulkDeleteMut.isPending}
+        onConfirm={() => bulkDeleteMut.mutate(Array.from(selectedIds))}
+        onCancel={() => setBulkDeleteOpen(false)}
+      />
+
       {proposeOpen && (
         <ProposeAssignmentModal
           resources={allResources}
@@ -469,98 +1058,452 @@ export function ResourcesPage() {
   );
 }
 
-/* ─── Resource table ─── */
+/* ─── Resource table ───────────────────────────────────────────────────
+ *
+ * Renders the filtered + sorted resources with:
+ *   - bulk-select checkbox column (header = indeterminate when partial)
+ *   - sortable headers (code, name, type, status, rate) with aria-sort
+ *   - inline rate edit (double-click cell → input → Enter/Esc/blur)
+ *   - per-row edit / delete buttons (data-row-action guards row click)
+ *
+ * Empty state is three-way:
+ *   1. No resources at all → CTA to create.
+ *   2. Filters active but nothing matches → CTA to clear filters.
+ *   3. Search term but nothing matches → quotes the search term.
+ */
 
-function ResourceTable({
-  rows,
-  onSelect,
-  emptyAction,
-}: {
-  rows: Resource[];
-  onSelect: (id: string) => void;
-  emptyAction: () => void;
-}) {
+interface SortableHeaderProps {
+  label: string;
+  columnKey: ResourceSortKey;
+  activeKey: ResourceSortKey;
+  dir: SortDir;
+  align?: 'left' | 'right';
+  onSort: (key: ResourceSortKey) => void;
+}
+
+function SortableHeader({
+  label,
+  columnKey,
+  activeKey,
+  dir,
+  align = 'left',
+  onSort,
+}: SortableHeaderProps) {
+  const isActive = activeKey === columnKey;
+  const Arrow = !isActive ? ArrowUpDown : dir === 'asc' ? ArrowUp : ArrowDown;
+  return (
+    <th
+      className={clsx(
+        'px-4 py-2.5',
+        align === 'right' ? 'text-right' : 'text-left',
+      )}
+      aria-sort={isActive ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      scope="col"
+    >
+      <button
+        type="button"
+        onClick={() => onSort(columnKey)}
+        className={clsx(
+          'inline-flex items-center gap-1 font-medium uppercase tracking-wide transition-colors',
+          isActive ? 'text-content-primary' : 'hover:text-content-primary',
+          align === 'right' && 'flex-row-reverse',
+        )}
+        data-testid={`resources-sort-${columnKey}`}
+      >
+        {label}
+        <Arrow size={11} className={clsx(!isActive && 'opacity-40')} aria-hidden="true" />
+      </button>
+    </th>
+  );
+}
+
+interface InlineRateCellProps {
+  resource: Resource;
+  pending: boolean;
+  onSave: (id: string, rate: number) => void;
+}
+
+function InlineRateCell({ resource, pending, onSave }: InlineRateCellProps) {
   const { t } = useTranslation();
-  if (rows.length === 0) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(String(resource.default_cost_rate ?? '0'));
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Re-seed local state whenever the underlying row changes (e.g. server
+  // round-trip finished, or another user edited it via WebSocket).
+  useEffect(() => {
+    if (!editing) setValue(String(resource.default_cost_rate ?? '0'));
+  }, [resource.default_cost_rate, editing]);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const commit = () => {
+    const num = Number(value);
+    if (Number.isNaN(num) || num < 0) {
+      // Reject silently and restore — the toast would be too noisy for an
+      // inline edit. The original value is back, the user sees that.
+      setValue(String(resource.default_cost_rate ?? '0'));
+      setEditing(false);
+      return;
+    }
+    if (num !== Number(resource.default_cost_rate)) {
+      onSave(resource.id, num);
+    }
+    setEditing(false);
+  };
+
+  if (editing) {
     return (
-      <EmptyState
-        icon={<Users size={22} />}
-        title={t('resources.empty_title', { defaultValue: 'No resources yet' })}
-        description={t('resources.empty_desc', {
-          defaultValue:
-            'Add people, crews and equipment to start planning their assignments.',
-        })}
-        action={{
-          label: t('resources.new_resource', { defaultValue: 'New Resource' }),
-          onClick: emptyAction,
+      <input
+        ref={inputRef}
+        type="number"
+        min={0}
+        step="0.01"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') commit();
+          else if (e.key === 'Escape') {
+            setValue(String(resource.default_cost_rate ?? '0'));
+            setEditing(false);
+          }
         }}
+        // Stop the row-click handler firing while the user types.
+        onClick={(e) => e.stopPropagation()}
+        className="w-24 rounded border border-oe-blue bg-surface-primary px-2 py-0.5 text-right text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-oe-blue/30"
+        aria-label={t('resources.edit_rate_aria', {
+          defaultValue: 'Edit rate for {{name}}',
+          name: resource.name,
+        })}
+        data-testid={`resource-rate-input-${resource.id}`}
       />
     );
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="bg-surface-secondary text-content-tertiary text-xs uppercase tracking-wide">
-          <tr>
-            <th className="px-4 py-2.5 text-left">
-              {t('resources.col_code', { defaultValue: 'Code' })}
-            </th>
-            <th className="px-4 py-2.5 text-left">
-              {t('resources.col_name', { defaultValue: 'Name' })}
-            </th>
-            <th className="px-4 py-2.5 text-left">
-              {t('resources.col_type', { defaultValue: 'Type' })}
-            </th>
-            <th className="px-4 py-2.5 text-left">
-              {t('resources.col_status', { defaultValue: 'Status' })}
-            </th>
-            <th className="px-4 py-2.5 text-right">
-              {t('resources.col_rate', { defaultValue: 'Rate' })}
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr
-              key={r.id}
-              onClick={() => onSelect(r.id)}
-              className="border-t border-border-light hover:bg-surface-secondary cursor-pointer"
-            >
-              <td className="px-4 py-2 font-mono text-xs text-content-secondary">
-                {r.code}
-              </td>
-              <td className="px-4 py-2 font-medium text-content-primary">{r.name}</td>
-              <td className="px-4 py-2">
-                <Badge variant={TYPE_VARIANT[r.resource_type]} size="sm">
-                  {r.resource_type}
-                </Badge>
-              </td>
-              <td className="px-4 py-2">
-                <Badge
-                  variant={
-                    r.status === 'active'
-                      ? 'success'
-                      : r.status === 'on_leave'
-                        ? 'warning'
-                        : 'neutral'
-                  }
-                  dot
-                  size="sm"
-                >
-                  {r.status}
-                </Badge>
-              </td>
-              <td className="px-4 py-2 text-right">
-                <MoneyDisplay
-                  amount={Number(r.default_cost_rate) || 0}
-                  currency={r.currency || undefined}
+    <button
+      type="button"
+      data-row-action
+      onClick={(e) => {
+        e.stopPropagation();
+        setEditing(true);
+      }}
+      onDoubleClick={(e) => {
+        e.stopPropagation();
+        setEditing(true);
+      }}
+      className={clsx(
+        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-right tabular-nums transition-colors',
+        'hover:bg-oe-blue-subtle hover:text-oe-blue-text',
+        pending && 'opacity-50',
+      )}
+      title={t('resources.edit_rate_hint', {
+        defaultValue: 'Click to edit rate',
+      })}
+      data-testid={`resource-rate-${resource.id}`}
+      disabled={pending}
+    >
+      <MoneyDisplay
+        amount={Number(resource.default_cost_rate) || 0}
+        currency={resource.currency || undefined}
+      />
+      {pending && <Loader2 size={10} className="animate-spin" />}
+    </button>
+  );
+}
+
+interface ResourceTableProps {
+  rows: Resource[];
+  total: number;
+  hasActiveFilters: boolean;
+  search: string;
+  selectedIds: Set<string>;
+  onToggleOne: (id: string) => void;
+  onToggleAll: () => void;
+  sortKey: ResourceSortKey;
+  sortDir: SortDir;
+  onSort: (key: ResourceSortKey) => void;
+  onSelect: (id: string) => void;
+  onEdit: (r: Resource) => void;
+  onDelete: (r: Resource) => void;
+  emptyAction: () => void;
+  onClearFilters: () => void;
+  onInlineRateSave: (id: string, rate: number) => void;
+  pendingRateId: string | null;
+}
+
+function ResourceTable({
+  rows,
+  total,
+  hasActiveFilters: _hasActiveFilters,
+  search,
+  selectedIds,
+  onToggleOne,
+  onToggleAll,
+  sortKey,
+  sortDir,
+  onSort,
+  onSelect,
+  onEdit,
+  onDelete,
+  emptyAction,
+  onClearFilters,
+  onInlineRateSave,
+  pendingRateId,
+}: ResourceTableProps) {
+  const { t } = useTranslation();
+
+  // Three-way empty state — see header comment above.
+  if (rows.length === 0) {
+    if (total === 0) {
+      return (
+        <EmptyState
+          icon={<Users size={22} />}
+          title={t('resources.empty_title', { defaultValue: 'No resources yet' })}
+          description={t('resources.empty_desc', {
+            defaultValue:
+              'Add people, crews and equipment to start planning their assignments. Click + New Resource to create your first one, or import an Excel file from the catalog page.',
+          })}
+          action={{
+            label: t('resources.new_resource', { defaultValue: 'New Resource' }),
+            onClick: emptyAction,
+          }}
+        />
+      );
+    }
+    if (search.trim()) {
+      return (
+        <EmptyState
+          icon={<Search size={22} />}
+          title={t('resources.empty_search_title', {
+            defaultValue: 'No resources match "{{q}}"',
+            q: search.trim(),
+          })}
+          description={t('resources.empty_search_desc', {
+            defaultValue:
+              'Try a shorter search, fewer filters, or check spelling. Search looks at code, name and notes.',
+          })}
+          action={{
+            label: t('resources.clear_filters', { defaultValue: 'Clear filters' }),
+            onClick: onClearFilters,
+          }}
+        />
+      );
+    }
+    return (
+      <EmptyState
+        icon={<Filter size={22} />}
+        title={t('resources.empty_filter_title', {
+          defaultValue: 'No resources match the current filters',
+        })}
+        description={t('resources.empty_filter_desc', {
+          defaultValue:
+            'Adjust the type, status or currency filter — or clear all filters to see everything.',
+        })}
+        action={{
+          label: t('resources.clear_filters', { defaultValue: 'Clear filters' }),
+          onClick: onClearFilters,
+        }}
+      />
+    );
+  }
+
+  const allSelected = rows.length > 0 && selectedIds.size === rows.length;
+  const someSelected = selectedIds.size > 0 && selectedIds.size < rows.length;
+
+  return (
+    <>
+      {/* Inline how-to hint above the grid — makes the edit / delete /
+          inline-rate-edit affordance discoverable without a dedicated tour. */}
+      <div className="flex items-center gap-2 px-4 py-2 text-xs text-content-tertiary border-b border-border-light bg-surface-secondary/40">
+        <Pencil size={11} aria-hidden="true" />
+        <span>
+          {t('resources.row_hint_v2', {
+            defaultValue:
+              'Click a row for details. Click the rate to edit inline. Use the pencil or trash icons for full edit / delete. Click headers to sort.',
+          })}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm" data-testid="resources-table">
+          <thead className="bg-surface-secondary text-content-tertiary text-xs">
+            <tr>
+              <th className="px-3 py-2.5 text-left w-8" scope="col">
+                <input
+                  type="checkbox"
+                  aria-label={t('common.select_all', { defaultValue: 'Select all' })}
+                  checked={allSelected}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someSelected;
+                  }}
+                  onChange={onToggleAll}
+                  data-testid="resources-select-all"
                 />
-              </td>
+              </th>
+              <SortableHeader
+                label={t('resources.col_code', { defaultValue: 'Code' })}
+                columnKey="code"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+              />
+              <SortableHeader
+                label={t('resources.col_name', { defaultValue: 'Name' })}
+                columnKey="name"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+              />
+              <SortableHeader
+                label={t('resources.col_type', { defaultValue: 'Type' })}
+                columnKey="resource_type"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+              />
+              <SortableHeader
+                label={t('resources.col_status', { defaultValue: 'Status' })}
+                columnKey="status"
+                activeKey={sortKey}
+                dir={sortDir}
+                onSort={onSort}
+              />
+              <SortableHeader
+                label={t('resources.col_rate', { defaultValue: 'Rate' })}
+                columnKey="default_cost_rate"
+                activeKey={sortKey}
+                dir={sortDir}
+                align="right"
+                onSort={onSort}
+              />
+              <th
+                className="px-4 py-2.5 text-right w-24 uppercase tracking-wide font-medium"
+                scope="col"
+              >
+                {t('resources.actions', { defaultValue: 'Actions' })}
+              </th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const isSelected = selectedIds.has(r.id);
+              return (
+                <tr
+                  key={r.id}
+                  onClick={(e) => {
+                    const target = e.target as HTMLElement;
+                    // Don't open the drawer when the click came from one of
+                    // the per-row action buttons or the checkbox.
+                    if (target.closest('[data-row-action]')) return;
+                    if (target.closest('input[type="checkbox"]')) return;
+                    onSelect(r.id);
+                  }}
+                  className={clsx(
+                    'border-t border-border-light hover:bg-surface-secondary cursor-pointer group',
+                    isSelected && 'bg-oe-blue-subtle/20',
+                  )}
+                  data-testid={`resource-row-${r.id}`}
+                  aria-selected={isSelected}
+                >
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={() => onToggleOne(r.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={t('common.select_row', {
+                        defaultValue: 'Select row',
+                      })}
+                      data-testid={`resource-select-${r.id}`}
+                    />
+                  </td>
+                  <td className="px-4 py-2 font-mono text-xs tabular-nums text-content-secondary">
+                    {r.code}
+                  </td>
+                  <td className="px-4 py-2 font-medium text-content-primary">
+                    {r.name}
+                  </td>
+                  <td className="px-4 py-2">
+                    <Badge variant={TYPE_VARIANT[r.resource_type]} size="sm">
+                      {resourceTypeLabel(t, r.resource_type)}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-2">
+                    <Badge
+                      variant={
+                        r.status === 'active'
+                          ? 'success'
+                          : r.status === 'on_leave'
+                            ? 'warning'
+                            : 'neutral'
+                      }
+                      dot
+                      size="sm"
+                    >
+                      {resourceStatusLabel(t, r.status)}
+                    </Badge>
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <InlineRateCell
+                      resource={r}
+                      pending={pendingRateId === r.id}
+                      onSave={onInlineRateSave}
+                    />
+                  </td>
+                  <td className="px-4 py-2 text-right">
+                    <div className="inline-flex gap-1 opacity-60 group-hover:opacity-100 transition-opacity">
+                      <button
+                        type="button"
+                        data-row-action
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onEdit(r);
+                        }}
+                        className="rounded p-1 text-content-secondary hover:text-oe-blue-text hover:bg-oe-blue-subtle"
+                        aria-label={t('resources.edit_aria', {
+                          defaultValue: 'Edit {{name}}',
+                          name: r.name,
+                        })}
+                        title={t('resources.edit_title', {
+                          defaultValue: 'Edit resource',
+                        })}
+                        data-testid={`resource-edit-${r.id}`}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        data-row-action
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDelete(r);
+                        }}
+                        className="rounded p-1 text-content-secondary hover:text-rose-600 hover:bg-rose-50"
+                        aria-label={t('resources.delete_aria', {
+                          defaultValue: 'Delete {{name}}',
+                          name: r.name,
+                        })}
+                        title={t('resources.delete_title', {
+                          defaultValue: 'Delete resource',
+                        })}
+                        data-testid={`resource-delete-${r.id}`}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -1270,7 +2213,7 @@ function RequestRow({
       <td className="px-4 py-2.5">
         <Badge variant={PRIORITY_VARIANT[r.priority]} size="sm">
           {PriorityIcon && <PriorityIcon size={10} className="inline mr-1" />}
-          {r.priority}
+          {requestPriorityLabel(t, r.priority)}
         </Badge>
       </td>
       <td className="px-4 py-2.5">
@@ -1308,7 +2251,7 @@ function RequestRow({
       </td>
       <td className="px-4 py-2.5">
         <Badge variant={REQUEST_STATUS_VARIANT[r.status]} dot size="sm">
-          {r.status}
+          {requestStatusLabel(t, r.status)}
         </Badge>
       </td>
       <td className="px-4 py-2.5 text-right">
@@ -1801,7 +2744,7 @@ function FulfillRequestModal({
       });
       onFulfilled();
     } catch (err) {
-      addToast({ type: 'error', title: getErrorMessage(err) });
+      addToast({ type: 'error', title: resourceErrorMessage(err) });
     } finally {
       setBusy(false);
     }
@@ -1839,7 +2782,7 @@ function FulfillRequestModal({
             <DateDisplay value={request.end_at} /> ·{' '}
             {request.quantity} ×{' '}
             <Badge variant={PRIORITY_VARIANT[request.priority]} size="sm">
-              {request.priority}
+              {requestPriorityLabel(t, request.priority)}
             </Badge>
           </p>
         </WideModalField>
@@ -1862,7 +2805,7 @@ function FulfillRequestModal({
             </option>
             {resources.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.code} — {r.name} ({r.resource_type})
+                {r.code} — {r.name} ({resourceTypeLabel(t, r.resource_type)})
               </option>
             ))}
           </select>
@@ -1944,34 +2887,42 @@ function AssignmentsTab({
     return m;
   }, [resources]);
 
-  // Fan-out assignments across resources (limited to first 50 to keep the
-  // request count bounded). Each per-resource query is keyed by resource
-  // id so React Query can invalidate them individually on mutation.
-  const samples = resources.slice(0, 50);
-  const assignmentQs = useQueries({
-    queries: samples.map((r) => ({
-      queryKey: ['resources', 'assignments', r.id] as const,
-      queryFn: () => listAssignmentsForResource(r.id, { limit: 50 }),
-      staleTime: 30_000,
-    })),
+  // Load assignments for ALL resources in one org-wide dispatcher query
+  // instead of fanning out per-resource (which previously capped at the
+  // first 50 resources and silently dropped assignments for resource #51+).
+  // The board returns resources + their assignments for the window in a
+  // single round-trip, keeping the list, header count and the side
+  // Conflicts panel over the same population. The window starts at the
+  // beginning of the current week and extends ~6 months out to cover the
+  // "upcoming" assignments the header advertises.
+  const boardWindow = useMemo(() => {
+    const start = startOfWeek();
+    const end = new Date(start);
+    end.setMonth(end.getMonth() + 6);
+    return { start, end: end.toISOString() };
+  }, []);
+
+  const boardQ = useQuery({
+    queryKey: ['resources', 'assignments', 'board', boardWindow.start, boardWindow.end],
+    queryFn: () => getBoard({ start: boardWindow.start, end: boardWindow.end }),
+    staleTime: 30_000,
   });
 
-  const isLoading = assignmentQs.some((q) => q.isLoading);
+  const isLoading = boardQ.isLoading;
 
   // Flatten + sort by start date ascending so "next up" is at the top.
   type FlatAssignment = Assignment & { resource_name: string };
   const flat: FlatAssignment[] = useMemo(() => {
     const out: FlatAssignment[] = [];
-    assignmentQs.forEach((q, idx) => {
-      const r = samples[idx];
-      if (!r || !q.data) return;
-      for (const a of q.data) {
-        out.push({ ...a, resource_name: r.name });
+    for (const entry of boardQ.data?.entries ?? []) {
+      const name = entry.resource.name ?? idToName[entry.resource.id] ?? '';
+      for (const a of entry.assignments) {
+        out.push({ ...a, resource_name: name });
       }
-    });
+    }
     out.sort((a, b) => (a.start_at < b.start_at ? -1 : a.start_at > b.start_at ? 1 : 0));
     return out;
-  }, [assignmentQs, samples]);
+  }, [boardQ.data, idToName]);
 
   const [statusFilter, setStatusFilter] = useState<AssignmentStatus | ''>('');
   const filtered = useMemo(
@@ -2286,7 +3237,7 @@ function AssignmentsTab({
                           </td>
                           <td className="px-3 py-1.5">
                             <Badge variant={ASSIGN_VARIANT[a.status]} dot size="sm">
-                              {a.status}
+                              {assignmentStatusLabel(t, a.status)}
                             </Badge>
                           </td>
                           <td className="px-3 py-1.5 text-right">
@@ -2295,7 +3246,7 @@ function AssignmentsTab({
                                 <button
                                   type="button"
                                   onClick={() => setEditing(a)}
-                                  className="rounded p-1 text-content-secondary hover:text-oe-blue hover:bg-oe-blue-subtle"
+                                  className="rounded p-1 text-content-secondary hover:text-oe-blue-text hover:bg-oe-blue-subtle"
                                   aria-label={t('common.edit', { defaultValue: 'Edit' })}
                                   title={t('common.edit', { defaultValue: 'Edit' })}
                                   data-testid={`assign-edit-${a.id}`}
@@ -2751,7 +3702,7 @@ function ResourceDrawer({
                   label={t('resources.col_type')}
                   value={
                     <Badge variant={TYPE_VARIANT[data.resource.resource_type]} size="sm">
-                      {data.resource.resource_type}
+                      {resourceTypeLabel(t, data.resource.resource_type)}
                     </Badge>
                   }
                 />
@@ -2763,7 +3714,7 @@ function ResourceDrawer({
                       dot
                       size="sm"
                     >
-                      {data.resource.status}
+                      {resourceStatusLabel(t, data.resource.status)}
                     </Badge>
                   }
                 />
@@ -2842,7 +3793,7 @@ function ResourceDrawer({
                         className="flex items-center justify-between py-1.5"
                       >
                         <span className="text-content-secondary">
-                          {w.window_type}
+                          {windowTypeLabel(t, w.window_type)}
                           {w.note ? ` · ${w.note}` : ''}
                         </span>
                         <span className="text-content-tertiary text-xs">
@@ -2873,7 +3824,7 @@ function ResourceDrawer({
                             variant={c.status === 'valid' ? 'success' : 'warning'}
                             size="sm"
                           >
-                            {c.status}
+                            {certStatusLabel(t, c.status)}
                           </Badge>
                         </div>
                         {c.valid_until && (
@@ -2931,6 +3882,13 @@ function AssignmentTable({
   busy: boolean;
 }) {
   const { t } = useTranslation();
+  const userRole = useAuthStore((s) => s.userRole);
+  // Confirm maps to resources.confirm_assignment (MANAGER); Decline maps to
+  // cancel which is resources.assign (EDITOR). Hide affordances the user
+  // cannot exercise so they don't click a button that always 403s.
+  const canConfirm = userRole === 'admin' || userRole === 'manager';
+  const canDecline =
+    userRole === 'admin' || userRole === 'manager' || userRole === 'editor';
   return (
     <div className="overflow-x-auto rounded border border-border-light">
       <table className="w-full text-sm">
@@ -2967,32 +3925,36 @@ function AssignmentTable({
               </td>
               <td className="px-3 py-1.5">
                 <Badge variant={ASSIGN_VARIANT[a.status]} dot size="sm">
-                  {a.status}
+                  {assignmentStatusLabel(t, a.status)}
                 </Badge>
               </td>
               <td className="px-3 py-1.5 text-right">
-                {a.status === 'proposed' && (
+                {a.status === 'proposed' && (canConfirm || canDecline) ? (
                   <div className="inline-flex gap-1">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      icon={<CheckCircle2 size={12} />}
-                      onClick={() => onConfirm(a.id)}
-                      disabled={busy}
-                    >
-                      {t('resources.confirm', { defaultValue: 'Confirm' })}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      icon={<XCircle size={12} />}
-                      onClick={() => onDecline(a.id)}
-                      disabled={busy}
-                    >
-                      {t('resources.decline', { defaultValue: 'Decline' })}
-                    </Button>
+                    {canConfirm && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<CheckCircle2 size={12} />}
+                        onClick={() => onConfirm(a.id)}
+                        disabled={busy}
+                      >
+                        {t('resources.confirm', { defaultValue: 'Confirm' })}
+                      </Button>
+                    )}
+                    {canDecline && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        icon={<XCircle size={12} />}
+                        onClick={() => onDecline(a.id)}
+                        disabled={busy}
+                      >
+                        {t('resources.decline', { defaultValue: 'Decline' })}
+                      </Button>
+                    )}
                   </div>
-                )}
+                ) : null}
               </td>
             </tr>
           ))}
@@ -3140,6 +4102,201 @@ function CreateResourceModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/* ─── Edit resource modal ─── */
+//
+// Mirrors CreateResourceModal's field layout for muscle-memory, but is
+// pre-filled from the row the user clicked and adds the two fields
+// missing from create (status, notes) which the backend accepts via
+// PATCH /resources/{id}.
+
+function EditResourceModal({
+  resource,
+  onClose,
+}: {
+  resource: Resource;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const qc = useQueryClient();
+  const addToast = useToastStore((s) => s.addToast);
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    code: resource.code,
+    name: resource.name,
+    resource_type: resource.resource_type,
+    default_cost_rate: String(resource.default_cost_rate ?? '0'),
+    currency: resource.currency || '',
+    status: resource.status,
+    notes: resource.notes ?? '',
+  });
+
+  async function submit() {
+    if (!form.code.trim() || !form.name.trim()) {
+      addToast({
+        type: 'error',
+        title: t('resources.required_missing', {
+          defaultValue: 'Code and name are required.',
+        }),
+      });
+      return;
+    }
+    const rateNum = Number(form.default_cost_rate);
+    if (Number.isNaN(rateNum) || rateNum < 0) {
+      addToast({
+        type: 'error',
+        title: t('resources.rate_invalid', {
+          defaultValue: 'Rate must be a non-negative number.',
+        }),
+      });
+      return;
+    }
+    setBusy(true);
+    try {
+      await updateResource(resource.id, {
+        code: form.code.trim(),
+        name: form.name.trim(),
+        resource_type: form.resource_type,
+        default_cost_rate: rateNum,
+        currency: form.currency.trim() || undefined,
+        status: form.status,
+        notes: form.notes,
+      });
+      addToast({
+        type: 'success',
+        title: t('resources.updated_ok', { defaultValue: 'Resource updated' }),
+      });
+      qc.invalidateQueries({ queryKey: ['resources', 'list'] });
+      qc.invalidateQueries({ queryKey: ['resources', 'dashboard', resource.id] });
+      onClose();
+    } catch (err) {
+      addToast({ type: 'error', title: getErrorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <WideModal
+      open
+      onClose={onClose}
+      busy={busy}
+      size="lg"
+      title={t('resources.edit_resource', { defaultValue: 'Edit Resource' })}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            {t('common.cancel', { defaultValue: 'Cancel' })}
+          </Button>
+          <Button
+            variant="primary"
+            onClick={submit}
+            loading={busy}
+            data-testid="edit-resource-save"
+            icon={busy ? <Loader2 size={14} /> : <CheckCircle2 size={14} />}
+          >
+            {t('common.save', { defaultValue: 'Save' })}
+          </Button>
+        </>
+      }
+    >
+      <WideModalSection columns={2}>
+        <WideModalField label={t('resources.code', { defaultValue: 'Code' })} required>
+          <input
+            value={form.code}
+            onChange={(e) => setForm({ ...form, code: e.target.value })}
+            className={inputCls}
+            placeholder="e.g. CR-001"
+            data-testid="edit-resource-code"
+          />
+        </WideModalField>
+        <WideModalField label={t('resources.name', { defaultValue: 'Name' })} required>
+          <input
+            value={form.name}
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+            className={inputCls}
+            data-testid="edit-resource-name"
+          />
+        </WideModalField>
+        <WideModalField label={t('resources.col_type', { defaultValue: 'Type' })}>
+          <select
+            value={form.resource_type}
+            onChange={(e) =>
+              setForm({ ...form, resource_type: e.target.value as ResourceType })
+            }
+            className={inputCls}
+          >
+            <option value="person">
+              {t('resources.type_person', { defaultValue: 'Person' })}
+            </option>
+            <option value="crew">
+              {t('resources.type_crew', { defaultValue: 'Crew' })}
+            </option>
+            <option value="equipment">
+              {t('resources.type_equipment', { defaultValue: 'Equipment' })}
+            </option>
+            <option value="subcontractor">
+              {t('resources.type_subcontractor', { defaultValue: 'Subcontractor' })}
+            </option>
+          </select>
+        </WideModalField>
+        <WideModalField label={t('resources.col_status', { defaultValue: 'Status' })}>
+          <select
+            value={form.status}
+            onChange={(e) =>
+              setForm({ ...form, status: e.target.value as ResourceStatus })
+            }
+            className={inputCls}
+          >
+            <option value="active">
+              {t('resources.status_active', { defaultValue: 'Active' })}
+            </option>
+            <option value="on_leave">
+              {t('resources.status_on_leave', { defaultValue: 'On leave' })}
+            </option>
+            <option value="inactive">
+              {t('resources.status_inactive', { defaultValue: 'Inactive' })}
+            </option>
+          </select>
+        </WideModalField>
+        <WideModalField label={t('resources.rate', { defaultValue: 'Rate' })}>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={form.default_cost_rate}
+            onChange={(e) =>
+              setForm({ ...form, default_cost_rate: e.target.value })
+            }
+            className={inputCls}
+          />
+        </WideModalField>
+        <WideModalField label={t('common.currency', { defaultValue: 'Currency' })}>
+          <input
+            value={form.currency}
+            onChange={(e) => setForm({ ...form, currency: e.target.value })}
+            maxLength={3}
+            className={inputCls}
+          />
+        </WideModalField>
+        <WideModalField
+          label={t('common.notes', { defaultValue: 'Notes' })}
+          span={2}
+        >
+          <textarea
+            value={form.notes}
+            onChange={(e) => setForm({ ...form, notes: e.target.value })}
+            rows={3}
+            className={clsx(inputCls, 'h-auto py-2 resize-y')}
+            placeholder={t('resources.notes_placeholder', {
+              defaultValue: 'Optional notes about this resource…',
+            })}
+          />
+        </WideModalField>
+      </WideModalSection>
+    </WideModal>
+  );
+}
+
 function ProposeAssignmentModal({
   resources,
   onClose,
@@ -3206,7 +4363,7 @@ function ProposeAssignmentModal({
       qc.invalidateQueries({ queryKey: ['resources'] });
       onClose();
     } catch (err) {
-      addToast({ type: 'error', title: getErrorMessage(err) });
+      addToast({ type: 'error', title: resourceErrorMessage(err) });
     } finally {
       setBusy(false);
     }

@@ -30,7 +30,7 @@
 //                     currencies" hint when applicable.
 //
 // Decimal-safety note:
-//   The repo has no Decimal-arithmetic dependency (see CLAUDE.md §
+//   The repo has no Decimal-arithmetic dependency (see the architecture guide §
 //   constraints — no new deps). We accept ``string`` amounts (the v3
 //   Decimal-as-string contract) and parse with parseFloat for
 //   summation, matching the convention already used by toNumber/toNum
