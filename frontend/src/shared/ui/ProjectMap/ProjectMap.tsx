@@ -13,10 +13,11 @@
  *   variant="detail"   → full interactive MapLibre map — pan, zoom, pin,
  *                        address overlay. Lives on the project detail page.
  *
- * Engine: the detail variant uses MapLibre GL JS (open-source vector-tile
- * renderer, no Leaflet branding) with OpenFreeMap tiles (free, key-less,
- * community-funded). The card variant uses CartoDB Voyager raster tiles
- * (also key-less) as a flat <img> — no renderer at all.
+ * Engine: the detail variant uses MapLibre GL JS (open-source, no Leaflet
+ * branding) with CARTO "Voyager" raster tiles served through our backend
+ * proxy (see ./basemap). The card variant paints a single proxy tile as a
+ * flat <img> with no renderer at all. Routing every tile through our own
+ * origin keeps maps working even when a browser blocks public tile CDNs.
  *
  * The geocoding pipeline:
  *   1. Accept lat/lng directly (fastest path — stored in project metadata).
@@ -32,13 +33,12 @@ import Map, { Marker, Popup, NavigationControl, AttributionControl } from 'react
 import 'maplibre-gl/dist/maplibre-gl.css';
 import clsx from 'clsx';
 
-// OpenFreeMap — free, no API key, OSM-community-funded vector tiles.
-// "Positron" = minimal light style. Switched from "liberty" because the
-// liberty style's POI layers reference attributes that are null on many
-// tiles and trip MapLibre's expression evaluator with a console warning
-// "Expected value to be of type number, but found null instead." per
-// rendered card. Positron's expressions are simpler and stay quiet.
-const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
+import { PROXY_TILE_BASE, RASTER_BASEMAP_STYLE } from './basemap';
+
+// All map tiles are served by our backend proxy as a raster basemap; see
+// ./basemap for the shared MapLibre style and the rationale (browser tile-
+// CDN blocking). Keeping the basemap raster also sidesteps the vector POI
+// expression warnings the old OpenFreeMap "liberty" style logged per card.
 
 export interface LatLng {
   lat: number;
@@ -84,15 +84,13 @@ function isFiniteNumber(v: unknown): v is number {
 // ── Static raster thumbnail (card variant) ──────────────────────────────
 //
 // The list grid renders ~12 cards at once. Mounting a live MapLibre GL
-// instance per card spins up 12 WebGL contexts that stream vector tiles
-// forever (the reason the page never reaches network-idle). For the card
-// variant we instead paint a single static raster tile centred on the
-// resolved coordinate — one cached <img> request, zero WebGL, zero ongoing
-// network. The interactive MapLibre map only mounts on the detail page.
-//
-// CartoDB "Voyager" raster basemap — keyless, OSM-community-funded, already
-// the documented raster fallback for this component.
-const RASTER_TILE_BASE = 'https://basemaps.cartocdn.com/rastertiles/voyager';
+// instance per card spins up 12 WebGL contexts that stream tiles forever
+// (the reason the page never reaches network-idle). For the card variant we
+// instead paint a single static raster tile centred on the resolved
+// coordinate: one cached <img> request, zero WebGL, zero ongoing network.
+// The interactive MapLibre map only mounts on the detail page. Tiles come
+// from our same-origin proxy (see ./basemap), so the card renders even when
+// a browser blocks public tile CDNs.
 const STATIC_TILE_ZOOM = 11;
 
 /** Web-Mercator lon → fractional tile X at the given zoom. */
@@ -112,7 +110,7 @@ function staticTileUrl(coords: LatLng): string {
   const max = 2 ** z;
   const x = Math.min(max - 1, Math.max(0, Math.floor(lngToTileX(coords.lng, z))));
   const y = Math.min(max - 1, Math.max(0, Math.floor(latToTileY(coords.lat, z))));
-  return `${RASTER_TILE_BASE}/${z}/${x}/${y}.png`;
+  return `${PROXY_TILE_BASE}/${z}/${x}/${y}.png`;
 }
 
 function readCache(q: string): LatLng | null {
@@ -343,7 +341,7 @@ export function ProjectMap({
           latitude: resolved.lat,
           zoom,
         }}
-        mapStyle={MAP_STYLE_URL}
+        mapStyle={RASTER_BASEMAP_STYLE}
         style={{ width: '100%', height: '100%' }}
         dragRotate={false}
         attributionControl={false}
@@ -351,7 +349,7 @@ export function ProjectMap({
         <NavigationControl position="top-right" showCompass={false} />
         <AttributionControl
           compact
-          customAttribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · <a href="https://openfreemap.org">OpenFreeMap</a>'
+          customAttribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
         />
 
         <Marker

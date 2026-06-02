@@ -1308,9 +1308,7 @@ async def test_update_assignment_allows_legal_status_transition() -> None:
         updated_at=datetime.now(UTC),
     )
     svc.assignment_repo.rows[target.id] = target
-    updated = await svc.update_assignment(
-        target.id, AssignmentUpdate(status="in_progress")
-    )
+    updated = await svc.update_assignment(target.id, AssignmentUpdate(status="in_progress"))
     assert updated.status == "in_progress"
 
 

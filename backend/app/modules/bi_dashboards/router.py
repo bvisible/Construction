@@ -167,9 +167,7 @@ async def _ensure_dashboard_read_access(
         return dashboard
     if scope == "project":
         # verify_project_access raises 404 on denial; grants owner/admin/team.
-        await verify_project_access(
-            getattr(dashboard, "project_id", None), user_id, session
-        )
+        await verify_project_access(getattr(dashboard, "project_id", None), user_id, session)
         return dashboard
     raise _not_found("Dashboard not found")
 

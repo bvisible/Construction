@@ -94,6 +94,7 @@ def _converter_subprocess_env(converter_path: Path) -> dict[str, str] | None:
     env["LD_LIBRARY_PATH"] = os.pathsep.join([*existing, prev]) if prev else os.pathsep.join(existing)
     return env
 
+
 # Active mapping for the running platform — kept under the legacy name
 # `CONVERTERS` so external callers (and the takeoff router) don't need
 # to know about platform branching.
@@ -259,8 +260,7 @@ def find_converter(extension: str) -> Path | None:
     # _converter_subprocess_env). Probe it FIRST so an auto-downloaded converter
     # is found with no apt install and no service restart.
     per_arch_linux_bin = (
-        Path.home() / ".openestimator" / "converters"
-        / f"_ddc_linux_{_deb_arch_tag()}" / "usr" / "bin" / linux_exe
+        Path.home() / ".openestimator" / "converters" / f"_ddc_linux_{_deb_arch_tag()}" / "usr" / "bin" / linux_exe
     )
     linux_apt_candidates = [
         per_arch_linux_bin,
@@ -395,8 +395,7 @@ class _ConverterInstallLock:
                         os.close(self._fd)
                         self._fd = None
                         raise TimeoutError(
-                            f"Timed out after {self._timeout:.0f}s waiting for the "
-                            f".{self._fmt} converter install lock"
+                            f"Timed out after {self._timeout:.0f}s waiting for the .{self._fmt} converter install lock"
                         ) from None
                     time.sleep(_INSTALL_LOCK_POLL_SEC)
         # Windows: exclusive-create poll loop.
@@ -424,8 +423,7 @@ class _ConverterInstallLock:
                     pass
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
-                        f"Timed out after {self._timeout:.0f}s waiting for the "
-                        f".{self._fmt} converter install lock"
+                        f"Timed out after {self._timeout:.0f}s waiting for the .{self._fmt} converter install lock"
                     ) from None
                 time.sleep(_INSTALL_LOCK_POLL_SEC)
 
@@ -495,8 +493,7 @@ def ensure_converter(fmt: str) -> Path:
     fmt = _CONVERTER_FORMAT_ALIASES.get(fmt, fmt)
     if fmt not in CONVERTERS:
         raise ConverterUnavailableError(
-            f"No DDC converter is defined for .{fmt} files. "
-            f"Supported formats: {', '.join(sorted(CONVERTERS))}."
+            f"No DDC converter is defined for .{fmt} files. Supported formats: {', '.join(sorted(CONVERTERS))}."
         )
 
     # Fast path — already installed.
@@ -549,9 +546,7 @@ def ensure_converter(fmt: str) -> Path:
                         _download_converter_files_linux as _download_converter,
                     )
             except Exception as exc:  # noqa: BLE001 — import failure must be actionable
-                raise ConverterUnavailableError(
-                    f"Could not load the converter installer for .{fmt}: {exc}"
-                ) from exc
+                raise ConverterUnavailableError(f"Could not load the converter installer for .{fmt}: {exc}") from exc
 
             try:
                 exe_path = _download_converter(fmt)
@@ -580,8 +575,7 @@ def ensure_converter(fmt: str) -> Path:
             if exe_path.exists():
                 return exe_path
             raise ConverterUnavailableError(
-                f"The .{fmt.upper()} converter was downloaded but could not be "
-                f"located afterwards at {exe_path}."
+                f"The .{fmt.upper()} converter was downloaded but could not be located afterwards at {exe_path}."
             )
     except ConverterUnavailableError:
         raise
@@ -1416,8 +1410,7 @@ def detect_converter_capabilities(extension: str) -> dict[str, Any]:
         caps = _v18_capabilities(version_text=probe_text[:512], help_tokens=help_tokens)
         _CONVERTER_CAPABILITIES[cache_key] = caps
         logger.info(
-            "DDC capability probe for %s detected v18 flag CLI "
-            "(dae=%s mode=%s no_dae=%s no_xlsx=%s force_path=%s)",
+            "DDC capability probe for %s detected v18 flag CLI (dae=%s mode=%s no_dae=%s no_xlsx=%s force_path=%s)",
             exe.name,
             caps["accepts_flag_dae"],
             caps["accepts_flag_mode"],

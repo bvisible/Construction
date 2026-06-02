@@ -591,10 +591,7 @@ async def grant_folder_permission_endpoint(
         # non-serialisable ``ctx`` (exception objects) that would itself 500.
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=[
-                {"loc": list(e.get("loc", [])), "msg": e.get("msg"), "type": e.get("type")}
-                for e in exc.errors()
-            ],
+            detail=[{"loc": list(e.get("loc", [])), "msg": e.get("msg"), "type": e.get("type")} for e in exc.errors()],
         ) from exc
 
     # Refuse to grant to a non-member — leaks "this user doesn't exist
@@ -742,7 +739,9 @@ async def project_dashboard(
             ).scalar_one()
 
             total_result = (
-                await session.execute(select(func.sum(numeric_value(Position.total))).where(Position.boq_id.in_(boq_ids)))
+                await session.execute(
+                    select(func.sum(numeric_value(Position.total))).where(Position.boq_id.in_(boq_ids))
+                )
             ).scalar_one()
             boq_total_value = round(total_result or 0.0, 2)
 
@@ -1548,9 +1547,7 @@ async def project_activity(
     if activity_queries:
         try:
             combined = union_all(*activity_queries).subquery()
-            rows = (
-                await session.execute(select(combined).order_by(combined.c.created_at.desc()).limit(limit))
-            ).all()
+            rows = (await session.execute(select(combined).order_by(combined.c.created_at.desc()).limit(limit))).all()
             for row in rows:
                 events.append(
                     {
@@ -1641,12 +1638,8 @@ async def dashboard_cards(
 
         # Pre-compute each project's FX map + base currency so per-position
         # conversion is a dict lookup rather than a per-row recompute.
-        fx_by_project: dict[str, dict[str, str]] = {
-            str(p.id): _project_fx_map(p) for p in all_projects
-        }
-        base_by_project: dict[str, str] = {
-            str(p.id): (p.currency or "") for p in all_projects
-        }
+        fx_by_project: dict[str, dict[str, str]] = {str(p.id): _project_fx_map(p) for p in all_projects}
+        base_by_project: dict[str, str] = {str(p.id): (p.currency or "") for p in all_projects}
 
         # BOQ count per project
         boq_count_rows = (
@@ -1672,9 +1665,7 @@ async def dashboard_cards(
             # be converted into its project's base currency before summing.
             pos_rows = (
                 await session.execute(
-                    select(Position.boq_id, Position.total, Position.metadata_).where(
-                        Position.boq_id.in_(all_boq_ids)
-                    )
+                    select(Position.boq_id, Position.total, Position.metadata_).where(Position.boq_id.in_(all_boq_ids))
                 )
             ).all()
             for boq_id, total, metadata in pos_rows:
@@ -1862,9 +1853,7 @@ async def analytics_overview(
             _uid = uuid.UUID(_user_id)
         except (ValueError, TypeError):
             return {}
-        proj_stmt = proj_stmt.where(
-            (Project.owner_id == _uid) | (Project.id.in_(member_project_ids_subquery(_uid)))
-        )
+        proj_stmt = proj_stmt.where((Project.owner_id == _uid) | (Project.id.in_(member_project_ids_subquery(_uid))))
     proj_result = await session.execute(proj_stmt)
     all_projects = list(proj_result.scalars().all())
 

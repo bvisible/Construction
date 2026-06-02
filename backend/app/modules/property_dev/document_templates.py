@@ -185,16 +185,18 @@ def list_locale_status() -> list[dict[str, Any]]:
         else:
             source = "none"
             key_count = 0
-        out.append({
-            "code": code,
-            "native_name": native,
-            "english_name": english,
-            "rtl": code in RTL_LOCALES,
-            "is_translated": override_exists or bundled_exists,
-            "source": source,
-            "key_count": key_count,
-            "en_key_count": en_keys,
-        })
+        out.append(
+            {
+                "code": code,
+                "native_name": native,
+                "english_name": english,
+                "rtl": code in RTL_LOCALES,
+                "is_translated": override_exists or bundled_exists,
+                "source": source,
+                "key_count": key_count,
+                "en_key_count": en_keys,
+            }
+        )
     return out
 
 
@@ -205,6 +207,7 @@ def _count_leaf_keys(blob: Any) -> int:
     if isinstance(blob, list):
         return sum(_count_leaf_keys(v) for v in blob)
     return 1 if isinstance(blob, str) else 0
+
 
 #: Regulators we ship clause-blocks for. Anything else uses ``NONE``.
 SUPPORTED_REGULATORS: tuple[str, ...] = (

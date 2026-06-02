@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from importlib import resources
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.core.partner_pack._safe_extract import has_zip_magic
 from app.core.partner_pack.apply import (
     apply_pack,
     build_preview,
@@ -27,6 +30,7 @@ from app.core.partner_pack.full_install import (
     FullInstallRequest,
     FullInstallResponse,
     full_install,
+    full_install_stream,
 )
 from app.dependencies import RequirePermission
 
@@ -138,6 +142,43 @@ async def full_install_pack(body: FullInstallRequest, request: Request) -> FullI
 
 
 @router.post(
+    "/full-install-stream",
+    summary="One-click install a pack's workspace with live SSE progress (admin)",
+    dependencies=[Depends(RequirePermission("admin"))],
+)
+async def full_install_pack_stream(body: FullInstallRequest, request: Request) -> StreamingResponse:
+    """Stream a pack activation step-by-step as Server-Sent Events.
+
+    Same orchestration as ``POST /full-install`` (apply preset, install language,
+    load the work catalog + its embedded resource database, build the vector
+    index, create demo projects) but emits one ``start`` / ``step_start`` /
+    ``step_done`` / ``done`` frame per step so the Modules-page activate dialog
+    can render a live, determinate progress bar with named steps and item counts.
+    Every step is fail-soft; the stream always reaches ``done``.
+
+    The generator opens its own DB sessions (the ``_step_*`` helpers do). It does
+    NOT depend on the request-scoped session: Starlette's BaseHTTPMiddleware
+    cancels that session between streamed chunks, which would kill the loaders
+    mid-import (see the same note on ``erp_chat.stream_chat``).
+    """
+    app = request.app
+
+    async def _gen() -> AsyncIterator[str]:
+        async for frame in full_install_stream(body, app=app):
+            yield frame
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post(
     "/unapply",
     summary="Remove the applied pack (admin)",
     dependencies=[Depends(RequirePermission("admin"))],
@@ -156,11 +197,79 @@ def rescan() -> dict[str, Any]:
     """Bust the discovery cache so on-disk packs are re-read.
 
     Note: brand-new pip-installed (entry-point) packs may still need a restart;
-    this reliably picks up source-checkout packs under ``packs/``.
+    this reliably picks up source-checkout packs under ``packs/`` and dropped
+    packs under ``<data_dir>/packs/``.
     """
     reset_cache()
     packs = discover_packs()
     return {"count": len(packs), "slugs": [m.slug for m in packs]}
+
+
+# Cap an uploaded pack at 25 MiB. A declarative pack is a tiny JSON manifest
+# plus a logo/favicon and a few locale files; anything larger is almost
+# certainly wrong (or hostile), and rejecting early bounds memory use.
+_MAX_PACK_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
+@router.post(
+    "/install",
+    summary="Upload and install a partner-pack .zip into the data dir (admin)",
+    dependencies=[Depends(RequirePermission("admin"))],
+)
+async def install_pack(file: UploadFile = File(...)) -> dict[str, Any]:
+    """Install a declarative partner pack from an uploaded ``.zip``.
+
+    The archive must contain a ``manifest.json`` (a serialized
+    ``PartnerPackManifest``) at its root or in a single wrapping folder, plus
+    its assets (logo, favicon, locales, onboarding script). The pack ships NO
+    code and is never executed: the manifest is parsed as JSON and validated
+    against the schema. The archive is safely extracted (staged, every member
+    validated against Zip Slip / symlink / absolute / drive-letter / backslash)
+    into ``<data_dir>/packs/<slug>/`` and the discovery cache is busted so the
+    new pack is immediately listable. The pack is NOT activated by this call -
+    apply it separately from the Partner Packs tab.
+
+    Returns:
+        ``{"installed": true, "slug", "partner_name", "pack_version"}`` on
+        success.
+
+    Raises:
+        HTTPException: 400 if the upload is not a zip, exceeds the size cap,
+            contains an unsafe member, or has no valid ``manifest.json``.
+    """
+    # Read with a hard cap so a huge upload cannot exhaust memory. Read one byte
+    # past the limit to detect an over-size body deterministically.
+    raw = await file.read(_MAX_PACK_UPLOAD_BYTES + 1)
+    if len(raw) > _MAX_PACK_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pack archive too large (limit {_MAX_PACK_UPLOAD_BYTES // (1024 * 1024)} MiB).",
+        )
+    if not raw:
+        raise HTTPException(status_code=400, detail="Empty upload.")
+
+    # Cheap magic-byte gate before the structural zip parse.
+    if not has_zip_magic(raw[:4]):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a .zip archive.")
+
+    # Local import keeps the install path (and its PackInstallError type) out of
+    # the module import graph at boot; discovery is always importable here.
+    from app.core.partner_pack.discovery import PackInstallError, install_dropped_zip
+
+    try:
+        manifest = install_dropped_zip(raw)
+    except PackInstallError as exc:
+        raise HTTPException(status_code=400, detail=exc.reason) from exc
+
+    # Make the freshly installed pack visible to discovery immediately.
+    reset_cache()
+    logger.info("Partner pack uploaded and installed: %s v%s", manifest.slug, manifest.pack_version)
+    return {
+        "installed": True,
+        "slug": manifest.slug,
+        "partner_name": manifest.partner_name,
+        "pack_version": manifest.pack_version,
+    }
 
 
 def _read_pack_resource(filename: str) -> bytes | None:
@@ -266,9 +375,7 @@ def partner_onboarding_script() -> Response:
         raise HTTPException(status_code=404, detail="No partner onboarding script")
     data = read_pack_file(active.slug, active.onboarding_script_path)
     if data is None:
-        raise HTTPException(
-            status_code=404, detail="Onboarding script file missing in pack"
-        )
+        raise HTTPException(status_code=404, detail="Onboarding script file missing in pack")
     ext = active.onboarding_script_path.rsplit(".", 1)[-1].lower()
     media_type = "application/json" if ext == "json" else "text/yaml"
     return Response(content=data, media_type=media_type)
@@ -292,9 +399,7 @@ def partner_locale(code: str) -> Response:
     return Response(content=data, media_type="application/json")
 
 
-@router.get(
-    "/by-slug/{slug}", summary="Inspect a non-active pack (admin / pre-install preview)"
-)
+@router.get("/by-slug/{slug}", summary="Inspect a non-active pack (admin / pre-install preview)")
 def inspect_pack(slug: str) -> dict[str, Any]:
     """Return the public manifest of any installed pack by slug."""
     m = get_pack_by_slug(slug)

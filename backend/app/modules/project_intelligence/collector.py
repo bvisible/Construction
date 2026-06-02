@@ -601,11 +601,7 @@ async def _collect_documents(
         # the dialect from this session's bind (not the global engine, which can
         # differ from the session under test).
         dialect_name = session.bind.dialect.name if session.bind else "sqlite"
-        concat = (
-            "GROUP_CONCAT(DISTINCT category)"
-            if dialect_name == "sqlite"
-            else "string_agg(DISTINCT category, ',')"
-        )
+        concat = "GROUP_CONCAT(DISTINCT category)" if dialect_name == "sqlite" else "string_agg(DISTINCT category, ',')"
         doc_row = (
             await session.execute(
                 text(

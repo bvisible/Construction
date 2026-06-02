@@ -74,11 +74,7 @@ def _required_columns(model: type) -> list[str]:
 
 def _missing_required(model: type, payload: dict[str, Any]) -> list[str]:
     """Return required column keys absent / null in ``payload``."""
-    return [
-        key
-        for key in _required_columns(model)
-        if payload.get(key) in (None, "")
-    ]
+    return [key for key in _required_columns(model) if payload.get(key) in (None, "")]
 
 
 def _serialise_row(row: object) -> dict[str, Any]:
@@ -232,10 +228,7 @@ class FileTrashService:
             if missing:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail=(
-                        f"Snapshot for kind {kind!r} is missing required "
-                        f"field(s): {', '.join(sorted(missing))}"
-                    ),
+                    detail=(f"Snapshot for kind {kind!r} is missing required field(s): {', '.join(sorted(missing))}"),
                 )
 
         now = datetime.now(UTC)

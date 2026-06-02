@@ -8,6 +8,15 @@ This document lists every field on `PartnerPackManifest` and the nested
 example. For onboarding context and install instructions see
 [`README.md`](README.md).
 
+The same schema backs both pack forms. A pip-installed pack builds a
+`PartnerPackManifest` in `manifest.py` and exposes it via an entry point. A pack
+dropped into the data dir or uploaded in-app ships the same data as a serialized
+`manifest.json`, which the core validates against this model and never executes.
+The quickest way to get a valid `manifest.json` to edit is
+`openconstructionerp pack new <slug>`. The `model_config` uses `extra="forbid"`,
+so an unknown field raises `ValidationError` and the pack is skipped at load
+time with a logged warning.
+
 ---
 
 ## `PartnerPackManifest`
@@ -19,7 +28,7 @@ example. For onboarding context and install instructions see
 | Type | `str` |
 | Default | _required_ |
 | Validation | regex `^[a-z][a-z0-9\-]{2,40}$` (lowercase, kebab-case, 3–41 chars) |
-| Purpose | Stable identifier. Used as the entry-point key, as the `OE_PARTNER_PACK` env-var value, and as the `/api/v1/partner-pack/by-slug/{slug}` path segment. |
+| Purpose | Stable identifier. Used as the entry-point key, as the `OE_PARTNER_PACK` env-var value, and as the `/api/v1/partner-pack/by-slug/{slug}` path segment. It is authoritative for activation: for a dropped or uploaded pack the slug, not the folder or zip filename, decides which pack is installed. |
 | Example | `"batimatech-ca"` |
 
 ### `partner_name`

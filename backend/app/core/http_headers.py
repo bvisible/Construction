@@ -32,9 +32,7 @@ def content_disposition_attachment(filename: str, *, inline: bool = False) -> st
     disp = "inline" if inline else "attachment"
     # ASCII fallback: replace anything non-ASCII with '?', and strip the two
     # characters that would break the quoted-string syntax.
-    ascii_fallback = (
-        filename.encode("ascii", "replace").decode("ascii").replace('"', "").replace("\\", "")
-    )
+    ascii_fallback = filename.encode("ascii", "replace").decode("ascii").replace('"', "").replace("\\", "")
     # RFC 5987 / 6266: percent-encode the UTF-8 bytes for the filename* form.
     encoded = quote(filename, safe="")
     return f"{disp}; filename=\"{ascii_fallback}\"; filename*=UTF-8''{encoded}"

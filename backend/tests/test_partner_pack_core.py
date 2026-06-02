@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import patch
 
 import pytest
@@ -74,13 +73,9 @@ class TestManifestSchema:
 
     def test_currency_iso_4217(self) -> None:
         with pytest.raises(Exception):
-            PartnerPackManifest(
-                slug="bad-curr", partner_name="XX", default_currency="cad"
-            )
+            PartnerPackManifest(slug="bad-curr", partner_name="XX", default_currency="cad")
 
-    def test_to_public_dict_strips_internal_paths(
-        self, sample_manifest: PartnerPackManifest
-    ) -> None:
+    def test_to_public_dict_strips_internal_paths(self, sample_manifest: PartnerPackManifest) -> None:
         pub = sample_manifest.to_public_dict()
         assert "logo_path" not in pub["branding"]
         assert pub["branding"]["has_logo"] is True
@@ -91,19 +86,18 @@ class TestManifestSchema:
 class TestDiscovery:
     def test_no_packs_installed(self) -> None:
         reset_cache()
-        with patch(
-            "app.core.partner_pack.discovery.entry_points", return_value=[]
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[],
+        with (
+            patch("app.core.partner_pack.discovery.entry_points", return_value=[]),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[],
+            ),
         ):
             assert discover_packs() == []
             assert get_active_pack() is None
             assert get_pack_by_slug("anything") is None
 
-    def test_pack_discovered_and_loaded(
-        self, sample_manifest: PartnerPackManifest
-    ) -> None:
+    def test_pack_discovered_and_loaded(self, sample_manifest: PartnerPackManifest) -> None:
         reset_cache()
 
         class FakeEP:
@@ -114,20 +108,21 @@ class TestDiscovery:
             def load() -> PartnerPackManifest:
                 return sample_manifest
 
-        with patch(
-            "app.core.partner_pack.discovery.entry_points",
-            return_value=[FakeEP()],
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[],
+        with (
+            patch(
+                "app.core.partner_pack.discovery.entry_points",
+                return_value=[FakeEP()],
+            ),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[],
+            ),
         ):
             packs = discover_packs()
             assert len(packs) == 1
             assert packs[0].slug == "test-pack"
 
-    def test_env_var_selects_pack(
-        self, sample_manifest: PartnerPackManifest, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_var_selects_pack(self, sample_manifest: PartnerPackManifest, monkeypatch: pytest.MonkeyPatch) -> None:
         reset_cache()
         other = PartnerPackManifest(slug="other-pack", partner_name="Other")
 
@@ -148,12 +143,15 @@ class TestDiscovery:
                 return other
 
         monkeypatch.setenv("OE_PARTNER_PACK", "other-pack")
-        with patch(
-            "app.core.partner_pack.discovery.entry_points",
-            return_value=[A(), B()],
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[],
+        with (
+            patch(
+                "app.core.partner_pack.discovery.entry_points",
+                return_value=[A(), B()],
+            ),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[],
+            ),
         ):
             active = get_active_pack()
             assert active is not None
@@ -170,12 +168,15 @@ class TestDiscovery:
             def load() -> object:
                 raise RuntimeError("boom")
 
-        with patch(
-            "app.core.partner_pack.discovery.entry_points",
-            return_value=[BrokenEP()],
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[],
+        with (
+            patch(
+                "app.core.partner_pack.discovery.entry_points",
+                return_value=[BrokenEP()],
+            ),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[],
+            ),
         ):
             assert discover_packs() == []
             assert get_active_pack() is None
@@ -190,20 +191,19 @@ class TestDiscovery:
         """
         reset_cache()
         monkeypatch.delenv("OE_PARTNER_PACK", raising=False)
-        with patch(
-            "app.core.partner_pack.discovery.entry_points", return_value=[]
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[sample_manifest],
+        with (
+            patch("app.core.partner_pack.discovery.entry_points", return_value=[]),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[sample_manifest],
+            ),
         ):
             packs = discover_packs()
             assert [m.slug for m in packs] == ["test-pack"]
             # Discovered, but no env -> not active.
             assert get_active_pack() is None
 
-    def test_entrypoint_pack_overrides_filesystem_on_slug_collision(
-        self, sample_manifest: PartnerPackManifest
-    ) -> None:
+    def test_entrypoint_pack_overrides_filesystem_on_slug_collision(self, sample_manifest: PartnerPackManifest) -> None:
         reset_cache()
         fs_version = PartnerPackManifest(
             slug="test-pack",
@@ -219,12 +219,15 @@ class TestDiscovery:
             def load() -> PartnerPackManifest:
                 return sample_manifest
 
-        with patch(
-            "app.core.partner_pack.discovery.entry_points",
-            return_value=[EP()],
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[fs_version],
+        with (
+            patch(
+                "app.core.partner_pack.discovery.entry_points",
+                return_value=[EP()],
+            ),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[fs_version],
+            ),
         ):
             packs = discover_packs()
             assert len(packs) == 1
@@ -234,16 +237,15 @@ class TestDiscovery:
 
 
 class TestRouter:
-    def test_current_when_no_pack(
-        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_current_when_no_pack(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         reset_cache()
         monkeypatch.delenv("OE_PARTNER_PACK", raising=False)
-        with patch(
-            "app.core.partner_pack.discovery.entry_points", return_value=[]
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[],
+        with (
+            patch("app.core.partner_pack.discovery.entry_points", return_value=[]),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[],
+            ),
         ):
             r = client.get("/api/v1/partner-pack/current")
             assert r.status_code == 200
@@ -268,11 +270,12 @@ class TestRouter:
         # Activation is explicit-only: a pack is only active when named by
         # OE_PARTNER_PACK. Discovering a pack must not auto-activate it.
         monkeypatch.setenv("OE_PARTNER_PACK", "test-pack")
-        with patch(
-            "app.core.partner_pack.discovery.entry_points", return_value=[EP()]
-        ), patch(
-            "app.core.partner_pack.discovery._discover_filesystem_packs",
-            return_value=[],
+        with (
+            patch("app.core.partner_pack.discovery.entry_points", return_value=[EP()]),
+            patch(
+                "app.core.partner_pack.discovery._discover_filesystem_packs",
+                return_value=[],
+            ),
         ):
             r = client.get("/api/v1/partner-pack/current")
             assert r.status_code == 200
@@ -283,16 +286,12 @@ class TestRouter:
 
     def test_logo_404_when_no_pack(self, client: TestClient) -> None:
         reset_cache()
-        with patch(
-            "app.core.partner_pack.discovery.entry_points", return_value=[]
-        ):
+        with patch("app.core.partner_pack.discovery.entry_points", return_value=[]):
             r = client.get("/api/v1/partner-pack/logo")
             assert r.status_code == 404
 
     def test_inspect_pack_by_slug_unknown(self, client: TestClient) -> None:
         reset_cache()
-        with patch(
-            "app.core.partner_pack.discovery.entry_points", return_value=[]
-        ):
+        with patch("app.core.partner_pack.discovery.entry_points", return_value=[]):
             r = client.get("/api/v1/partner-pack/by-slug/nope")
             assert r.status_code == 404

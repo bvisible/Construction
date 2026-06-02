@@ -65,10 +65,10 @@ describe('PWA service worker configuration', () => {
     expect(config).toContain("'oce-i18n-locales'");
   });
 
-  it('configures oce-api cache with NetworkFirst + 8s timeout', () => {
+  it('configures oce-api cache with NetworkFirst + 30s timeout', () => {
     expect(config).toContain("'oce-api'");
     expect(config).toContain("'NetworkFirst'");
-    expect(config).toContain('networkTimeoutSeconds: 8');
+    expect(config).toContain('networkTimeoutSeconds: 30');
   });
 
   it('configures registerType: autoUpdate', () => {

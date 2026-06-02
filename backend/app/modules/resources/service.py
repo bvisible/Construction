@@ -697,10 +697,7 @@ class ResourcesService:
                 if target_status not in allowed:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
-                        detail=(
-                            f"Cannot change assignment status from "
-                            f"'{assignment.status}' to '{target_status}'"
-                        ),
+                        detail=(f"Cannot change assignment status from '{assignment.status}' to '{target_status}'"),
                     )
         # If start_at/end_at change, run conflict check
         new_start = fields.get("start_at", assignment.start_at)
@@ -1126,11 +1123,7 @@ class ResourcesService:
             if a.status in ("proposed", "confirmed", "in_progress")
             and _as_aware(a.start_at) <= now <= _as_aware(a.end_at)
         ]
-        upcoming = [
-            a
-            for a in all_assignments
-            if a.status in ("proposed", "confirmed") and _as_aware(a.start_at) > now
-        ]
+        upcoming = [a for a in all_assignments if a.status in ("proposed", "confirmed") and _as_aware(a.start_at) > now]
         certs = await self.cert_repo.list_for_resource(resource_id)
         today = now.date()
         cutoff = today + timedelta(days=60)

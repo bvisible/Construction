@@ -241,8 +241,8 @@ async def export_rfi_log(
     # code — the value lives in the project's currency (EUR/BRL/GBP/…), never
     # a bare number that downstream readers might assume is USD.
     project_currency = (
-        await session.scalar(select(Project.currency).where(Project.id == project_id)) or ""
-    ).strip().upper()
+        (await session.scalar(select(Project.currency).where(Project.id == project_id)) or "").strip().upper()
+    )
 
     wb = Workbook()
     ws = wb.active

@@ -287,8 +287,7 @@ async def compute_boq_summary(
         overall_zero_price += bucket["zero_price"]
 
     by_currency = [
-        {"currency": cur, "total_value": _money(total)}
-        for cur, total in sorted(totals_by_currency_map.items())
+        {"currency": cur, "total_value": _money(total)} for cur, total in sorted(totals_by_currency_map.items())
     ]
     multi_currency = len(totals_by_currency_map) > 1
 
@@ -902,8 +901,7 @@ async def compute_change_orders(
         impact_by_currency[row_currency] += impact
 
     by_currency = [
-        {"currency": cur, "total_impact": _money(total)}
-        for cur, total in sorted(impact_by_currency.items())
+        {"currency": cur, "total_impact": _money(total)} for cur, total in sorted(impact_by_currency.items())
     ]
     multi_currency = len(impact_by_currency) > 1
 

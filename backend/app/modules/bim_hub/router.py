@@ -2723,9 +2723,7 @@ async def get_model_geometry(
                 "request_id": request_id,
                 "model_id": str(model_id),
                 "model_status": model_status,
-                "message": (
-                    "3D geometry is still being generated for this model."
-                ),
+                "message": ("3D geometry is still being generated for this model."),
                 "remediation": (
                     "Conversion is in progress. The viewer will load "
                     "automatically once the CAD converter finishes — this "
@@ -2756,10 +2754,7 @@ async def get_model_geometry(
                 "model_id": str(model_id),
                 "model_status": model_status,
                 "conversion_error": model.error_message or None,
-                "message": (
-                    "3D geometry could not be generated: the CAD conversion "
-                    "of this model failed."
-                ),
+                "message": ("3D geometry could not be generated: the CAD conversion of this model failed."),
                 "remediation": (
                     "Open the model in the BIM tab and click Retry to run the "
                     "conversion again. If it keeps failing the source file may "
@@ -2825,10 +2820,7 @@ async def get_model_geometry(
                 "request_id": request_id,
                 "model_id": str(model_id),
                 "model_status": model_status,
-                "message": (
-                    "This model is marked ready but its 3D geometry file is "
-                    "no longer on the server."
-                ),
+                "message": ("This model is marked ready but its 3D geometry file is no longer on the server."),
                 "remediation": (
                     "The geometry was generated but the file appears to have "
                     "been deleted from storage. Re-upload the source CAD/BIM "
@@ -2848,8 +2840,7 @@ async def get_model_geometry(
     # "absent" (no 3D to show) rather than the data-loss "missing" code,
     # keeping "geometry_missing" reserved for the ready-but-gone case above.
     logger.warning(
-        "BIM geometry not found on storage for non-ready model "
-        "(request_id=%s, model_id=%s, project_id=%s, status=%s)",
+        "BIM geometry not found on storage for non-ready model (request_id=%s, model_id=%s, project_id=%s, status=%s)",
         request_id,
         model_id,
         project_id,

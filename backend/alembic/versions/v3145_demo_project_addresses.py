@@ -121,12 +121,7 @@ def upgrade() -> None:
     # Python so we can dispatch by demo_id without writing one UPDATE
     # per template. The result set is tiny (5 demo templates × any
     # number of multi-tenant seedings — still measured in tens).
-    rows = bind.execute(
-        sa.text(
-            "SELECT id, metadata FROM oe_projects "
-            "WHERE address IS NULL"
-        )
-    ).fetchall()
+    rows = bind.execute(sa.text("SELECT id, metadata FROM oe_projects WHERE address IS NULL")).fetchall()
 
     updated = 0
     for row in rows:
@@ -151,9 +146,7 @@ def upgrade() -> None:
         if canonical is None:
             continue
         bind.execute(
-            sa.text(
-                "UPDATE oe_projects SET address = :addr WHERE id = :pid"
-            ).bindparams(
+            sa.text("UPDATE oe_projects SET address = :addr WHERE id = :pid").bindparams(
                 sa.bindparam("addr", value=json.dumps(canonical), type_=sa.JSON()),
                 sa.bindparam("pid", value=project_id),
             )

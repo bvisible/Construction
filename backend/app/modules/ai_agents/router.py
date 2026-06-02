@@ -27,6 +27,7 @@ from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.ai_agents.schemas import (
     AgentDescriptor,
     AgentHealthResponse,
+    AgentInsightResponse,
     AgentRunListItem,
     AgentRunResponse,
     AgentStepResponse,
@@ -56,7 +57,7 @@ IDEMPOTENCY_TTL_SECONDS = 600  # 10 minutes
 IDEMPOTENCY_MAX_ENTRIES = 10_000
 # ``OrderedDict`` keeps insertion order so we can drop the oldest entries
 # in O(1) when the hard cap is hit (FIFO eviction).
-_IDEMPOTENCY_CACHE: "OrderedDict[tuple[str, str], tuple[uuid.UUID, float]]" = OrderedDict()
+_IDEMPOTENCY_CACHE: OrderedDict[tuple[str, str], tuple[uuid.UUID, float]] = OrderedDict()
 
 
 def _sweep_stale(now: float) -> None:
@@ -399,6 +400,28 @@ async def list_runs(
     uid = uuid.UUID(user_id)
     runs = await service.list_runs(user_id=uid, project_id=project_id, limit=limit)
     return [AgentRunListItem.model_validate(r) for r in runs]
+
+
+@router.get(
+    "/insights",
+    response_model=list[AgentInsightResponse],
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def project_insights(
+    user_id: CurrentUserId,
+    project_id: uuid.UUID = Query(..., description="Project to surface insights for"),
+    limit: int = Query(2, ge=1, le=10),
+    service: AgentService = Depends(_get_service),
+) -> list[AgentInsightResponse]:
+    """Recent AI insights for a project, distilled from the caller's runs.
+
+    Powers the project-dashboard "AI insights" widget. Returns an empty list
+    (not an error) when the user has not run any agents against the project,
+    so the widget shows its empty state rather than failing.
+    """
+    uid = uuid.UUID(user_id)
+    items = await service.project_insights(user_id=uid, project_id=project_id, limit=limit)
+    return [AgentInsightResponse.model_validate(i) for i in items]
 
 
 @router.get(

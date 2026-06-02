@@ -84,8 +84,7 @@ class PartnerPackManifest(BaseModel):
     additional_locales: dict[str, str] = Field(
         default_factory=dict,
         description=(
-            "Optional extra locales the pack ships. "
-            "Mapping locale_code -> path inside the pack package to a JSON file."
+            "Optional extra locales the pack ships. Mapping locale_code -> path inside the pack package to a JSON file."
         ),
     )
 
@@ -125,10 +124,7 @@ class PartnerPackManifest(BaseModel):
     )
     hidden_modules: list[str] = Field(
         default_factory=list,
-        description=(
-            "Module slugs to hide by default for this pack. "
-            "Users can re-enable via the sidebar editor."
-        ),
+        description=("Module slugs to hide by default for this pack. Users can re-enable via the sidebar editor."),
     )
 
     # Branding (logo, colours, favicon)

@@ -38,7 +38,6 @@ from sqlalchemy.exc import IntegrityError
 from app.modules.bid_management.schemas import BidInvitationResponse
 from app.modules.bid_management.service import BidManagementService
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 
@@ -95,8 +94,7 @@ def test_invitation_response_excludes_token_hash() -> None:
     response_dict = response.model_dump()
 
     assert "token_hash" not in response_dict, (
-        f"token_hash must not appear in BidInvitationResponse. "
-        f"Got keys: {list(response_dict)}"
+        f"token_hash must not appear in BidInvitationResponse. Got keys: {list(response_dict)}"
     )
 
 
@@ -274,9 +272,7 @@ async def test_record_submission_integrity_error_surfaces_409() -> None:
     # Pre-flight sees nothing (both requests pass simultaneously)
     svc.submission_repo.get_by_invitation = AsyncMock(return_value=None)
     # The actual insert raises IntegrityError (DB UNIQUE fires)
-    svc.submission_repo.create = AsyncMock(
-        side_effect=IntegrityError("UNIQUE constraint failed", None, None)
-    )
+    svc.submission_repo.create = AsyncMock(side_effect=IntegrityError("UNIQUE constraint failed", None, None))
 
     svc.invitation_repo = MagicMock()
     svc.invitation_repo.get_by_id = AsyncMock(return_value=inv_obj)

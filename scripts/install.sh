@@ -1,5 +1,5 @@
 #!/bin/bash
-# OpenConstructionERP — One-Line Installer for Linux / macOS
+# OpenConstructionERP - One-Line Installer for Linux / macOS
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionERP/main/scripts/install.sh | bash
@@ -75,10 +75,10 @@ install_docker() {
         curl -fsSL "$OE_REPO/raw/v$OE_VERSION/docker-compose.quickstart.yml" -o docker-compose.yml
     fi
 
-    info "Starting OpenEstimate..."
+    info "Starting OpenConstructionERP..."
     docker compose up -d
 
-    ok "OpenEstimate is running at http://localhost:${OE_PORT}"
+    ok "OpenConstructionERP is running at http://localhost:${OE_PORT}"
     echo ""
     echo "Commands:"
     echo "  cd $OE_INSTALL_DIR && docker compose logs -f   # View logs"
@@ -111,8 +111,8 @@ install_uv() {
     fi
 
     echo ""
-    echo "Run: openestimate serve --port $OE_PORT"
-    echo "     openestimate serve --port $OE_PORT --open  # Also opens browser"
+    echo "Run: openconstructionerp serve --port $OE_PORT"
+    echo "     openconstructionerp serve --port $OE_PORT --open  # Also opens browser"
 }
 
 install_pip() {
@@ -153,7 +153,7 @@ install_pip() {
 
     ok "OpenConstructionERP installed in $OE_INSTALL_DIR/venv"
 
-    # Create convenience script
+    # Convenience launcher.
     cat > "$OE_INSTALL_DIR/start.sh" << 'SCRIPT'
 #!/bin/bash
 source "$(dirname "$0")/venv/bin/activate"
@@ -161,13 +161,34 @@ openconstructionerp serve "$@"
 SCRIPT
     chmod +x "$OE_INSTALL_DIR/start.sh"
 
+    # Put the command on PATH via ~/.local/bin, which is on PATH for most
+    # shells. This makes a bare `openconstructionerp` work in a new terminal.
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$OE_INSTALL_DIR/venv/bin/openconstructionerp" "$HOME/.local/bin/openconstructionerp"
+
     echo ""
-    echo "Run: $OE_INSTALL_DIR/start.sh --port $OE_PORT"
-    echo " Or: source $OE_INSTALL_DIR/venv/bin/activate && openconstructionerp serve"
+    echo "  +-------------------------------------------------+"
+    echo "  |  OpenConstructionERP is installed               |"
+    echo "  +-------------------------------------------------+"
+    echo ""
+    if echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+        echo "  Open a new terminal and run:"
+        echo "     openconstructionerp"
+    else
+        echo "  Add ~/.local/bin to your PATH once:"
+        echo "     echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.bashrc && source ~/.bashrc"
+        echo "  then run:"
+        echo "     openconstructionerp"
+    fi
+    echo ""
+    echo "  That starts the server and serves http://localhost:$OE_PORT"
+    echo "  Sign in with:  demo@openconstructionerp.com  /  DemoPass1234!"
+    echo ""
+    echo "  Or start it right now:  $OE_INSTALL_DIR/start.sh --open"
 }
 
 create_systemd_service() {
-    local service_file="$HOME/.config/systemd/user/openestimate.service"
+    local service_file="$HOME/.config/systemd/user/openconstructionerp.service"
     mkdir -p "$(dirname "$service_file")"
 
     local oe_bin
@@ -221,16 +242,16 @@ main() {
             ;;
         auto)
             if has_docker; then
-                info "Docker detected — using Docker Compose (recommended)"
+                info "Docker detected, using Docker Compose (recommended)"
                 install_docker
             elif has_uv; then
-                info "uv detected — installing as Python tool"
+                info "uv detected, installing as Python tool"
                 install_uv
             elif has_python312; then
-                info "Python 3.12+ detected — installing via pip"
+                info "Python 3.12+ detected, installing via pip"
                 install_pip
             else
-                info "No Docker or Python found — installing uv first"
+                info "No Docker or Python found, installing uv first"
                 install_uv
             fi
             ;;

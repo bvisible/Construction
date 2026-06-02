@@ -447,10 +447,7 @@ class BidComparisonCreate(BaseModel):
     def _weights_sum_to_100(self) -> BidComparisonCreate:
         total = self.commercial_weight_pct + self.technical_weight_pct
         if total != 100:
-            raise ValueError(
-                "commercial_weight_pct + technical_weight_pct must equal 100 "
-                f"(got {total})"
-            )
+            raise ValueError(f"commercial_weight_pct + technical_weight_pct must equal 100 (got {total})")
         return self
 
 
@@ -473,10 +470,7 @@ class BidComparisonUpdate(BaseModel):
         if self.commercial_weight_pct is not None and self.technical_weight_pct is not None:
             total = self.commercial_weight_pct + self.technical_weight_pct
             if total != 100:
-                raise ValueError(
-                    "commercial_weight_pct + technical_weight_pct must equal 100 "
-                    f"(got {total})"
-                )
+                raise ValueError(f"commercial_weight_pct + technical_weight_pct must equal 100 (got {total})")
         return self
 
 

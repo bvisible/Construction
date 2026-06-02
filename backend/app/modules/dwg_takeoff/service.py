@@ -843,7 +843,7 @@ class DwgTakeoffService:
                 error_message=(
                     "DWG conversion requires the DDC DwgExporter binary, "
                     "which was not found on this server. Click the "
-                    "\"Install converter\" pill at the top right of /dwg-takeoff, "
+                    '"Install converter" pill at the top right of /dwg-takeoff, '
                     "or download manually from "
                     "https://github.com/datadrivenconstruction/cad2data-Revit-IFC-DWG-DGN. "
                     "DXF files work without the converter."

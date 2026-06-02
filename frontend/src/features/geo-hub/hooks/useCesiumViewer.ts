@@ -59,15 +59,19 @@ export function useCesiumViewer(_mapConfig?: MapConfig) {
       try {
         viewer = new cesium.Viewer(ref.current, {
           terrainProvider: new cesium.EllipsoidTerrainProvider(),
-          // OSM base imagery — Cesium >= 1.107 falls back to Ion-backed
-          // Bing Maps when baseLayer is unset, which silently 401s
-          // without an ion token. Explicit OSM keeps the viewer working
-          // out of the box per the architecture guide "no vendor lock-in".
+          // Basemap tiles come from our own backend proxy, not a public CDN
+          // directly. Cesium >= 1.107 otherwise falls back to Ion-backed Bing
+          // Maps, which silently 401s without a token. We must not hit the raw
+          // OpenStreetMap servers (their policy forbids app use and returns an
+          // "Access blocked" tile), and a direct CDN such as CARTO is routinely
+          // blocked by browser ad/privacy blockers. The same-origin proxy
+          // fetches CARTO server-side with a proper User-Agent and a cache, so
+          // the globe works in any browser with no vendor lock-in.
           baseLayer: new cesium.ImageryLayer(
             new cesium.UrlTemplateImageryProvider({
-              url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              credit: '© OpenStreetMap contributors',
-              maximumLevel: 19,
+              url: '/api/v1/geo-hub/tiles/{z}/{x}/{y}.png',
+              credit: '© OpenStreetMap contributors © CARTO',
+              maximumLevel: 20,
             }),
           ),
           baseLayerPicker: false,

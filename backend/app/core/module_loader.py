@@ -360,8 +360,7 @@ class ModuleLoader:
         kebab_name = dir_name.replace("_", "-")
         prefixes = (f"/api/v1/{kebab_name}", f"/api/v1/{dir_name}")
         return any(
-            hasattr(r, "path") and any(getattr(r, "path", "").startswith(p) for p in prefixes)
-            for r in app.routes
+            hasattr(r, "path") and any(getattr(r, "path", "").startswith(p) for p in prefixes) for r in app.routes
         )
 
     async def disable_module(self, module_name: str, app: FastAPI) -> dict[str, Any]:

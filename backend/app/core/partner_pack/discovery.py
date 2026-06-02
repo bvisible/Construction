@@ -28,11 +28,18 @@ from __future__ import annotations
 import importlib.util
 import logging
 import os
+import zipfile
 from functools import lru_cache
 from importlib import resources
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 
+from app.core.module_state import _resolve_data_dir
+from app.core.partner_pack._safe_extract import (
+    UnsafeArchiveError,
+    resolve_single_top_level,
+    safe_extract_all,
+)
 from app.core.partner_pack.manifest import PartnerPackManifest
 
 logger = logging.getLogger(__name__)
@@ -44,6 +51,17 @@ ENTRY_POINT_GROUP = "openconstructionerp.partner_packs"
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _PACKS_DIR = _REPO_ROOT / "packs"
 
+# Name of the declarative manifest a dropped (data-dir) pack must contain.
+# Unlike repo/source-checkout packs (which ship a Python ``manifest.py`` that
+# the core imports), data-dir packs ship a serialized ``PartnerPackManifest``
+# as JSON and are NEVER executed — see ``_discover_data_dir_packs``.
+DATA_DIR_MANIFEST_FILENAME = "manifest.json"
+
+# Sub-directory of the runtime data dir scanned for dropped packs. A pack
+# dropped here is a folder (or an extracted folder) whose root contains
+# ``manifest.json``; a dropped ``.zip`` is safely extracted in place first.
+PACKS_SUBDIR = "packs"
+
 
 def _coerce_manifest(value: object) -> PartnerPackManifest:
     """Accept either a manifest instance or a dict and return a manifest."""
@@ -51,10 +69,7 @@ def _coerce_manifest(value: object) -> PartnerPackManifest:
         return value
     if isinstance(value, dict):
         return PartnerPackManifest(**value)
-    raise TypeError(
-        f"Partner pack entry-point must point at a PartnerPackManifest or dict, "
-        f"got {type(value).__name__}"
-    )
+    raise TypeError(f"Partner pack entry-point must point at a PartnerPackManifest or dict, got {type(value).__name__}")
 
 
 def _load_one(ep: EntryPoint) -> PartnerPackManifest | None:
@@ -156,18 +171,244 @@ def _discover_filesystem_packs() -> list[PartnerPackManifest]:
     return manifests
 
 
+# ── Data-dir (dropped) packs ────────────────────────────────────────────────
+# Pip / VPS users have no repo checkout, so the repo ``packs/`` folder is
+# unreachable and there is no place to "drop a pack". The runtime data dir
+# (where the DB + partner_pack_state.json live) gets a ``packs/`` sub-folder
+# that IS scanned. A dropped pack is purely declarative: a ``manifest.json``
+# (a serialized PartnerPackManifest) plus its assets. We NEVER import or exec
+# anything from a data-dir pack — that is the security crux of this feature.
+
+
+def _data_dir_packs_dir(data_dir: Path | None = None) -> Path:
+    """Return ``<data_dir>/packs`` — the scanned drop folder for dropped packs."""
+    return _resolve_data_dir(data_dir) / PACKS_SUBDIR
+
+
+def _load_data_dir_manifest(manifest_path: Path) -> PartnerPackManifest | None:
+    """Load a declarative ``manifest.json`` into a manifest, logging failures.
+
+    The file is parsed as JSON and validated against the Pydantic schema. It is
+    NEVER imported or executed, so a dropped pack cannot run code. Returns
+    ``None`` (with a logged warning) on any error so one bad pack never breaks
+    discovery of the others.
+    """
+    try:
+        raw = manifest_path.read_text(encoding="utf-8")
+        return PartnerPackManifest.model_validate_json(raw)
+    except Exception as exc:  # noqa: BLE001 — best-effort filesystem scan
+        logger.warning(
+            "Data-dir partner pack manifest %s is invalid: %s. Skipping.",
+            manifest_path,
+            exc,
+        )
+        return None
+
+
+def _manifest_dir_in(root: Path) -> Path | None:
+    """Find the directory under ``root`` that holds ``manifest.json``.
+
+    Accepts the manifest either directly under ``root`` or one level down in a
+    single wrapping sub-directory (the common ``<pack>/manifest.json`` layout).
+    Returns the directory containing the manifest, or ``None`` if not found.
+    """
+    direct = root / DATA_DIR_MANIFEST_FILENAME
+    if direct.is_file():
+        return root
+    # Single wrapping sub-directory (e.g. an extracted ``my-pack/`` folder).
+    subdirs = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(("__MACOSX", "."))]
+    if len(subdirs) == 1 and (subdirs[0] / DATA_DIR_MANIFEST_FILENAME).is_file():
+        return subdirs[0]
+    return None
+
+
+def _extract_dropped_zip(zip_path: Path, packs_dir: Path) -> None:
+    """Safely extract a dropped ``<slug>.zip`` into ``<packs_dir>/<slug>/``.
+
+    The extraction is staged and validated member-by-member (see
+    ``_safe_extract``). A zip that is structurally broken or contains no valid
+    ``manifest.json`` is left untouched and logged — never crashes discovery,
+    never executes anything. If a folder of the same name already exists the
+    zip is assumed already extracted and skipped (idempotent on rescan).
+
+    The destination folder name is the zip's stem; the manifest's own ``slug``
+    is authoritative for activation, so a mismatched filename is harmless.
+    """
+    target = packs_dir / zip_path.stem
+    if target.exists():
+        return  # Already extracted (or a same-named folder exists) — idempotent.
+
+    if not zipfile.is_zipfile(zip_path):
+        logger.warning("Dropped pack %s is not a valid zip archive. Ignoring.", zip_path)
+        return
+
+    import shutil
+    import tempfile
+
+    staging = Path(tempfile.mkdtemp(prefix="oe_pack_extract_"))
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            safe_extract_all(zf, staging)
+        pack_root = resolve_single_top_level(staging)
+        if not (pack_root / DATA_DIR_MANIFEST_FILENAME).is_file():
+            logger.warning(
+                "Dropped pack zip %s has no %s; ignoring.",
+                zip_path,
+                DATA_DIR_MANIFEST_FILENAME,
+            )
+            return
+        if _load_data_dir_manifest(pack_root / DATA_DIR_MANIFEST_FILENAME) is None:
+            logger.warning("Dropped pack zip %s has an invalid manifest; ignoring.", zip_path)
+            return
+        # Atomic move into the scanned location under the zip's stem.
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(pack_root), str(target))
+        logger.info("Extracted dropped partner pack %s -> %s", zip_path.name, target)
+    except UnsafeArchiveError as exc:
+        logger.warning("Refusing to extract unsafe dropped pack %s: %s", zip_path, exc)
+    except Exception as exc:  # noqa: BLE001 — a bad drop must never crash discovery
+        logger.warning("Failed to extract dropped pack %s: %s", zip_path, exc)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _discover_data_dir_packs(data_dir: Path | None = None) -> list[PartnerPackManifest]:
+    """Scan ``<data_dir>/packs`` for dropped declarative packs.
+
+    Handles three drop shapes, all declarative (no code execution):
+      * a folder containing ``manifest.json`` at its root,
+      * a folder wrapping a single sub-folder that holds ``manifest.json``,
+      * a ``<slug>.zip`` which is safely extracted in place, then loaded.
+
+    Returns ``[]`` when the drop folder does not exist. A pack that fails to
+    load is skipped with a logged warning.
+    """
+    packs_dir = _data_dir_packs_dir(data_dir)
+    if not packs_dir.is_dir():
+        return []
+
+    # 1) Extract any dropped .zip files first so the folder scan below sees them.
+    for entry in sorted(packs_dir.iterdir()):
+        if entry.is_file() and entry.suffix.lower() == ".zip":
+            _extract_dropped_zip(entry, packs_dir)
+
+    # 2) Scan extracted/dropped folders for a declarative manifest.json.
+    manifests: list[PartnerPackManifest] = []
+    for entry in sorted(packs_dir.iterdir()):
+        if not entry.is_dir() or entry.name.startswith(("__MACOSX", ".")):
+            continue
+        manifest_dir = _manifest_dir_in(entry)
+        if manifest_dir is None:
+            continue
+        manifest = _load_data_dir_manifest(manifest_dir / DATA_DIR_MANIFEST_FILENAME)
+        if manifest:
+            manifests.append(manifest)
+    return manifests
+
+
+class PackInstallError(Exception):
+    """Raised when an uploaded pack archive cannot be installed.
+
+    Carries a user-safe ``reason`` (no filesystem internals) suitable for a
+    400 response body.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def install_dropped_zip(zip_bytes: bytes, data_dir: Path | None = None) -> PartnerPackManifest:
+    """Validate and install a pack ``.zip`` upload into ``<data_dir>/packs/``.
+
+    Used by the ``POST /api/v1/partner-pack/install`` endpoint. Unlike the
+    passive discovery scan (``_extract_dropped_zip``), this RAISES on any
+    problem so the caller can return a clear 400. The flow is:
+
+      1. structural zip check + member-by-member safety validation (staged
+         temp extraction — nothing lands in a scanned path until validated),
+      2. locate the declarative ``manifest.json`` (root or single sub-folder),
+      3. validate it against :class:`PartnerPackManifest` (NEVER executed),
+      4. atomically move the validated tree into ``<data_dir>/packs/<slug>/``,
+         keyed on the manifest's own ``slug``.
+
+    Args:
+        zip_bytes: The raw uploaded archive bytes.
+        data_dir: Override the runtime data dir (tests). Defaults to the
+            resolved data dir (beside the database).
+
+    Returns:
+        The validated :class:`PartnerPackManifest` of the installed pack.
+
+    Raises:
+        PackInstallError: If the upload is not a valid zip, contains an unsafe
+            member, has no loadable ``manifest.json``, or a different pack with
+            the same slug is already installed.
+    """
+    import io
+    import shutil
+    import tempfile
+
+    bio = io.BytesIO(zip_bytes)
+    if not zipfile.is_zipfile(bio):
+        raise PackInstallError("uploaded file is not a valid zip archive")
+    bio.seek(0)
+
+    packs_dir = _data_dir_packs_dir(data_dir)
+    staging = Path(tempfile.mkdtemp(prefix="oe_pack_install_"))
+    try:
+        with zipfile.ZipFile(bio) as zf:
+            try:
+                safe_extract_all(zf, staging)
+            except UnsafeArchiveError as exc:
+                raise PackInstallError(f"refusing to install unsafe archive: {exc}") from exc
+
+        pack_root = resolve_single_top_level(staging)
+        manifest_file = pack_root / DATA_DIR_MANIFEST_FILENAME
+        if not manifest_file.is_file():
+            raise PackInstallError(
+                f"archive does not contain a {DATA_DIR_MANIFEST_FILENAME} (a serialized partner-pack manifest)"
+            )
+        try:
+            manifest = PartnerPackManifest.model_validate_json(manifest_file.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001 — surface the validation reason
+            raise PackInstallError(f"{DATA_DIR_MANIFEST_FILENAME} is not a valid partner-pack manifest: {exc}") from exc
+
+        target = packs_dir / manifest.slug
+        if target.exists():
+            # Don't clobber an existing same-slug pack — make the conflict explicit.
+            raise PackInstallError(
+                f"a pack with slug '{manifest.slug}' is already installed; remove it first or rename this one"
+            )
+
+        packs_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(pack_root), str(target))
+        logger.info("Installed uploaded partner pack '%s' -> %s", manifest.slug, target)
+        return manifest
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 @lru_cache(maxsize=1)
 def discover_packs() -> list[PartnerPackManifest]:
-    """Return all discoverable packs (pip entry-points + repo ``packs/`` dir).
+    """Return all discoverable packs (entry-points + repo + data-dir drops).
 
-    Entry-point packs take precedence on slug collision. Results are deduped
-    by slug and sorted alphabetically. Cached for the lifetime of the process;
-    call ``discover_packs.cache_clear()`` (or ``reset_cache()``) in tests that
-    install or remove a pack at runtime.
+    Sources, lowest to highest precedence on slug collision:
+      1. data-dir dropped packs (``<data_dir>/packs/``, declarative JSON)
+      2. repo source-checkout packs (``packs/<slug>/src/...``, Python manifest)
+      3. pip entry-point packs
+
+    Results are deduped by slug and sorted alphabetically. Cached for the
+    lifetime of the process; call ``discover_packs.cache_clear()`` (or
+    ``reset_cache()``) in tests that install or remove a pack at runtime.
+    Dropped packs are listable but, like repo packs, are NEVER auto-activated.
     """
     by_slug: dict[str, PartnerPackManifest] = {}
 
-    # Filesystem packs first so entry-point packs can override on collision.
+    # Data-dir drops first (lowest precedence), then filesystem, then
+    # entry-points — so a pip-installed pack always wins on a slug collision.
+    for manifest in _discover_data_dir_packs():
+        by_slug[manifest.slug] = manifest
     for manifest in _discover_filesystem_packs():
         by_slug[manifest.slug] = manifest
     for manifest in _discover_entrypoint_packs():
@@ -287,9 +528,7 @@ def _fs_package_dir_for_slug(slug: str) -> Path | None:
         if not src_dir.is_dir():
             return []
         return [
-            d
-            for d in sorted(src_dir.glob("openconstructionerp_*"))
-            if d.is_dir() and not d.name.endswith(".egg-info")
+            d for d in sorted(src_dir.glob("openconstructionerp_*")) if d.is_dir() and not d.name.endswith(".egg-info")
         ]
 
     # Fast path: the pack directory name matches the slug (repo convention).
@@ -312,14 +551,54 @@ def _fs_package_dir_for_slug(slug: str) -> Path | None:
     return None
 
 
+def _data_dir_package_dir_for_slug(slug: str, data_dir: Path | None = None) -> Path | None:
+    """Locate the on-disk directory of a dropped (data-dir) pack by slug.
+
+    Matches on the manifest's ``slug`` (authoritative), not on the folder name,
+    so a pack dropped under any folder/zip name still resolves. Returns the
+    directory that contains ``manifest.json`` (and the pack's assets), or
+    ``None`` if no dropped pack declares that slug.
+    """
+    packs_dir = _data_dir_packs_dir(data_dir)
+    if not packs_dir.is_dir():
+        return None
+    for entry in sorted(packs_dir.iterdir()):
+        if not entry.is_dir() or entry.name.startswith(("__MACOSX", ".")):
+            continue
+        manifest_dir = _manifest_dir_in(entry)
+        if manifest_dir is None:
+            continue
+        m = _load_data_dir_manifest(manifest_dir / DATA_DIR_MANIFEST_FILENAME)
+        if m and m.slug == slug:
+            return manifest_dir
+    return None
+
+
+def _read_sandboxed(base: Path, rel: str) -> bytes | None:
+    """Read ``base/rel`` only if it resolves to a file inside ``base``."""
+    base = base.resolve()
+    target = (base / rel).resolve()
+    try:
+        target.relative_to(base)
+    except ValueError:
+        return None
+    if target.is_file():
+        return target.read_bytes()
+    return None
+
+
 def read_pack_file(slug: str, relpath: str) -> bytes | None:
     """Read a file shipped inside a pack package, addressed by slug.
 
-    Works for pip-installed (entry-point) packs via ``importlib.resources`` and
-    for source-checkout packs under ``packs/<slug>/src/``. Path-traversal safe.
-    Returns ``None`` when the pack or the file cannot be found. This is the
-    by-slug counterpart to ``router._read_pack_resource`` (which only reads the
-    active pack); the /modules grid uses it to show each pack's own logo.
+    Resolves, in order:
+      1. pip-installed (entry-point) packs via ``importlib.resources``,
+      2. source-checkout packs under ``packs/<slug>/src/``,
+      3. dropped packs under ``<data_dir>/packs/`` (assets beside manifest.json).
+
+    Path-traversal safe in every branch. Returns ``None`` when the pack or the
+    file cannot be found. This is the by-slug counterpart to
+    ``router._read_pack_resource`` (which only reads the active pack); the
+    /modules grid uses it to show each pack's own logo.
     """
     rel = relpath.lstrip("/\\")
     if not rel or ".." in Path(rel.replace("\\", "/")).parts:
@@ -343,14 +622,15 @@ def read_pack_file(slug: str, relpath: str) -> bytes | None:
     # 2) source-checkout pack — read from the packs/ directory, sandboxed.
     pkg_dir = _fs_package_dir_for_slug(slug)
     if pkg_dir:
-        base = pkg_dir.resolve()
-        target = (base / rel).resolve()
-        try:
-            target.relative_to(base)
-        except ValueError:
-            return None
-        if target.is_file():
-            return target.read_bytes()
+        data = _read_sandboxed(pkg_dir, rel)
+        if data is not None:
+            return data
+
+    # 3) dropped (data-dir) pack — assets sit beside manifest.json, sandboxed.
+    dropped_dir = _data_dir_package_dir_for_slug(slug)
+    if dropped_dir:
+        return _read_sandboxed(dropped_dir, rel)
+
     return None
 
 

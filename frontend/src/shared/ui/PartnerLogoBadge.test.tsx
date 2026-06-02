@@ -8,12 +8,13 @@
 //   1. Renders nothing while usePartnerPack is loading.
 //   2. Renders nothing when `active: false` (no partner pack installed).
 //   3. Dashboard variant: shows powered-by text + partner name + logo,
-//      uses the partner_url with external rel/target when http(s).
+//      links to the in-app Partner Packs page.
 //   4. Nav variant: renders the partner name chip with logo.
 //   5. Dismiss button hides the badge and persists to sessionStorage.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 import type { PartnerPackResponse } from '@/shared/hooks/usePartnerPack';
 
@@ -60,6 +61,16 @@ async function importBadge() {
   return mod.PartnerLogoBadge;
 }
 
+/**
+ * The badge wraps its content in a react-router ``<Link>`` to the in-app
+ * Partner Packs page, so every render needs a router in context.
+ * ``MemoryRouter`` adds no DOM node of its own, so ``container.firstChild``
+ * still reflects the component's own output (e.g. ``null`` when hidden).
+ */
+function renderBadge(ui: JSX.Element) {
+  return render(<MemoryRouter>{ui}</MemoryRouter>);
+}
+
 beforeEach(() => {
   cleanup();
   hookMock.usePartnerPack.mockReset();
@@ -81,7 +92,7 @@ describe('<PartnerLogoBadge />', () => {
     hookMock.usePartnerPack.mockReturnValue({ isLoading: true, data: undefined });
     const PartnerLogoBadge = await importBadge();
 
-    const { container } = render(<PartnerLogoBadge variant="dashboard" />);
+    const { container } = renderBadge(<PartnerLogoBadge variant="dashboard" />);
     expect(container.firstChild).toBeNull();
   });
 
@@ -92,7 +103,7 @@ describe('<PartnerLogoBadge />', () => {
     });
     const PartnerLogoBadge = await importBadge();
 
-    const { container } = render(<PartnerLogoBadge variant="dashboard" />);
+    const { container } = renderBadge(<PartnerLogoBadge variant="dashboard" />);
     expect(container.firstChild).toBeNull();
   });
 
@@ -103,7 +114,7 @@ describe('<PartnerLogoBadge />', () => {
     });
     const PartnerLogoBadge = await importBadge();
 
-    render(<PartnerLogoBadge variant="dashboard" />);
+    renderBadge(<PartnerLogoBadge variant="dashboard" />);
 
     // Powered-by text is the manifest's powered_by_text.
     expect(screen.getByText('Powered by OpenConstructionERP')).toBeTruthy();
@@ -113,11 +124,10 @@ describe('<PartnerLogoBadge />', () => {
     const logo = screen.getByAltText('ACME Corp logo') as HTMLImageElement;
     expect(logo).toBeTruthy();
     expect(logo.getAttribute('src')).toBe('/api/v1/partner-pack/logo');
-    // External link wraps the logo + powered-by line.
+    // The badge links to the in-app Partner Packs page (not the partner's
+    // external site); react-router renders the <Link> as an internal <a>.
     const links = screen.getAllByRole('link');
-    expect(links[0]?.getAttribute('href')).toBe('https://acme.example.com');
-    expect(links[0]?.getAttribute('target')).toBe('_blank');
-    expect(links[0]?.getAttribute('rel')).toBe('noreferrer');
+    expect(links[0]?.getAttribute('href')).toBe('/modules?tab=partner-packs');
   });
 
   it('renders the nav variant chip with the partner name', async () => {
@@ -127,7 +137,7 @@ describe('<PartnerLogoBadge />', () => {
     });
     const PartnerLogoBadge = await importBadge();
 
-    render(<PartnerLogoBadge variant="nav" />);
+    renderBadge(<PartnerLogoBadge variant="nav" />);
 
     expect(screen.getByTestId('partner-logo-nav')).toBeTruthy();
     expect(screen.getByText('ACME Corp')).toBeTruthy();
@@ -140,7 +150,7 @@ describe('<PartnerLogoBadge />', () => {
     });
     const PartnerLogoBadge = await importBadge();
 
-    const { container } = render(<PartnerLogoBadge variant="dashboard" />);
+    const { container } = renderBadge(<PartnerLogoBadge variant="dashboard" />);
     expect(container.firstChild).not.toBeNull();
 
     const dismissBtn = screen.getByRole('button', { name: /Hide partner badge/i });

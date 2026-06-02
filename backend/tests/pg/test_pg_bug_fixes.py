@@ -11,6 +11,7 @@ Covered fixes:
 * ``audit._parse_iso`` returns tz-aware datetimes for TIMESTAMPTZ comparison
 * ``AwareDateTime`` coerces ISO strings / naive datetimes at bind time
 """
+
 from __future__ import annotations
 
 import uuid
@@ -51,9 +52,7 @@ async def test_costs_rate_filter_tolerates_nonnumeric(pg_session) -> None:
     from app.modules.costs.models import CostItem
     from app.modules.costs.repository import CostItemRepository
 
-    pg_session.add(
-        CostItem(code="PG-RATE-1", description="bad rate", unit="m2", rate="N/A", currency="USD")
-    )
+    pg_session.add(CostItem(code="PG-RATE-1", description="bad rate", unit="m2", rate="N/A", currency="USD"))
     await pg_session.flush()
 
     repo = CostItemRepository(pg_session)
@@ -125,9 +124,7 @@ async def test_costs_autocomplete_uses_jsonb_array_length(pg_session) -> None:
 async def test_audit_naive_date_filter_no_crash(pg_session) -> None:
     from app.core.audit import audit_log, get_audit_entries
 
-    await audit_log(
-        pg_session, action="create", entity_type="pg_test", entity_id=str(uuid.uuid4())
-    )
+    await audit_log(pg_session, action="create", entity_type="pg_test", entity_id=str(uuid.uuid4()))
     await pg_session.flush()
 
     # date_from has no offset → _parse_iso must attach UTC, else asyncpg rejects

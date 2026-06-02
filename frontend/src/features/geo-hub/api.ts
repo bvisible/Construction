@@ -101,6 +101,33 @@ export function deleteTileset(id: string): Promise<void> {
   return apiDelete(`${BASE}/tilesets/${id}`);
 }
 
+/**
+ * Place an already-converted BIM/CAD model on the project map as a
+ * georeferenced 3D Tileset, anchored to the project location.
+ *
+ * ``cadImportId`` is the bim_hub model id - the backend resolves it
+ * through ``BIMModelRepository`` in ``POST /from-canonical/{id}``, then
+ * builds the tileset against the project's geo anchor. The body is left
+ * empty so the tileset name falls back to the model's own name.
+ *
+ * Surfaced errors (the picker maps these to friendly toasts):
+ *   - 404 ``cad_import_not_found`` - bad id or project mismatch;
+ *   - 422 ``no_anchor_for_project`` - project has no map location yet;
+ *   - 422 ``canonical_elements_empty`` / ``canonical_elements_have_no_geometry``
+ *     - the model carries no usable 3D geometry to place.
+ */
+export function placeBimModelOnMap(
+  cadImportId: string,
+  options: { projectId: string; developmentId?: string | null },
+): Promise<Tileset> {
+  const qs = new URLSearchParams({ project_id: options.projectId });
+  if (options.developmentId) qs.set('development_id', options.developmentId);
+  return apiPost<Tileset>(
+    `${BASE}/from-canonical/${cadImportId}?${qs.toString()}`,
+    {},
+  );
+}
+
 /* ── Jobs ────────────────────────────────────────────────────────────── */
 
 export function listJobs(projectId: string, state?: string): Promise<TileJob[]> {
@@ -423,6 +450,27 @@ export function rasterOverlayFromDwg(
 /** Resolve the public URL used by Cesium's SingleTileImageryProvider. */
 export function rasterOverlayImageUrl(id: string): string {
   return `/api${RASTER_BASE}/${id}/raster.png`;
+}
+
+/**
+ * URL Cesium uses to load a tileset artifact (``tileset.json`` or a child
+ * tile such as ``tile_0.b3dm``). The DB stores only a storage key, so the
+ * backend artifact route streams the bytes; Cesium resolves child tiles
+ * relative to the ``tileset.json`` URL, so they hit this same route.
+ */
+export function tilesetArtifactUrl(tilesetId: string, filename = 'tileset.json'): string {
+  return `/api${BASE}/tilesets/${tilesetId}/artifact/${filename}`;
+}
+
+/**
+ * Authorization headers for the requests Cesium issues itself (imagery
+ * overlays and 3D tilesets). Cesium cannot read the api-client interceptor,
+ * so the bearer token is attached to the Cesium ``Resource`` instead. The
+ * geo artifact endpoints are tenant-scoped and 401 without it.
+ */
+export function geoAuthHeaders(): Record<string, string> {
+  const token = useAuthStore.getState().accessToken;
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 /* ── Geocode autocomplete + cache admin (Wave 7 depth) ──────────────── */

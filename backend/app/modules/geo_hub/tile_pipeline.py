@@ -58,6 +58,7 @@ from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, Iterable, Sequence
 
 from app.modules.geo_hub.coord_transforms import (
+    ecef_to_wgs84,
     enu_to_ecef,
 )
 
@@ -771,20 +772,19 @@ def _bounding_region_for_aabb(
     ]
     for e, n, u in corners:
         x, y, z = enu_to_ecef(e, n, u, anchor_lat, anchor_lon, anchor_alt)
-        # ECEF -> WGS84 (lat/lon in radians).
-        lon = math.atan2(y, x)
-        p = math.sqrt(x * x + y * y)
-        lat = math.atan2(z, p * (1 - 0.006_694_379_990_14))
-        # Refine latitude via a 3-step iteration.
-        for _ in range(3):
-            n_phi = 6_378_137.0 / math.sqrt(
-                1 - 0.006_694_379_990_14 * math.sin(lat) ** 2,
-            )
-            lat = math.atan2(
-                z + 0.006_694_379_990_14 * n_phi * math.sin(lat),
-                p,
-            )
-        alt = p / math.cos(lat) - 6_378_137.0
+        # ECEF -> WGS84. Reuse the shared, unit-tested Bowring solver from
+        # ``coord_transforms`` rather than re-deriving the geodetic height
+        # inline. The previous inline version subtracted the constant
+        # semi-major axis ``A`` (6_378_137 m) instead of the prime-vertical
+        # radius ``N(lat) = A / sqrt(1 - e2 * sin^2(lat))`` when computing
+        # altitude, so every ground point came out at ``N - A`` metres above
+        # the ellipsoid (~8.7 km at 40 deg latitude, ~13 km at 52 deg). That
+        # baked-in vertical offset floated all building tiles kilometres into
+        # the sky (issue #48). ``ecef_to_wgs84`` returns degrees; the 3D Tiles
+        # ``region`` wants lon/lat in radians.
+        lat_deg, lon_deg, alt = ecef_to_wgs84(x, y, z)
+        lat = math.radians(lat_deg)
+        lon = math.radians(lon_deg)
         west = min(west, lon)
         south = min(south, lat)
         east = max(east, lon)

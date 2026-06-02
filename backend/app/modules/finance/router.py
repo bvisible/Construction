@@ -526,17 +526,19 @@ async def export_invoice_br_pdf(
     # additional headers (CRLF injection).  Strip every character that is not
     # ASCII printable, remove double-quotes (which terminate the quoted-string
     # token) and forward-slashes (already done historically), and cap length.
-    _raw_num = (invoice.invoice_number or "invoice")
+    _raw_num = invoice.invoice_number or "invoice"
     _safe_num = (
-        _raw_num
-        .encode("ascii", errors="replace")  # non-ASCII → b'?'
-        .decode("ascii")
-        .replace("\r", "")
-        .replace("\n", "")
-        .replace('"', "'")
-        .replace("/", "-")
-        .strip()
-    )[:80] or "invoice"
+        (
+            _raw_num.encode("ascii", errors="replace")  # non-ASCII → b'?'
+            .decode("ascii")
+            .replace("\r", "")
+            .replace("\n", "")
+            .replace('"', "'")
+            .replace("/", "-")
+            .strip()
+        )[:80]
+        or "invoice"
+    )
     filename = f"RPS_{_safe_num}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
@@ -592,9 +594,7 @@ async def list_payments(
     numbers: dict[uuid.UUID, str] = {}
     if invoice_ids:
         rows = (
-            await session.execute(
-                select(Invoice.id, Invoice.invoice_number).where(Invoice.id.in_(invoice_ids))
-            )
+            await session.execute(select(Invoice.id, Invoice.invoice_number).where(Invoice.id.in_(invoice_ids)))
         ).all()
         numbers = {row[0]: row[1] for row in rows}
 
@@ -1059,7 +1059,8 @@ async def export_budgets(
         # BUG-069: use Decimal (not float) so large construction-budget values
         # (e.g. 123456789.99) don't suffer IEEE-754 rounding when Excel reads
         # them back — openpyxl stores Decimal natively as a NUMERIC cell.
-        from decimal import Decimal as _Dec, InvalidOperation as _IOp
+        from decimal import Decimal as _Dec
+        from decimal import InvalidOperation as _IOp
 
         def _bd(raw: Any) -> _Dec:
             if raw is None or raw == "":

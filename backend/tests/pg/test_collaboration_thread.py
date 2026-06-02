@@ -9,6 +9,7 @@ a REAL PostgreSQL cluster and fail if that regression returns.
 
 Gated by ``OE_TEST_DB=pg`` (see conftest).
 """
+
 from __future__ import annotations
 
 import uuid

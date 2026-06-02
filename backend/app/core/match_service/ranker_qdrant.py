@@ -100,36 +100,40 @@ _BOOSTS = (
 # patching, lintel installation), and source IFCs often attach a
 # meaningful name to the opening (``"merk B2-R"`` for a door/window
 # label). Excluding it would over-suppress.
-_NON_BILLABLE_IFC: frozenset[str] = frozenset({
-    "IfcSpace",
-    "IfcZone",
-    "IfcSite",
-    "IfcBuilding",
-    "IfcBuildingStorey",
-    "IfcVirtualElement",
-    "IfcGrid",
-    "IfcAnnotation",
-    "IfcGeographicElement",
-    "IfcDistributionPort",
-    "IfcLocalPlacement",
-})
+_NON_BILLABLE_IFC: frozenset[str] = frozenset(
+    {
+        "IfcSpace",
+        "IfcZone",
+        "IfcSite",
+        "IfcBuilding",
+        "IfcBuildingStorey",
+        "IfcVirtualElement",
+        "IfcGrid",
+        "IfcAnnotation",
+        "IfcGeographicElement",
+        "IfcDistributionPort",
+        "IfcLocalPlacement",
+    }
+)
 
 
 # Sentinels for "the source extractor synthesised the only English
 # anchor available" — when the post-synthesis description equals just
 # these generic phrases the source supplied no specific signal.
-_GENERIC_DESCRIPTIONS: frozenset[str] = frozenset({
-    "building element part",
-    "generic element",
-    "virtual element",
-    "space room zone",
-    "transport element",
-    "opening void",
-    "site",
-    "building",
-    "zone",
-    "annotation",
-})
+_GENERIC_DESCRIPTIONS: frozenset[str] = frozenset(
+    {
+        "building element part",
+        "generic element",
+        "virtual element",
+        "space room zone",
+        "transport element",
+        "opening void",
+        "site",
+        "building",
+        "zone",
+        "annotation",
+    }
+)
 
 
 def _envelope_has_specific_signal(envelope: ElementEnvelope) -> bool:
@@ -147,9 +151,7 @@ def _envelope_has_specific_signal(envelope: ElementEnvelope) -> bool:
         return True
     if envelope.nominal_size_mm:
         return True
-    if envelope.properties and any(
-        v for v in envelope.properties.values() if isinstance(v, str) and v.strip()
-    ):
+    if envelope.properties and any(v for v in envelope.properties.values() if isinstance(v, str) and v.strip()):
         return True
     desc = (envelope.description or "").strip().lower()
     if not desc:
@@ -160,7 +162,7 @@ def _envelope_has_specific_signal(envelope: ElementEnvelope) -> bool:
     # → "8.01") and check whether anything alphabetic is left.
     for anchor in _GENERIC_DESCRIPTIONS:
         if desc.startswith(anchor):
-            tail = desc[len(anchor):].strip().strip(",").strip()
+            tail = desc[len(anchor) :].strip().strip(",").strip()
             return bool(tail) and any(c.isalpha() for c in tail)
     return True
 

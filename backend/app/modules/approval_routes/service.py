@@ -212,10 +212,7 @@ class ApprovalRouteService:
             if existing:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "Route has instances; its steps can no longer be edited. "
-                        "Create a new route instead."
-                    ),
+                    detail=("Route has instances; its steps can no longer be edited. Create a new route instead."),
                 )
             old_steps = await self.repo.list_steps(route_id)
             await self.repo.delete_steps_for_route(route_id)
@@ -343,10 +340,7 @@ class ApprovalRouteService:
         if route.target_kind != payload.target_kind:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=(
-                    f"Route target_kind {route.target_kind!r} does not match "
-                    f"requested {payload.target_kind!r}"
-                ),
+                detail=(f"Route target_kind {route.target_kind!r} does not match requested {payload.target_kind!r}"),
             )
 
         steps = await self.repo.list_steps(route.id)
@@ -471,10 +465,7 @@ class ApprovalRouteService:
         if step.ordinal != instance.current_step_ordinal:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Step ordinal {step.ordinal} is not the current step "
-                    f"({instance.current_step_ordinal})"
-                ),
+                detail=(f"Step ordinal {step.ordinal} is not the current step ({instance.current_step_ordinal})"),
             )
 
         # User-pinned step: only the named user may decide.
@@ -522,9 +513,7 @@ class ApprovalRouteService:
         if payload.decision == "rejected":
             instance.status = "rejected"
             instance.completed_at = now
-            events_to_fire.append(
-                ("approval_routes.instance.rejected", {**base_event, "status": "rejected"})
-            )
+            events_to_fire.append(("approval_routes.instance.rejected", {**base_event, "status": "rejected"}))
         else:
             advanced = await self._maybe_advance(instance, step)
             if advanced is None:
@@ -535,18 +524,12 @@ class ApprovalRouteService:
                 # cursor and finished the chain, so both events fire.
                 instance.status = "approved"
                 instance.completed_at = now
-                events_to_fire.append(
-                    ("approval_routes.instance.advanced", {**base_event, "status": "pending"})
-                )
-                events_to_fire.append(
-                    ("approval_routes.instance.completed", {**base_event, "status": "approved"})
-                )
+                events_to_fire.append(("approval_routes.instance.advanced", {**base_event, "status": "pending"}))
+                events_to_fire.append(("approval_routes.instance.completed", {**base_event, "status": "approved"}))
             else:
                 # Move to next step.
                 instance.current_step_ordinal = step.ordinal + 1
-                events_to_fire.append(
-                    ("approval_routes.instance.advanced", {**base_event, "status": "pending"})
-                )
+                events_to_fire.append(("approval_routes.instance.advanced", {**base_event, "status": "pending"}))
 
         await self.session.flush()
         await self.session.refresh(instance)

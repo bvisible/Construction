@@ -9,6 +9,7 @@ and a handful of load-bearing tables are present.
 
 This is the guard that stops PG-breaking DDL from shipping untested.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -41,9 +42,7 @@ async def test_full_orm_schema_builds_on_pg(pg_engine) -> None:
                 "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
             )
         )
-        n_indexes = await conn.scalar(
-            text("SELECT count(*) FROM pg_indexes WHERE schemaname = 'public'")
-        )
+        n_indexes = await conn.scalar(text("SELECT count(*) FROM pg_indexes WHERE schemaname = 'public'"))
 
     assert n_tables >= _MIN_TABLES, f"only {n_tables} tables built on PG (expected >= {_MIN_TABLES})"
     # Indexes >> tables proves the JSONB/GIN/composite ``after_create`` hooks ran.
@@ -55,10 +54,7 @@ async def test_critical_tables_present(pg_engine) -> None:
     """Foundational module tables materialised (no silently-skipped models)."""
     async with pg_engine.connect() as conn:
         rows = await conn.execute(
-            text(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = 'public'"
-            )
+            text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
         )
         present = {r[0] for r in rows}
 

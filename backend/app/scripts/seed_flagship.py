@@ -214,9 +214,7 @@ async def install_flagship(
     # ── BOQ + sections + positions ──────────────────────────────────────
     boq = spec["boq"]
     bid = uuid.UUID(boq["id"])
-    session.add(
-        BOQ(id=bid, project_id=pid, name=boq["name"], description=boq["description"], status="draft")
-    )
+    session.add(BOQ(id=bid, project_id=pid, name=boq["name"], description=boq["description"], status="draft"))
     sort = 0
     pos_links: list[tuple[uuid.UUID, list[str]]] = []
     npos = 0

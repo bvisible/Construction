@@ -746,9 +746,7 @@ class TenderingService:
                     return package, a, idx
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Addendum not found")
 
-    async def publish_addendum(
-        self, package: TenderPackage, addendum_id: str, user_id: str | None
-    ) -> AddendumResponse:
+    async def publish_addendum(self, package: TenderPackage, addendum_id: str, user_id: str | None) -> AddendumResponse:
         """Mark an addendum as published (stamps timestamp + publisher)."""
         addenda = self._read_addenda(package)
         target_idx = next(
@@ -911,9 +909,7 @@ class TenderingService:
         for bid in bids:
             quoted = [_to_decimal(it.get("unit_rate", 0)) for it in bid_index[str(bid.id)].values()]
             quoted = [r for r in quoted if r > 0]
-            bid_mean_rate[str(bid.id)] = (
-                (sum(quoted, Decimal("0")) / Decimal(len(quoted))) if quoted else Decimal("0")
-            )
+            bid_mean_rate[str(bid.id)] = (sum(quoted, Decimal("0")) / Decimal(len(quoted))) if quoted else Decimal("0")
 
         summaries: dict[str, dict] = {
             str(bid.id): {

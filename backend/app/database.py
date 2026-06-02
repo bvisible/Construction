@@ -264,9 +264,7 @@ try:
 except Exception as _pg_opt_exc:  # noqa: BLE001
     import logging as _logging
 
-    _logging.getLogger(__name__).warning(
-        "pg_optimizations not registered: %r", _pg_opt_exc
-    )
+    _logging.getLogger(__name__).warning("pg_optimizations not registered: %r", _pg_opt_exc)
 
 
 engine = create_engine_from_settings()

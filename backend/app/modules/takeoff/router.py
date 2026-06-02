@@ -321,9 +321,7 @@ _LINUX_APT_PACKAGES: dict[str, str] = {
 # the zero-user-action flow the Windows installer provides. Validated
 # end-to-end against the live repo (amd64; arm64 is advertised in Release but
 # currently ships an empty index, so that arch falls back to a clear apt hint).
-_DDC_APT_BASE_URL = os.environ.get(
-    "OE_CONVERTER_APT_URL", "https://pkg.datadrivenconstruction.io"
-).rstrip("/")
+_DDC_APT_BASE_URL = os.environ.get("OE_CONVERTER_APT_URL", "https://pkg.datadrivenconstruction.io").rstrip("/")
 _DDC_APT_SUITE = os.environ.get("OE_CONVERTER_APT_SUITE", "stable")
 
 # converter_id -> the real ELF binary name shipped under usr/bin (no suffix).
@@ -342,17 +340,20 @@ _LINUX_CONVERTER_BINARIES: dict[str, str] = {
 _DDC_DEB_DEPS: dict[str, list[str]] = {
     "rvt": ["ddc-rvtconverter", "ddc-deps-kernel", "ddc-deps-revit", "ddc-thirdparty"],
     "ifc": ["ddc-ifcconverter", "ddc-deps-kernel", "ddc-deps-ifc", "ddc-thirdparty"],
-    "dwg": ["ddc-dwgconverter", "ddc-deps-kernel", "ddc-deps-drawings",
-            "ddc-deps-architecture", "ddc-thirdparty"],
-    "dgn": ["ddc-dgnconverter", "ddc-deps-kernel", "ddc-deps-drawings",
-            "ddc-deps-architecture", "ddc-thirdparty"],
+    "dwg": ["ddc-dwgconverter", "ddc-deps-kernel", "ddc-deps-drawings", "ddc-deps-architecture", "ddc-thirdparty"],
+    "dgn": ["ddc-dgnconverter", "ddc-deps-kernel", "ddc-deps-drawings", "ddc-deps-architecture", "ddc-thirdparty"],
 }
 _DDC_DEB_VERSIONS: dict[str, str] = {
-    "ddc-rvtconverter": "18.4.1.0", "ddc-ifcconverter": "18.4.1.0",
-    "ddc-dwgconverter": "18.4.1.0", "ddc-dgnconverter": "18.4.1.0",
+    "ddc-rvtconverter": "18.4.1.0",
+    "ddc-ifcconverter": "18.4.1.0",
+    "ddc-dwgconverter": "18.4.1.0",
+    "ddc-dgnconverter": "18.4.1.0",
     "ddc-thirdparty": "18.4.1.0",
-    "ddc-deps-kernel": "27.2", "ddc-deps-revit": "27.2", "ddc-deps-ifc": "27.2",
-    "ddc-deps-drawings": "27.2", "ddc-deps-architecture": "27.2",
+    "ddc-deps-kernel": "27.2",
+    "ddc-deps-revit": "27.2",
+    "ddc-deps-ifc": "27.2",
+    "ddc-deps-drawings": "27.2",
+    "ddc-deps-architecture": "27.2",
 }
 
 
@@ -392,8 +393,7 @@ def _check_apt_url_allowed(url: str) -> None:
     allowed = _ddc_apt_hosts()
     if host not in allowed:
         raise RuntimeError(
-            f"Refused to download {url!r} — host {host!r} is not the configured "
-            f"DDC apt host {sorted(allowed)}"
+            f"Refused to download {url!r} — host {host!r} is not the configured DDC apt host {sorted(allowed)}"
         )
 
 
@@ -453,9 +453,7 @@ def _fetch_apt_index(arch: str) -> dict[str, dict[str, str]] | None:
         url = f"{base}/{name}"
         try:
             _check_apt_url_allowed(url)
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "OpenConstructionERP-converter-installer"}
-            )
+            req = urllib.request.Request(url, headers={"User-Agent": "OpenConstructionERP-converter-installer"})
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 — host allow-listed
                 raw = resp.read(_MAX_DOWNLOAD_BYTES + 1)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -519,8 +517,13 @@ def _download_converter_files_linux(converter_id: str) -> Path:
     # Resolve the ordered .deb set: prefer the live apt index (auto-adapts to
     # version bumps); fall back to the validated hard-coded chain + versions.
     _set_install_progress(
-        converter_id, stage="listing", current=0, total=0, bytes_done=0,
-        file=None, started_at=_time.time(),
+        converter_id,
+        stage="listing",
+        current=0,
+        total=0,
+        bytes_done=0,
+        file=None,
+        started_at=_time.time(),
     )
     index = _fetch_apt_index(arch)
     plan: list[tuple[str, str]] = []  # (package, filename relative to base URL)
@@ -545,12 +548,15 @@ def _download_converter_files_linux(converter_id: str) -> Path:
             plan.append((pkg, f"pool/main/{pkg[0]}/{pkg}/{pkg}_{ver}_{arch}.deb"))
         logger.info(
             "Linux converter %s using deterministic .deb fallback (%d packages)",
-            converter_id, len(plan),
+            converter_id,
+            len(plan),
         )
 
     logger.info(
         "Linux converter %s resolves to %d .deb packages: %s",
-        converter_id, len(plan), [p for p, _ in plan],
+        converter_id,
+        len(plan),
+        [p for p, _ in plan],
     )
 
     root.mkdir(parents=True, exist_ok=True)
@@ -563,12 +569,14 @@ def _download_converter_files_linux(converter_id: str) -> Path:
             _check_apt_url_allowed(deb_url)
             dest = tmpdir / f"{i:02d}_{pkg}.deb"
             _set_install_progress(
-                converter_id, stage="downloading", current=i, total=n,
-                bytes_done=total, file=f"{pkg}.deb",
+                converter_id,
+                stage="downloading",
+                current=i,
+                total=n,
+                bytes_done=total,
+                file=f"{pkg}.deb",
             )
-            req = urllib.request.Request(
-                deb_url, headers={"User-Agent": "OpenConstructionERP-converter-installer"}
-            )
+            req = urllib.request.Request(deb_url, headers={"User-Agent": "OpenConstructionERP-converter-installer"})
             try:
                 with urllib.request.urlopen(req, timeout=120) as resp:  # noqa: S310 — allow-listed
                     size = 0
@@ -581,8 +589,7 @@ def _download_converter_files_linux(converter_id: str) -> Path:
                             total += len(chunk)
                             if size > _MAX_DOWNLOAD_BYTES:
                                 raise RuntimeError(
-                                    f"{pkg}.deb exceeds the per-file cap "
-                                    f"({_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB)."
+                                    f"{pkg}.deb exceeds the per-file cap ({_MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB)."
                                 )
                             if total > _MAX_INSTALL_BYTES:
                                 raise RuntimeError(
@@ -600,26 +607,28 @@ def _download_converter_files_linux(converter_id: str) -> Path:
                 raise RuntimeError(f"Download failed for {pkg}: {exc}") from exc
 
         _set_install_progress(
-            converter_id, stage="extracting", current=n, total=n,
-            bytes_done=total, file=None,
+            converter_id,
+            stage="extracting",
+            current=n,
+            total=n,
+            bytes_done=total,
+            file=None,
         )
         for i, (pkg, _rel) in enumerate(plan, 1):
             deb = tmpdir / f"{i:02d}_{pkg}.deb"
             proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
                 ["dpkg-deb", "-x", str(deb), str(root)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=180,
             )
             if proc.returncode != 0:
                 raise RuntimeError(
-                    f"dpkg-deb extraction of {pkg} failed: "
-                    f"{proc.stderr.decode('utf-8', 'replace')[:300]}"
+                    f"dpkg-deb extraction of {pkg} failed: {proc.stderr.decode('utf-8', 'replace')[:300]}"
                 )
 
     if not bin_path.exists():
-        raise RuntimeError(
-            f"Converter binary {binary_name} was not found after extraction "
-            f"(expected at {bin_path})."
-        )
+        raise RuntimeError(f"Converter binary {binary_name} was not found after extraction (expected at {bin_path}).")
     bin_path.chmod(0o755)
     logger.info("Linux converter %s ready at %s", converter_id, bin_path)
     return bin_path
@@ -1330,13 +1339,9 @@ async def install_converter(
             # one-time apt instructions so the user can install system-wide.
             apt_pkg = _LINUX_APT_PACKAGES.get(converter_id, f"ddc-{converter_id}converter")
             try:
-                exe_path = await asyncio.to_thread(
-                    _download_converter_files_linux, converter_id
-                )
+                exe_path = await asyncio.to_thread(_download_converter_files_linux, converter_id)
             except Exception as exc:  # noqa: BLE001 — fall back to apt instructions
-                logger.warning(
-                    "Linux converter auto-download failed for %s: %s", converter_id, exc
-                )
+                logger.warning("Linux converter auto-download failed for %s: %s", converter_id, exc)
                 _clear_install_progress(converter_id)
                 apt_source_path = Path("/etc/apt/sources.list.d/ddc.list")
                 source_already_present = apt_source_path.exists()
@@ -1390,8 +1395,7 @@ async def install_converter(
                 "message": (
                     f"{meta['name']} installed successfully at {exe_path}"
                     if smoke_ok
-                    else (health.get("message")
-                          or f"{meta['name']} installed but the smoke test did not pass.")
+                    else (health.get("message") or f"{meta['name']} installed but the smoke test did not pass.")
                 ),
             }
 

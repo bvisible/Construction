@@ -891,9 +891,7 @@ class FinanceService:
             fx_map = _project_fx_map(project)
 
             def _budget_base(amounts: dict[str, float]) -> Decimal:
-                converted, _ = _convert_to_base(
-                    amounts, base_currency=base_ccy, fx_rates_map=fx_map
-                )
+                converted, _ = _convert_to_base(amounts, base_currency=base_ccy, fx_rates_map=fx_map)
                 return Decimal(str(converted))
 
             revised = _budget_base(budget_agg["revised_by_currency"])
@@ -1055,9 +1053,7 @@ class FinanceService:
         missing: set[str] = set()
 
         def _to_base(amounts: dict[str, float]) -> float:
-            converted, miss = _convert_to_base(
-                amounts, base_currency=currency, fx_rates_map=fx_rates_map
-            )
+            converted, miss = _convert_to_base(amounts, base_currency=currency, fx_rates_map=fx_rates_map)
             missing.update(miss)
             return converted
 

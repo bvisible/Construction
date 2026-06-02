@@ -59,11 +59,7 @@ class ApprovalRouteRepository:
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_steps(self, route_id: uuid.UUID) -> list[Step]:
-        stmt = (
-            select(Step)
-            .where(Step.route_id == route_id)
-            .order_by(Step.ordinal.asc())
-        )
+        stmt = select(Step).where(Step.route_id == route_id).order_by(Step.ordinal.asc())
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_steps_for_routes(
@@ -78,11 +74,7 @@ class ApprovalRouteRepository:
         """
         if not route_ids:
             return {}
-        stmt = (
-            select(Step)
-            .where(Step.route_id.in_(route_ids))
-            .order_by(Step.route_id, Step.ordinal.asc())
-        )
+        stmt = select(Step).where(Step.route_id.in_(route_ids)).order_by(Step.route_id, Step.ordinal.asc())
         rows = list((await self.session.execute(stmt)).scalars().all())
         out: dict[uuid.UUID, list[Step]] = {rid: [] for rid in route_ids}
         for step in rows:
@@ -154,11 +146,7 @@ class ApprovalRouteRepository:
     # ── Step states ───────────────────────────────────────────────────
 
     async def list_step_states(self, instance_id: uuid.UUID) -> list[StepState]:
-        stmt = (
-            select(StepState)
-            .where(StepState.instance_id == instance_id)
-            .order_by(StepState.created_at.asc())
-        )
+        stmt = select(StepState).where(StepState.instance_id == instance_id).order_by(StepState.created_at.asc())
         return list((await self.session.execute(stmt)).scalars().all())
 
     async def list_step_states_for_step(

@@ -4,6 +4,7 @@ Builds a legacy ``openestimate.db`` with a couple of rows, boots an embedded PG
 at the same data dir, runs the auto-migration, and verifies the rows landed in
 PostgreSQL and the SQLite file was retired so it cannot migrate twice.
 """
+
 from __future__ import annotations
 
 import os

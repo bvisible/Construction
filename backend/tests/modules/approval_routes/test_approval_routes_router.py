@@ -106,13 +106,9 @@ def _build_app(
         # Minimal owner-only ACL — matches the IDOR-404 policy.
         row = await session.get(Project, project_id)
         if row is None:
-            raise HTTPException(
-                status_code=st.HTTP_404_NOT_FOUND, detail="Project not found"
-            )
+            raise HTTPException(status_code=st.HTTP_404_NOT_FOUND, detail="Project not found")
         if str(row.owner_id) != str(user_id):
-            raise HTTPException(
-                status_code=st.HTTP_404_NOT_FOUND, detail="Project not found"
-            )
+            raise HTTPException(status_code=st.HTTP_404_NOT_FOUND, detail="Project not found")
 
     app.dependency_overrides[get_session] = _session_override
     app.dependency_overrides[get_current_user_id] = _user_override

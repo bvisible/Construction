@@ -22,6 +22,7 @@ Design notes
   (so the app's own ``commit()`` calls become savepoint releases) and rolls the
   whole thing back afterwards. Fast, and the shared schema is never mutated.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -123,7 +124,7 @@ async def pg_engine(pg_async_url):
 
 
 @pytest_asyncio.fixture
-async def pg_session(pg_engine) -> "AsyncGenerator":
+async def pg_session(pg_engine) -> AsyncGenerator:
     """Per-test session with outer-transaction + savepoint rollback isolation."""
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 

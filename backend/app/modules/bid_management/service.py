@@ -1243,8 +1243,7 @@ class BidManagementService:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        "commercial_weight_pct + technical_weight_pct must equal 100 "
-                        f"(got {commercial + technical})"
+                        f"commercial_weight_pct + technical_weight_pct must equal 100 (got {commercial + technical})"
                     ),
                 )
         await self.comparison_repo.update_fields(comparison_id, **fields)

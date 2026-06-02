@@ -31,6 +31,7 @@ import {
   pinTooltipLabel,
   type PinCluster,
 } from './projectPinUtils';
+import { geoAuthHeaders, tilesetArtifactUrl } from './api';
 import type { AnchoredProject, GeoPinBundle, MapConfig } from './types';
 import type { TilesetOverlayState } from './hooks/useTilesetOverlayState';
 
@@ -291,6 +292,14 @@ type CesiumViewerInstance = {
   camera: {
     flyTo: (options: { destination: unknown }) => void;
     /**
+     * Instantly position the camera with no animation. Used for the
+     * initial project/development framing so the very first painted frame
+     * is already at the anchor instead of animating in from the default
+     * whole-globe view out in deep space. Optional in the shim so a build
+     * without it falls back to a short flyTo.
+     */
+    setView?: (options: { destination: unknown; orientation?: unknown }) => void;
+    /**
      * Optional in our type-shim — exists in all Cesium versions we ship
      * but we guard the call at runtime so the focus effect degrades to
      * a no-op on hypothetical builds where it's absent.
@@ -384,8 +393,15 @@ interface CesiumLike {
   UrlTemplateImageryProvider: new (options: Record<string, unknown>) => unknown;
   ImageryLayer: new (provider: unknown) => unknown;
   Cesium3DTileset: {
-    fromUrl: (url: string) => Promise<unknown>;
+    fromUrl: (url: string | object) => Promise<unknown>;
   };
+  /**
+   * Constructor for a Cesium ``Resource`` - a URL plus request options.
+   * We pass the bearer ``headers`` through it so Cesium's own fetches of
+   * ``tileset.json`` and the derived child tiles carry our auth; the
+   * tileset artifacts are tenant-scoped and served behind a real route.
+   */
+  Resource: new (options: Record<string, unknown>) => object;
   /**
    * Constructor for the styling expression that controls per-tile colour
    * (and thus opacity via the alpha channel). Optional in the shim so
@@ -622,11 +638,14 @@ export function CesiumViewer({
         // token via the Terrain admin page; we surface it through
         // the map-config bundle for them.
         //
-        // Base imagery: OpenStreetMap via UrlTemplateImageryProvider.
-        // Cesium >= 1.107 falls back to Ion-backed Bing Maps when
-        // ``imageryProvider`` is unset, which silently 401s without an
-        // ion token. Explicit OSM keeps /geo-hub working out of the box
-        // with no third-party key per the architecture guide "no vendor lock-in".
+        // Base imagery: keyless CARTO Voyager raster (rendered from OSM
+        // data) via UrlTemplateImageryProvider. Cesium >= 1.107 falls back
+        // to Ion-backed Bing Maps when ``imageryProvider`` is unset, which
+        // silently 401s without an ion token. The raw OpenStreetMap tile
+        // servers are not an option either: their usage policy forbids app
+        // and bulk use and returns an "Access blocked" tile. CARTO is
+        // keyless and already used by the 2D maps, so /geo-hub matches them
+        // out of the box with no vendor lock-in.
         //
         // ``homeButton`` and ``navigationHelpButton`` are disabled here
         // because we don't ship Cesium's ``widgets.css`` in the bundle,
@@ -653,11 +672,17 @@ export function CesiumViewer({
         const initialSceneMode = _sceneModeEnum(cesium, sceneModeRef.current);
         const v = new cesium.Viewer(container, {
           terrainProvider: new cesium.EllipsoidTerrainProvider(),
+          // Tiles are fetched through our own same-origin backend proxy, not
+          // straight from a public CDN. A direct CARTO/OSM URL is routinely
+          // blocked by browser ad/privacy blockers (shows up as a blank blue
+          // globe), and the raw OSM servers refuse app use outright. The proxy
+          // pulls CARTO server-side with a proper User-Agent and caches, so the
+          // map renders in any browser.
           baseLayer: new cesium.ImageryLayer(
             new cesium.UrlTemplateImageryProvider({
-              url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-              credit: '© OpenStreetMap contributors',
-              maximumLevel: 19,
+              url: '/api/v1/geo-hub/tiles/{z}/{x}/{y}.png',
+              credit: '© OpenStreetMap contributors © CARTO',
+              maximumLevel: 20,
             }),
           ),
           baseLayerPicker: false,
@@ -738,19 +763,47 @@ export function CesiumViewer({
           const lat = Number(mapConfig.anchor.lat);
           const lon = Number(mapConfig.anchor.lon);
           const alt = Number(mapConfig.anchor.alt || 200);
-          v.camera.flyTo({
-            destination: cesium.Cartesian3.fromDegrees(
-              lon, lat, Math.max(alt + 500, 1500),
-            ),
-          });
+          // Place the camera AT the project on the very first frame.
+          //
+          // ROOT CAUSE of the "why am I in space, and why is the earth
+          // loading forever" report: ``flyTo`` animates FROM Cesium's
+          // default view (the whole globe seen from deep space) TO the
+          // anchor, and its duration scales with distance — so the user
+          // watched a multi-second descent from orbit. Worse, while the
+          // camera is up in space Cesium needs the entire low-zoom tile
+          // pyramid for the whole planet, and every one of those tiles is
+          // a round-trip through our same-origin proxy, so the globe took
+          // a long time to even texture.
+          //
+          // ``setView`` is instant: the first painted frame is already
+          // over the site at a rooftop altitude, so Cesium only streams
+          // the handful of high-zoom tiles around the project. No orbital
+          // fly-in, and first meaningful paint is near-immediate.
+          const destination = cesium.Cartesian3.fromDegrees(
+            lon, lat, Math.max(alt + 500, 1500),
+          );
+          if (typeof v.camera.setView === 'function') {
+            v.camera.setView({ destination });
+          } else {
+            // Older Cesium build without setView — fall back to flyTo.
+            v.camera.flyTo({ destination });
+          }
         }
         if (mapConfig?.tilesets) {
           for (const ts of mapConfig.tilesets) {
             if (ts.status !== 'ready' || !ts.tileset_json_uri) continue;
             try {
-              const tileset = await cesium.Cesium3DTileset.fromUrl(
-                ts.tileset_json_uri,
-              );
+              // Cesium fetches tileset.json and its child tiles itself, so it
+              // must carry our bearer token (the artifacts are tenant-scoped)
+              // and hit a real serving route. ``tileset_json_uri`` is only a
+              // storage key in the DB; the backend artifact route streams the
+              // bytes, and the Resource header propagates to derived child
+              // tile requests.
+              const resource = new cesium.Resource({
+                url: tilesetArtifactUrl(ts.id, 'tileset.json'),
+                headers: geoAuthHeaders(),
+              });
+              const tileset = await cesium.Cesium3DTileset.fromUrl(resource);
               if (disposed) break;
               v.scene.primitives.add(tileset);
               // Record so the focus effect can flyTo() its boundingSphere
@@ -1739,17 +1792,29 @@ export function CesiumViewer({
     if (points.length === 0 && spheres.length === 0) return false;
 
     try {
-      // Compose: points → one BoundingSphere, then union with tileset
-      // spheres via fromBoundingSpheres.
+      // Choose what to frame. A loaded 3D model is the primary content the
+      // user came to see, so when any tileset bounding sphere is present we
+      // frame the tileset(s) ALONE and ignore the project anchor and pins.
+      //
+      // Why: the b3dm models can be georeferenced with a large vertical
+      // offset (hundreds of metres to several km above the ellipsoid). The
+      // project anchor sits at altitude 0, so unioning it with a high model
+      // gave a bounding sphere whose radius spanned that whole vertical gap,
+      // and flyToBoundingSphere then parked the eye kilometres out with the
+      // building a distant speck (the "3D model not visible" report). Framing
+      // the tileset sphere on its own puts the camera a few hundred metres
+      // from the model regardless of its absolute height.
       let aggregate: unknown = null;
-      if (points.length > 0) {
+      if (spheres.length > 0) {
+        if (spheres.length === 1) {
+          aggregate = spheres[0];
+        } else if (typeof cesium.BoundingSphere.fromBoundingSpheres === 'function') {
+          aggregate = cesium.BoundingSphere.fromBoundingSpheres(spheres);
+        } else {
+          aggregate = spheres[0];
+        }
+      } else if (points.length > 0) {
         aggregate = cesium.BoundingSphere.fromPoints(points);
-      }
-      if (spheres.length > 0 && typeof cesium.BoundingSphere.fromBoundingSpheres === 'function') {
-        const allSpheres = aggregate ? [aggregate, ...spheres] : spheres;
-        aggregate = cesium.BoundingSphere.fromBoundingSpheres(allSpheres);
-      } else if (!aggregate && spheres.length === 1) {
-        aggregate = spheres[0];
       }
       if (!aggregate) return false;
       if (typeof v.camera.flyToBoundingSphere === 'function') {
@@ -1785,14 +1850,61 @@ export function CesiumViewer({
   useEffect(() => {
     if (cesiumStatus !== 'loaded') return;
     if (hasAutoZoomedRef.current) return;
-    // Wait briefly so tilesets that are still resolving have a chance to
-    // register in ``loadedTilesetsRef`` and populate ``boundingSphere``.
-    const handle = window.setTimeout(() => {
-      if (hasAutoZoomedRef.current) return;
+    // When the only thing to frame is the project anchor itself (no
+    // tilesets, no pins, no address-search hit), the instant ``setView``
+    // run at viewer init has already framed it. Calling fitToData here
+    // would build a bounding sphere from a single point (radius 0), which
+    // Cesium's flyToBoundingSphere reads as "drop the camera onto that
+    // exact spot", a jarring second camera move right after first paint,
+    // sometimes ending at ground level. Mark auto-zoom done and bail.
+    if (tilesetCount === 0 && pinDataLen === 0 && !searchPin) {
+      hasAutoZoomedRef.current = true;
+      return;
+    }
+
+    // With no tilesets to wait on, pins and address-search hits are already
+    // in hand, so a short settle delay is all the fit needs.
+    if (tilesetCount === 0) {
+      const handle = window.setTimeout(() => {
+        if (hasAutoZoomedRef.current) return;
+        const flew = fitToData();
+        if (flew) hasAutoZoomedRef.current = true;
+      }, 200);
+      return () => window.clearTimeout(handle);
+    }
+
+    // Tilesets present: a fixed timeout races the b3dm fetch and parse. A
+    // large model whose ``boundingSphere`` has not populated yet would leave
+    // the camera parked over the anchor with the building a distant speck
+    // (the recurring "3D model not visible" report). Instead wait for the
+    // loaded tilesets to register and their root tile to become ready, the
+    // same approach the focused-tileset flyTo uses, then fit. The deadline
+    // stops a tileset that never loads from holding the camera hostage.
+    let cancelled = false;
+    (async () => {
+      const deadline = Date.now() + 8000;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const loaded = (): any[] => [...loadedTilesetsRef.current.values()];
+      while (loaded().length === 0 && Date.now() < deadline && !cancelled) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      for (const tileset of loaded()) {
+        if (cancelled) return;
+        try {
+          if (tileset?.readyPromise && typeof tileset.readyPromise.then === 'function') {
+            await tileset.readyPromise;
+          }
+        } catch {
+          /* tileset never became ready - degrade silently */
+        }
+      }
+      if (cancelled || hasAutoZoomedRef.current) return;
       const flew = fitToData();
       if (flew) hasAutoZoomedRef.current = true;
-    }, tilesetCount > 0 ? 800 : 200);
-    return () => window.clearTimeout(handle);
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cesiumStatus, pinDataLen, tilesetCount, searchPin?.lat, searchPin?.lon]);
 
@@ -1923,7 +2035,7 @@ export function CesiumViewer({
               >
                 Cesium
               </a>{' '}
-              <span className="text-slate-400">— Apache 2.0 · 3D globe runtime</span>
+              <span className="text-slate-400">Apache 2.0 · 3D globe runtime</span>
             </li>
             <li>
               <a
@@ -1934,7 +2046,18 @@ export function CesiumViewer({
               >
                 OpenStreetMap
               </a>{' '}
-              <span className="text-slate-400">— ODbL · base imagery + map data</span>
+              <span className="text-slate-400">ODbL · map data and geocoding</span>
+            </li>
+            <li>
+              <a
+                href="https://carto.com/basemaps/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sky-300 hover:text-sky-200"
+              >
+                CARTO Basemaps
+              </a>{' '}
+              <span className="text-slate-400">CC BY 3.0 · keyless base imagery tiles</span>
             </li>
             <li>
               <a
@@ -1945,7 +2068,7 @@ export function CesiumViewer({
               >
                 Nominatim
               </a>{' '}
-              <span className="text-slate-400">— ODbL · structured geocoding</span>
+              <span className="text-slate-400">ODbL · structured geocoding</span>
             </li>
             <li>
               <a
@@ -1956,7 +2079,7 @@ export function CesiumViewer({
               >
                 Photon
               </a>{' '}
-              <span className="text-slate-400">— Apache 2.0 · autocomplete geocoder</span>
+              <span className="text-slate-400">Apache 2.0 · autocomplete geocoder</span>
             </li>
           </ul>
           <div className="mt-2 text-[10px] text-slate-400">

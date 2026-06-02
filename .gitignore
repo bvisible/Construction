@@ -232,3 +232,6 @@ _verify_out.txt
 # Embedded-Postgres (pixeltable-pgserver) data dirs — never commit
 .smoke_pgdata/
 **/test_pgdata/
+
+# Ad-hoc QA scratch output (never commit)
+_qa_tmp/

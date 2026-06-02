@@ -8,9 +8,12 @@ holes by 404-ing project-mismatched accesses.
 
 from __future__ import annotations
 
+import base64
 import uuid
+from collections import OrderedDict
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 
 from app.core.i18n import get_locale
@@ -63,6 +66,74 @@ router = APIRouter(tags=["geo_hub"])
 
 def _svc(session: SessionDep) -> GeoHubService:
     return GeoHubService(session)
+
+
+# ── Basemap tile proxy (public) ─────────────────────────────────────────────
+# Browsers cannot reliably reach public tile CDNs directly: ad and privacy
+# blockers routinely block ``basemaps.cartocdn.com`` and the OpenStreetMap
+# tile servers, and OSM's usage policy forbids app or bulk use of its raw
+# tiles (it returns an "Access blocked" tile). Either way the 3D globe and the
+# project-card thumbnails go blank. We proxy the basemap through our own
+# origin: the browser only ever talks to same-origin ``/api`` (which blockers
+# do not touch), and the server fetches each tile once, with a proper
+# User-Agent, and caches it. This removes the external runtime dependency and
+# keeps the maps working in any browser. It is intentionally the one public
+# route in this module: ``<img>`` and the Cesium/MapLibre tile loaders cannot
+# attach an auth header, and basemap tiles are public imagery.
+_TILE_UPSTREAM = "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
+_TILE_CACHE: OrderedDict[str, bytes] = OrderedDict()
+_TILE_CACHE_MAX = 4096  # bounded LRU of 256px PNGs (a few MB resident)
+_TILE_HEADERS = {
+    "User-Agent": "OpenConstructionERP/1.0 (+https://openconstructionerp.com)",
+    "Accept": "image/png,image/*;q=0.8,*/*;q=0.5",
+    "Referer": "https://openconstructionerp.com/",
+}
+# 1x1 transparent PNG returned on any upstream failure so the map shows a
+# clean gap rather than a broken-image icon.
+_BLANK_TILE = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+)
+
+
+@router.get("/tiles/{z}/{x}/{y}.png", include_in_schema=False)
+async def proxy_basemap_tile(z: int, x: int, y: int) -> Response:
+    """Proxy one XYZ basemap raster tile through our own origin.
+
+    Public by design (see the section comment). Coordinates are clamped to
+    the valid web-mercator range so this can only ever fetch real basemap
+    tiles and never act as an open proxy for arbitrary URLs. Results come
+    from a bounded in-process LRU cache; a miss fetches the upstream tile
+    once. Any failure returns a transparent tile so the map degrades to a
+    clean gap instead of a broken image.
+    """
+    cache_headers = {"Cache-Control": "public, max-age=604800, immutable"}
+    if not (0 <= z <= 22):
+        return Response(content=_BLANK_TILE, media_type="image/png")
+    bound = (1 << z) - 1
+    if not (0 <= x <= bound and 0 <= y <= bound):
+        return Response(content=_BLANK_TILE, media_type="image/png")
+
+    key = f"{z}/{x}/{y}"
+    hit = _TILE_CACHE.get(key)
+    if hit is not None:
+        _TILE_CACHE.move_to_end(key)
+        return Response(content=hit, media_type="image/png", headers=cache_headers)
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(_TILE_UPSTREAM.format(z=z, x=x, y=y), headers=_TILE_HEADERS)
+    except (httpx.HTTPError, OSError):
+        return Response(content=_BLANK_TILE, media_type="image/png")
+
+    if res.status_code != 200 or not res.content:
+        return Response(content=_BLANK_TILE, media_type="image/png")
+
+    data = res.content
+    _TILE_CACHE[key] = data
+    _TILE_CACHE.move_to_end(key)
+    while len(_TILE_CACHE) > _TILE_CACHE_MAX:
+        _TILE_CACHE.popitem(last=False)
+    return Response(content=data, media_type="image/png", headers=cache_headers)
 
 
 # ── Anchors ──────────────────────────────────────────────────────────────
@@ -882,6 +953,38 @@ async def get_raster_overlay_image(
     return Response(
         content=blob,
         media_type="image/png",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@router.get(
+    "/tilesets/{tileset_id}/artifact/{filename}",
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+async def get_tileset_artifact(
+    tileset_id: uuid.UUID,
+    filename: str,
+    service: GeoHubService = Depends(_svc),
+    payload: CurrentUserPayload = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("geo_hub.read")),
+) -> Response:
+    """Stream a tileset's ``tileset.json`` and tile blobs from storage.
+
+    The DB stores only a storage key for a packaged tileset, so Cesium has
+    nothing HTTP-reachable to load (the bare key fell through to the SPA
+    catch-all and came back as index.html, which Cesium could not parse).
+    This serves the artifacts, tenant-scoped behind ``geo_hub.read``; the
+    frontend points Cesium at ``…/tilesets/{id}/artifact/tileset.json`` and
+    its relative child-tile requests resolve back to this same route.
+    """
+    blob, media_type = await service.get_tileset_artifact_bytes(
+        tileset_id,
+        filename,
+        payload=payload,
+    )
+    return Response(
+        content=blob,
+        media_type=media_type,
         headers={"Cache-Control": "private, max-age=300"},
     )
 

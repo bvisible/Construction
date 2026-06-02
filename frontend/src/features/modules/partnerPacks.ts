@@ -1,5 +1,5 @@
 /**
- * Partner-pack apply / update / un-apply client + React Query hooks.
+ * Partner-pack apply / update / un-apply / install client + React Query hooks.
  *
  * Backend: backend/app/core/partner_pack/router.py
  *   GET  /v1/partner-pack/applied            -> AppliedInfo
@@ -7,10 +7,11 @@
  *   POST /v1/partner-pack/apply              { slug, confirm_disables }
  *   POST /v1/partner-pack/unapply
  *   POST /v1/partner-pack/rescan
+ *   POST /v1/partner-pack/install            multipart: file=<.zip>  (admin)
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost } from '@/shared/lib/api';
+import { apiGet, apiPost, API_BASE, getAuthToken, getErrorMessage } from '@/shared/lib/api';
 
 export interface AppliedInfo {
   applied: boolean;
@@ -84,6 +85,18 @@ export interface ApplyResult {
   warnings: string[];
 }
 
+/** Success payload of ``POST /v1/partner-pack/install``. */
+export interface InstallResult {
+  installed: boolean;
+  slug: string;
+  partner_name: string;
+  pack_version: string;
+}
+
+/** Client-side guard limit, mirrors the backend 25 MiB cap so an oversize
+ *  upload is rejected before it leaves the browser. */
+export const MAX_PACK_UPLOAD_BYTES = 25 * 1024 * 1024;
+
 const KEY_APPLIED = 'partner-pack-applied';
 const KEY_INSTALLED = 'partner-packs';
 
@@ -139,6 +152,56 @@ export function useRescanPacks() {
   const invalidate = useInvalidatePackQueries();
   return useMutation({
     mutationFn: () => apiPost<{ count: number; slugs: string[] }>('/v1/partner-pack/rescan', {}),
+    onSuccess: invalidate,
+  });
+}
+
+/**
+ * Upload a partner-pack ``.zip`` to ``POST /v1/partner-pack/install``.
+ *
+ * Multipart uploads bypass the JSON ``apiPost`` helper (which always sets a
+ * JSON content-type and stringifies the body), so this assembles its own
+ * ``FormData`` and ``Authorization`` header via raw ``fetch`` - the same
+ * pattern the SSE installer and the project-import upload use. On a non-2xx
+ * response the backend returns a user-safe ``{detail}`` string (not a zip /
+ * too large / unsafe member / no manifest / slug already installed); we
+ * surface that ``detail`` verbatim so the caller can toast it as-is.
+ */
+export async function installPack(file: File): Promise<InstallResult> {
+  const form = new FormData();
+  form.append('file', file);
+
+  const token = getAuthToken();
+  const response = await fetch(`${API_BASE}/v1/partner-pack/install`, {
+    method: 'POST',
+    // No explicit Content-Type: the browser sets the multipart boundary.
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    body: form,
+  });
+
+  if (!response.ok) {
+    // Prefer the backend's human-readable ``detail``; fall back to a
+    // status-based message via the shared error normaliser.
+    let body: unknown = null;
+    try {
+      body = await response.json();
+    } catch {
+      // Non-JSON error body (proxy error page, empty 502) — fall through.
+    }
+    const detail =
+      body && typeof body === 'object' && typeof (body as { detail?: unknown }).detail === 'string'
+        ? (body as { detail: string }).detail
+        : getErrorMessage(body ?? new Error(`HTTP ${response.status}`));
+    throw new Error(detail);
+  }
+
+  return (await response.json()) as InstallResult;
+}
+
+export function useInstallPack() {
+  const invalidate = useInvalidatePackQueries();
+  return useMutation({
+    mutationFn: (file: File) => installPack(file),
     onSuccess: invalidate,
   });
 }

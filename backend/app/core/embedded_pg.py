@@ -23,6 +23,7 @@ Single-process only: run ONE uvicorn worker with embedded PG (the default). For
 multi-worker deployments use an external PostgreSQL and set ``DATABASE_URL``
 directly.
 """
+
 from __future__ import annotations
 
 import logging
@@ -134,8 +135,7 @@ def boot(data_dir: Path | str) -> bool:
         except Exception as exc:  # noqa: BLE001
             last_exc = exc
             logger.warning(
-                "embedded PostgreSQL not ready (attempt %d/%d); crash recovery "
-                "may be replaying WAL -- retrying: %r",
+                "embedded PostgreSQL not ready (attempt %d/%d); crash recovery may be replaying WAL -- retrying: %r",
                 attempt,
                 attempts,
                 exc,
@@ -248,10 +248,7 @@ def auto_migrate_legacy_sqlite(data_dir: Path | str) -> str:
         logger.warning("migrated but could not rename %s", sqlite_file)
         kept = sqlite_file.name + " (rename failed)"
 
-    msg = (
-        f"migrated SQLite -> embedded PostgreSQL "
-        f"(skipped {skipped} unconvertible rows); legacy db kept as {kept}"
-    )
+    msg = f"migrated SQLite -> embedded PostgreSQL (skipped {skipped} unconvertible rows); legacy db kept as {kept}"
     logger.info(msg)
     return msg
 

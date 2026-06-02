@@ -1,7 +1,7 @@
 [project]
 name = "openconstructionerp"
-version = "6.2.3"
-description = "Open-source construction cost estimation — multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 24 languages. AGPL-3.0. After install, run: openconstructionerp"
+version = "6.4.2"
+description = "Open-source construction cost estimation, multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 24 languages. AGPL-3.0. After install, run: openconstructionerp"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 authors = [
@@ -43,7 +43,7 @@ classifiers = [
 dependencies = [
     "fastapi>=0.116.0,<1",
     "uvicorn[standard]>=0.32.0,<1",
-    "python-multipart>=0.0.26",
+    "python-multipart>=0.0.27",
     "sqlalchemy[asyncio]>=2.0.36,<2.1",
     "aiosqlite>=0.20.0",
     # Embedded PostgreSQL 16 is the default runtime (v6.0.0): a real in-process
@@ -64,15 +64,21 @@ dependencies = [
     "httpx>=0.28.0,<1",
     "orjson>=3.10.0",
     "python-dateutil>=2.9.0",
+    "hijridate>=2.5.0",
     "structlog>=24.4.0",
     "pyyaml>=6.0",
     "defusedxml>=0.7.1",
     "pandas>=2.2.0,<4",
-    "pyarrow>=18.0.0,<25",
+    "pyarrow>=23.0.1,<25",
     "trimesh>=4.0.0",
     "ezdxf>=0.18.0",
     "duckdb>=1.2.0,<2",
     "rapidfuzz>=3.0.0",
+    # Imported at module load by the smart_views (signed share links) and eac
+    # (safe expression evaluation) modules, so they must be base dependencies;
+    # a clean install otherwise cannot import those modules.
+    "itsdangerous>=2.1.0",
+    "simpleeval>=0.9.13",
 ]
 [project.scripts]
 openestimate = "app.cli:main"
@@ -161,7 +167,11 @@ dev = [
     "pytest-xdist>=3.5.0",
     "httpx>=0.28.0",
     "factory-boy>=3.3.0",
-    "ruff>=0.8.0",
+    # Pinned exactly: the CI "ruff format --check" gate compares against the
+    # formatter's output, which can shift between ruff releases. A floating
+    # spec let CI pick a newer ruff than contributors ran locally, so formatted
+    # code still failed the check. Bump this deliberately when adopting a new ruff.
+    "ruff==0.15.14",
     "mypy>=1.13.0",
     "pre-commit>=4.0.0",
     "pyinstaller>=6.0.0",
@@ -184,7 +194,7 @@ build-backend = "hatchling.build"
 path = "hatch_build.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["app", "openconstructionerp"]
 
 # Bundle pre-built frontend into the wheel for pip install
 # Build frontend first: cd frontend && npm run build
@@ -212,9 +222,9 @@ packages = ["app"]
 #      pre-build so hatchling versions that walk the map regardless of the
 #      overrides above still find the path.
 [tool.hatch.build.targets.editable]
-packages = ["app"]
+packages = ["app", "openconstructionerp"]
 dev-mode-dirs = ["."]
-only-include = ["app"]
+only-include = ["app", "openconstructionerp"]
 
 [tool.hatch.build.targets.editable.force-include]
 
@@ -222,6 +232,14 @@ only-include = ["app"]
 target-version = "py312"
 line-length = 120
 src = ["app", "tests"]
+
+[tool.ruff.format]
+# The demo pack templates are hand-authored BOQ data tables, one position per
+# line, laid out as readable columns. The formatter would wrap each long row
+# into eight or more lines, exploding the files and destroying their tabular
+# readability for no behaviour gain, so they are skipped by the formatter.
+# They are still linted (with N999 ignored below, and E501 is off globally).
+exclude = ["app/core/demo_packs/*-*.py"]
 
 [tool.ruff.lint]
 # Pragmatic ruleset: catch real bugs (E/F/W/B), enforce import order (I)
@@ -296,6 +314,13 @@ ignore = [
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
+
+[tool.ruff.lint.per-file-ignores]
+# Demo pack template files use hyphenated, slug-style names
+# (e.g. "commercial-auckland.py") and are loaded dynamically by slug via
+# importlib, never imported by module path, so the invalid-module-name rule
+# (N999) does not apply to them.
+"app/core/demo_packs/*.py" = ["N999"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

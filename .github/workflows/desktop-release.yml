@@ -24,6 +24,9 @@ jobs:
     name: Build Sidecar (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
+      # Build every OS even if one fails, so a single-platform break never
+      # cancels the others and we still ship the installers that did build.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest
@@ -89,6 +92,9 @@ jobs:
     needs: build-sidecar
     runs-on: ${{ matrix.os }}
     strategy:
+      # Build every OS even if one fails, so a single-platform break never
+      # cancels the others and we still ship the installers that did build.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest

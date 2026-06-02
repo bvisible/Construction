@@ -1,9 +1,10 @@
 /**
- * ModuleDeveloperGuide — in-app, readable, search-friendly guide for
+ * ModuleDeveloperGuide - in-app, readable, search-friendly guide for
  * building your own module. Mirrors the repo's MODULES.md but rendered
  * natively so users don't leave the app to learn the workflow.
  */
 
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import {
@@ -28,6 +29,9 @@ import {
   AlertTriangle,
   Rocket,
   Download,
+  UploadCloud,
+  RefreshCw,
+  Power,
 } from 'lucide-react';
 import { Card, Badge, Breadcrumb } from '@/shared/ui';
 
@@ -80,6 +84,15 @@ function Inline({ children }: { children: React.ReactNode }) {
 export function ModuleDeveloperGuide() {
   const { t } = useTranslation();
 
+  // Deep-link support: when the page is opened with a #hash (e.g. the
+  // Partner Packs tab links to #partner-packs), scroll that section into
+  // view once the content has rendered.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.location.hash) return;
+    const el = document.querySelector(window.location.hash);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, []);
+
   return (
     <div className="max-w-4xl mx-auto animate-fade-in">
       <Breadcrumb
@@ -118,6 +131,258 @@ export function ModuleDeveloperGuide() {
         </Link>
       </div>
 
+      {/* Partner Packs - create & share your own */}
+      <Card id="partner-packs" className="mb-5 scroll-mt-24">
+        <div className="p-6">
+          <div className="flex items-center gap-2 mb-3">
+            <Package size={18} className="text-oe-blue" />
+            <h2 className="text-lg font-semibold text-content-primary">
+              {t('modules.dev_pack_title', {
+                defaultValue: 'Partner Packs: create and share your own',
+              })}
+            </h2>
+            <Badge variant="neutral" size="sm">No code</Badge>
+          </div>
+          <p className="text-sm text-content-secondary leading-relaxed mb-4">
+            {t('modules.dev_pack_intro', {
+              defaultValue:
+                'A partner pack is a small, code-free preset bundle for a country, region or company. It only carries presets: branding (logo and colours), a default locale, currency and tax defaults, which modules to show or hide, an optional onboarding script, and references to cost-database regions and validation rule packs that already exist in the core. Anyone can build one, share it, and let an admin activate it in one click from the Partner Packs tab.',
+            })}
+          </p>
+
+          {/* What a pack can and cannot do — honest framing up front */}
+          <div className="mb-5 grid sm:grid-cols-2 gap-3">
+            <div className="rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/20 p-3">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <CheckCircle2 size={14} className="text-emerald-600 dark:text-emerald-400" />
+                <p className="text-xs font-semibold text-content-primary">
+                  {t('modules.dev_pack_can_title', { defaultValue: 'A pack switches on what already exists' })}
+                </p>
+              </div>
+              <p className="text-xs text-content-secondary leading-relaxed">
+                {t('modules.dev_pack_can_body', {
+                  defaultValue:
+                    'Default currency and tax template, default and additional languages, which modules are visible, co-branding, an onboarding script, and which built-in CWICR regions and validation rule packs to turn on.',
+                })}
+              </p>
+            </div>
+            <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/20 p-3">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <AlertTriangle size={14} className="text-amber-600 dark:text-amber-400" />
+                <p className="text-xs font-semibold text-content-primary">
+                  {t('modules.dev_pack_cannot_title', { defaultValue: 'A pack ships no code and no data' })}
+                </p>
+              </div>
+              <p className="text-xs text-content-secondary leading-relaxed">
+                {t('modules.dev_pack_cannot_body', {
+                  defaultValue:
+                    'It is declarative only (Shape A) and is never executed. It cannot ship new validation rule classes or its own catalog data; it only references rule packs and cost regions the core already provides. Need new screens, endpoints, tables or rules? Build a module instead.',
+                })}
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <Step number={1} title={t('modules.dev_pack_step_create', { defaultValue: 'Scaffold the pack' })}>
+              <p>
+                {t('modules.dev_pack_step_create_body', {
+                  defaultValue:
+                    'The CLI scaffolds a ready-to-edit folder with a valid manifest, a placeholder logo, an onboarding script and a README. Edit the placeholders and you are done — no code to write.',
+                })}
+              </p>
+              <Code lang="bash">
+{`openconstructionerp pack new acme-co
+# -> creates acme-co/ with:
+#      manifest.json    the pack definition (only required file)
+#      logo.svg         your logo, shown in-app
+#      onboarding.yaml  optional first-login onboarding script
+#      README.md`}
+              </Code>
+              <p>
+                {t('modules.dev_pack_step_create_byhand', {
+                  defaultValue:
+                    'Prefer to author it by hand? Just create a folder with a manifest.json. The minimal shape is below.',
+                })}
+              </p>
+            </Step>
+
+            <Step number={2} title={t('modules.dev_pack_step_manifest', { defaultValue: 'Edit manifest.json' })}>
+              <p>
+                {t('modules.dev_pack_step_manifest_body', {
+                  defaultValue:
+                    'manifest.json is a serialized PartnerPackManifest. slug, partner_name and pack_version identify the pack; the rest are the presets it applies. Empty default_modules means all modules stay visible.',
+                })}
+              </p>
+              <Code lang="json">
+{`{
+  "slug": "acme-co",
+  "partner_name": "ACME Construction",
+  "partner_url": "https://acme.example",
+  "pack_version": "0.1.0",
+  "description": "Preset for ACME teams in the UK.",
+  "default_locale": "en",
+  "additional_locales": {},
+  "cwicr_regions": [],
+  "default_currency": "GBP",
+  "default_tax_template": "uk_vat",
+  "validation_rule_packs": [],
+  "default_modules": [],
+  "hidden_modules": [],
+  "branding": {
+    "primary_color": "#0F2C5F",
+    "accent_color": null,
+    "logo_path": "logo.svg",
+    "favicon_path": null,
+    "powered_by_text": null
+  },
+  "onboarding_script_path": "onboarding.yaml",
+  "metadata": {
+    "country": "GB",
+    "country_name_en": "United Kingdom",
+    "support_email": "hello@acme.example"
+  }
+}`}
+              </Code>
+            </Step>
+
+            <Step number={3} title={t('modules.dev_pack_step_install', { defaultValue: 'Install it (two ways)' })}>
+              <p className="flex items-start gap-2">
+                <RefreshCw size={14} className="mt-0.5 shrink-0 text-oe-blue" />
+                <span>
+                  {t('modules.dev_pack_step_install_drop', {
+                    defaultValue:
+                      'Drop the folder (or a .zip of it) into your install’s data directory under packs/ — by default ~/.openestimate/packs/, next to the database — then open the Partner Packs tab and click Rescan. No restart needed.',
+                  })}
+                </span>
+              </p>
+              <Code lang="bash">
+{`# Drop-in: place the pack beside the database, then Rescan in the app
+~/.openestimate/packs/acme-co/manifest.json`}
+              </Code>
+              <p className="flex items-start gap-2">
+                <UploadCloud size={14} className="mt-0.5 shrink-0 text-oe-blue" />
+                <span>
+                  {t('modules.dev_pack_step_install_upload', {
+                    defaultValue:
+                      'Or zip the folder and upload the .zip directly on the Partner Packs tab using the in-app installer (admins only). It is extracted into the same packs/ directory and appears immediately.',
+                  })}
+                </span>
+              </p>
+            </Step>
+
+            <Step number={4} title={t('modules.dev_pack_step_activate', { defaultValue: 'Activate it' })}>
+              <p className="flex items-start gap-2">
+                <Power size={14} className="mt-0.5 shrink-0 text-oe-blue" />
+                <span>
+                  {t('modules.dev_pack_step_activate_body_v2', {
+                    defaultValue:
+                      'Open Modules → Partner Packs, find your pack and press Activate. It applies the currency, language, validation standards, module visibility and branding, and can install a demo project. Activation is reversible — Deactivate restores the previous state any time.',
+                  })}
+                </span>
+              </p>
+              <Link
+                to="/modules?tab=partner-packs"
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-oe-blue hover:underline"
+              >
+                <ExternalLink size={13} />
+                {t('modules.dev_pack_open_tab', { defaultValue: 'Open the Partner Packs tab' })}
+              </Link>
+            </Step>
+          </div>
+
+          {/* Discovery caveat — replaces the old "restart the backend" claim */}
+          <div className="mt-5 flex items-start gap-2 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+            <Info size={14} className="text-content-tertiary shrink-0 mt-0.5" />
+            <p className="text-xs text-content-secondary">
+              {t('modules.dev_pack_restart_caveat', {
+                defaultValue:
+                  'Packs dropped into the data dir, and packs in the repo packs/ folder, are picked up by Rescan with no restart. Only a brand-new pack shipped as a pip package (registered via an entry point) may still need a backend restart before it appears.',
+              })}
+            </p>
+          </div>
+
+          {/* Pip-package option — still supported, just no longer the headline */}
+          <div className="mt-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-2">
+              {t('modules.dev_pack_pip_title', { defaultValue: 'Optional: ship as a pip package' })}
+            </p>
+            <p className="text-xs text-content-secondary mb-2 leading-relaxed">
+              {t('modules.dev_pack_pip_body', {
+                defaultValue:
+                  'To distribute on PyPI instead of as a folder/zip, expose the manifest through the entry-point group so it is discovered after pip install. A pip-installed pack may require a one-time backend restart.',
+              })}
+            </p>
+            <Code lang="toml">
+{`[project.entry-points."openconstructionerp.partner_packs"]
+acme-co = "openconstructionerp_acme_co:MANIFEST"`}
+            </Code>
+          </div>
+
+          {/* Sharing */}
+          <div className="mt-5 rounded-lg border border-oe-blue/20 bg-oe-blue/5 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Rocket size={15} className="text-oe-blue" />
+              <h3 className="text-sm font-semibold text-content-primary">
+                {t('modules.dev_pack_share_title', { defaultValue: 'Sharing your pack' })}
+              </h3>
+            </div>
+            <ul className="space-y-2 text-sm text-content-secondary list-disc pl-5">
+              <li>
+                {t('modules.dev_pack_share_pip', {
+                  defaultValue:
+                    'You can add it as a package to the platform (publish your pip package), so anyone can install and activate it.',
+                })}
+              </li>
+              <li>
+                {t('modules.dev_pack_share_pr', {
+                  defaultValue:
+                    'Or contribute it directly through a pull request, which makes it visible to everyone out of the box.',
+                })}
+              </li>
+              <li>
+                {t('modules.dev_pack_share_contact', {
+                  defaultValue:
+                    'The pack can display your contact details or website to whoever uses it (your partner website, support email and your co-branding line).',
+                })}
+              </li>
+              <li>
+                {t('modules.dev_pack_share_social', {
+                  defaultValue:
+                    'We can also share information about you and your pack through our social networks, so more people discover your work.',
+                })}
+              </li>
+            </ul>
+            <a
+              href="https://github.com/datadrivenconstruction/OpenConstructionERP"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-flex items-center gap-1.5 text-xs font-medium text-oe-blue hover:underline"
+            >
+              <ExternalLink size={13} />
+              {t('modules.dev_pack_share_repo', {
+                defaultValue: 'Open the repository to contribute a pack',
+              })}
+            </a>
+            <p className="mt-2 text-xs text-content-tertiary">
+              {t('modules.dev_pack_contact_us', {
+                defaultValue:
+                  'To list your pack or get featured, contact info@datadrivenconstruction.io.',
+              })}
+            </p>
+          </div>
+
+          <div className="mt-4 flex items-start gap-2 rounded-lg border border-border-light bg-surface-secondary/40 p-3">
+            <Info size={14} className="text-content-tertiary shrink-0 mt-0.5" />
+            <p className="text-xs text-content-secondary">
+              {t('modules.dev_pack_vs_module', {
+                defaultValue:
+                  'A pack holds presets only, no code. If you need new screens, endpoints or tables, build a module (below) and reference it from your pack via default_modules.',
+              })}
+            </p>
+          </div>
+        </div>
+      </Card>
+
       {/* Prerequisites */}
       <Card className="mb-5">
         <div className="p-6">
@@ -138,19 +403,19 @@ export function ModuleDeveloperGuide() {
               <li className="flex gap-2">
                 <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
                 <span>
-                  <strong>Python 3.12+</strong> — backend runtime
+                  <strong>Python 3.12+</strong>: backend runtime
                 </span>
               </li>
               <li className="flex gap-2">
                 <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
                 <span>
-                  <strong>Node.js 20+</strong> — frontend build
+                  <strong>Node.js 20+</strong>: frontend build
                 </span>
               </li>
               <li className="flex gap-2">
                 <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
                 <span>
-                  <strong>Git</strong> — clone + commit
+                  <strong>Git</strong>: clone + commit
                 </span>
               </li>
             </ul>
@@ -158,13 +423,13 @@ export function ModuleDeveloperGuide() {
               <li className="flex gap-2">
                 <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
                 <span>
-                  <strong>PostgreSQL 16 or SQLite</strong> — SQLite auto-created in dev
+                  <strong>PostgreSQL 16 or SQLite</strong>: SQLite auto-created in dev
                 </span>
               </li>
               <li className="flex gap-2">
                 <CheckCircle2 size={14} className="text-emerald-500 shrink-0 mt-0.5" />
                 <span>
-                  <strong>Editor</strong> — VS Code, Cursor, or anything with Python + TS
+                  <strong>Editor</strong>: VS Code, Cursor, or anything with Python + TS
                 </span>
               </li>
               <li className="flex gap-2">
@@ -200,7 +465,7 @@ cd frontend && npm install && npm run dev`}
             <Rocket size={18} className="text-rose-500" />
             <h2 className="text-lg font-semibold text-content-primary">
               {t('modules.dev_demo_title', {
-                defaultValue: 'Hello World — your first module in 3 minutes',
+                defaultValue: 'Hello World - your first module in 3 minutes',
               })}
             </h2>
             <Badge variant="neutral" size="sm">Backend only</Badge>
@@ -208,7 +473,7 @@ cd frontend && npm install && npm run dev`}
           <p className="text-sm text-content-secondary mb-4">
             {t('modules.dev_demo_intro', {
               defaultValue:
-                'Minimal end-to-end module that serves a greeting endpoint. Copy-paste the four blocks below, restart the backend, and curl the route — that is the full loop.',
+                'Minimal end-to-end module that serves a greeting endpoint. Copy-paste the four blocks below, restart the backend, and curl the route, that is the full loop.',
             })}
           </p>
 
@@ -291,7 +556,7 @@ curl "http://localhost:8000/api/v1/hello_world/?name=Artem"
             <p className="text-xs text-content-secondary">
               {t('modules.dev_demo_note', {
                 defaultValue:
-                  'That is it — no main.py edit, no registry import, no migration. The module loader discovers the folder, reads the manifest, and mounts the router. The module also appears under Modules & Marketplace automatically.',
+                  'That is it: no main.py edit, no registry import, no migration. The module loader discovers the folder, reads the manifest, and mounts the router. The module also appears under Modules & Marketplace automatically.',
               })}
             </p>
           </div>
@@ -310,7 +575,7 @@ curl "http://localhost:8000/api/v1/hello_world/?name=Artem"
           <p className="text-sm text-content-secondary leading-relaxed mb-4">
             {t('modules.dev_what_desc', {
               defaultValue:
-                'OpenConstructionERP v4.3 ships with 110+ modules. Every business feature — BOQ, BIM Hub, Schedule, CDE, regional BOQ packs, AI tooling — is a self-contained module. A module can add REST routes, database tables, UI pages, validation rules, translations, or any combination. You can enable, disable, install, or replace any module without touching the core.',
+                'OpenConstructionERP ships with 100+ modules. Every business feature (BOQ, BIM Hub, Schedule, CDE, regional BOQ packs, AI tooling) is a self-contained module. A module can add REST routes, database tables, UI pages, validation rules, translations, or any combination. You can enable, disable, install, or replace any module without touching the core.',
             })}
           </p>
           <div className="grid sm:grid-cols-3 gap-3">
@@ -343,7 +608,7 @@ curl "http://localhost:8000/api/v1/hello_world/?name=Artem"
               </p>
               <p className="text-xs text-content-tertiary mt-1">
                 {t('modules.dev_what_full_ex', {
-                  defaultValue: 'most real features — routes, UI, and a DB migration',
+                  defaultValue: 'most real features: routes, UI, and a DB migration',
                 })}
               </p>
             </div>
@@ -357,27 +622,27 @@ curl "http://localhost:8000/api/v1/hello_world/?name=Artem"
           <div className="flex items-center gap-2 mb-2">
             <Server size={18} className="text-emerald-500" />
             <h2 className="text-lg font-semibold text-content-primary">
-              {t('modules.dev_backend_title', { defaultValue: 'Backend module — in 5 minutes' })}
+              {t('modules.dev_backend_title', { defaultValue: 'Backend module - in 5 minutes' })}
             </h2>
             <Badge variant="neutral" size="sm">Python / FastAPI</Badge>
           </div>
           <p className="text-sm text-content-secondary mb-5">
             {t('modules.dev_backend_intro', {
               defaultValue:
-                'Everything starts from the template in the repo. The module loader auto-discovers anything you drop into backend/app/modules/ — no manual wiring of routes or migrations.',
+                'Everything starts from the template in the repo. The module loader auto-discovers anything you drop into backend/app/modules/, no manual wiring of routes or migrations.',
             })}
           </p>
           <div className="space-y-5">
             <Step number={1} title={t('modules.dev_step_copy', { defaultValue: 'Scaffold from the template' })}>
               <p>
-                Two equivalent options — the Makefile target is the one used in CI examples,
+                Two equivalent options: the Makefile target is the one used in CI examples,
                 a raw copy works on machines without <Inline>make</Inline>.
               </p>
               <Code lang="bash">
-{`# Option A — Makefile target (uses the scaffolder script)
+{`# Option A - Makefile target (uses the scaffolder script)
 make module-new NAME=oe_my_module
 
-# Option B — plain copy of the template
+# Option B - plain copy of the template
 cp -r modules/oe-module-template backend/app/modules/my_module`}
               </Code>
             </Step>
@@ -398,8 +663,8 @@ manifest = ModuleManifest(
     description="One-line description",
     author="Your Name",
     category="community",            # core | integration | regional | community
-    depends=["oe_projects"],         # hard deps — load fails without them
-    optional_depends=["oe_boq"],     # soft deps — present-if-installed
+    depends=["oe_projects"],         # hard deps - load fails without them
+    optional_depends=["oe_boq"],     # soft deps - present-if-installed
     display_name_i18n={              # localized display names (optional)
         "de": "Mein Modul",
         "ru": "Мой модуль",
@@ -413,7 +678,7 @@ manifest = ModuleManifest(
             <Step number={3} title={t('modules.dev_step_router', { defaultValue: 'Add a router' })}>
               <p>
                 Routes live in <Inline>router.py</Inline>. The loader mounts the router at{' '}
-                <Inline>/api/v1/my_module/*</Inline> automatically — you do not touch{' '}
+                <Inline>/api/v1/my_module/*</Inline> automatically, you do not touch{' '}
                 <Inline>main.py</Inline>.
               </p>
               <Code lang="python">
@@ -439,7 +704,7 @@ async def list_items():
               <p>
                 Modules that ingest data must ship validation rules. Subclass{' '}
                 <Inline>ValidationRule</Inline> in{' '}
-                <Inline>backend/app/core/validation/rules/my_module.py</Inline> — the engine
+                <Inline>backend/app/core/validation/rules/my_module.py</Inline>; the engine
                 auto-registers it.
               </p>
             </Step>
@@ -473,7 +738,7 @@ async def list_items():
           <div className="flex items-center gap-2 mb-3">
             <FolderTree size={18} className="text-indigo-500" />
             <h2 className="text-lg font-semibold text-content-primary">
-              {t('modules.dev_tree_title', { defaultValue: 'File structure — what goes where' })}
+              {t('modules.dev_tree_title', { defaultValue: 'File structure - what goes where' })}
             </h2>
           </div>
           <p className="text-sm text-content-secondary mb-4">
@@ -502,7 +767,7 @@ async def list_items():
 ├── validators.py        # validation rules (optional)
 ├── migrations/          # Alembic migrations (module-scoped)
 │   └── versions/
-└── tests/               # pytest — run with: pytest backend/app/modules/my_module`}
+└── tests/               # pytest - run with: pytest backend/app/modules/my_module`}
               </Code>
             </div>
             <div>
@@ -519,14 +784,14 @@ async def list_items():
 ├── hooks/               # custom hooks (optional)
 │   └── useMyData.ts
 ├── types.ts             # TS types (optional)
-└── __tests__/           # vitest — run with: npm run test`}
+└── __tests__/           # vitest - run with: npm run test`}
               </Code>
             </div>
           </div>
           <p className="text-xs text-content-tertiary mt-4">
             {t('modules.dev_tree_note', {
               defaultValue:
-                'All files except manifest.* are optional — start with the smallest set and add files as the module grows.',
+                'All files except manifest.* are optional; start with the smallest set and add files as the module grows.',
             })}
           </p>
         </div>
@@ -545,7 +810,7 @@ async def list_items():
           <p className="text-sm text-content-secondary mb-4">
             {t('modules.dev_db_intro', {
               defaultValue:
-                'If your module adds or changes tables, you must ship a migration. The project uses Alembic — autogenerate is your friend but always review the result.',
+                'If your module adds or changes tables, you must ship a migration. The project uses Alembic; autogenerate is your friend but always review the result.',
             })}
           </p>
 
@@ -599,7 +864,7 @@ alembic upgrade head`}
             <p className="text-xs text-content-secondary">
               {t('modules.dev_db_warn', {
                 defaultValue:
-                  'Always prefix table names with the module slug (oe_my_module_*) to avoid collisions. Never drop columns in a single migration — add the new column, backfill, then drop in a later release.',
+                  'Always prefix table names with the module slug (oe_my_module_*) to avoid collisions. Never drop columns in a single migration: add the new column, backfill, then drop in a later release.',
               })}
             </p>
           </div>
@@ -612,7 +877,7 @@ alembic upgrade head`}
           <div className="flex items-center gap-2 mb-2">
             <Layers size={18} className="text-purple-500" />
             <h2 className="text-lg font-semibold text-content-primary">
-              {t('modules.dev_frontend_title', { defaultValue: 'Frontend module — in 5 minutes' })}
+              {t('modules.dev_frontend_title', { defaultValue: 'Frontend module - in 5 minutes' })}
             </h2>
             <Badge variant="neutral" size="sm">React / TypeScript</Badge>
           </div>
@@ -664,7 +929,7 @@ export const manifest: ModuleManifest = {
 
             <Step number={3} title={t('modules.dev_front_step_component', { defaultValue: 'Build the React page' })}>
               <p>
-                Create <Inline>MyFeatureModule.tsx</Inline> — a normal React component. Use{' '}
+                Create <Inline>MyFeatureModule.tsx</Inline>, a normal React component. Use{' '}
                 <Inline>useTranslation()</Inline> for every user-visible string.
               </p>
             </Step>
@@ -682,8 +947,9 @@ export const MODULE_REGISTRY = [..., myFeature];`}
 
             <Step number={5} title={t('modules.dev_front_step_i18n', { defaultValue: 'Add translations' })}>
               <p>
-                Add the English fallback for every new i18n key to{' '}
-                <Inline>frontend/src/app/i18n-fallbacks.ts</Inline>. Never leave a raw English string
+                Add the English string for every new i18n key to{' '}
+                <Inline>frontend/src/app/locales/en</Inline> and provide an inline{' '}
+                <Inline>defaultValue</Inline>. Never leave a raw English string
                 in TSX.
               </p>
             </Step>
@@ -698,7 +964,7 @@ export const MODULE_REGISTRY = [..., myFeature];`}
             <Zap size={18} className="text-yellow-500" />
             <h2 className="text-lg font-semibold text-content-primary">
               {t('modules.dev_events_title', {
-                defaultValue: 'Events & hooks — how modules talk to each other',
+                defaultValue: 'Events & hooks - how modules talk to each other',
               })}
             </h2>
           </div>
@@ -748,7 +1014,7 @@ event_bus.subscribe("boq.position.updated", on_boq_change)`}
           </p>
           <ul className="text-xs text-content-secondary space-y-1 pl-4 list-disc">
             <li>
-              <Inline>projects.project.created</Inline> — after a project is created
+              <Inline>projects.project.created</Inline>: after a project is created
             </li>
             <li>
               <Inline>boq.position.created</Inline> / <Inline>.updated</Inline> /{' '}
@@ -761,7 +1027,7 @@ event_bus.subscribe("boq.position.updated", on_boq_change)`}
               <Inline>documents.document.uploaded</Inline>
             </li>
             <li>
-              <Inline>bim.model.ingested</Inline> — after CAD/BIM conversion succeeds
+              <Inline>bim.model.ingested</Inline>: after CAD/BIM conversion succeeds
             </li>
           </ul>
         </div>
@@ -779,7 +1045,7 @@ event_bus.subscribe("boq.position.updated", on_boq_change)`}
           <p className="text-sm text-content-secondary mb-4">
             {t('modules.dev_perms_intro', {
               defaultValue:
-                'Declare the permissions your module uses. Protect every mutating endpoint with RequirePermission — never rely on the user being logged in alone.',
+                'Declare the permissions your module uses. Protect every mutating endpoint with RequirePermission; never rely on the user being logged in alone.',
             })}
           </p>
 
@@ -825,7 +1091,7 @@ async def create_item(data: CreateItemSchema):
             <p className="text-xs text-content-secondary">
               {t('modules.dev_perms_roles', {
                 defaultValue:
-                  'Roles are ordered admin > manager > editor > viewer. When you grant a permission to Role.EDITOR, every editor + manager + admin gets it automatically — admin always bypasses, so you never list admin explicitly. Unregistered permission names default to admin-only, which is safe but usually not what you want.',
+                  'Roles are ordered admin > manager > editor > viewer. When you grant a permission to Role.EDITOR, every editor + manager + admin gets it automatically; admin always bypasses, so you never list admin explicitly. Unregistered permission names default to admin-only, which is safe but usually not what you want.',
               })}
             </p>
           </div>
@@ -851,7 +1117,7 @@ async def create_item(data: CreateItemSchema):
           <div className="grid md:grid-cols-3 gap-3">
             <div className="rounded-lg border border-border-light bg-surface-secondary/40 p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-2">
-                {t('modules.dev_test_backend', { defaultValue: 'Backend — pytest' })}
+                {t('modules.dev_test_backend', { defaultValue: 'Backend - pytest' })}
               </p>
               <Code lang="bash">
 {`# run this module's tests
@@ -863,7 +1129,7 @@ pytest backend/tests/integration`}
             </div>
             <div className="rounded-lg border border-border-light bg-surface-secondary/40 p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-2">
-                {t('modules.dev_test_frontend', { defaultValue: 'Frontend — vitest' })}
+                {t('modules.dev_test_frontend', { defaultValue: 'Frontend - vitest' })}
               </p>
               <Code lang="bash">
 {`cd frontend
@@ -873,7 +1139,7 @@ npm run typecheck  # TS-level checks`}
             </div>
             <div className="rounded-lg border border-border-light bg-surface-secondary/40 p-4">
               <p className="text-xs font-semibold uppercase tracking-wider text-content-tertiary mb-2">
-                {t('modules.dev_test_e2e', { defaultValue: 'E2E — Playwright' })}
+                {t('modules.dev_test_e2e', { defaultValue: 'E2E - Playwright' })}
               </p>
               <Code lang="bash">
 {`cd frontend
@@ -886,7 +1152,7 @@ npx playwright test my-   # filter by spec name`}
           <p className="text-xs text-content-tertiary mt-4">
             {t('modules.dev_test_pattern', {
               defaultValue:
-                'Backend tests use httpx + ASGITransport — no real HTTP. Frontend tests run in jsdom. Shared integration fixtures live in backend/tests/integration/_auth_helpers.py.',
+                'Backend tests use httpx + ASGITransport, no real HTTP. Frontend tests run in jsdom. Shared integration fixtures live in backend/tests/integration/_auth_helpers.py.',
             })}
           </p>
         </div>
@@ -906,7 +1172,7 @@ npx playwright test my-   # filter by spec name`}
               <p className="text-xs font-semibold uppercase tracking-wide text-content-tertiary mb-2">
                 {t('modules.dev_install_zip', { defaultValue: 'Zip install (recommended)' })}
               </p>
-              <Code>{`openestimate module install path/to/my-module-1.0.0.zip`}</Code>
+              <Code>{`openconstructionerp module install path/to/my-module-1.0.0.zip`}</Code>
             </div>
             <div className="rounded-lg border border-border-light bg-surface-secondary/40 p-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-content-tertiary mb-2">
@@ -938,36 +1204,36 @@ npx playwright test my-   # filter by spec name`}
             <li className="flex gap-2">
               <span className="text-oe-blue font-bold shrink-0">1.</span>
               <span>
-                <strong>i18n everywhere</strong> — every user-visible string goes through{' '}
-                <Inline>t()</Inline>. Fallbacks live in{' '}
-                <Inline>frontend/src/app/i18n-fallbacks.ts</Inline>.
+                <strong>i18n everywhere</strong>: every user-visible string goes through{' '}
+                <Inline>t()</Inline>. English strings live in{' '}
+                <Inline>frontend/src/app/locales/en</Inline>.
               </span>
             </li>
             <li className="flex gap-2">
               <span className="text-oe-blue font-bold shrink-0">2.</span>
               <span>
-                <strong>No IfcOpenShell / BCF / native IFC</strong> — CAD/BIM is always converted
+                <strong>No IfcOpenShell / BCF / native IFC</strong>: CAD/BIM is always converted
                 through DDC cad2data into the canonical JSON format.
               </span>
             </li>
             <li className="flex gap-2">
               <span className="text-oe-blue font-bold shrink-0">3.</span>
               <span>
-                <strong>Validation is not optional</strong> — any module that ingests data must
+                <strong>Validation is not optional</strong>: any module that ingests data must
                 declare validation rules.
               </span>
             </li>
             <li className="flex gap-2">
               <span className="text-oe-blue font-bold shrink-0">4.</span>
               <span>
-                <strong>AI-augmented, human-confirmed</strong> — AI suggestions must show a
+                <strong>AI-augmented, human-confirmed</strong>: AI suggestions must show a
                 confidence score and require user confirmation before mutating data.
               </span>
             </li>
             <li className="flex gap-2">
               <span className="text-oe-blue font-bold shrink-0">5.</span>
               <span>
-                <strong>AGPL-3.0 compliance</strong> — contributions are dual-licensed (AGPL +
+                <strong>AGPL-3.0 compliance</strong>: contributions are dual-licensed (AGPL +
                 Commercial). First-time contributors sign a CLA via bot.
               </span>
             </li>
@@ -1019,7 +1285,7 @@ npx playwright test my-   # filter by spec name`}
                 </tr>
                 <tr className="border-b border-border-light/50">
                   <td className="py-2.5 pr-4">Add translations</td>
-                  <td className="py-2.5"><Inline>frontend/src/app/i18n-fallbacks.ts</Inline></td>
+                  <td className="py-2.5"><Inline>frontend/src/app/locales/en</Inline></td>
                 </tr>
                 <tr className="border-b border-border-light/50">
                   <td className="py-2.5 pr-4">Declare a permission</td>
@@ -1086,7 +1352,7 @@ npx playwright test my-   # filter by spec name`}
             <li>
               {t('modules.dev_ai_copy', {
                 defaultValue:
-                  'Copy the template — do not invent the manifest schema. It changes faster than any document.',
+                  'Copy the template; do not invent the manifest schema. It changes faster than any document.',
               })}
             </li>
             <li>
@@ -1098,13 +1364,13 @@ npx playwright test my-   # filter by spec name`}
             <li>
               {t('modules.dev_ai_registry', {
                 defaultValue:
-                  'Never edit the contract files _types.ts or the shape of _registry.ts — only append to the registry array.',
+                  'Never edit the contract files _types.ts or the shape of _registry.ts, only append to the registry array.',
               })}
             </li>
             <li>
               {t('modules.dev_ai_i18n', {
                 defaultValue:
-                  'Every new user-visible string gets a translation key and an English fallback in i18n-fallbacks.ts.',
+                  'Every new user-visible string gets a translation key and an English string in frontend/src/app/locales/en, plus an inline defaultValue fallback.',
               })}
             </li>
           </ul>
@@ -1118,7 +1384,7 @@ npx playwright test my-   # filter by spec name`}
             <AlertTriangle size={18} className="text-amber-500" />
             <h2 className="text-lg font-semibold text-content-primary">
               {t('modules.dev_trouble_title', {
-                defaultValue: 'Troubleshooting — common issues',
+                defaultValue: 'Troubleshooting - common issues',
               })}
             </h2>
           </div>
@@ -1147,7 +1413,7 @@ npx playwright test my-   # filter by spec name`}
               <p className="text-xs text-content-secondary">
                 {t('modules.dev_trouble_2_a', {
                   defaultValue:
-                    'The loader prefixes with /api/v1/<module_name>/. So router.py paths like @router.get("/") become /api/v1/my_module/. Keep the trailing slash on the frontend API client — redirect_slashes is disabled on the backend.',
+                    'The loader prefixes with /api/v1/<module_name>/. So router.py paths like @router.get("/") become /api/v1/my_module/. Keep the trailing slash on the frontend API client; redirect_slashes is disabled on the backend.',
                 })}
               </p>
             </div>
@@ -1175,7 +1441,7 @@ npx playwright test my-   # filter by spec name`}
               <p className="text-xs text-content-secondary">
                 {t('modules.dev_trouble_4_a', {
                   defaultValue:
-                    'You forgot to add the English fallback in frontend/src/app/i18n-fallbacks.ts. Add it there — the backend serves locales via /api/v1/i18n/ by merging that file with each translation JSON.',
+                    'You forgot to add the English string. Add it to frontend/src/app/locales/en and provide an inline defaultValue. The app boots from locales/en and lazy-loads the other locales on demand.',
                 })}
               </p>
             </div>
@@ -1203,7 +1469,7 @@ npx playwright test my-   # filter by spec name`}
               <p className="text-xs text-content-secondary">
                 {t('modules.dev_trouble_6_a', {
                   defaultValue:
-                    'The contract lives in frontend/src/modules/_types.ts — import ModuleManifest from there. Never modify _types.ts or the shape of _registry.ts: only append your import to the MODULE_REGISTRY array.',
+                    'The contract lives in frontend/src/modules/_types.ts; import ModuleManifest from there. Never modify _types.ts or the shape of _registry.ts: only append your import to the MODULE_REGISTRY array.',
                 })}
               </p>
             </div>
@@ -1247,17 +1513,17 @@ npx playwright test my-   # filter by spec name`}
 cd backend/app/modules
 zip -r ~/my-module-0.1.0.zip my_module
 
-# 2. Share the zip — recipients install with:
-openestimate module install ~/my-module-0.1.0.zip
+# 2. Share the zip, recipients install with:
+openconstructionerp module install ~/my-module-0.1.0.zip
 
-# 3. Optional — publish on the OpenEstimate marketplace:
+# 3. Optional - publish on the OpenConstructionERP marketplace:
 #    open a PR against github.com/datadrivenconstruction/OpenConstructionERP-modules
 #    adding your zip URL + manifest summary`}
           </Code>
           <p className="text-xs text-content-tertiary mt-3">
             {t('modules.dev_publish_versioning', {
               defaultValue:
-                'Always bump manifest.version on every release — the installer uses it to decide when to upgrade an existing install.',
+                'Always bump manifest.version on every release; the installer uses it to decide when to upgrade an existing install.',
             })}
           </p>
         </div>

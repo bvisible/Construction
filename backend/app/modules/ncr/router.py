@@ -217,9 +217,7 @@ async def create_variation_from_ncr(
         # Prefer the currency parsed from the NCR's own cost_impact; otherwise fall
         # back to the project's real currency. NEVER hardcode "EUR" — load the
         # project's currency, and leave blank ("") if the project has none set.
-        project_currency = await session.scalar(
-            select(Project.currency).where(Project.id == ncr.project_id)
-        )
+        project_currency = await session.scalar(select(Project.currency).where(Project.id == ncr.project_id))
         currency = parsed_currency or (project_currency or "")
 
         description_parts = [

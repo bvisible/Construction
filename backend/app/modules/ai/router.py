@@ -731,9 +731,7 @@ async def enrich_estimate(
                     conditions = [CostItem.description.ilike(f"%{kw}%") for kw in keywords]
 
                     async def _kw_search(use_region: bool) -> list[CostItem]:
-                        stmt = select(CostItem).where(
-                            CostItem.is_active.is_(True), or_(*conditions)
-                        )
+                        stmt = select(CostItem).where(CostItem.is_active.is_(True), or_(*conditions))
                         if use_region and region:
                             stmt = stmt.where(CostItem.region == region)
                         stmt = stmt.limit(15)

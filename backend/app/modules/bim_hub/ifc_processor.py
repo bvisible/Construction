@@ -2013,8 +2013,14 @@ def process_ifc_file(
                 }
             )
 
-    # Try to extract real placement coordinates from IFC before generating geometry
-    _extract_placements(elements, entities)
+    # Try to extract real placement coordinates from IFC before generating
+    # geometry.  Issue #53: IfcCartesianPoint coordinates are in the file's
+    # declared LENGTHUNIT (often millimetres), so they must be rescaled to
+    # canonical metres exactly like the IfcQuantity values above, otherwise
+    # a mm-authored model's placements come out 1000x too large and the
+    # generated bounding box (placement + metre-scale extents) is mangled,
+    # breaking viewer framing and any geometry-derived quantity.
+    _extract_placements(elements, entities, length_scale=unit_ctx.scale_for.get("LENGTHUNIT", 1.0))
 
     # Generate simplified COLLADA
     geometry_path = None
@@ -2998,14 +3004,27 @@ def _simplify_type(ifc_type: str) -> str:
 def _extract_placements(
     elements: list[dict[str, Any]],
     entities: dict[int, dict],
+    length_scale: float = 1.0,
 ) -> None:
     """Try to extract real XYZ placement coordinates from IFC entities.
 
     Parses ``IfcLocalPlacement → IfcAxis2Placement3D → IfcCartesianPoint``
     and stores the result in ``elem["_placement"]`` as ``(x, y, z)``.
     Elements without recoverable placement keep ``_placement = None``.
+
+    Args:
+        elements: Parsed element dicts; mutated in place with ``_placement``.
+        entities: The full parsed IFC entity table.
+        length_scale: Multiplier that converts the file's declared LENGTHUNIT
+            into canonical metres (e.g. ``0.001`` for a millimetre model,
+            ``0.3048`` for feet, ``1.0`` for SI metres). Issue #53:
+            IfcCartesianPoint coordinates are expressed in this unit, so we
+            apply the scale at read time to keep every exported coordinate in
+            metres, consistent with the IfcQuantity rescaling done by
+            ``_extract_quantities_for_element``.
     """
-    # Build map: element_ifc_id → placement ref
+    # Build map: element_ifc_id → placement ref. Coordinates are rescaled to
+    # canonical metres as they are read (see ``length_scale`` above).
     placement_map: dict[int, tuple[float, float, float]] = {}
 
     for eid, ent in entities.items():
@@ -3013,7 +3032,11 @@ def _extract_placements(
             nums = re.findall(r"[-\d.]+(?:E[+-]?\d+)?", ent["args_raw"])
             if len(nums) >= 3:
                 try:
-                    placement_map[eid] = (float(nums[0]), float(nums[1]), float(nums[2]))
+                    placement_map[eid] = (
+                        float(nums[0]) * length_scale,
+                        float(nums[1]) * length_scale,
+                        float(nums[2]) * length_scale,
+                    )
                 except ValueError as exc:
                     logger.debug(
                         "IFC placement skipped: malformed 3D coordinate at #%d (%r): %s",
@@ -3023,7 +3046,11 @@ def _extract_placements(
                     )
             elif len(nums) == 2:
                 try:
-                    placement_map[eid] = (float(nums[0]), float(nums[1]), 0.0)
+                    placement_map[eid] = (
+                        float(nums[0]) * length_scale,
+                        float(nums[1]) * length_scale,
+                        0.0,
+                    )
                 except ValueError as exc:
                     logger.debug(
                         "IFC placement skipped: malformed 2D coordinate at #%d (%r): %s",

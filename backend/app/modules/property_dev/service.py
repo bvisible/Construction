@@ -2228,16 +2228,12 @@ class PropertyDevService:
         contracted_by_ccy = await self.buyers.sum_contract_value_by_currency(
             dev_id, status_in=["contracted", "completed"]
         )
-        contracted_value_by_currency = {
-            code: str(amount) for code, amount in sorted(contracted_by_ccy.items())
-        }
+        contracted_value_by_currency = {code: str(amount) for code, amount in sorted(contracted_by_ccy.items())}
         # ``contracted_value`` is retained for single-currency consumers /
         # backward compatibility: it is meaningful only when there is at
         # most one currency, and is left at 0 otherwise so no caller is
         # tempted to render a blended figure.
-        contracted_value = (
-            next(iter(contracted_by_ccy.values())) if len(contracted_by_ccy) == 1 else Decimal("0")
-        )
+        contracted_value = next(iter(contracted_by_ccy.values())) if len(contracted_by_ccy) == 1 else Decimal("0")
         open_snags = await self.snags.count_open_for_development(dev_id)
         open_warranty = await self.warranty.count_open_for_development(dev_id)
         completed_handovers, scheduled_handovers = await self.handovers.count_progress_for_development(dev_id)

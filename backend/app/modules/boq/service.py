@@ -3244,9 +3244,7 @@ class BOQService:
             # currencies into the stored rate (Issue #88 / #157). Mirrors the
             # read-side ``_resource_total_in_base`` so the persisted value and
             # the FX-aware rollup agree.
-            new_unit_rate = _quantize_money_str(
-                _resource_total_in_base(resources, _fx_map, _fx_base_ccy or "")
-            )
+            new_unit_rate = _quantize_money_str(_resource_total_in_base(resources, _fx_map, _fx_base_ccy or ""))
             fields["unit_rate"] = new_unit_rate
 
         # Recalculate total only when something pricing-related actually changed.

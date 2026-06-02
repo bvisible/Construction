@@ -9,11 +9,20 @@
 
 ## 1. What a partner pack is
 
-A **partner pack** is a pip-installable Python wheel that pre-configures a
+A **partner pack** is a small, code-free preset bundle that pre-configures a
 vanilla OpenConstructionERP install for a specific region, industry vertical,
 or partner brand. It is the smallest possible unit of customisation: one
 manifest plus a handful of static assets (logo, locale JSON, onboarding
 script, validation rule-pack JSON files).
+
+You can ship a pack three ways, all declarative and none of them requiring you
+to write code: scaffold a folder with the `pack new` CLI command and drop it
+into your install's data directory, zip that folder and upload it in-app, or
+publish it as a pip wheel that registers through an entry point. The folder
+form carries a serialized `manifest.json`; the pip form carries a `manifest.py`
+that builds the same `PartnerPackManifest`. Either way the manifest is the only
+required file and the core never executes any code from a pack. Section 4
+covers all three install paths.
 
 Conceptually, a pack answers seven questions at boot:
 
@@ -37,11 +46,11 @@ brand assets.
 | Concern | Modules (`backend/app/modules/<name>/`) | Partner packs (`packs/<slug>/`) |
 |---|---|---|
 | What they add | New tables, routes, frontend pages, business logic | Configuration of existing features |
-| Installation | Drop folder into `backend/app/modules/`, restart | `pip install <pack>`, restart |
-| Discovery | File-system scan by `core/module_loader.py` | Python entry-points group `openconstructionerp.partner_packs` |
+| Installation | Drop folder into `backend/app/modules/`, restart | Drop a folder or zip into the data dir, upload in-app, or pip-install a wheel |
+| Discovery | File-system scan by `core/module_loader.py` | Data-dir `packs/` scan, repo `packs/` scan, and the entry-points group `openconstructionerp.partner_packs` |
 | Database | Owns Alembic migrations | None — packs MUST NOT touch the schema |
 | Frontend | Owns React routes under `features/<name>/` | None — packs MUST NOT add routes |
-| Activation | All enabled modules load simultaneously | **Exactly one pack is active per install** |
+| Activation | All enabled modules load simultaneously | **One pack is active per install**, applied in-app or via `OE_PARTNER_PACK` |
 | Versioning | SemVer, independent per module | SemVer, independent per pack |
 
 If you need a brand-new database table or a brand-new sidebar route, write a
@@ -53,10 +62,13 @@ locale, DIN rules pre-enabled — ship a pack.
 ## 2. Hard constraints (what packs CANNOT do)
 
 These are enforced by the architecture, not by code review. Violating them
-will not work — the loader has no path to register them.
+will not work — the loader has no path to register them. A pack dropped into
+the data dir is loaded from its `manifest.json`, which is parsed as JSON and
+validated against the Pydantic schema and never imported or executed. That is
+the security crux of the drop-in and upload paths.
 
-- **No new Python modules.** A pack's wheel is not scanned by
-  `module_loader.py`. There is no entry-point group for modules.
+- **No new Python modules.** A pack is not scanned by `module_loader.py`.
+  There is no entry-point group for modules.
 - **No new frontend routes.** The React bundle is compiled at the core's
   build time (`frontend/dist/`). Packs cannot inject routes, components, or
   JS chunks at runtime.
@@ -68,12 +80,15 @@ will not work — the loader has no path to register them.
   already exist in `backend/app/core/validation/rules/`. The JSON files
   shipped under `rule_packs/` are reference data and documentation for the
   partner; they are not loaded as executable rules by the core.
-- **No code execution at boot beyond manifest construction.** The pack's
-  `__init__.py` should expose `MANIFEST` and nothing else. Side-effects
-  there break test isolation and the discovery cache.
-- **No multi-tenant support in v5.6.x.** Exactly one pack is active per
-  install (selected by `OE_PARTNER_PACK` env var, or first alphabetically).
-  Hosted multi-tenant pack selection is reserved for a future major.
+- **No code execution at boot beyond manifest construction.** For a pip pack
+  the `__init__.py` should expose `MANIFEST` and nothing else; side-effects
+  there break test isolation and the discovery cache. A data-dir pack ships no
+  Python at all, so there is nothing to execute.
+- **No multi-tenant support yet.** One pack is active per install. Discovery
+  lists every pack it finds, but listing a pack never activates or co-brands
+  anything. A pack becomes active only when an admin applies it in-app, or when
+  the `OE_PARTNER_PACK` env var names its slug. Hosted multi-tenant pack
+  selection is reserved for a future major.
 
 If a partner requires any of the above, the answer is "ship a module under
 `backend/app/modules/`, not a pack." See `docs/module-development/quickstart.md`.
@@ -117,6 +132,94 @@ packs/<slug>/
 The three names are deliberately redundant so the loader can cross-check
 them and fail fast if a pack is mis-wired.
 
+The layout above is for the pip-wheel form. If you are shipping a pack as a
+folder to drop in or upload, the shape is simpler: a `manifest.json` (the
+serialized `PartnerPackManifest`) at the root, next to `logo.svg` and an
+optional `onboarding.yaml`. The next section walks through that.
+
+---
+
+## 3a. Creating and installing your own pack
+
+You do not need to clone the repo or build a wheel to make a pack. The fastest
+path is the CLI scaffolder, and there are three ways to get a finished pack into
+a running install.
+
+### Scaffold with `pack new`
+
+```bash
+openconstructionerp pack new acme-co
+```
+
+This writes a ready-to-edit folder named after the slug with four files: a valid
+`manifest.json` (the only required file, a serialized `PartnerPackManifest` with
+sensible placeholders so it is guaranteed to validate), a placeholder `logo.svg`,
+an `onboarding.yaml` stub, and a `README.md`. The slug must match
+`^[a-z][a-z0-9\-]{2,40}$`; the command fails fast with a clear message if it does
+not. Use `--out DIR` to choose where the folder is written and `--force` to
+overwrite an existing one. Edit the placeholders (partner name, colours, locale,
+currency, CWICR regions, validation rule packs) and the logo, and the pack is
+done. There is no code to write.
+
+Prefer to author it by hand? Create a folder with a `manifest.json` that matches
+the schema in [`MANIFEST_REFERENCE.md`](MANIFEST_REFERENCE.md). The minimal
+shape:
+
+```json
+{
+  "slug": "acme-co",
+  "partner_name": "ACME Construction",
+  "default_currency": "GBP",
+  "default_tax_template": "uk_vat",
+  "branding": { "primary_color": "#0F2C5F", "logo_path": "logo.svg" },
+  "onboarding_script_path": "onboarding.yaml"
+}
+```
+
+### Three ways to install a pack
+
+**Drop it into the data directory.** Place the folder, or a `<slug>.zip` of it,
+into your install's data directory under `packs/`. By default that is
+`~/.openestimate/packs/`, next to the database. So the manifest ends up at
+`~/.openestimate/packs/acme-co/manifest.json`. Then open Modules, Partner Packs
+and click Rescan. No restart is needed. A dropped `.zip` is safely extracted in
+place on the scan; extraction is hardened against Zip-Slip and friends
+(absolute paths, `..` traversal, drive letters, backslash separators and symlink
+members are all rejected), and a broken or invalid archive is skipped with a log
+line rather than crashing discovery.
+
+**Upload the zip in-app.** Zip the folder and upload the `.zip` directly on the
+Partner Packs tab using the in-app installer. This is admin-only. The upload
+goes through the same member-by-member safety validation, the `manifest.json` is
+validated before anything lands in a scanned path, and the validated pack is
+filed under the manifest's own slug, so it appears immediately. If a pack with
+that slug is already installed the upload is refused with a clear message rather
+than clobbering it.
+
+**Ship it as a pip wheel.** To distribute on PyPI instead of as a folder or zip,
+expose the manifest through the entry-point group so it is discovered after a
+`pip install`. This is the only path that may need a one-time backend restart
+before the pack appears.
+
+```toml
+[project.entry-points."openconstructionerp.partner_packs"]
+acme-co = "openconstructionerp_acme_co:MANIFEST"
+```
+
+Packs dropped into the data dir, and the reference packs under the repo `packs/`
+folder, are picked up by Rescan with no restart. Only a brand-new pip-installed
+pack may still need one.
+
+### Activate it
+
+Discovering a pack never co-brands the app. Once the pack is listed, open
+Modules, Partner Packs, find it and press Activate (Apply). Activation sets the
+currency, default and additional languages, validation standards, module
+visibility and branding, and can install a demo project. It is reversible:
+Deactivate restores the previous state at any time. You can also pin the active
+pack from the environment with `OE_PARTNER_PACK=<slug>`; the in-app applied pack
+takes precedence over the env var.
+
 ---
 
 ## 4. The 10 reference packs
@@ -145,10 +248,10 @@ wheels and are independent of the core release cycle.
 
 ```bash
 pip install openconstructionerp openconstructionerp-batimatech-ca
-# optional: explicitly pin which pack is active
+# pin which pack is active (or apply it in-app from the Partner Packs tab)
 export OE_PARTNER_PACK=batimatech-ca   # PowerShell: $env:OE_PARTNER_PACK="batimatech-ca"
 openconstructionerp serve
-# log line: "Active partner pack (auto-selected): batimatech-ca"
+# log line: "Active partner pack (env-selected): batimatech-ca"
 ```
 
 ### Install commands for every reference pack
@@ -182,15 +285,18 @@ openconstructionerp-<slug>` to remove it.
 
 ### Install many — pick one as active
 
-Multiple packs can be installed simultaneously. Only one is active at a
-time. Precedence:
+Multiple packs can be installed or dropped in simultaneously. Discovery lists
+all of them, but only one is active at a time, and discovery alone never
+activates a pack. Precedence:
 
-1. `OE_PARTNER_PACK=<slug>` env var (exact match against `manifest.slug`).
-2. First pack alphabetically by slug (`aus-nzs` wins over `batimatech-ca`).
+1. The in-app applied pack, persisted in `partner_pack_state.json` beside the
+   database (set by Activate on the Partner Packs tab, cleared by Deactivate).
+2. `OE_PARTNER_PACK=<slug>` env var (exact match against `manifest.slug`).
 3. None — runs in vanilla OCERP mode.
 
-To switch between installed packs without reinstalling, restart with a
-different `OE_PARTNER_PACK` value.
+To switch packs, apply a different one from the Partner Packs tab, or restart
+with a different `OE_PARTNER_PACK` value. The in-app applied pack wins over the
+env var when both are set.
 
 ---
 
@@ -386,7 +492,7 @@ export OE_PARTNER_PACK=your-pack   # PowerShell: $env:OE_PARTNER_PACK="your-pack
 
 # 4. Run the backend
 openconstructionerp serve --reload
-# Expect log line: "Active partner pack (auto-selected): your-pack v0.1.0"
+# Expect log line: "Active partner pack (env-selected): your-pack"
 
 # 5. Hit the API
 curl http://localhost:8000/api/v1/partner-pack/current | jq
@@ -432,7 +538,8 @@ against a core version that predates the entry-point group.
 |---|---|---|
 | `/api/v1/partner-pack/current` returns `{"active": false}` after install | Entry-point not registered | Verify `pyproject.toml` has the `[project.entry-points."openconstructionerp.partner_packs"]` table and that you reinstalled after editing it |
 | Logs say `Partner pack 'X' failed to load: ...` | `MANIFEST` is malformed or `manifest.py` raises at import | Run `python -c "from openconstructionerp_x import MANIFEST; print(MANIFEST)"` to reproduce; fix the validation error |
-| Wrong pack is active when multiple are installed | First-alphabetical-slug fallback | Set `OE_PARTNER_PACK=<slug>` explicitly |
+| Wrong pack is active when multiple are installed | An in-app applied pack takes precedence over the env var | Deactivate it on the Partner Packs tab, or set `OE_PARTNER_PACK=<slug>` and remove the applied state |
+| A dropped folder or uploaded zip does not appear | The scan has not run, or the archive has no valid `manifest.json` | Click Rescan on the Partner Packs tab; confirm `manifest.json` is at the pack root and validates |
 | `/api/v1/partner-pack/logo` returns 404 | `logo_path` points at a missing file or the file is not in `package-data` | Ensure `pyproject.toml`'s `[tool.setuptools.package-data]` lists `"logo.svg"` (or your filename), then reinstall |
 | Co-brand chip overlaps header buttons at 1366×768 | Pre-v5.6.0 layout bug | Upgrade core to ≥ v5.6.0 (header chip is `xl:flex` + `max-w-14rem`) |
 | Pack works in test but not after `pip install` | Editable install picked up dev-only files | Add the missing globs to `[tool.setuptools.package-data]` and rebuild the wheel |

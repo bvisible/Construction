@@ -10,6 +10,7 @@ Two helpers are provided:
 * :func:`member_project_ids_subquery` — synchronous scalar subquery used
   in ORM ``WHERE … IN (…)`` clauses for list/aggregate endpoints.
 """
+
 from __future__ import annotations
 
 import uuid

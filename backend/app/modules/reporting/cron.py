@@ -159,12 +159,7 @@ def next_occurrence(expr: str, after: datetime) -> datetime:
     # Common case: daily / weekly / monthly hit within ~31 days. We
     # advance one minute at a time — trivially correct, negligible cost.
     while probe <= deadline:
-        if (
-            probe.minute in minutes
-            and probe.hour in hours
-            and probe.month in months
-            and _day_matches(probe)
-        ):
+        if probe.minute in minutes and probe.hour in hours and probe.month in months and _day_matches(probe):
             return probe
         # Skip ahead by hours / days when coarser fields don't match —
         # keeps the worst-case (year-long search) bounded in ms, not s.

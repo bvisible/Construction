@@ -58,9 +58,7 @@ async def _register_admin(client: AsyncClient) -> tuple[dict[str, str], str]:
     # Promote to admin so verify_project_access lets the user through
     # for cross-project sanity probes.
     async with async_session_factory() as session:
-        await session.execute(
-            sa_update(User).where(User.email == email.lower()).values(role="admin", is_active=True)
-        )
+        await session.execute(sa_update(User).where(User.email == email.lower()).values(role="admin", is_active=True))
         await session.commit()
 
     token = ""
@@ -137,9 +135,7 @@ async def _create_markup(
 
 
 @pytest.mark.asyncio
-async def test_create_with_assignee_round_trips(
-    client: AsyncClient, auth_pair, project_id: str
-) -> None:
+async def test_create_with_assignee_round_trips(client: AsyncClient, auth_pair, project_id: str) -> None:
     headers, user_id = auth_pair
     created = await _create_markup(client, headers, project_id, assignee_id=user_id)
     assert created["assignee_id"] == user_id
@@ -172,9 +168,7 @@ async def test_patch_assignee_reflected(client: AsyncClient, auth_pair, project_
 
 
 @pytest.mark.asyncio
-async def test_filter_by_assignee_only_returns_match(
-    client: AsyncClient, auth_pair, project_id: str
-) -> None:
+async def test_filter_by_assignee_only_returns_match(client: AsyncClient, auth_pair, project_id: str) -> None:
     headers, user_id = auth_pair
     assigned = await _create_markup(client, headers, project_id, label="assigned", assignee_id=user_id)
     unassigned = await _create_markup(client, headers, project_id, label="unassigned")
@@ -193,9 +187,7 @@ async def test_filter_by_assignee_only_returns_match(
 
 
 @pytest.mark.asyncio
-async def test_filter_unassigned_only_returns_null_assignees(
-    client: AsyncClient, auth_pair, project_id: str
-) -> None:
+async def test_filter_unassigned_only_returns_null_assignees(client: AsyncClient, auth_pair, project_id: str) -> None:
     headers, user_id = auth_pair
     assigned = await _create_markup(client, headers, project_id, label="A", assignee_id=user_id)
     unassigned = await _create_markup(client, headers, project_id, label="U")
@@ -214,9 +206,7 @@ async def test_filter_unassigned_only_returns_null_assignees(
 
 
 @pytest.mark.asyncio
-async def test_cross_tenant_assignee_filter_does_not_leak(
-    client: AsyncClient, auth_pair, project_id: str
-) -> None:
+async def test_cross_tenant_assignee_filter_does_not_leak(client: AsyncClient, auth_pair, project_id: str) -> None:
     """User A's assigned markup must not be visible when listing a
     project they don't own. verify_project_access either short-circuits
     with 404 OR returns 200 with an empty list for a fabricated id —

@@ -98,17 +98,29 @@ def _plan(m: PartnerPackManifest) -> dict[str, Any]:
 
     warnings: list[str] = []
     if enable_missing:
-        warnings.append(f"{len(enable_missing)} module(s) the pack wants enabled are not installed: {', '.join(enable_missing)}")
+        warnings.append(
+            f"{len(enable_missing)} module(s) the pack wants enabled are not installed: {', '.join(enable_missing)}"
+        )
     if disable_missing:
-        warnings.append(f"{len(disable_missing)} module(s) the pack wants hidden are not installed: {', '.join(disable_missing)}")
+        warnings.append(
+            f"{len(disable_missing)} module(s) the pack wants hidden are not installed: {', '.join(disable_missing)}"
+        )
     if rules_docs_only:
-        warnings.append(f"{len(rules_docs_only)} validation rule pack(s) are documentation-only (no built-in engine match): {', '.join(rules_docs_only)}")
+        warnings.append(
+            f"{len(rules_docs_only)} validation rule pack(s) are documentation-only (no built-in engine match): {', '.join(rules_docs_only)}"
+        )
     if m.default_currency:
-        warnings.append(f"Default currency {m.default_currency} applies to NEW projects only; existing projects keep their currency.")
+        warnings.append(
+            f"Default currency {m.default_currency} applies to NEW projects only; existing projects keep their currency."
+        )
     if m.default_tax_template:
-        warnings.append(f"Default tax template '{m.default_tax_template}' is recorded for reference (no automatic tax resolver yet).")
+        warnings.append(
+            f"Default tax template '{m.default_tax_template}' is recorded for reference (no automatic tax resolver yet)."
+        )
     if m.cwicr_regions:
-        warnings.append(f"CWICR regions {', '.join(m.cwicr_regions)} are recorded; cost data is not downloaded automatically.")
+        warnings.append(
+            f"CWICR regions {', '.join(m.cwicr_regions)} are recorded; cost data is not downloaded automatically."
+        )
 
     return {
         "branding": {

@@ -422,6 +422,17 @@ function BugReportMenu() {
     if (!open) setOverrodeNetworkWarning(false);
   }, [open]);
 
+  // Open this menu when any component dispatches ``oe:open-bug-report``.
+  // The v6 PostgreSQL-migration notice strip points its "Report a problem"
+  // action here: the community build ships without SMTP, so routing people
+  // to this menu (whose first channel opens a pre-filled GitHub issue) is
+  // the path that can actually deliver a report, unlike the e-mail form.
+  useEffect(() => {
+    const openMenu = () => setOpen(true);
+    window.addEventListener('oe:open-bug-report', openMenu);
+    return () => window.removeEventListener('oe:open-bug-report', openMenu);
+  }, []);
+
   const handleGithub = () => {
     setOpen(false);
     const { url, body } = buildBugReportUrl(t);
@@ -767,13 +778,11 @@ function HelpMenu() {
           role="menu"
           className="absolute right-0 top-full mt-1.5 w-60 rounded-xl border border-border-light bg-surface-elevated shadow-lg animate-scale-in py-1 z-40"
         >
-          {/* External resources. Documentation points at the repository's
-              docs/ folder on GitHub (the marketing-site docs.html 404s), a
-              real browsable destination on the same repo the GitHub item
-              below links to. */}
+          {/* External resources. Documentation points at the official docs
+              site so users land on the maintained guides, not the raw repo. */}
           <a
             role="menuitem"
-            href="https://github.com/datadrivenconstruction/OpenConstructionERP/tree/main/docs"
+            href="https://openconstructionerp.com/docs"
             target="_blank"
             rel="noopener noreferrer"
             onClick={() => setOpen(false)}

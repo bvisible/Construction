@@ -492,9 +492,7 @@ async def test_create_embodied_entry_autofill_direct_multiply(
         ),
     )
     # 10 × 0.13 = 1.3 exactly (no float drift).
-    assert Decimal(str(entry.carbon_kg)) == Decimal("1.3"), (
-        f"auto-fill produced wrong carbon_kg: {entry.carbon_kg}"
-    )
+    assert Decimal(str(entry.carbon_kg)) == Decimal("1.3"), f"auto-fill produced wrong carbon_kg: {entry.carbon_kg}"
 
 
 # ── EPD source allowlist includes epd_international (Fix 2) ──────────────

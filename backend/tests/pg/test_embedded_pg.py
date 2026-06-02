@@ -3,6 +3,7 @@
 Exercises app.core.embedded_pg directly (the helper the CLI wires into
 _setup_env). Gated to the PG lane like the rest of tests/pg.
 """
+
 from __future__ import annotations
 
 import os

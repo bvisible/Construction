@@ -45,10 +45,7 @@ class ProjectRepository:
 
         base = select(Project)
         if not is_admin:
-            base = base.where(
-                (Project.owner_id == owner_id)
-                | (Project.id.in_(member_project_ids_subquery(owner_id)))
-            )
+            base = base.where((Project.owner_id == owner_id) | (Project.id.in_(member_project_ids_subquery(owner_id))))
         if status is not None:
             base = base.where(Project.status == status)
         elif exclude_archived:

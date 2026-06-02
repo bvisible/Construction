@@ -5,6 +5,7 @@ import { Map as MapIcon, MapPin } from 'lucide-react';
 import clsx from 'clsx';
 import type { MapRef, MarkerProps } from 'react-map-gl/maplibre';
 import { buildGeocodeQuery } from '@/shared/ui/ProjectMap/geocode';
+import { RASTER_BASEMAP_STYLE } from '@/shared/ui/ProjectMap/basemap';
 // maplibre-gl ships its canvas / control styles separately. The static
 // import lets Vite hoist the CSS into the dashboard chunk so markers
 // have correct positioning the moment the JS module resolves —
@@ -13,7 +14,6 @@ import { buildGeocodeQuery } from '@/shared/ui/ProjectMap/geocode';
 // half of the "no-pins" bug the user reported.
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-const MAP_STYLE_URL = 'https://tiles.openfreemap.org/styles/positron';
 const CACHE_PREFIX = 'oe.geocode.';
 const CACHE_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
@@ -324,7 +324,7 @@ export function DashboardProjectsMap({ projects, className }: DashboardProjectsM
             mapRef.current = instance;
           }}
           initialViewState={initialView}
-          mapStyle={MAP_STYLE_URL}
+          mapStyle={RASTER_BASEMAP_STYLE}
           style={{ width: '100%', height: '100%' }}
           interactive
           dragRotate={false}

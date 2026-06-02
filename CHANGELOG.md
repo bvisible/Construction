@@ -5,6 +5,83 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.4.2] - 2026-06-02
+
+### Fixed
+
+- BIM and 3D models now sit at ground level. Two separate geometry bugs put models far from where they belong. A file authored in millimetres or imperial units had its element placements read in raw file units while the extents were already converted to metres, so every element landed up to a thousand times too far from the origin and the viewer could not frame the building. Placements are now scaled to the file's declared length unit the same way the quantities are, and SI-metre and unit-less files are unaffected. Separately, the 3D tiles a project map serves were georeferenced several kilometres above the ground because of a duplicated coordinate conversion that used the wrong Earth radius. That math is replaced by the shared, tested helper, so a model now opens at the correct altitude. These close issue #53 and issue #48.
+- The X-DDC-License response header is ASCII-only again. It previously carried a non-ASCII separator character that some HTTP clients and test tools rejected. The separator is now a plain hyphen. The header is a decorative authorship marker and nothing depends on its exact text.
+
+### Added
+
+- Partner Packs are easier to create and install. A pack is declarative presets only, so it ships no code and no data and is never executed. You can now scaffold a valid pack from the command line with `pack new`, drop a pack folder or a .zip into the runtime data directory's packs folder and pick it up with Rescan, or, as an admin, upload the .zip straight from Modules then Partner Packs. None of these need a restart or a source checkout, which matters for pip and server installs that have no repository on disk. The in-app developer guide was rewritten to describe this create, install and apply flow as it actually works, and the old instruction to restart the backend is gone.
+- Zip uploads and dropped archives are extracted through one hardened routine that rejects path traversal, symlinks, absolute paths, drive letters and backslash members, checks every entry, and stages to a temporary directory before an atomic move into place. The admin upload endpoint is size-capped and checks the file is really a zip before reading it.
+
+### Security
+
+- Conservative dependency fixes for flagged advisories, none of which affect the running application. python-multipart was raised to 0.0.27 to pick up the fix for a multipart-parsing denial-of-service that is reachable through file uploads, and pyarrow to 23.0.1 for a patch within the same series. On the frontend, the uuid library bundled inside exceljs is pinned to 11.1.1 to clear a transitive advisory. The remaining flagged items are all inside the vitest test tooling, which is a development dependency that never ships in the build or runs in production, so that upgrade is being handled separately as a tested change because it is a major version.
+
+### Changed
+
+- The production Docker deployment is documented, covering both the single-image build and the split backend and nginx setup, including the upload size limit, module-worker content type and the WebSocket upgrade the nginx config handles.
+- Build and test hygiene. Backend test collection no longer aborts when an optional dependency is not installed, so the continuous integration run completes cleanly, and a batch of frontend unit tests that had drifted from the components they cover was brought back in line. None of this changes how the app runs.
+
+## [6.4.1] - 2026-06-02
+
+### Fixed
+
+- Backend lint and formatting are clean again. Cleared every ruff check and ruff format issue across the backend and pinned the ruff version so the formatter gives the same result in CI and on a developer machine. The hand-written demo pack cost tables stay out of the formatter so they keep their readable one-line-per-item layout. This is build and lint hygiene only, with no change to how the app runs.
+
+## [6.4.0] - 2026-06-02
+
+### Added
+
+- Cost spine. Estimate, BOQ, budget, purchase orders, contracts and bid packages now hang off one stable cost line, so a number entered once carries through the whole project. A control-account tree groups the lines, and each line opens a rollup that puts its estimate, budget, committed, contracted and actual figures side by side together with every linked record. Amounts are converted inside a project through its own exchange rates and grouped by currency across projects, never blended, and a mixed-currency rollup says so plainly. Generating the spine from a BOQ is idempotent, so running it a second time never duplicates lines.
+- Partner Packs install from the command line. New "module install", "module list" and "module uninstall" commands take a packaged module folder or archive, check its manifest, and move it into place, rejecting path-traversal and bad-layout archives.
+
+### Fixed
+
+- The 3D model now frames itself when you open a project map. The viewer waits for the model to finish loading before flying the camera to it, instead of giving up after a fixed delay and leaving the building as a distant speck.
+- The cost database region loader reports the real number of resource components it already holds instead of zero on a reload.
+- Developer guide text and the bundled partner packs were tidied up, including the partner-pack entry-point name and a sweep of stray long dashes.
+
+## [6.3.1] - 2026-06-01
+
+### Fixed
+
+- The project geo page no longer crashes and 3D geometry renders again. The crash came from a documents response contract mismatch, and the missing geometry from canonical elements that carry a flat bounding box. Both are corrected and pinned by regression tests.
+- The Daily Diary now exports a real PDF instead of a placeholder.
+- Opening a document from Takeoff loads it in the in-app viewer instead of following a broken download link.
+- Docker and nginx packaging were corrected for self-hosting: a non-editable backend install, a larger upload limit, and correct module-script and WebSocket handling.
+- Logging in no longer holds a database write open on a background connection. The login used to record its last-seen timestamp on a separate connection that ran after the response, which collided with the user's next request on the default database and could surface as a locked database with a long stall. The timestamp is now written inside the login request itself, so login stays fast and never contends with the next call.
+- The Documentation link in the top menu opens the official docs site at openconstructionerp.com/docs instead of the raw repository folder.
+
+### Added
+
+- The project dashboard schedule-summary and AI-insights widgets are backed by real endpoints. Schedule summary reports progress, completed and delayed counts and the next milestone. AI insights are distilled from the project's completed agent runs. Empty projects show a clean empty state instead of a gated widget.
+- Quantity matching gained a PDF source for a bill of quantities, an optional AI matcher that falls back to vector search when no key is set, and group split and merge with requests for quotation wired through.
+- Real multi-year holiday calendars (Hijri, equinox-based, and a curated Hindu festival table) replace the earlier approximations.
+- Partner Pack activation now installs the pack's bundled work catalogue and resource database, shown with a live step-by-step progress bar.
+- After a pip install, the app can be started with python -m openconstructionerp. This works from any folder even when pip placed the launcher in a scripts directory that is not on PATH, which is common on Windows.
+
+### Changed
+
+- Removed the coming-soon connector teasers (Microsoft 365, Google Workspace, WhatsApp, and the Procore and MS Project marketplace placeholders) so nothing in the interface is a dead end.
+
+## [6.3.0] - 2026-06-01
+
+### Added
+
+- Nine role-based company profiles: general contractor, estimator, architecture and engineering, construction manager, real estate developer, subcontractor, owner and client, BIM and VDC, and full enterprise. The profile picked during onboarding now tailors the workspace. The sidebar shows the modules that role needs and hides the rest, while the core modules stay on for everyone. The onboarding wizard reads the profile catalogue from the backend so the wizard, the saved preferences and the sidebar all use one vocabulary.
+- A unified place-on-map picker on the project geo page.
+- An apply dialog and a short developer guide on the Partner Packs page.
+
+### Changed
+
+- The dashboard co-branding banner now links into the in-app Partner Packs page, and the partner logo is shown as a proper app icon with a brand-coloured monogram fallback.
+- The US Construction Pack ships a clean stars-and-stripes emblem, and the pack descriptions across every region were tidied up.
+- AUTHORS and CONTRIBUTORS were split so authorship and copyright stay with DataDrivenConstruction while community contributors are credited in their own file.
+
 ## [6.1.2] - 2026-05-31
 
 ### Added

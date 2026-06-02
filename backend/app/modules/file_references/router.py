@@ -191,9 +191,7 @@ async def list_for_file_route(
     _validate_kind(kind)
     await verify_project_access(project_id, user_id, session)
     # IDOR fix: pass the verified project_id so the service scopes the query.
-    items, total = await list_references_for_file(
-        session, project_id=project_id, file_kind=kind, file_id=file_id
-    )
+    items, total = await list_references_for_file(session, project_id=project_id, file_kind=kind, file_id=file_id)
     return FileReferenceListResponse(items=items, total=total)
 
 

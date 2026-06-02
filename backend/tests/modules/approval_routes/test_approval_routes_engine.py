@@ -113,9 +113,7 @@ async def test_three_step_user_pinned_route_completes_on_all_approvals(
 
     target_id = uuid.uuid4()
     instance = await svc.start_instance(
-        InstanceCreate(
-            route_id=route.id, target_kind="submittal", target_id=target_id
-        ),
+        InstanceCreate(route_id=route.id, target_kind="submittal", target_id=target_id),
         started_by=owner_id,
     )
     assert instance.status == "pending"
@@ -192,9 +190,7 @@ async def test_reject_midway_finalises_instance_as_rejected(
     # Step 2 rejected → terminal state.
     instance = await svc.submit_decision(
         instance.id,
-        DecisionSubmit(
-            step_id=steps[1].id, decision="rejected", comment="budget mismatch"
-        ),
+        DecisionSubmit(step_id=steps[1].id, decision="rejected", comment="budget mismatch"),
         approver_id=u2,
     )
     assert instance.status == "rejected"
@@ -230,9 +226,7 @@ async def test_majority_mode_advances_after_majority_approve(
     )
     steps = await svc.list_steps(route.id)
     instance = await svc.start_instance(
-        InstanceCreate(
-            route_id=route.id, target_kind="rfi", target_id=uuid.uuid4()
-        ),
+        InstanceCreate(route_id=route.id, target_kind="rfi", target_id=uuid.uuid4()),
         started_by=owner_id,
     )
 
@@ -270,9 +264,7 @@ async def test_any_mode_advances_on_first_approval(session: AsyncSession) -> Non
     )
     steps = await svc.list_steps(route.id)
     instance = await svc.start_instance(
-        InstanceCreate(
-            route_id=route.id, target_kind="markup", target_id=uuid.uuid4()
-        ),
+        InstanceCreate(route_id=route.id, target_kind="markup", target_id=uuid.uuid4()),
         started_by=owner_id,
     )
     instance = await svc.submit_decision(
@@ -309,9 +301,7 @@ async def test_duplicate_decision_from_same_approver_is_rejected(
     )
     steps = await svc.list_steps(route.id)
     instance = await svc.start_instance(
-        InstanceCreate(
-            route_id=route.id, target_kind="contract", target_id=uuid.uuid4()
-        ),
+        InstanceCreate(route_id=route.id, target_kind="contract", target_id=uuid.uuid4()),
         started_by=owner_id,
     )
 
@@ -353,15 +343,11 @@ async def test_cancel_pending_instance(session: AsyncSession) -> None:
     )
     steps = await svc.list_steps(route.id)
     instance = await svc.start_instance(
-        InstanceCreate(
-            route_id=route.id, target_kind="invoice", target_id=uuid.uuid4()
-        ),
+        InstanceCreate(route_id=route.id, target_kind="invoice", target_id=uuid.uuid4()),
         started_by=owner_id,
     )
 
-    cancelled = await svc.cancel_instance(
-        instance.id, actor_id=owner_id, reason="superseded"
-    )
+    cancelled = await svc.cancel_instance(instance.id, actor_id=owner_id, reason="superseded")
     assert cancelled.status == "cancelled"
     assert cancelled.completed_at is not None
 
@@ -402,9 +388,7 @@ async def test_cannot_start_second_pending_instance_on_same_target(
     )
     with pytest.raises(HTTPException) as excinfo:
         await svc.start_instance(
-            InstanceCreate(
-                route_id=route.id, target_kind="rfi", target_id=target_id
-            ),
+            InstanceCreate(route_id=route.id, target_kind="rfi", target_id=target_id),
             started_by=owner_id,
         )
     assert excinfo.value.status_code == 409
@@ -432,9 +416,7 @@ async def test_route_target_kind_mismatch_is_rejected(
     )
     with pytest.raises(HTTPException) as excinfo:
         await svc.start_instance(
-            InstanceCreate(
-                route_id=route.id, target_kind="rfi", target_id=uuid.uuid4()
-            ),
+            InstanceCreate(route_id=route.id, target_kind="rfi", target_id=uuid.uuid4()),
             started_by=owner_id,
         )
     assert excinfo.value.status_code == 422
@@ -463,9 +445,7 @@ async def test_user_pinned_step_rejects_wrong_approver(
     )
     steps = await svc.list_steps(route.id)
     instance = await svc.start_instance(
-        InstanceCreate(
-            route_id=route.id, target_kind="contract", target_id=uuid.uuid4()
-        ),
+        InstanceCreate(route_id=route.id, target_kind="contract", target_id=uuid.uuid4()),
         started_by=owner_id,
     )
 

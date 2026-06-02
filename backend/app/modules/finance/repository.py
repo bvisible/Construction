@@ -183,8 +183,8 @@ class InvoiceRepository:
         overdue_by_currency: dict[str, float] = {}
         overdue_count = 0
         for currency_code, cnt, total in overdue_rows:
-            overdue_by_currency[currency_code or ""] = (
-                overdue_by_currency.get(currency_code or "", 0.0) + float(total or 0)
+            overdue_by_currency[currency_code or ""] = overdue_by_currency.get(currency_code or "", 0.0) + float(
+                total or 0
             )
             overdue_count += cnt
 
@@ -262,11 +262,7 @@ class PaymentRepository:
         if invoice_id is not None:
             base = base.where(Payment.invoice_id == invoice_id)
         if project_id is not None:
-            base = base.where(
-                Payment.invoice_id.in_(
-                    select(Invoice.id).where(Invoice.project_id == project_id)
-                )
-            )
+            base = base.where(Payment.invoice_id.in_(select(Invoice.id).where(Invoice.project_id == project_id)))
 
         count_stmt = select(func.count()).select_from(base.subquery())
         total = (await self.session.execute(count_stmt)).scalar_one()
@@ -315,11 +311,7 @@ class PaymentRepository:
             func.coalesce(func.sum(cast(Payment.amount, Numeric)), 0),
         )
         if project_id is not None:
-            base = base.where(
-                Payment.invoice_id.in_(
-                    select(Invoice.id).where(Invoice.project_id == project_id)
-                )
-            )
+            base = base.where(Payment.invoice_id.in_(select(Invoice.id).where(Invoice.project_id == project_id)))
         base = base.group_by(Payment.currency_code)
 
         rows = (await self.session.execute(base)).all()

@@ -108,11 +108,9 @@ async def _on_qms_finding_raised(event: Event) -> None:
                 project_id=project_id,
                 ncr_number=ncr_number,
                 title=f"QMS audit finding → NCR ({finding_type})"[:500],
-                description=(
-                    f"Auto-mirrored from QMS audit {audit_id}, "
-                    f"finding {finding_id_s}. "
-                    f"Type: {finding_type}."
-                )[:10000],
+                description=(f"Auto-mirrored from QMS audit {audit_id}, finding {finding_id_s}. Type: {finding_type}.")[
+                    :10000
+                ],
                 ncr_type="documentation",
                 severity=severity,
                 status="identified",

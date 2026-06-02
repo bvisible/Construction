@@ -293,8 +293,7 @@ async def _on_dispatch_webhook(event: Event) -> None:
                     continue
                 if current_failures >= _CIRCUIT_OPEN_THRESHOLD:
                     logger.debug(
-                        "dispatcher: circuit open for webhook target %s "
-                        "(%d failures) — skipping delivery",
+                        "dispatcher: circuit open for webhook target %s (%d failures) — skipping delivery",
                         target.id,
                         current_failures,
                     )

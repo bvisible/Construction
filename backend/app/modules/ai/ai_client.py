@@ -69,6 +69,8 @@ def resolve_anthropic_model(model: str | None) -> str:
     if not choice:
         return ANTHROPIC_MODEL
     return ANTHROPIC_MODELS.get(choice, choice)
+
+
 # gpt-4.1 is OpenAI's current flagship general model (vision + tool-calling,
 # 1M-token context, not deprecated). gpt-4o still works but is older — using
 # the current id by default reduces "deprecated model" failures (issue #129).

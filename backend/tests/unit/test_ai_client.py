@@ -280,6 +280,28 @@ class TestModelOverride:
         assert model == "gemini-2.5-pro"
 
     def test_resolve_provider_key_model_none_when_no_override(self):
+        # A non-Anthropic provider with no per-provider override resolves to a
+        # None model id, so call_ai falls back to the provider's built-in
+        # default. (Anthropic is special-cased — see the dropdown-alias test.)
+        settings = SimpleNamespace(
+            anthropic_api_key=None,
+            openai_api_key="sk-openai-1",
+            gemini_api_key=None,
+            openrouter_api_key=None,
+            mistral_api_key=None,
+            groq_api_key=None,
+            deepseek_api_key=None,
+            preferred_model="gpt-4o",
+            metadata_={},
+        )
+        provider, key, model = resolve_provider_key_model(settings)
+        assert provider == "openai"
+        assert model is None
+
+    def test_resolve_provider_key_model_anthropic_passes_dropdown_alias(self):
+        # For Anthropic, with no free-text override, the UI dropdown choice
+        # stored in preferred_model is returned so that picking Opus/Haiku
+        # actually sends Opus/Haiku (resolve_anthropic_model maps the alias).
         settings = SimpleNamespace(
             anthropic_api_key="sk-ant-1",
             openai_api_key=None,
@@ -288,12 +310,12 @@ class TestModelOverride:
             mistral_api_key=None,
             groq_api_key=None,
             deepseek_api_key=None,
-            preferred_model="claude-sonnet",
+            preferred_model="claude-opus",
             metadata_={},
         )
         provider, key, model = resolve_provider_key_model(settings)
         assert provider == "anthropic"
-        assert model is None
+        assert model == "claude-opus"
 
 
 # ── "Model not found" error surfacing (issue #129) ───────────────────────────
@@ -377,6 +399,7 @@ class TestModelErrorSurfacing:
             image_media_type="image/jpeg",
             max_tokens=4096,
             model=None,
+            base_url=None,
         ):
             seen.append(model)
             if model == "openrouter/auto":

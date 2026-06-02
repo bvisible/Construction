@@ -433,9 +433,7 @@ def compute_forecast(opportunities: Iterable[Any], period: str) -> dict[str, Any
         ccy = _opp_currency(o)
         pipeline_by_currency[ccy] = pipeline_by_currency.get(ccy, Decimal(0)) + value
 
-    by_currency = [
-        {"currency": ccy, "total": _q2(total)} for ccy, total in sorted(pipeline_by_currency.items())
-    ]
+    by_currency = [{"currency": ccy, "total": _q2(total)} for ccy, total in sorted(pipeline_by_currency.items())]
     mixed_currency = _is_mixed_currency(by_currency)
 
     return {

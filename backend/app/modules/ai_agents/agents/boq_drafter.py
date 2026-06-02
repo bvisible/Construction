@@ -201,10 +201,7 @@ async def _tool_create_position(
     if not currency_code:
         # Surface the gap so the LLM re-calls search_costs for the ISO code
         # instead of silently proposing an un-priced line.
-        proposal["warning"] = (
-            "missing currency — re-run search_costs and supply the ISO "
-            "currency code of the unit_rate"
-        )
+        proposal["warning"] = "missing currency — re-run search_costs and supply the ISO currency code of the unit_rate"
     return proposal
 
 

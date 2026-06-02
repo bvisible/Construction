@@ -1,21 +1,22 @@
 """‌⁠‍OpenConstructionERP CLI — run the platform from the command line.
 
-Usage:
-    openestimate serve   [--host HOST] [--port PORT] [--data-dir DIR] [--open]
-    openestimate init-db [--data-dir DIR]
-    openestimate doctor  [--host HOST] [--port PORT] [--data-dir DIR]
-    openestimate seed    [--demo] [--data-dir DIR]
-    openestimate version
-
-The happy path for a new user is just three commands:
+The happy path for a new user is two commands:
 
     pip install openconstructionerp
-    openestimate init-db
-    openestimate serve
+    openconstructionerp
 
-`openestimate doctor` runs a set of pre-flight checks and prints OK /
-WARNING / ERROR per check so you can diagnose install problems before
-opening a GitHub issue.
+The bare ``openconstructionerp`` command creates the local database,
+loads the demo data, starts the server and opens the browser. The
+explicit subcommands are still there for advanced use:
+
+    openconstructionerp serve   [--host HOST] [--port PORT] [--data-dir DIR] [--open]
+    openconstructionerp init-db [--data-dir DIR]
+    openconstructionerp doctor  [--host HOST] [--port PORT] [--data-dir DIR]
+    openconstructionerp seed    [--demo] [--data-dir DIR]
+    openconstructionerp version
+
+``openconstructionerp doctor`` runs pre-flight checks and prints OK /
+WARNING / ERROR per check so you can diagnose install problems.
 """
 
 from __future__ import annotations
@@ -121,6 +122,11 @@ def _bold(text: str) -> str:
     return _c(text, "1")
 
 
+def _bar() -> str:
+    """Left accent rule for the info panels (amber bar, ASCII pipe fallback)."""
+    return _amber(_u("┃", "|"))
+
+
 # ── Banner ────────────────────────────────────────────────────────────────
 # "OpenConstructionERP" rendered in the figlet "small" font (82 cols × 5
 # rows). The previous "Standard" font wrapped the 19-character name onto
@@ -149,25 +155,27 @@ def print_startup_banner(
     to open, how to log in, where the data lives, how to stop.
     """
     url = f"http://{host}:{port}"
+    bar = _bar()
+    check = _green(_u("✔", "OK"))
     print()
     print(_amber(_BANNER_ART))
     print()
-    print(f"  {_bold('OpenConstructionERP')} {_dim('v' + version)}")
-    print(f"  {_dim('Open-source construction cost estimation platform')}")
-    print()
-    print(f"  {_bold('Open in your browser:')}  {_amber(url)}")
+    print(f"  {bar}  {check} {_bold('OpenConstructionERP is running')}  {_dim('v' + version)}")
+    print(f"  {bar}")
+    print(f"  {bar}  {_bold('Open in your browser')}")
+    print(f"  {bar}     {_amber(url)}")
     if serve_frontend:
-        print(f"  {_dim('API docs:')}              {url}/api/docs")
+        print(f"  {bar}     {_dim(url + '/api/docs   (API reference)')}")
     else:
-        print(f"  {_dim('API only (frontend not bundled). Docs:')} {url}/api/docs")
-    print()
-    print(f"  {_bold('Demo login')} {_dim('(auto-created on first run)')}")
-    print(f"    {_dim('Email:')}    demo@openconstructionerp.com")
-    print(f"    {_dim('Password:')} DemoPass1234!")
-    print()
-    print(f"  {_dim('Data directory:')} {data_dir}")
-    print(f"  {_dim('Stop the server:')} Ctrl+C")
-    print(f"  {_dim('Need help:')} {DOCS_URL}")
+        print(f"  {bar}     {_dim('frontend not bundled, API only at ' + url + '/api/docs')}")
+    print(f"  {bar}")
+    print(f"  {bar}  {_bold('Log in with the demo account')}")
+    print(f"  {bar}     demo@openconstructionerp.com  {_dim('/')}  DemoPass1234!")
+    print(f"  {bar}")
+    print(f"  {bar}  {_dim('Stop'.ljust(11))} Ctrl+C")
+    print(f"  {bar}  {_dim('Start again'.ljust(11))} {_amber('openconstructionerp')}")
+    print(f"  {bar}  {_dim('Data folder'.ljust(11))} {data_dir}")
+    print(f"  {bar}  {_dim('Need help'.ljust(11))} {DOCS_URL}")
     print()
 
 
@@ -570,7 +578,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         for c in fatal_checks:
             c.print()
         print()
-        print(_dim("Run 'openestimate doctor' for full diagnostics."))
+        print(_dim("Run 'openconstructionerp doctor' for full diagnostics."))
         print(_dim(f"Troubleshooting: {TROUBLESHOOTING_URL}"))
         sys.exit(1)
 
@@ -636,7 +644,11 @@ def cmd_serve(args: argparse.Namespace) -> None:
         print(_red(_bold("Server failed to start:")) + f" {exc}")
         arrow = _u("\u2192", "->")
         if "address already in use" in str(exc).lower() or "10048" in str(exc):
-            print(_dim(f"  {arrow} Port {args.port} is already in use. Try: openestimate serve --port {args.port + 1}"))
+            print(
+                _dim(
+                    f"  {arrow} Port {args.port} is already in use. Try: openconstructionerp serve --port {args.port + 1}"
+                )
+            )
         else:
             print(_dim(f"  {arrow} See: {TROUBLESHOOTING_URL}"))
         sys.exit(1)
@@ -644,7 +656,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         arrow = _u("\u2192", "->")
         print()
         print(_red(_bold("Unexpected startup error:")) + f" {type(exc).__name__}: {exc}")
-        print(_dim(f"  {arrow} Run 'openestimate doctor' to diagnose."))
+        print(_dim(f"  {arrow} Run 'openconstructionerp doctor' to diagnose."))
         print(_dim(f"  {arrow} Report this at: {ISSUES_URL}"))
         sys.exit(1)
 
@@ -776,7 +788,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
         asyncio.run(_create())
     except Exception as exc:
         print(_red(f"Database initialisation failed: {exc}"))
-        print(_dim(f"  {_u('\u2192', '->')} Run 'openestimate doctor' for diagnostics."))
+        print(_dim(f"  {_u('\u2192', '->')} Run 'openconstructionerp doctor' for diagnostics."))
         sys.exit(1)
 
     total = len(_module_names)
@@ -791,7 +803,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
         print()
         print(_red("Schema may be incomplete. Reinstall the package or check the error above."))
         print(_dim(f"  {_u('\u2192', '->')} pip install --upgrade --force-reinstall openconstructionerp"))
-        print(_dim(f"  {_u('\u2192', '->')} Then run 'openestimate doctor' to verify."))
+        print(_dim(f"  {_u('\u2192', '->')} Then run 'openconstructionerp doctor' to verify."))
         sys.exit(1)
 
     print()
@@ -800,7 +812,7 @@ def cmd_init_db(args: argparse.Namespace) -> None:
     print(f"  {_dim('Vectors:')}  {data_dir / 'vectors'}")
     print(f"  {_dim('Uploads:')}  {data_dir / 'uploads'}")
     print()
-    print(f"Next: {_amber('openestimate serve')}")
+    print(f"Next: {_amber('openconstructionerp serve')}")
 
 
 def cmd_doctor(args: argparse.Namespace) -> None:
@@ -823,7 +835,7 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     if errors:
         print(_red(_bold(f"  {len(errors)} error(s)")) + _dim(f", {len(warns)} warning(s)"))
         print()
-        print(_dim("Fix the errors above, then run 'openestimate serve'."))
+        print(_dim("Fix the errors above, then run 'openconstructionerp serve'."))
         print(_dim(f"Docs: {TROUBLESHOOTING_URL}"))
         sys.exit(1)
     elif warns:
@@ -832,11 +844,11 @@ def cmd_doctor(args: argparse.Namespace) -> None:
             + _dim(_u(" \u2014 non-fatal, server will run", " - non-fatal, server will run"))
         )
         print()
-        print(f"Run: {_amber('openestimate serve')}")
+        print(f"Run: {_amber('openconstructionerp serve')}")
     else:
         print(_green(_bold("  All checks passed.")))
         print()
-        print(f"Run: {_amber('openestimate serve')}")
+        print(f"Run: {_amber('openconstructionerp serve')}")
 
 
 def cmd_version(_args: argparse.Namespace) -> None:
@@ -921,34 +933,46 @@ def _resolve_version() -> str:
 def print_welcome(*, next_command_hint: bool = True) -> None:
     """Fast, zero-network welcome screen.
 
-    Shown on the first bare ``openestimate`` invocation and when the
-    user runs ``openestimate welcome`` explicitly. Tells them what the
-    package does, the three commands that matter, and where to ask
-    questions when something goes wrong.
+    Shown on the first bare ``openconstructionerp`` invocation and when
+    the user runs ``openconstructionerp welcome`` explicitly. Tells them
+    the single command that starts everything, the demo login, and where
+    to ask questions when something goes wrong.
+
+    ``next_command_hint`` distinguishes the two contexts. When True the
+    user typed ``welcome`` and no server is starting, so we tell them the
+    command that does. When False this is the first-run bare command and
+    the server is about to auto-start, so we say so instead.
     """
     version = _resolve_version()
+    bar = _bar()
+    url = f"http://{DEFAULT_HOST}:{DEFAULT_PORT}"
     print()
     print(_amber(_BANNER_ART))
     print()
     print(f"  {_bold('OpenConstructionERP')} {_dim('v' + version)}")
     print(f"  {_dim('Open-source construction cost estimation platform')}")
     print()
-    print(f"  {_bold('Three commands get you running:')}")
-    print(f"    {_amber('openestimate init-db')}   {_dim('# one-time, creates ~/.openestimate/')}")
-    print(f"    {_amber('openestimate serve')}     {_dim('# start the server (Ctrl+C to stop)')}")
-    print(f"    {_amber('openestimate doctor')}    {_dim('# health check if something looks wrong')}")
+    if next_command_hint:
+        print(f"  {bar}  {_bold('To start, run one command')}")
+        print(f"  {bar}     {_amber('openconstructionerp')}")
+        print(f"  {bar}  {_dim('It sets up the database, loads the demo and opens your browser.')}")
+    else:
+        print(f"  {bar}  {_bold('Setting things up for you')}")
+        print(f"  {bar}  {_dim('Creating the database and loading the demo. The server starts in a moment.')}")
+    print(f"  {bar}")
+    print(f"  {bar}  {_bold('Then log in')}")
+    print(f"  {bar}     {_amber(url)}")
+    print(f"  {bar}     demo@openconstructionerp.com  {_dim('/')}  DemoPass1234!")
     print()
-    print(f"  {_bold('After serve, open:')} {_amber('http://127.0.0.1:8080')}")
-    print(f"  {_dim('Demo login:')} demo@openconstructionerp.com / DemoPass1234!")
+    print(f"  {_dim('Advanced:')}  openconstructionerp serve {_dim('|')} init-db {_dim('|')} doctor {_dim('|')} --help")
     print()
-    print(f"  {_bold('Get help or ask questions')}")
-    print(f"    {_dim('Docs:')}      {DOCS_URL}")
-    print(f"    {_dim('GitHub:')}    {GITHUB_URL}")
-    print(f"    {_dim('Issues:')}    {ISSUES_URL}")
-    print(f"    {_dim('Community:')} {COMMUNITY_URL} {_dim('(Telegram)')}")
+    print(f"  {_bold('Help and community')}")
+    print(f"    {_dim('Docs'.ljust(10))} {DOCS_URL}")
+    print(f"    {_dim('GitHub'.ljust(10))} {GITHUB_URL}")
+    print(f"    {_dim('Community'.ljust(10))} {COMMUNITY_URL} {_dim('(Telegram)')}")
     print()
     if next_command_hint:
-        print(f"  {_dim('Tip:')} run {_amber('openestimate')} again and it will start the server for you.")
+        print(f"  {_dim('Tip: run')} {_amber('openconstructionerp')} {_dim('again any time to start the server.')}")
         print()
 
 
@@ -1022,6 +1046,489 @@ def cmd_seed(args: argparse.Namespace) -> None:
     asyncio.run(_run_seed())
 
 
+# ── Module management (install / list / uninstall) ─────────────────────────
+# A module is a Python package under ``app/modules/`` that carries a
+# ``manifest.py`` exposing a module-level ``manifest = ModuleManifest(...)``.
+# The loader (``app.core.module_loader``) discovers modules by scanning that
+# directory for ``manifest.py`` and registers each by ``manifest.name`` (e.g.
+# ``oe_boq``). The on-disk directory name is ``manifest.name`` with the
+# ``oe_`` prefix stripped (``oe_boq`` -> ``boq``), which is the convention
+# ``_load_module`` uses to resolve the importable package path. These commands
+# extract / remove modules into exactly that directory so the loader picks
+# them up on the next server start.
+
+
+def _modules_dir() -> Path:
+    """Return the directory the module loader scans for modules.
+
+    Imports the loader so we always agree with it on the location, instead of
+    re-deriving the path here and risking drift.
+    """
+    from app.core.module_loader import MODULES_DIR
+
+    return MODULES_DIR
+
+
+def _module_dir_name(manifest_name: str) -> str:
+    """Map a manifest name to its on-disk package directory name.
+
+    Mirrors ``ModuleLoader._load_module`` (``dir_name = name.removeprefix('oe_')``).
+    """
+    return manifest_name.removeprefix("oe_")
+
+
+def _read_manifest_name(source: str) -> str | None:
+    """Extract ``manifest.name`` from a ``manifest.py`` source string.
+
+    Parsed statically with ``ast`` rather than imported, so installing a module
+    never executes untrusted code just to learn its name. Looks for a top-level
+    assignment ``<target> = ModuleManifest(... name="...", ...)`` and returns the
+    literal ``name`` keyword. Returns ``None`` if it cannot be found.
+    """
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        callee = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+        if callee != "ModuleManifest":
+            continue
+        for kw in node.keywords:
+            if kw.arg == "name" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                return kw.value.value
+    return None
+
+
+def cmd_module_install(args: argparse.Namespace) -> None:
+    """Install a module from a .zip archive into the modules directory."""
+    import shutil
+    import tempfile
+    import zipfile
+
+    # One shared, hardened zip-safety implementation (no weaker fork). Imported
+    # here rather than at module top so the CLI's pre-import env setup
+    # (_setup_env, which must run before any ``app`` import builds the DB
+    # engine) is never pre-empted by importing this command's helper.
+    from app.core.partner_pack._safe_extract import (
+        UnsafeArchiveError,
+        is_unsafe_zip_member,
+        safe_extract_all,
+    )
+
+    zip_path = Path(args.zip).expanduser().resolve()
+
+    if not zip_path.exists():
+        print(_red(f"Archive not found: {zip_path}"))
+        sys.exit(1)
+
+    if not zipfile.is_zipfile(zip_path):
+        print(_red(f"Not a valid zip archive: {zip_path}"))
+        sys.exit(1)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        infos = zf.infolist()
+        if not infos:
+            print(_red("Archive is empty."))
+            sys.exit(1)
+
+        # 1. Reject any unsafe member before touching the filesystem.
+        for info in infos:
+            reason = is_unsafe_zip_member(info)
+            if reason is not None:
+                print(_red(f"Refusing to install — unsafe archive member ({reason})."))
+                sys.exit(1)
+
+        # 2. Require exactly one top-level package directory. Every member must
+        #    live under it (a flat archive with files at the root is rejected).
+        top_levels: set[str] = set()
+        for info in infos:
+            first = info.filename.split("/", 1)[0]
+            if first:
+                top_levels.add(first)
+        if len(top_levels) != 1:
+            print(
+                _red(
+                    "Archive must contain exactly one top-level package directory "
+                    f"(found {len(top_levels)}: {', '.join(sorted(top_levels)) or 'none'})."
+                )
+            )
+            sys.exit(1)
+        top = next(iter(top_levels))
+
+        # 3. The top-level entry must be a directory, not a single file.
+        if not any(i.filename.rstrip("/") != top for i in infos):
+            print(_red(f"Top-level entry {top!r} is a file, not a package directory."))
+            sys.exit(1)
+
+        # 4. Locate the manifest at the top level: ``<top>/manifest.py``.
+        manifest_arcname = f"{top}/manifest.py"
+        names = {i.filename for i in infos}
+        if manifest_arcname not in names:
+            print(
+                _red(
+                    f"No manifest found at {manifest_arcname!r}. A module package must contain a top-level manifest.py."
+                )
+            )
+            sys.exit(1)
+
+        # 5. Read the module name from the manifest (static parse, no exec).
+        try:
+            manifest_src = zf.read(manifest_arcname).decode("utf-8")
+        except (KeyError, UnicodeDecodeError) as exc:
+            print(_red(f"Could not read {manifest_arcname}: {exc}"))
+            sys.exit(1)
+
+        module_name = _read_manifest_name(manifest_src)
+        if not module_name:
+            print(
+                _red('Could not determine the module name from manifest.py (expected ModuleManifest(name="...", ...)).')
+            )
+            sys.exit(1)
+
+        # 6. Resolve the canonical on-disk directory name and target path.
+        dir_name = _module_dir_name(module_name)
+        modules_dir = _modules_dir()
+        target = modules_dir / dir_name
+
+        if target.exists():
+            if not args.force:
+                print(
+                    _red(f"Module '{module_name}' already installed at {target}.") + _dim(" Use --force to overwrite.")
+                )
+                sys.exit(1)
+            shutil.rmtree(target)
+
+        # 7. Safe extraction into a temp staging dir, then atomically move the
+        #    package into place under its canonical directory name. Staging
+        #    first means a mid-extract failure never leaves a half-written
+        #    module in the loader's scan path. ``safe_extract_all`` re-validates
+        #    each member at write time (defence in depth against a crafted
+        #    ZipInfo whose name slipped past the up-front check).
+        modules_dir.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix="oe_module_install_"))
+        try:
+            try:
+                safe_extract_all(zf, staging)
+            except UnsafeArchiveError as exc:
+                print(_red(f"Refusing to install — {exc}."))
+                sys.exit(1)
+
+            staged_pkg = staging / top
+            if not staged_pkg.is_dir():
+                print(_red("Extraction did not produce the expected package directory."))
+                sys.exit(1)
+
+            shutil.move(str(staged_pkg), str(target))
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    print(_green(_bold(f"Installed module: {module_name}")) + _dim(f"  ({target})"))
+    print("Restart the server to load the module.")
+
+
+def _discover_manifests() -> dict[str, object]:
+    """Discover all module manifests via the real loader, return name -> manifest.
+
+    Uses a fresh ``ModuleLoader`` (not the global singleton) so a CLI ``list``
+    never mutates shared process state.
+    """
+    from app.core.module_loader import ModuleLoader
+
+    loader = ModuleLoader()
+    loader.discover()
+    return dict(loader._manifests)
+
+
+def cmd_module_list(_args: argparse.Namespace) -> None:
+    """List discovered modules with version and enabled/core status."""
+    from app.core.module_state import load_module_states
+
+    manifests = _discover_manifests()
+    if not manifests:
+        print(_dim("No modules found."))
+        return
+
+    states = load_module_states()
+
+    rows: list[tuple[str, str, str, str]] = []
+    for name in sorted(manifests):
+        manifest = manifests[name]
+        version = getattr(manifest, "version", "?")
+        category = getattr(manifest, "category", "")
+        is_core = category == "core"
+        # A non-core module is disabled only if persisted state says so.
+        state = states.get(name)
+        enabled = True if state is None else state.enabled
+        if is_core:
+            status = "core"
+        else:
+            status = "enabled" if enabled else "disabled"
+        rows.append((name, version, category, status))
+
+    name_w = max((len(r[0]) for r in rows), default=4)
+    ver_w = max((len(r[1]) for r in rows), default=7)
+    cat_w = max((len(r[2]) for r in rows), default=8)
+
+    header = f"  {'NAME'.ljust(name_w)}  {'VERSION'.ljust(ver_w)}  {'CATEGORY'.ljust(cat_w)}  STATUS"
+    print(_bold(header))
+    for name, version, category, status in rows:
+        if status == "core":
+            badge = _dim("core")
+        elif status == "enabled":
+            badge = _green("enabled")
+        else:
+            badge = _yellow("disabled")
+        print(f"  {name.ljust(name_w)}  {version.ljust(ver_w)}  {category.ljust(cat_w)}  {badge}")
+
+    print()
+    print(_dim(f"{len(rows)} module(s) in {_modules_dir()}"))
+
+
+def cmd_module_uninstall(args: argparse.Namespace) -> None:
+    """Remove an installed module's package directory."""
+    import shutil
+
+    requested = args.name
+    manifests = _discover_manifests()
+
+    # Accept either the manifest name (oe_foo) or the directory name (foo).
+    manifest = manifests.get(requested)
+    if manifest is None:
+        manifest = manifests.get(f"oe_{requested}")
+
+    if manifest is None:
+        print(_red(f"Module '{requested}' is not installed."))
+        print(_dim("Run 'openconstructionerp module list' to see installed modules."))
+        sys.exit(1)
+
+    manifest_name = getattr(manifest, "name", requested)
+    is_core = getattr(manifest, "category", "") == "core"
+    auto_install = bool(getattr(manifest, "auto_install", False))
+
+    if (is_core or auto_install) and not args.force:
+        kind = "core" if is_core else "auto-install"
+        print(
+            _red(f"Refusing to uninstall '{manifest_name}' — it is a {kind} module.")
+            + _dim(" Use --force to remove it anyway.")
+        )
+        sys.exit(1)
+
+    dir_name = _module_dir_name(manifest_name)
+    target = _modules_dir() / dir_name
+    if not target.exists():
+        print(_red(f"Module directory not found: {target}"))
+        sys.exit(1)
+
+    shutil.rmtree(target)
+    print(_green(_bold(f"Uninstalled module: {manifest_name}")) + _dim(f"  ({target})"))
+    print("Restart the server to apply the change.")
+
+
+def cmd_module(args: argparse.Namespace) -> None:
+    """Dispatch ``module`` sub-actions; print help when none is given."""
+    action = getattr(args, "module_action", None)
+    if action == "install":
+        cmd_module_install(args)
+    elif action == "list":
+        cmd_module_list(args)
+    elif action == "uninstall":
+        cmd_module_uninstall(args)
+    else:
+        # No sub-action: print the module group's help.
+        args._module_parser.print_help()
+
+
+# ── Partner-pack scaffolding (pack new) ─────────────────────────────────────
+# A partner pack dropped into ``<data-dir>/packs/`` is *declarative*: a
+# ``manifest.json`` (a serialized PartnerPackManifest) plus its assets. Unlike
+# business modules it ships NO Python and is never imported/executed by the
+# core. ``pack new`` emits a minimal, valid, immediately-discoverable folder so
+# a partner can edit the placeholders and drop it straight into the data dir.
+
+_PACK_PLACEHOLDER_LOGO_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 64" role="img"
+     aria-label="Partner logo placeholder">
+  <rect width="240" height="64" rx="8" fill="#0F2C5F"/>
+  <text x="120" y="40" font-family="Arial, sans-serif" font-size="22"
+        font-weight="700" fill="#FFFFFF" text-anchor="middle">{partner}</text>
+</svg>
+"""
+
+_PACK_ONBOARDING_YAML = """\
+# {slug} - first-login onboarding script (declarative).
+#
+# Replaces the default OnboardingWizard steps when this pack is active. Each
+# step is rendered by the frontend OnboardingWizard; `kind` maps to an existing
+# step renderer (intro | form | choice | external_link | summary). Edit freely.
+
+version: 2
+pack: {slug}
+estimated_minutes: 5
+
+steps:
+  - id: welcome
+    kind: intro
+    skippable: false
+    title_i18n:
+      en: "Welcome"
+    body_i18n:
+      en: "This OpenConstructionERP install is pre-configured by {partner}. Replace these placeholder steps with your own onboarding flow."
+
+  - id: done
+    kind: summary
+    skippable: false
+    title_i18n:
+      en: "All set"
+    body_i18n:
+      en: "You are ready to start. Edit onboarding.yaml in this pack to customise these steps."
+"""
+
+_PACK_README = """\
+# {slug} - OpenConstructionERP partner pack
+
+This is a declarative partner pack (Shape A). It carries only presets:
+branding, default locale, currency/tax defaults, module visibility and an
+onboarding script. It contains no Python and is never executed by the core.
+
+## Files
+
+- `manifest.json` - the serialized PartnerPackManifest (the only required file)
+- `logo.svg` - partner logo, streamed on the co-brand badge
+- `onboarding.yaml` - optional first-login onboarding script
+- `README.md` - this file
+
+## Install
+
+Drop this whole folder (or a `.zip` of it) into your install's data directory
+under `packs/`:
+
+    <data-dir>/packs/{slug}/manifest.json
+
+Then in the app go to the Modules page, Partner Packs tab, click Rescan and
+Apply, or upload the `.zip` via the in-app installer. The default data dir is
+`~/.openestimate` (or wherever your database lives).
+
+Edit the placeholders in `manifest.json` (partner name, colours, locale,
+currency, CWICR regions, validation rule packs) before shipping.
+"""
+
+
+def _scaffold_pack_manifest_json(slug: str) -> str:
+    """Build a valid serialized ``PartnerPackManifest`` JSON for ``slug``.
+
+    Constructs a real :class:`PartnerPackManifest` with sensible placeholders so
+    the emitted file is guaranteed to validate (and therefore be discoverable),
+    then serialises it with indentation for easy hand-editing.
+    """
+    from app.core.partner_pack.manifest import PartnerBranding, PartnerPackManifest
+
+    partner_display = slug.replace("-", " ").title()
+    manifest = PartnerPackManifest(
+        slug=slug,
+        partner_name=partner_display,
+        partner_url="https://example.com",
+        pack_version="0.1.0",
+        description=f"Preset bundle for {partner_display}. Edit this manifest before shipping.",
+        default_locale="en",
+        additional_locales={},
+        cwicr_regions=[],
+        default_currency="EUR",
+        default_tax_template=None,
+        validation_rule_packs=[],
+        default_modules=[],
+        hidden_modules=[],
+        branding=PartnerBranding(
+            primary_color="#0F2C5F",
+            accent_color=None,
+            logo_path="logo.svg",
+            favicon_path=None,
+            powered_by_text=None,
+        ),
+        onboarding_script_path="onboarding.yaml",
+        metadata={"country": "", "support_email": "info@example.com"},
+    )
+    return manifest.model_dump_json(indent=2)
+
+
+def cmd_pack_new(args: argparse.Namespace) -> None:
+    """Scaffold a new declarative partner pack folder ready to drop in."""
+    from app.core.partner_pack.manifest import PartnerPackManifest
+
+    slug = args.slug.strip()
+
+    # Validate the slug against the same pattern the manifest enforces, so we
+    # fail fast with a clear message instead of emitting a pack that the loader
+    # would later reject.
+    slug_field = PartnerPackManifest.model_fields["slug"]
+    pattern = next((m.pattern for m in slug_field.metadata if hasattr(m, "pattern")), r"^[a-z][a-z0-9\-]{2,40}$")
+    import re
+
+    if not re.match(pattern, slug):
+        print(_red(f"Invalid pack slug {slug!r}."))
+        print(_dim(f"  Must match {pattern} (lowercase, starts with a letter, 3-41 chars, hyphens allowed)."))
+        sys.exit(1)
+
+    out_root = Path(args.out).expanduser().resolve() if args.out else Path.cwd()
+    target = out_root / slug
+
+    if target.exists():
+        if not args.force:
+            print(_red(f"Target already exists: {target}.") + _dim(" Use --force to overwrite."))
+            sys.exit(1)
+        import shutil
+
+        shutil.rmtree(target)
+
+    partner_display = slug.replace("-", " ").title()
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "manifest.json").write_text(_scaffold_pack_manifest_json(slug), encoding="utf-8")
+        (target / "logo.svg").write_text(_PACK_PLACEHOLDER_LOGO_SVG.format(partner=partner_display), encoding="utf-8")
+        (target / "onboarding.yaml").write_text(
+            _PACK_ONBOARDING_YAML.format(slug=slug, partner=partner_display), encoding="utf-8"
+        )
+        (target / "README.md").write_text(_PACK_README.format(slug=slug), encoding="utf-8")
+    except OSError as exc:
+        print(_red(f"Could not write pack files: {exc}"))
+        sys.exit(1)
+
+    # Sanity check: the file we just wrote must validate, so "new" never emits a
+    # pack the loader would silently skip.
+    try:
+        PartnerPackManifest.model_validate_json((target / "manifest.json").read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — defensive; placeholders are valid by construction
+        print(_red(f"Scaffolded manifest failed validation: {exc}"))
+        sys.exit(1)
+
+    print(_green(_bold(f"Created partner pack: {slug}")) + _dim(f"  ({target})"))
+    print()
+    print(f"  {_dim('manifest.json')}    serialized PartnerPackManifest (edit the placeholders)")
+    print(f"  {_dim('logo.svg')}         placeholder partner logo")
+    print(f"  {_dim('onboarding.yaml')}  first-login onboarding stub")
+    print(f"  {_dim('README.md')}        how to install")
+    print()
+    print(_bold("Next steps"))
+    print(f"  1. Edit {_amber(str(target / 'manifest.json'))} (partner name, colours, locale, currency).")
+    print(f"  2. Replace {_amber(str(target / 'logo.svg'))} with the real logo.")
+    print("  3. Drop the folder (or a .zip of it) into your install's data dir under packs/,")
+    print("     then open the Modules page > Partner Packs, click Rescan, and Apply.")
+
+
+def cmd_pack(args: argparse.Namespace) -> None:
+    """Dispatch ``pack`` sub-actions; print help when none is given."""
+    action = getattr(args, "pack_action", None)
+    if action == "new":
+        cmd_pack_new(args)
+    else:
+        args._pack_parser.print_help()
+
+
 # ── Arg parser ────────────────────────────────────────────────────────────
 def _add_common_server_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--host", default=DEFAULT_HOST, help=f"Bind host (default: {DEFAULT_HOST})")
@@ -1046,14 +1553,13 @@ def _add_common_server_args(p: argparse.ArgumentParser) -> None:
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        prog="openestimate",
+        prog="openconstructionerp",
         description=(
-            "OpenConstructionERP — open-source construction cost estimation platform.\n\n"
-            "Quick start:\n"
-            "    openestimate init-db\n"
-            "    openestimate serve\n"
-            "\n"
-            "Then open http://localhost:8080 — log in with demo@openconstructionerp.com / DemoPass1234!"
+            "OpenConstructionERP, open-source construction cost estimation platform.\n\n"
+            "Quick start, one command does everything:\n"
+            "    openconstructionerp\n\n"
+            "It creates the local database, loads the demo data, starts the server\n"
+            "and opens http://127.0.0.1:8080 (demo@openconstructionerp.com / DemoPass1234!)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1130,7 +1636,75 @@ def main() -> None:
         help=f"Data directory (default: {DEFAULT_DATA_DIR})",
     )
 
+    # module — install / list / uninstall business modules
+    module_p = subparsers.add_parser(
+        "module",
+        help="Install, list, or uninstall modules",
+        description=(
+            "Manage OpenConstructionERP modules.\n\n"
+            "    openconstructionerp module install <archive.zip> [--force]\n"
+            "    openconstructionerp module list\n"
+            "    openconstructionerp module uninstall <name> [--force]\n\n"
+            "A module is a Python package with a manifest.py. Install extracts it\n"
+            "into the modules directory; restart the server to load it."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    module_sub = module_p.add_subparsers(dest="module_action")
+
+    module_install_p = module_sub.add_parser("install", help="Install a module from a .zip archive")
+    module_install_p.add_argument("zip", help="Path to the module .zip archive")
+    module_install_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing module of the same name",
+    )
+
+    module_sub.add_parser("list", help="List discovered modules (name, version, status)")
+
+    module_uninstall_p = module_sub.add_parser("uninstall", help="Remove an installed module")
+    module_uninstall_p.add_argument("name", help="Module name (oe_foo) or directory name (foo)")
+    module_uninstall_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Remove even core / auto-install modules",
+    )
+
+    # pack — scaffold a new declarative partner pack
+    pack_p = subparsers.add_parser(
+        "pack",
+        help="Scaffold and manage partner packs",
+        description=(
+            "Manage OpenConstructionERP partner packs (declarative preset bundles).\n\n"
+            "    openconstructionerp pack new <slug> [--out DIR] [--force]\n\n"
+            "Emits a minimal, valid pack folder (manifest.json + logo + onboarding\n"
+            "+ README). Drop the folder (or a .zip of it) into <data-dir>/packs/ and\n"
+            "activate it from the Modules page."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pack_sub = pack_p.add_subparsers(dest="pack_action")
+    pack_new_p = pack_sub.add_parser("new", help="Scaffold a new partner pack folder")
+    pack_new_p.add_argument("slug", help="Pack slug (lowercase, e.g. acme-de)")
+    pack_new_p.add_argument(
+        "--out",
+        default=None,
+        help="Parent directory to create the pack folder in (default: current directory)",
+    )
+    pack_new_p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing folder of the same slug",
+    )
+
     args = parser.parse_args()
+
+    # Make the module group's parser reachable from cmd_module so it can print
+    # help when invoked with no sub-action (``openconstructionerp module``).
+    if args.command == "module":
+        args._module_parser = module_p
+    if args.command == "pack":
+        args._pack_parser = pack_p
 
     # Embedded PostgreSQL is the default (see embedded_pg.is_requested). The
     # flags are explicit overrides mapped to the same env vars _setup_env reads
@@ -1154,15 +1728,19 @@ def main() -> None:
         cmd_upgrade(args)
     elif args.command == "seed":
         cmd_seed(args)
+    elif args.command == "module":
+        cmd_module(args)
+    elif args.command == "pack":
+        cmd_pack(args)
     elif args.command in ("welcome", "hello"):
         cmd_welcome(args)
     elif args.command is None:
-        # Default behaviour for bare ``openestimate`` / ``openconstructionerp``:
-        # * First run (no data dir yet) — show the welcome screen and an
+        # Default behaviour for bare ``openconstructionerp``:
+        # * First run (no data dir yet) - show the welcome screen and an
         #   interactive "open in browser?" prompt so the user sees the URL,
-        #   community link, and three-command quick start BEFORE uvicorn
-        #   eats the terminal for 30 s of startup.
-        # * Subsequent runs — jump straight to serve (they already know).
+        #   demo login and community links BEFORE uvicorn eats the
+        #   terminal for the startup wait.
+        # * Subsequent runs - jump straight to serve (they already know).
         data_dir = Path(DEFAULT_DATA_DIR)
         first_run = not data_dir.exists() or not (data_dir / "openestimate.db").exists()
         args.host = DEFAULT_HOST

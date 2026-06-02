@@ -94,10 +94,7 @@ def _load_metadata():
 
     from app.database import Base
 
-    print(
-        f"model discovery: imported {imported} module model packages; "
-        f"{len(Base.metadata.tables)} tables registered"
-    )
+    print(f"model discovery: imported {imported} module model packages; {len(Base.metadata.tables)} tables registered")
     return Base
 
 
@@ -138,9 +135,7 @@ def _make_source_engine(url: str) -> Engine:
 def _iter_batches(src: Engine, table, batch_size: int) -> Iterator[list[dict]]:
     """Yield rows of ``table`` from the source in memory-bounded batches."""
     with src.connect() as sconn:
-        result = sconn.execution_options(stream_results=True, yield_per=batch_size).execute(
-            select(table)
-        )
+        result = sconn.execution_options(stream_results=True, yield_per=batch_size).execute(select(table))
         while True:
             chunk = result.fetchmany(batch_size)
             if not chunk:
@@ -291,10 +286,7 @@ def _reset_sequences(dst: Engine, base) -> None:
                     if not seq:
                         continue
                     dconn.execute(
-                        text(
-                            f"SELECT setval('{seq}', "
-                            f"COALESCE((SELECT MAX({col.name}) FROM {table.name}), 1))"
-                        )
+                        text(f"SELECT setval('{seq}', COALESCE((SELECT MAX({col.name}) FROM {table.name}), 1))")
                     )
                     dconn.commit()
                 except Exception as exc:  # noqa: BLE001
@@ -315,9 +307,7 @@ def _dry_run(src: Engine, base) -> int:
                 print(f"  {table.name}: count failed ({exc!r})", file=sys.stderr)
                 n = 0
             total += n
-    print(
-        f"tables in metadata: {len(base.metadata.sorted_tables)}; total source rows: {total}"
-    )
+    print(f"tables in metadata: {len(base.metadata.sorted_tables)}; total source rows: {total}")
     return 0
 
 

@@ -117,9 +117,7 @@ async def _caller_scope_project_ids(
     except Exception:
         logger.exception("Admin-role lookup failed during addendum scope resolution")
 
-    stmt = select(Project.id).where(
-        (Project.owner_id == uid) | (Project.id.in_(member_project_ids_subquery(uid)))
-    )
+    stmt = select(Project.id).where((Project.owner_id == uid) | (Project.id.in_(member_project_ids_subquery(uid))))
     rows = await session.execute(stmt)
     return list(rows.scalars().all())
 

@@ -799,16 +799,12 @@ def vector_index(items: list[dict]) -> int:
         # Qdrant 400 ("expected dim 3072, got 384"), so the catalogue badge
         # stayed stuck at 0 vectorised items (issue #170).
         vec_dim = (
-            len(items[0]["vector"])
-            if items and items[0].get("vector") is not None
-            else _resolve_active_model()[1]
+            len(items[0]["vector"]) if items and items[0].get("vector") is not None else _resolve_active_model()[1]
         )
 
         collections = [c.name for c in client.get_collections().collections]
         if COST_TABLE not in collections:
-            client.create_collection(
-                COST_TABLE, vectors_config=VectorParams(size=vec_dim, distance=Distance.COSINE)
-            )
+            client.create_collection(COST_TABLE, vectors_config=VectorParams(size=vec_dim, distance=Distance.COSINE))
         else:
             # A collection left over from a different embedding model (for
             # example a 3072-d prebuilt snapshot that was later cleared) is

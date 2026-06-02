@@ -69,9 +69,7 @@ async def _activate_user(email: str) -> None:
     from app.modules.users.models import User
 
     async with async_session_factory() as s:
-        await s.execute(
-            update(User).where(User.email == email.lower()).values(is_active=True)
-        )
+        await s.execute(update(User).where(User.email == email.lower()).values(is_active=True))
         await s.commit()
 
 
@@ -181,9 +179,7 @@ async def test_team_member_can_access_boq(http_client, scenario):
     boq_id = scenario["boq_id"]
     headers = scenario["b_headers"]
 
-    list_resp = await http_client.get(
-        f"/api/v1/boq/?project_id={scenario['project_id']}", headers=headers
-    )
+    list_resp = await http_client.get(f"/api/v1/boq/?project_id={scenario['project_id']}", headers=headers)
     assert list_resp.status_code == 200, f"list BOQs: {list_resp.text}"
 
     get_resp = await http_client.get(f"/api/v1/boq/{boq_id}", headers=headers)
@@ -197,9 +193,7 @@ async def test_uninvolved_user_still_404_via_verify_project_access(http_client, 
     headers = scenario["c_headers"]
 
     get_resp = await http_client.get(f"/api/v1/projects/{pid}", headers=headers)
-    assert get_resp.status_code == 404, (
-        f"Expected 404 for uninvolved user (IDOR defence), got {get_resp.status_code}"
-    )
+    assert get_resp.status_code == 404, f"Expected 404 for uninvolved user (IDOR defence), got {get_resp.status_code}"
 
 
 @pytest.mark.asyncio
@@ -208,6 +202,4 @@ async def test_member_dashboard_cards_includes_member_projects(http_client, scen
     resp = await http_client.get("/api/v1/projects/dashboard-cards", headers=scenario["b_headers"])
     assert resp.status_code == 200, f"dashboard-cards failed: {resp.text}"
     ids = [p.get("id") or p.get("project_id") for p in resp.json()]
-    assert scenario["project_id"] in ids, (
-        "invited project missing from team member's dashboard cards"
-    )
+    assert scenario["project_id"] in ids, "invited project missing from team member's dashboard cards"

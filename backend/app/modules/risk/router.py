@@ -260,9 +260,7 @@ async def _authorized_risk_ids(
     from app.modules.risk.models import RiskItem
 
     rows = (
-        await session.execute(
-            _select(RiskItem.id, RiskItem.project_id).where(RiskItem.id.in_(requested_ids))
-        )
+        await session.execute(_select(RiskItem.id, RiskItem.project_id).where(RiskItem.id.in_(requested_ids)))
     ).all()
 
     allowed_projects: dict[str, bool] = {}

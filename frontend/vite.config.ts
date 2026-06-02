@@ -119,7 +119,7 @@ export default defineConfig({
     //       an instant paint in their last language even when offline,
     //       while the background fetch keeps the chunk fresh.
     //     - "oce-api"            NetworkFirst for ``/api/v1/*`` GETs
-    //       with an 8s timeout; cache used only as offline fallback for
+    //       with a 30s timeout; cache used only as offline fallback for
     //       idempotent reads.  Mutations (POST/PUT/PATCH/DELETE) bypass
     //       the cache and surface a network error normally.
     //

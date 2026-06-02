@@ -73,9 +73,7 @@ class Route(Base):
     """Approval route template (definition, not an active workflow)."""
 
     __tablename__ = "oe_approval_routes_route"
-    __table_args__ = (
-        Index("ix_approval_route_project_kind", "project_id", "target_kind"),
-    )
+    __table_args__ = (Index("ix_approval_route_project_kind", "project_id", "target_kind"),)
 
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID(),
@@ -105,9 +103,7 @@ class Step(Base):
     """Ordered approver slot inside a :class:`Route`."""
 
     __tablename__ = "oe_approval_routes_step"
-    __table_args__ = (
-        Index("ix_approval_step_route_ordinal", "route_id", "ordinal"),
-    )
+    __table_args__ = (Index("ix_approval_step_route_ordinal", "route_id", "ordinal"),)
 
     route_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -138,9 +134,7 @@ class Instance(Base):
     """A running approval workflow against one target row."""
 
     __tablename__ = "oe_approval_routes_instance"
-    __table_args__ = (
-        Index("ix_approval_instance_target", "target_kind", "target_id"),
-    )
+    __table_args__ = (Index("ix_approval_instance_target", "target_kind", "target_id"),)
 
     route_id: Mapped[uuid.UUID] = mapped_column(
         GUID(),
@@ -176,10 +170,7 @@ class Instance(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover
-        return (
-            f"<Instance {self.target_kind}:{self.target_id} "
-            f"step={self.current_step_ordinal} status={self.status}>"
-        )
+        return f"<Instance {self.target_kind}:{self.target_id} step={self.current_step_ordinal} status={self.status}>"
 
 
 class StepState(Base):

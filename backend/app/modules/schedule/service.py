@@ -2129,9 +2129,7 @@ class ScheduleService:
         # this one project, so they share a single ISO currency. Read the
         # project's real currency instead of hardcoding "EUR". Fall back to
         # blank ("unknown") — NEVER to "EUR" — when the project has no currency.
-        cur_result = await self.session.execute(
-            _select(Project.currency).where(Project.id == project_id)
-        )
+        cur_result = await self.session.execute(_select(Project.currency).where(Project.id == project_id))
         currency = cur_result.scalar_one_or_none() or ""
 
         stmt = (

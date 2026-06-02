@@ -20,13 +20,12 @@ from __future__ import annotations
 
 import uuid
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.modules.boq.repository import PositionRepository
 from app.modules.boq.service import _quantize_money
-
 
 # ── IDOR-REORDER: repository.reorder must filter by boq_id ──────────────────
 
@@ -60,9 +59,7 @@ async def test_reorder_filters_by_boq_id() -> None:
         stmt = c.args[0]  # positional first arg to execute(stmt)
         compiled = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         # Must reference the boq_id constraint
-        assert str(boq_id) in compiled, (
-            f"Statement {idx} missing boq_id constraint:\n{compiled}"
-        )
+        assert str(boq_id) in compiled, f"Statement {idx} missing boq_id constraint:\n{compiled}"
 
 
 @pytest.mark.asyncio
@@ -72,9 +69,7 @@ async def test_reorder_signature_accepts_boq_id() -> None:
 
     sig = inspect.signature(PositionRepository.reorder)
     param_names = list(sig.parameters.keys())
-    assert "boq_id" in param_names, (
-        "PositionRepository.reorder must have a boq_id parameter"
-    )
+    assert "boq_id" in param_names, "PositionRepository.reorder must have a boq_id parameter"
 
 
 # ── BULK-FLOAT: rate_factor branch must stay in Decimal ─────────────────────
@@ -97,9 +92,7 @@ def test_bulk_rate_factor_no_float_roundtrip() -> None:
     quantized = _quantize_money(new_rate)
 
     # Must be Decimal — not float
-    assert isinstance(quantized, Decimal), (
-        f"_quantize_money should return Decimal, got {type(quantized)}"
-    )
+    assert isinstance(quantized, Decimal), f"_quantize_money should return Decimal, got {type(quantized)}"
 
     # Must not have lost more than 4 decimal-place precision
     expected = Decimal("1271604.9267")
@@ -132,31 +125,28 @@ def test_bulk_rate_factor_float_comparison_demonstrates_loss() -> None:
 def test_duplicate_boq_endpoint_has_user_id_param() -> None:
     """duplicate_boq must declare CurrentUserId (user_id) parameter."""
     import inspect
+
     from app.modules.boq.router import duplicate_boq
 
     sig = inspect.signature(duplicate_boq)
-    assert "user_id" in sig.parameters, (
-        "duplicate_boq endpoint is missing user_id (ownership check)."
-    )
+    assert "user_id" in sig.parameters, "duplicate_boq endpoint is missing user_id (ownership check)."
 
 
 def test_duplicate_position_endpoint_has_user_id_param() -> None:
     """duplicate_position must declare CurrentUserId (user_id) parameter."""
     import inspect
+
     from app.modules.boq.router import duplicate_position
 
     sig = inspect.signature(duplicate_position)
-    assert "user_id" in sig.parameters, (
-        "duplicate_position endpoint is missing user_id (ownership check)."
-    )
+    assert "user_id" in sig.parameters, "duplicate_position endpoint is missing user_id (ownership check)."
 
 
 def test_duplicate_position_endpoint_has_session_param() -> None:
     """duplicate_position must accept session so _verify_boq_owner can query."""
     import inspect
+
     from app.modules.boq.router import duplicate_position
 
     sig = inspect.signature(duplicate_position)
-    assert "session" in sig.parameters, (
-        "duplicate_position endpoint is missing session parameter."
-    )
+    assert "session" in sig.parameters, "duplicate_position endpoint is missing session parameter."

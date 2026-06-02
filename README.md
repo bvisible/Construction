@@ -776,9 +776,23 @@ pip install --upgrade openconstructionerp
 openconstructionerp
 ```
 
-That's it. Installs backend + pre-built React frontend in one wheel (~7.4 MB), opens your browser at **http://localhost:8080**, creates a SQLite database, and seeds the three demo accounts on first boot. No Docker, no Node.js, no extra services. [PyPI package](https://pypi.org/project/openconstructionerp/).
+That's it. The single wheel ships the backend plus the pre-built React frontend. The first run sets up a local embedded PostgreSQL database (no Docker, no setup), loads the demo data, opens your browser at **http://localhost:8080**, and you sign in with `demo@openconstructionerp.com` / `DemoPass1234!`. No Node.js and no extra services. Every later run, just type `openconstructionerp` again. [PyPI package](https://pypi.org/project/openconstructionerp/).
 
-> **Ubuntu / Debian users:** on Ubuntu 23.04+ (including Ubuntu 26) and Debian 12+, `pip install` directly to the system Python fails with `error: externally-managed-environment` (PEP 668). Use a venv:
+> **If your terminal says `openconstructionerp: command not found` (macOS/Linux) or `'openconstructionerp' is not recognized` (Windows):** the package installed fine, pip just put the launcher in a per-user scripts folder that is not on your PATH. There are two easy ways out.
+>
+> The clean one is [pipx](https://pipx.pypa.io). It installs the app in its own isolated environment and adds the command to your PATH for you:
+> ```bash
+> python -m pip install --user pipx
+> python -m pipx ensurepath        # then close and reopen the terminal
+> pipx install openconstructionerp
+> openconstructionerp
+> ```
+> Or run it straight through Python without changing anything. This works from any folder and starts the exact same app:
+> ```bash
+> python -m openconstructionerp
+> ```
+
+> **Ubuntu / Debian users:** on Ubuntu 23.04+ (including Ubuntu 26) and Debian 12+, `pip install` into the system Python fails with `error: externally-managed-environment` (PEP 668). The simplest fix is pipx (above), which is built for exactly this. If you prefer a venv:
 > ```bash
 > sudo apt install -y python3.12 python3.12-venv
 > python3.12 -m venv venv && source venv/bin/activate
@@ -786,9 +800,9 @@ That's it. Installs backend + pre-built React frontend in one wheel (~7.4 MB), o
 > ```
 > Full Linux guide with system deps and troubleshooting: [docs/INSTALL_LINUX.md](docs/INSTALL_LINUX.md).
 
-If something looks off, run `openconstructionerp doctor` for a per-check OK/WARN/ERROR report.
+If something looks off, run `openconstructionerp doctor` (or `python -m openconstructionerp doctor`) for a per-check OK/WARN/ERROR report.
 
-### Alternative 1: One-line installer (auto-detects Docker / uv / pip)
+### Alternative 1: One-line installer (handles PATH for you)
 
 ```bash
 # Linux / macOS
@@ -798,7 +812,7 @@ curl -fsSL https://raw.githubusercontent.com/datadrivenconstruction/OpenConstruc
 irm https://raw.githubusercontent.com/datadrivenconstruction/OpenConstructionERP/main/scripts/install.ps1 | iex
 ```
 
-Picks Docker if installed, otherwise uv, otherwise pip. Runs at **http://localhost:8080**.
+If you would rather not think about PATH at all, use this. It picks Docker if installed, otherwise uv, otherwise a dedicated Python virtual environment, installs OpenConstructionERP there, puts the `openconstructionerp` command on your PATH automatically, and finishes with a short panel showing the URL, the demo login and how to start. It also offers to launch right away. Open a new terminal afterwards and `openconstructionerp` just works. Runs at **http://localhost:8080**.
 
 ### Alternative 2: Docker compose
 
@@ -855,6 +869,8 @@ env vars **before the first boot**:
 | Admin | `demo@openconstructionerp.com` | _see startup log or `.demo_credentials.json`_ | Full access |
 | Estimator | `estimator@openconstructionerp.com` | _see startup log or `.demo_credentials.json`_ | Estimator |
 | Manager | `manager@openconstructionerp.com` | _see startup log or `.demo_credentials.json`_ | Manager |
+
+> On a local default install you can simply type `DemoPass1234!` on the sign-in form for any demo account. The built-in demo login accepts it, so the documented credential always works. The per-install random password above is the stored hash, kept for reference and for API tokens. This shortcut turns off whenever `SEED_DEMO=false`, which you should set for any internet-exposed deployment.
 
 > Demo accounts include 5 pre-loaded projects from Berlin, London, New York, Paris, and Dubai with complete BOQs, schedules, and cost models.
 >

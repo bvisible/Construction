@@ -595,9 +595,7 @@ class SubmittalService:
                 return fresh_check
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "Submittal status changed concurrently; please reload and retry."
-                ),
+                detail=("Submittal status changed concurrently; please reload and retry."),
             )
 
         fresh = await self.repo.get_by_id(submittal_id)
