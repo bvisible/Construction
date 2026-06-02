@@ -58,6 +58,11 @@ const BOQEditorPage = lazy(() =>
 const CostModelPage = lazy(() =>
   import('@/features/costmodel/CostModelPage').then((m) => ({ default: m.CostModelPage }))
 );
+const YieldLibraryPage = lazy(() =>
+  import('@/features/costmodel_typed/YieldLibraryPage').then((m) => ({
+    default: m.YieldLibraryPage,
+  }))
+);
 const SchedulePage = lazy(() =>
   import('@/features/schedule/SchedulePage').then((m) => ({ default: m.SchedulePage }))
 );
@@ -833,6 +838,10 @@ export default function App() {
         <Route path="/schedule/:id/cpm" element={<P title="CPM"><CPMViewRoute /></P>} />
 
         <Route path="/5d" element={<P title="5D Cost Model"><CostModelPage /></P>} />
+        <Route
+          path="/5d/yield-library"
+          element={<P title="Yield Library"><YieldLibraryPage /></P>}
+        />
 
         <Route path="/analytics" element={<P title="Analytics"><AnalyticsPage /></P>} />
 
