@@ -67,9 +67,18 @@ export function YieldLibraryPage() {
   });
 
   const isSearching = search.trim().length >= 2;
-  const entries = isSearching ? searchQuery.data ?? [] : listQuery.data ?? [];
+  const rawEntries = isSearching ? searchQuery.data : listQuery.data;
+  // The Frappe → OCE proxy can answer with ``{error: "..."}`` instead of an
+  // array (e.g. user not yet provisioned). Guard so neither ``reduce`` nor
+  // ``map`` crash on a non-array payload.
+  const entries: YieldLibraryEntry[] = Array.isArray(rawEntries) ? rawEntries : [];
+  const proxyError =
+    rawEntries && !Array.isArray(rawEntries) && typeof rawEntries === 'object'
+      ? (rawEntries as { error?: string }).error ?? null
+      : null;
   const isLoading = isSearching ? searchQuery.isLoading : listQuery.isLoading;
-  const error = isSearching ? searchQuery.error : listQuery.error;
+  const queryError = isSearching ? searchQuery.error : listQuery.error;
+  const error: unknown = queryError ?? (proxyError ? new Error(proxyError) : null);
 
   const deleteMutation = useMutation({
     mutationFn: (entryId: string) => costModelTypedApi.deleteYieldEntry(entryId),
