@@ -63,6 +63,11 @@ const YieldLibraryPage = lazy(() =>
     default: m.YieldLibraryPage,
   }))
 );
+const ProttiBOQViewer = lazy(() =>
+  import('@/features/costmodel_typed/ProttiBOQViewer').then((m) => ({
+    default: m.ProttiBOQViewer,
+  }))
+);
 const SchedulePage = lazy(() =>
   import('@/features/schedule/SchedulePage').then((m) => ({ default: m.SchedulePage }))
 );
@@ -841,6 +846,10 @@ export default function App() {
         <Route
           path="/5d/yield-library"
           element={<P title="Yield Library"><YieldLibraryPage /></P>}
+        />
+        <Route
+          path="/5d/protti-boq"
+          element={<P title="Devis Protti"><ProttiBOQViewer /></P>}
         />
 
         <Route path="/analytics" element={<P title="Analytics"><AnalyticsPage /></P>} />
