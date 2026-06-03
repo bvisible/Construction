@@ -745,7 +745,17 @@ async def _seed_demo_account() -> None:
         # Quantities) is present out of the box. Idempotent, so it also
         # backfills existing databases on the next startup. Runs regardless of
         # project_count so an upgrade picks it up.
-        if os.environ.get("OE_TEST_FAST_STARTUP", "").lower() in ("1", "true", "yes"):
+        # //// NEOFFICE PATCH — opt out of the flagship "Residential House —
+        # Reference Build" seed. Upstream installs it unconditionally at every
+        # boot (idempotent, recreated even after a hard delete). Neoffice demo
+        # instances only want the Villa Bois-Mermet (Protti) project, so gate
+        # it behind OE_SEED_FLAGSHIP. Default = upstream behaviour; set
+        # OE_SEED_FLAGSHIP=false in .env to keep it gone. REVIEW: drop if
+        # upstream adds its own flag. See Obsidian Neoconstruction note 06.
+        _flagship_optout = os.environ.get("OE_SEED_FLAGSHIP", "").strip().lower() in ("0", "false", "no", "off")
+        if _flagship_optout:
+            logger.info("Flagship seed skipped (OE_SEED_FLAGSHIP=false)")
+        elif os.environ.get("OE_TEST_FAST_STARTUP", "").lower() in ("1", "true", "yes"):
             # The flagship installer writes a 6640-element model and ~16MB of
             # geometry; no test needs it, and it adds several seconds to every
             # per-module app startup. Skip it when the test suite asks for a
