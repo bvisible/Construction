@@ -1,31 +1,28 @@
 /**
  * Protti BOQ Viewer — Excel-like read-only rendering of the Phase 1 corpus.
  *
- * Loads ``/data/protti_corpus.json`` directly (no DB seeder needed) so the
- * full Maçonnerie devis (Attalens immeuble 7 appart.) can be inspected from
- * Neoconstruction with the same shape as the source spreadsheet:
- *
- *   - Section recap (Installation, Sous-sol, RDC, …, Régie) + Brut / TVA / TTC
- *   - Per-sheet article table (code, description, unit, qty, PU, total)
- *   - Per-article drill-down → sub-blocks → typed components
- *
- * Pure client side, no backend call. Designed for the Cédric demo.
+ * Styled with the same OCE design tokens (oe-blue, content-primary,
+ * border-light, semantic-*) as the rest of the SPA so the page reads as a
+ * native Neoconstruction screen.
  */
 
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   ChevronDown,
   ChevronRight,
   FileSpreadsheet,
+  Layers,
+  Receipt,
   Search,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { Card, CardContent, CardHeader } from '@/shared/ui/Card';
 import { Skeleton } from '@/shared/ui/Skeleton';
 
-// ── Corpus shape (a strict subset of what the Phase 1 parser produces) ──
+// ── Corpus shape ────────────────────────────────────────────────────────────
 
 interface CorpusComponent {
   type: string;
@@ -80,28 +77,72 @@ interface Corpus {
     params?: Record<string, number>;
     mo_breakdown?: Record<string, number>;
     mo_travel_distance_km?: number;
-    concrete_recipes?: Array<{ name: string; sale_price_per_m3?: number }>;
-    machines?: Array<{ code: string | null; name: string; hourly_rate: number }>;
   };
   articles: CorpusArticle[];
   sheet_totals: Record<string, SheetTotals>;
 }
 
-// ── Display helpers ──────────────────────────────────────────────────────────
+// ── Component-type badge (OCE tone) ─────────────────────────────────────────
 
-const TYPE_BADGE: Record<string, { bg: string; label: string }> = {
-  labor: { bg: 'bg-amber-100 text-amber-800', label: 'MO' },
-  fg_admin: { bg: 'bg-amber-50 text-amber-700', label: 'FG' },
-  machine: { bg: 'bg-sky-100 text-sky-800', label: 'Mach' },
-  material: { bg: 'bg-emerald-100 text-emerald-800', label: 'Mat' },
-  internal_loc: { bg: 'bg-indigo-100 text-indigo-800', label: 'Loc int' },
-  external_loc: { bg: 'bg-indigo-50 text-indigo-700', label: 'Loc ext' },
-  external_margin: { bg: 'bg-rose-50 text-rose-700', label: 'Marge ext' },
-  subcontractor: { bg: 'bg-violet-100 text-violet-800', label: 'S-trait' },
-  subcontractor_margin: { bg: 'bg-rose-100 text-rose-700', label: 'Marge ST' },
-  misc: { bg: 'bg-gray-100 text-gray-700', label: 'Divers' },
-  transport: { bg: 'bg-cyan-100 text-cyan-800', label: 'Transp' },
+const TYPE_BADGE: Record<string, { bg: string; text: string; short: string }> = {
+  labor: {
+    bg: 'bg-amber-100 dark:bg-amber-900/30',
+    text: 'text-amber-800 dark:text-amber-300',
+    short: 'MO',
+  },
+  fg_admin: {
+    bg: 'bg-amber-50 dark:bg-amber-900/20',
+    text: 'text-amber-700 dark:text-amber-400',
+    short: 'FG',
+  },
+  machine: {
+    bg: 'bg-sky-100 dark:bg-sky-900/30',
+    text: 'text-sky-800 dark:text-sky-300',
+    short: 'Machine',
+  },
+  material: {
+    bg: 'bg-emerald-100 dark:bg-emerald-900/30',
+    text: 'text-emerald-800 dark:text-emerald-300',
+    short: 'Matière',
+  },
+  internal_loc: {
+    bg: 'bg-indigo-100 dark:bg-indigo-900/30',
+    text: 'text-indigo-800 dark:text-indigo-300',
+    short: 'Loc int',
+  },
+  external_loc: {
+    bg: 'bg-indigo-50 dark:bg-indigo-900/20',
+    text: 'text-indigo-700 dark:text-indigo-400',
+    short: 'Loc ext',
+  },
+  external_margin: {
+    bg: 'bg-rose-50 dark:bg-rose-900/20',
+    text: 'text-rose-700 dark:text-rose-400',
+    short: 'Marge ext',
+  },
+  subcontractor: {
+    bg: 'bg-violet-100 dark:bg-violet-900/30',
+    text: 'text-violet-800 dark:text-violet-300',
+    short: 'S-trait',
+  },
+  subcontractor_margin: {
+    bg: 'bg-rose-100 dark:bg-rose-900/30',
+    text: 'text-rose-700 dark:text-rose-400',
+    short: 'Marge ST',
+  },
+  misc: {
+    bg: 'bg-content-tertiary/10',
+    text: 'text-content-secondary',
+    short: 'Divers',
+  },
+  transport: {
+    bg: 'bg-cyan-100 dark:bg-cyan-900/30',
+    text: 'text-cyan-800 dark:text-cyan-300',
+    short: 'Transport',
+  },
 };
+
+// ── Formatters ──────────────────────────────────────────────────────────────
 
 function fmtCHF(n: number | null | undefined, decimals = 2): string {
   if (n === null || n === undefined || Number.isNaN(n)) return '—';
@@ -116,21 +157,17 @@ function fmtNum(n: number | null | undefined): string {
   return n.toLocaleString('fr-CH', { maximumFractionDigits: 4 });
 }
 
-// ── Corpus loader (single fetch, cached forever) ─────────────────────────────
+// ── Corpus loader ───────────────────────────────────────────────────────────
 
 async function loadCorpus(): Promise<Corpus> {
-  // Use a base-relative path so it works both at the Vite dev server root
-  // (/) and behind the Frappe asset mount (/assets/neoconstruction/…/).
   const base = import.meta.env.BASE_URL || '/';
   const url = `${base.replace(/\/$/, '')}/data/protti_corpus.json`;
   const res = await fetch(url, { cache: 'force-cache' });
-  if (!res.ok) {
-    throw new Error(`Failed to load corpus (${res.status})`);
-  }
+  if (!res.ok) throw new Error(`Corpus introuvable (${res.status})`);
   return (await res.json()) as Corpus;
 }
 
-// ── Page component ───────────────────────────────────────────────────────────
+// ── Page ────────────────────────────────────────────────────────────────────
 
 export function ProttiBOQViewer() {
   const { t } = useTranslation();
@@ -146,8 +183,6 @@ export function ProttiBOQViewer() {
   const [search, setSearch] = useState('');
 
   const corpus = corpusQuery.data;
-
-  // Default to the heaviest sheet (211 Maçonnerie) once loaded.
   const sheetNames = useMemo(
     () => (corpus ? Object.keys(corpus.sheet_totals) : []),
     [corpus],
@@ -170,97 +205,127 @@ export function ProttiBOQViewer() {
     );
   }, [corpus, selectedSheet, search]);
 
-  const sheetTotals = corpus?.sheet_totals[selectedSheet];
+  const totals = corpus?.sheet_totals[selectedSheet];
 
+  // ── Loading / error states ──────────────────────────────────────────────
   if (corpusQuery.isLoading) {
     return (
-      <div className="mx-auto max-w-7xl space-y-4 p-6">
-        <Skeleton height={40} />
-        <Skeleton height={200} />
-        <Skeleton height={400} />
+      <div className="mx-auto max-w-7xl space-y-3 p-6">
+        <Skeleton height={48} className="w-1/2" rounded="md" />
+        <Skeleton height={160} className="w-full" rounded="lg" />
+        <Skeleton height={48} className="w-full" rounded="md" />
+        <Skeleton height={300} className="w-full" rounded="lg" />
       </div>
     );
   }
-
   if (corpusQuery.error || !corpus) {
     return (
       <div className="mx-auto max-w-7xl p-6">
-        <Card>
-          <CardContent className="p-6 text-sm text-red-600">
-            {corpusQuery.error instanceof Error
-              ? corpusQuery.error.message
-              : 'Corpus introuvable'}
-          </CardContent>
-        </Card>
+        <div className="flex items-start gap-3 rounded-lg border border-semantic-error/30 bg-semantic-error-bg/30 p-4">
+          <AlertTriangle size={18} className="mt-0.5 shrink-0 text-semantic-error" />
+          <div>
+            <p className="text-sm font-medium text-content-primary">
+              {t('protti.error_title', {
+                defaultValue: 'Impossible de charger le corpus',
+              })}
+            </p>
+            <p className="mt-0.5 text-xs text-content-tertiary">
+              {corpusQuery.error instanceof Error
+                ? corpusQuery.error.message
+                : 'Erreur inconnue'}
+            </p>
+          </div>
+        </div>
       </div>
     );
   }
 
+  const totalArticles = corpus.articles.filter((a) => a.sheet === selectedSheet).length;
+
   return (
-    <div className="mx-auto max-w-7xl space-y-6 p-6">
+    <div className="mx-auto max-w-7xl space-y-5 p-6">
       {/* ── Header ────────────────────────────────────────────────────── */}
-      <header>
-        <div className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <FileSpreadsheet className="h-6 w-6 text-primary" aria-hidden />
-          {t('protti.title', {
-            defaultValue: 'Devis Protti — Immeuble Attalens (7 appartements)',
-          })}
+      <header className="flex items-start gap-3">
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-oe-blue-subtle text-oe-blue-text">
+          <FileSpreadsheet size={18} aria-hidden />
         </div>
-        <p className="mt-1 text-sm text-text-secondary">
-          {t('protti.subtitle', {
-            defaultValue:
-              'Visualisation du devis source (corpus Phase 1) avec sous-détail de prix typé par composante.',
-          })}
-        </p>
+        <div className="min-w-0">
+          <h1 className="text-xl font-semibold text-content-primary">
+            {t('protti.title', {
+              defaultValue: 'Devis Protti — Immeuble Attalens',
+            })}
+          </h1>
+          <p className="mt-0.5 text-xs text-content-tertiary">
+            {t('protti.subtitle', {
+              defaultValue:
+                'Visualisation du devis source (corpus Phase 1) — sous-détail de prix typé par composante.',
+            })}
+          </p>
+        </div>
       </header>
 
-      {/* ── Catalog highlights ────────────────────────────────────────── */}
-      <Card>
-        <CardHeader
-          title={t('protti.catalog', { defaultValue: 'Paramètres de chiffrage' })}
-          subtitle={t('protti.catalog_subtitle', {
-            defaultValue:
-              'Coût horaire MO, R&B et coefficient métrés — repris de l\'onglet « Bases » du fichier source.',
-          })}
-        />
-        <CardContent className="grid grid-cols-2 gap-3 p-4 md:grid-cols-5">
-          <Stat label="Coût MO/h" value={`${fmtCHF(corpus.catalog.params?.labor_cost_per_hour)} CHF`} />
-          <Stat label="FG admin/h" value={`${fmtCHF(corpus.catalog.params?.fg_administrative)} CHF`} />
+      {/* ── Catalog parameters ───────────────────────────────────────── */}
+      <section className="rounded-xl border border-border-light bg-surface">
+        <div className="flex items-center gap-2 border-b border-border-light px-5 py-3">
+          <SlidersHorizontal size={15} className="text-content-tertiary" aria-hidden />
+          <h2 className="text-sm font-semibold text-content-primary">
+            {t('protti.catalog', { defaultValue: 'Paramètres de chiffrage' })}
+          </h2>
+          <span className="ml-2 text-xs text-content-tertiary">
+            {t('protti.catalog_subtitle', {
+              defaultValue: "repris de l'onglet « Bases » du fichier source",
+            })}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3 p-5 md:grid-cols-5">
           <Stat
-            label="R&B"
+            label={t('protti.mo_per_hour', { defaultValue: 'Coût MO / h' })}
+            value={`${fmtCHF(corpus.catalog.params?.labor_cost_per_hour)} CHF`}
+          />
+          <Stat
+            label={t('protti.fg_per_hour', { defaultValue: 'FG admin / h' })}
+            value={`${fmtCHF(corpus.catalog.params?.fg_administrative)} CHF`}
+          />
+          <Stat
+            label={t('protti.rb', { defaultValue: 'Risques & Bénéfices' })}
             value={`${((corpus.catalog.params?.rb_risk_benefit ?? 0) * 100).toFixed(1)} %`}
           />
           <Stat
-            label="Coef. métrés"
+            label={t('protti.metres_coef', { defaultValue: 'Coef. majoration métrés' })}
             value={fmtNum(corpus.catalog.params?.metres_coefficient)}
           />
           <Stat
-            label="Loc int. centrale"
-            value={`${fmtCHF(corpus.catalog.params?.central_loc_internal)} CHF/m³`}
+            label={t('protti.central_loc', { defaultValue: 'Loc. int. centrale' })}
+            value={`${fmtCHF(corpus.catalog.params?.central_loc_internal)} CHF / m³`}
           />
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      {/* ── Sheet selector ────────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-1.5">
+      {/* ── Sheet tabs ───────────────────────────────────────────────── */}
+      <div className="-mb-px flex flex-wrap gap-1 border-b border-border-light">
         {sheetNames.map((name) => {
           const totals = corpus.sheet_totals[name];
           const isActive = selectedSheet === name;
           return (
             <button
               key={name}
+              type="button"
               onClick={() => {
                 setActiveSheet(name);
                 setExpandedRow(null);
               }}
-              className={`rounded-md border px-3 py-1.5 text-xs font-medium transition ${
+              className={`group inline-flex items-baseline gap-2 border-b-2 px-3 py-2.5 text-sm transition ${
                 isActive
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-text-secondary hover:border-text-tertiary'
+                  ? 'border-oe-blue font-semibold text-content-primary'
+                  : 'border-transparent text-content-secondary hover:border-content-tertiary/40 hover:text-content-primary'
               }`}
             >
-              {name}
-              <span className="ml-2 text-text-tertiary">
+              <span>{name}</span>
+              <span
+                className={`text-xs tabular-nums ${
+                  isActive ? 'text-oe-blue' : 'text-content-tertiary'
+                }`}
+              >
                 {fmtCHF(totals?.brut, 0)} CHF
               </span>
             </button>
@@ -268,112 +333,123 @@ export function ProttiBOQViewer() {
         })}
       </div>
 
-      {/* ── Recap of the active sheet (sections + brut/tva/ttc) ────── */}
-      {sheetTotals && (
-        <Card>
-          <CardHeader
-            title={t('protti.recap', { defaultValue: 'Récapitulation' })}
-            subtitle={selectedSheet}
-          />
-          <CardContent className="p-0">
+      {/* ── Recap + KPIs ─────────────────────────────────────────────── */}
+      {totals && (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          {/* Section table — 2/3 */}
+          <section className="lg:col-span-2 rounded-xl border border-border-light bg-surface">
+            <div className="flex items-center gap-2 border-b border-border-light px-5 py-3">
+              <Layers size={15} className="text-content-tertiary" aria-hidden />
+              <h2 className="text-sm font-semibold text-content-primary">
+                {t('protti.recap', { defaultValue: 'Récapitulation' })}
+              </h2>
+              <span className="ml-auto text-xs text-content-tertiary">
+                {selectedSheet}
+              </span>
+            </div>
             <table className="w-full text-sm">
               <tbody>
-                {sheetTotals.sections.map((s, i) => (
+                {totals.sections.map((s, i) => (
                   <tr
                     key={`${s.label}-${i}`}
-                    className="border-b border-border/40 last:border-0"
+                    className="border-b border-border-light/60 last:border-0"
                   >
-                    <td className="px-4 py-2 text-text-secondary">{s.label}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">
+                    <td className="px-5 py-2 text-content-secondary">{s.label}</td>
+                    <td className="px-5 py-2 text-right tabular-nums text-content-primary">
                       {fmtCHF(s.amount, 0)} CHF
                     </td>
                   </tr>
                 ))}
-                <tr className="border-t border-border bg-surface-secondary/50 font-semibold">
-                  <td className="px-4 py-2.5">MONTANT TOTAL BRUT</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">
-                    {fmtCHF(sheetTotals.brut, 2)} CHF
-                  </td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-2 text-text-secondary">+ TVA 7.7 %</td>
-                  <td className="px-4 py-2 text-right tabular-nums">
-                    {fmtCHF(sheetTotals.tva, 2)} CHF
-                  </td>
-                </tr>
-                <tr className="bg-primary/10 font-semibold text-primary">
-                  <td className="px-4 py-2.5">MONTANT TOTAL TTC</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums">
-                    {fmtCHF(sheetTotals.ttc, 2)} CHF
-                  </td>
-                </tr>
               </tbody>
             </table>
-          </CardContent>
-        </Card>
+          </section>
+
+          {/* Brut / TVA / TTC stack — 1/3 */}
+          <section className="rounded-xl border border-border-light bg-surface">
+            <div className="flex items-center gap-2 border-b border-border-light px-5 py-3">
+              <Receipt size={15} className="text-content-tertiary" aria-hidden />
+              <h2 className="text-sm font-semibold text-content-primary">
+                {t('protti.totals', { defaultValue: 'Montants' })}
+              </h2>
+            </div>
+            <dl className="divide-y divide-border-light">
+              <KPI label="Brut" value={`${fmtCHF(totals.brut)} CHF`} tone="strong" />
+              <KPI label="Escompte" value={`${fmtCHF(totals.escompte)} CHF`} muted />
+              <KPI label="Net HT" value={`${fmtCHF(totals.net)} CHF`} />
+              <KPI label="TVA 7,7 %" value={`${fmtCHF(totals.tva)} CHF`} muted />
+              <KPI label="TTC" value={`${fmtCHF(totals.ttc)} CHF`} tone="primary" />
+            </dl>
+          </section>
+        </div>
       )}
 
-      {/* ── Article search ────────────────────────────────────────────── */}
-      <Card>
-        <CardContent className="p-3">
-          <div className="relative">
+      {/* ── Articles table ───────────────────────────────────────────── */}
+      <section className="rounded-xl border border-border-light bg-surface">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-light px-5 py-3">
+          <h2 className="text-sm font-semibold text-content-primary">
+            {t('protti.articles', { defaultValue: 'Articles' })}
+            <span className="ml-2 text-xs font-normal text-content-tertiary">
+              {articlesForSheet.length}
+              {articlesForSheet.length !== totalArticles && ` / ${totalArticles}`}
+            </span>
+          </h2>
+          <div className="relative w-full sm:w-72">
             <Search
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary"
+              size={14}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-content-tertiary"
               aria-hidden
             />
             <input
-              type="text"
+              type="search"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder={t('protti.search_placeholder', {
-                defaultValue: 'Filtrer par code ou description…',
+                defaultValue: 'Filtrer (code, description)…',
               })}
-              className="h-10 w-full rounded-md border border-border bg-surface pl-10 pr-3 text-sm outline-none focus:border-primary"
+              className="h-9 w-full rounded-lg border border-border-light bg-surface pl-9 pr-3 text-sm text-content-primary placeholder:text-content-tertiary outline-none focus:border-oe-blue"
             />
           </div>
-        </CardContent>
-      </Card>
-
-      {/* ── Articles table with drill-down ───────────────────────────── */}
-      <Card>
-        <CardHeader
-          title={`Articles ${articlesForSheet.length}/${corpus.articles.filter((a) => a.sheet === selectedSheet).length}`}
-        />
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="border-b border-border bg-surface-secondary/50 text-left text-xs uppercase text-text-tertiary">
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[840px] text-sm">
+            <thead className="border-b border-border-light bg-surface-secondary/40">
+              <tr className="text-left text-xs text-content-tertiary">
+                <th className="w-8 px-3 py-2.5" />
+                <th className="px-3 py-2.5 font-medium">Code</th>
+                <th className="px-3 py-2.5 font-medium">Description</th>
+                <th className="px-3 py-2.5 font-medium">Unité</th>
+                <th className="px-3 py-2.5 text-right font-medium">Quantité</th>
+                <th className="px-3 py-2.5 text-right font-medium">PU</th>
+                <th className="px-3 py-2.5 text-right font-medium">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {articlesForSheet.map((art) => (
+                <ArticleRow
+                  key={`${art.sheet}-${art.row}`}
+                  article={art}
+                  expanded={expandedRow === art.row}
+                  onToggle={() =>
+                    setExpandedRow(expandedRow === art.row ? null : art.row)
+                  }
+                />
+              ))}
+              {articlesForSheet.length === 0 && (
                 <tr>
-                  <th className="w-6 px-2 py-2.5" />
-                  <th className="px-3 py-2.5 font-medium">Code</th>
-                  <th className="px-3 py-2.5 font-medium">Description</th>
-                  <th className="px-3 py-2.5 font-medium">Unité</th>
-                  <th className="px-3 py-2.5 text-right font-medium">Qté</th>
-                  <th className="px-3 py-2.5 text-right font-medium">PU (CHF)</th>
-                  <th className="px-3 py-2.5 text-right font-medium">Total (CHF)</th>
+                  <td colSpan={7} className="px-5 py-10 text-center text-sm text-content-tertiary">
+                    {t('protti.empty', { defaultValue: 'Aucun article ne correspond' })}
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {articlesForSheet.map((art) => (
-                  <ArticleRow
-                    key={`${art.sheet}-${art.row}`}
-                    article={art}
-                    expanded={expandedRow === art.row}
-                    onToggle={() =>
-                      setExpandedRow(expandedRow === art.row ? null : art.row)
-                    }
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
   );
 }
 
-// ── Article row + expand ────────────────────────────────────────────────────
+// ── Article row + sub-blocks ────────────────────────────────────────────────
 
 function ArticleRow({
   article,
@@ -388,45 +464,45 @@ function ArticleRow({
   return (
     <>
       <tr
-        className={`border-b border-border/40 transition-colors ${
-          expanded ? 'bg-primary/5' : 'hover:bg-surface-secondary/40'
-        } ${article.is_regie ? 'italic text-text-tertiary' : ''}`}
+        className={`border-b border-border-light/60 transition-colors ${
+          expanded
+            ? 'bg-oe-blue-subtle/40'
+            : 'hover:bg-surface-secondary/50'
+        } ${article.is_regie ? 'italic text-content-tertiary' : ''}`}
       >
-        <td className="px-2 py-2.5">
-          {hasSubBlocks ? (
+        <td className="px-3 py-2.5">
+          {hasSubBlocks && (
             <button
               type="button"
               onClick={onToggle}
-              className="rounded p-0.5 text-text-tertiary hover:bg-surface-secondary"
-              aria-label="Toggle"
+              className="rounded p-0.5 text-content-tertiary hover:bg-surface-secondary hover:text-content-primary"
+              aria-label={expanded ? 'Replier' : 'Déplier'}
             >
-              {expanded ? (
-                <ChevronDown className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronRight className="h-3.5 w-3.5" />
-              )}
+              {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             </button>
-          ) : null}
+          )}
         </td>
-        <td className="px-3 py-2.5 font-mono text-xs">{article.code || '—'}</td>
-        <td className="px-3 py-2.5 max-w-xl text-text-primary">
+        <td className="px-3 py-2.5 font-mono text-xs text-content-secondary">
+          {article.code || '—'}
+        </td>
+        <td className="px-3 py-2.5 max-w-2xl text-content-primary">
           {article.description}
         </td>
-        <td className="px-3 py-2.5 text-xs text-text-tertiary">
+        <td className="px-3 py-2.5 text-xs text-content-tertiary">
           {article.unit || '—'}
         </td>
-        <td className="px-3 py-2.5 text-right tabular-nums">
+        <td className="px-3 py-2.5 text-right tabular-nums text-content-secondary">
           {fmtNum(article.quantity)}
         </td>
-        <td className="px-3 py-2.5 text-right tabular-nums">
+        <td className="px-3 py-2.5 text-right tabular-nums text-content-secondary">
           {fmtCHF(article.unit_price)}
         </td>
-        <td className="px-3 py-2.5 text-right font-medium tabular-nums">
+        <td className="px-3 py-2.5 text-right font-medium tabular-nums text-content-primary">
           {fmtCHF(article.total)}
         </td>
       </tr>
       {expanded && hasSubBlocks && (
-        <tr className="border-b border-border/60 bg-surface-secondary/30">
+        <tr className="border-b border-border-light bg-surface-secondary/30">
           <td />
           <td colSpan={6} className="px-3 py-3">
             <div className="space-y-3">
@@ -449,63 +525,73 @@ function SubBlockCard({
   index: number;
 }) {
   return (
-    <div className="rounded-md border border-border bg-surface">
-      <div className="flex flex-wrap items-baseline gap-2 border-b border-border px-3 py-2 text-xs">
-        <span className="font-mono text-text-tertiary">
+    <div className="rounded-lg border border-border-light bg-surface shadow-xs">
+      <div className="flex flex-wrap items-baseline gap-2 border-b border-border-light px-4 py-2">
+        <span className="font-mono text-xs text-content-tertiary">
           {String.fromCharCode(97 + index)})
         </span>
-        <span className="font-medium">{sb.label || '(sans libellé)'}</span>
-        <span className="ml-auto text-text-tertiary">
-          Métré <strong className="text-text-primary">{fmtNum(sb.metre_value)}</strong>{' '}
-          {sb.metre_unit ?? ''} · Prix vente HT sans R&B{' '}
-          <strong className="text-text-primary">{fmtCHF(sb.sale_price_per_unit)}</strong>{' '}
+        <span className="text-sm font-medium text-content-primary">
+          {sb.label || <em className="text-content-tertiary">(sans libellé)</em>}
+        </span>
+        <span className="ml-auto text-xs text-content-tertiary">
+          Métré{' '}
+          <strong className="text-content-primary tabular-nums">
+            {fmtNum(sb.metre_value)}
+          </strong>{' '}
+          {sb.metre_unit ?? ''} · Prix HT sans R&B{' '}
+          <strong className="text-content-primary tabular-nums">
+            {fmtCHF(sb.sale_price_per_unit)}
+          </strong>{' '}
           CHF
         </span>
       </div>
       {sb.components && sb.components.length > 0 && (
         <table className="w-full text-xs">
-          <thead className="text-text-tertiary">
-            <tr className="border-b border-border/40">
-              <th className="w-20 px-3 py-1.5 text-left font-normal">Type</th>
-              <th className="px-3 py-1.5 text-left font-normal">Libellé</th>
-              <th className="w-10 px-2 py-1.5 text-left font-normal">Un.</th>
-              <th className="w-20 px-2 py-1.5 text-right font-normal">PU</th>
-              <th className="w-16 px-2 py-1.5 text-right font-normal">Rem.</th>
-              <th className="w-20 px-2 py-1.5 text-right font-normal">Qté</th>
-              <th className="w-20 px-2 py-1.5 text-right font-normal">U/h</th>
-              <th className="w-24 px-3 py-1.5 text-right font-normal">Montant</th>
+          <thead className="text-content-tertiary">
+            <tr className="border-b border-border-light/60">
+              <th className="w-24 px-4 py-2 text-left font-normal">Type</th>
+              <th className="px-3 py-2 text-left font-normal">Libellé</th>
+              <th className="w-12 px-2 py-2 text-left font-normal">Un.</th>
+              <th className="w-24 px-2 py-2 text-right font-normal">Prix u.</th>
+              <th className="w-16 px-2 py-2 text-right font-normal">Rem.</th>
+              <th className="w-24 px-2 py-2 text-right font-normal">Quantité</th>
+              <th className="w-20 px-2 py-2 text-right font-normal">U / h</th>
+              <th className="w-28 px-4 py-2 text-right font-normal">Montant</th>
             </tr>
           </thead>
           <tbody>
             {sb.components.map((c, ci) => {
-              const badge = TYPE_BADGE[c.type] ?? {
-                bg: 'bg-gray-100 text-gray-700',
-                label: c.type,
+              const b = TYPE_BADGE[c.type] ?? {
+                bg: 'bg-content-tertiary/10',
+                text: 'text-content-secondary',
+                short: c.type,
               };
               return (
-                <tr key={ci} className="border-b border-border/40 last:border-0">
-                  <td className="px-3 py-1">
+                <tr key={ci} className="border-b border-border-light/40 last:border-0">
+                  <td className="px-4 py-1.5">
                     <span
-                      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${badge.bg}`}
+                      className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-medium ${b.bg} ${b.text}`}
                     >
-                      {badge.label}
+                      {b.short}
                     </span>
                   </td>
-                  <td className="px-3 py-1 text-text-primary">{c.label}</td>
-                  <td className="px-2 py-1 text-text-tertiary">{c.unit ?? '—'}</td>
-                  <td className="px-2 py-1 text-right tabular-nums">
+                  <td className="px-3 py-1.5 text-content-primary">{c.label}</td>
+                  <td className="px-2 py-1.5 text-content-tertiary">{c.unit ?? '—'}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums text-content-secondary">
                     {fmtCHF(c.unit_price)}
                   </td>
-                  <td className="px-2 py-1 text-right tabular-nums text-text-tertiary">
-                    {c.discount != null ? `${(c.discount * 100).toFixed(0)} %` : '—'}
+                  <td className="px-2 py-1.5 text-right tabular-nums text-content-tertiary">
+                    {c.discount != null && c.discount > 0
+                      ? `${(c.discount * 100).toFixed(0)} %`
+                      : '—'}
                   </td>
-                  <td className="px-2 py-1 text-right tabular-nums">
+                  <td className="px-2 py-1.5 text-right tabular-nums text-content-secondary">
                     {fmtNum(c.qty)}
                   </td>
-                  <td className="px-2 py-1 text-right tabular-nums">
+                  <td className="px-2 py-1.5 text-right tabular-nums text-content-secondary">
                     {fmtNum(c.yield_per_hour)}
                   </td>
-                  <td className="px-3 py-1 text-right font-medium tabular-nums">
+                  <td className="px-4 py-1.5 text-right font-medium tabular-nums text-content-primary">
                     {fmtCHF(c.amount)}
                   </td>
                 </tr>
@@ -521,8 +607,53 @@ function SubBlockCard({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <div className="text-xs uppercase text-text-tertiary">{label}</div>
-      <div className="mt-0.5 text-lg font-semibold tabular-nums">{value}</div>
+      <dt className="text-[10px] uppercase tracking-wide text-content-tertiary">
+        {label}
+      </dt>
+      <dd className="mt-0.5 text-base font-semibold tabular-nums text-content-primary">
+        {value}
+      </dd>
+    </div>
+  );
+}
+
+function KPI({
+  label,
+  value,
+  tone,
+  muted,
+}: {
+  label: string;
+  value: string;
+  tone?: 'strong' | 'primary';
+  muted?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-baseline justify-between gap-3 px-5 py-2.5 ${
+        tone === 'primary' ? 'bg-oe-blue-subtle/40' : ''
+      }`}
+    >
+      <dt
+        className={`text-xs ${
+          tone ? 'font-semibold text-content-primary' : muted ? 'text-content-tertiary' : 'text-content-secondary'
+        }`}
+      >
+        {label}
+      </dt>
+      <dd
+        className={`tabular-nums ${
+          tone === 'primary'
+            ? 'text-base font-semibold text-oe-blue'
+            : tone === 'strong'
+              ? 'text-sm font-semibold text-content-primary'
+              : muted
+                ? 'text-xs text-content-tertiary'
+                : 'text-sm text-content-primary'
+        }`}
+      >
+        {value}
+      </dd>
     </div>
   );
 }
