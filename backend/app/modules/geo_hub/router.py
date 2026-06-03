@@ -8,13 +8,15 @@ holes by 404-ing project-mismatched accesses.
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import hashlib
 import uuid
 from collections import OrderedDict
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 
 from app.core.i18n import get_locale
 from app.core.validation.messages import translate
@@ -81,59 +83,141 @@ def _svc(session: SessionDep) -> GeoHubService:
 # route in this module: ``<img>`` and the Cesium/MapLibre tile loaders cannot
 # attach an auth header, and basemap tiles are public imagery.
 _TILE_UPSTREAM = "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
-_TILE_CACHE: OrderedDict[str, bytes] = OrderedDict()
-_TILE_CACHE_MAX = 4096  # bounded LRU of 256px PNGs (a few MB resident)
+# Bounded LRU of ``(bytes, etag)`` keyed by ``z/x/y``. 4096 256px PNGs is a
+# few MB resident — small enough to keep in-process, big enough to cover a
+# project view plus several pan/zoom steps so repeat loads never re-fetch.
+_TILE_CACHE: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+_TILE_CACHE_MAX = 4096
 _TILE_HEADERS = {
     "User-Agent": "OpenConstructionERP/1.0 (+https://openconstructionerp.com)",
     "Accept": "image/png,image/*;q=0.8,*/*;q=0.5",
     "Referer": "https://openconstructionerp.com/",
 }
+# A basemap tile for a fixed z/x/y is effectively immutable for a week, so we
+# let the browser AND any shared cache hold onto it. ``immutable`` stops the
+# revalidation round-trip entirely on supporting browsers; the ETag covers the
+# rest via conditional GETs (304, empty body).
+_TILE_CACHE_CONTROL = "public, max-age=604800, stale-while-revalidate=86400, immutable"
 # 1x1 transparent PNG returned on any upstream failure so the map shows a
-# clean gap rather than a broken-image icon.
+# clean gap rather than a broken-image icon. NOT cached client-side (a later
+# request must be able to retry the upstream), so it carries no-store.
 _BLANK_TILE = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
 )
+_BLANK_TILE_HEADERS = {"Cache-Control": "no-store"}
+
+# Shared, pooled httpx client. The previous implementation opened a brand-new
+# ``AsyncClient`` (and therefore a fresh TLS handshake + connection) for EVERY
+# tile, which under Cesium's burst of ~20-60 simultaneous tile requests starved
+# the event loop and left many tiles to time out — the "loads slowly / only a
+# fragment of the map" report. A single process-wide client with a sized
+# connection pool keeps the upstream connections warm and lets many tiles fly
+# in parallel over kept-alive sockets.
+_tile_client: httpx.AsyncClient | None = None
+_tile_client_lock = asyncio.Lock()
+
+
+async def _get_tile_client() -> httpx.AsyncClient:
+    """Return the process-wide pooled httpx client, creating it once.
+
+    Guarded by an async lock so a burst of concurrent first-requests can't
+    race two clients into existence. Connection limits are sized for the
+    fan-out of a single Cesium scene; timeouts are split so a slow upstream
+    connect fails fast while an in-flight read gets a little more room.
+    """
+    global _tile_client
+    client = _tile_client
+    if client is not None and not client.is_closed:
+        return client
+    async with _tile_client_lock:
+        if _tile_client is not None and not _tile_client.is_closed:
+            return _tile_client
+        _tile_client = httpx.AsyncClient(
+            headers=_TILE_HEADERS,
+            http2=False,
+            limits=httpx.Limits(
+                max_connections=64,
+                max_keepalive_connections=32,
+                keepalive_expiry=30.0,
+            ),
+            timeout=httpx.Timeout(connect=4.0, read=8.0, write=4.0, pool=8.0),
+            follow_redirects=True,
+        )
+        return _tile_client
+
+
+async def close_tile_client() -> None:
+    """Close the shared tile client. Safe to call when none was created."""
+    global _tile_client
+    client = _tile_client
+    _tile_client = None
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
+def _tile_response(data: bytes, etag: str) -> Response:
+    """Build a cacheable 200 image response with validators."""
+    return Response(
+        content=data,
+        media_type="image/png",
+        headers={
+            "Cache-Control": _TILE_CACHE_CONTROL,
+            "ETag": etag,
+            "Content-Length": str(len(data)),
+        },
+    )
 
 
 @router.get("/tiles/{z}/{x}/{y}.png", include_in_schema=False)
-async def proxy_basemap_tile(z: int, x: int, y: int) -> Response:
+async def proxy_basemap_tile(z: int, x: int, y: int, request: Request) -> Response:
     """Proxy one XYZ basemap raster tile through our own origin.
 
     Public by design (see the section comment). Coordinates are clamped to
     the valid web-mercator range so this can only ever fetch real basemap
     tiles and never act as an open proxy for arbitrary URLs. Results come
-    from a bounded in-process LRU cache; a miss fetches the upstream tile
-    once. Any failure returns a transparent tile so the map degrades to a
-    clean gap instead of a broken image.
+    from a bounded in-process LRU cache backed by a shared, pooled httpx
+    client; a miss fetches the upstream tile once. Every hit carries a
+    strong ``ETag`` + long ``Cache-Control`` so the browser short-circuits
+    repeat loads (and conditional ``If-None-Match`` GETs get a 304 with no
+    body). Any failure returns a transparent, non-cacheable tile so the map
+    degrades to a clean gap instead of a broken image and can retry later.
     """
-    cache_headers = {"Cache-Control": "public, max-age=604800, immutable"}
     if not (0 <= z <= 22):
-        return Response(content=_BLANK_TILE, media_type="image/png")
+        return Response(content=_BLANK_TILE, media_type="image/png", headers=_BLANK_TILE_HEADERS)
     bound = (1 << z) - 1
     if not (0 <= x <= bound and 0 <= y <= bound):
-        return Response(content=_BLANK_TILE, media_type="image/png")
+        return Response(content=_BLANK_TILE, media_type="image/png", headers=_BLANK_TILE_HEADERS)
 
     key = f"{z}/{x}/{y}"
     hit = _TILE_CACHE.get(key)
     if hit is not None:
+        data, etag = hit
         _TILE_CACHE.move_to_end(key)
-        return Response(content=hit, media_type="image/png", headers=cache_headers)
+        if request.headers.get("if-none-match") == etag:
+            return Response(
+                status_code=304,
+                headers={"Cache-Control": _TILE_CACHE_CONTROL, "ETag": etag},
+            )
+        return _tile_response(data, etag)
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            res = await client.get(_TILE_UPSTREAM.format(z=z, x=x, y=y), headers=_TILE_HEADERS)
+        client = await _get_tile_client()
+        res = await client.get(_TILE_UPSTREAM.format(z=z, x=x, y=y))
     except (httpx.HTTPError, OSError):
-        return Response(content=_BLANK_TILE, media_type="image/png")
+        return Response(content=_BLANK_TILE, media_type="image/png", headers=_BLANK_TILE_HEADERS)
 
     if res.status_code != 200 or not res.content:
-        return Response(content=_BLANK_TILE, media_type="image/png")
+        return Response(content=_BLANK_TILE, media_type="image/png", headers=_BLANK_TILE_HEADERS)
 
     data = res.content
-    _TILE_CACHE[key] = data
+    # Strong validator derived from the bytes so a re-fetch of identical
+    # content keeps the same ETag (and the browser's conditional GET 304s).
+    etag = f'"{hashlib.sha1(data).hexdigest()}"'  # noqa: S324 - cache validator, not security
+    _TILE_CACHE[key] = (data, etag)
     _TILE_CACHE.move_to_end(key)
     while len(_TILE_CACHE) > _TILE_CACHE_MAX:
         _TILE_CACHE.popitem(last=False)
-    return Response(content=data, media_type="image/png", headers=cache_headers)
+    return _tile_response(data, etag)
 
 
 # ── Anchors ──────────────────────────────────────────────────────────────

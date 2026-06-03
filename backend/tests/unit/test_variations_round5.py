@@ -28,25 +28,12 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_log import ActivityLog
-from app.database import Base
 from app.dependencies import get_current_user_id, get_session
-from app.modules.changeorders.models import ChangeOrder, ChangeOrderApproval, ChangeOrderItem
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.users.models import APIKey, User
-from app.modules.variations.models import (
-    Notice,
-    VariationCostImpact,
-    VariationOrder,
-    VariationRequest,
-    VariationScheduleImpact,
-)
+from app.modules.projects.models import Project
+from app.modules.users.models import User
 from app.modules.variations.router import router as variations_router
 from app.modules.variations.schemas import (
     VariationOrderCreate,
@@ -59,41 +46,22 @@ from app.modules.variations.service import (
     allowed_vo_transitions,
     allowed_vr_transitions,
 )
-
-# ── Tables needed by in-process tests ────────────────────────────────────────
-
-_TABLES = [
-    User.__table__,
-    APIKey.__table__,
-    Project.__table__,
-    ProjectWBS.__table__,
-    ProjectMilestone.__table__,
-    Notice.__table__,
-    VariationRequest.__table__,
-    VariationOrder.__table__,
-    VariationCostImpact.__table__,
-    VariationScheduleImpact.__table__,
-    ChangeOrder.__table__,
-    ChangeOrderApproval.__table__,
-    ChangeOrderItem.__table__,
-    ActivityLog.__table__,
-]
-
+from tests._pg import transactional_session
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite session with Variations tables."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    """Per-test PostgreSQL session wrapped in a rolled-back transaction.
+
+    Runs against the shared ``oe_test_unit`` database (full schema, built once
+    per session). The outer transaction is rolled back on teardown, so the
+    session's own commits behave as savepoints and leave no residue between
+    tests.
+    """
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

@@ -246,6 +246,24 @@ class BudgetLineRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def distinct_currencies(self, project_id: uuid.UUID) -> set[str]:
+        """Return the distinct non-blank ISO currency codes on a project's budget lines.
+
+        The dashboard uses this to decide whether summing across budget lines
+        is safe (a single currency) or whether to raise the ``mixed_currency``
+        flag (multiple currencies, which may have crossed a missing fx_rate
+        during conversion). Reuses ``_list_lines_for_rollup`` so the data
+        access stays in the repository and unit tests can stub it without
+        monkey-patching SQLAlchemy. Blank/None currencies are treated as
+        legacy base-currency rows and ignored.
+        """
+        lines = await self._list_lines_for_rollup(project_id)
+        return {
+            (getattr(line, "currency", "") or "").strip().upper()
+            for line in lines
+            if (getattr(line, "currency", "") or "").strip()
+        }
+
     async def _project_fx_context(self, project_id: uuid.UUID) -> tuple[str, dict[str, str]]:
         """Resolve the project's base currency and ``fx_rates`` map.
 

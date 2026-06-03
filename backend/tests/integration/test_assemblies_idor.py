@@ -10,27 +10,23 @@ Verifies that:
 4.  Admins bypass the ownership check and can read any assembly.
 5.  apply-to-boq is blocked when the caller does not own the target BOQ.
 
-All tests use isolated temp SQLite and the service layer directly (no HTTP).
-The router-level ``_verify_assembly_owner`` function is also tested directly
-to confirm the 404 / bypass semantics without spinning up a full FastAPI app.
+All tests use a transaction-isolated PostgreSQL session (rolled back on
+teardown via ``tests._pg.transactional_session``) and the service layer
+directly (no HTTP). The router-level ``_verify_assembly_owner`` function is
+also tested directly to confirm the 404 / bypass semantics without spinning
+up a full FastAPI app.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
+from tests._pg import transactional_session
 
 # ── Fixture helpers ───────────────────────────────────────────────────────────
 
@@ -40,26 +36,10 @@ PROJECT_A = uuid.uuid4()
 PROJECT_B = uuid.uuid4()
 
 
-def _register_models() -> None:
-    import app.modules.assemblies.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.catalog.models  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def session():
-    """Isolated temp SQLite session with two tenants and two projects."""
-    tmp_db = Path(tempfile.mkdtemp()) / "idor_asm.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session with two tenants and two projects."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -73,12 +53,6 @@ async def session():
             s.add(Project(id=pid, name=str(pid), owner_id=oid, currency=ccy))
         await s.commit()
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 # ── Helper: create a minimal single-component assembly ────────────────────────

@@ -195,10 +195,10 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:5173"
 
     # ── Database ─────────────────────────────────────────────────────────
-    # Default: SQLite (zero config, works out of the box)
-    # For production: set DATABASE_URL=postgresql+asyncpg://user:pass@host/db
-    database_url: str = "sqlite+aiosqlite:///./openestimate.db"
-    database_sync_url: str = "sqlite:///./openestimate.db"
+    # PostgreSQL is required; embedded PostgreSQL boots by default (no Docker),
+    # or set DATABASE_URL to an external PostgreSQL.
+    database_url: str = ""
+    database_sync_url: str = ""
     database_pool_size: int = 24
     database_max_overflow: int = 10
     database_echo: bool = False
@@ -493,20 +493,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _cross_fill_db_urls(self) -> "Settings":
-        """Derive the missing async/sync DB URL when only one points at Postgres.
+        """Derive the missing async/sync DB URL when only one is supplied.
 
-        Operators commonly set only ``DATABASE_URL`` (the async one). If that
-        points at Postgres but ``DATABASE_SYNC_URL`` is still the bundled SQLite
-        default, alembic, the CWICR bulk import and the migration helper would
-        silently target a stray local SQLite file instead of the real database.
-        Mirror whichever side is set to Postgres into the other so both halves
-        always agree on the same cluster.
+        Operators commonly set only ``DATABASE_URL`` (the async one). Mirror
+        whichever side points at Postgres into the other when that other side
+        is blank, so alembic, the CWICR bulk import and the migration helper
+        always agree on the same cluster instead of one of them falling back to
+        an unconfigured engine.
         """
-        async_default = "sqlite+aiosqlite:///./openestimate.db"
-        sync_default = "sqlite:///./openestimate.db"
-        if self.database_url.startswith("postgresql") and self.database_sync_url == sync_default:
+        if self.database_url.startswith("postgresql") and not self.database_sync_url.strip():
             self.database_sync_url = _canonicalize_db_url(self.database_url, driver="psycopg2")
-        elif self.database_sync_url.startswith("postgresql") and self.database_url == async_default:
+        elif self.database_sync_url.startswith("postgresql") and not self.database_url.strip():
             self.database_url = _canonicalize_db_url(self.database_sync_url, driver="asyncpg")
         return self
 

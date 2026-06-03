@@ -14,13 +14,13 @@ Covers the full feature end-to-end through the router:
 * Deleting a master promotes an instance (no orphaned links).
 * Every linked instance in a reuse group gets a distinct ordinal.
 
-Test isolation (``feedback_test_isolation.md``): the per-session temp
-SQLite redirect, eager model registration and the synchronous event-bus
+Test isolation (``feedback_test_isolation.md``): the per-session
+PostgreSQL database, eager model registration and the synchronous event-bus
 shim are all provided by ``backend/tests/conftest.py`` (the repo's
-``testpaths`` root) — the production ``openestimate.db`` is never
-touched. The fresh temp DB gets the new linked-position columns from
-``create_all`` (the model is the source of truth on a clean SQLite DB),
-so no ``alembic upgrade`` is needed for the test.
+``testpaths`` root) — the production database is never touched. The
+session DB gets the linked-position columns from ``create_all`` (the
+model is the source of truth on the schema), so no ``alembic upgrade``
+is needed for the test.
 
 Run:
     cd backend
@@ -541,8 +541,8 @@ async def test_unlink_master_endpoint_does_not_500_and_preserves_values(
     instance orphaned (the lone survivor's group dissolves cleanly).
 
     Kept deliberately small (one master + one instance, one unlink) so the
-    critical 500→200 guard stays robust under the module-scoped aiosqlite
-    test harness. Survivor *promotion* with ≥2 instances is covered by
+    critical 500→200 guard stays robust under the module-scoped
+    PostgreSQL test harness. Survivor *promotion* with ≥2 instances is covered by
     ``test_delete_master_promotes_an_instance`` (shared list-group/promote
     path) and verified live against the running server.
     """
@@ -597,7 +597,7 @@ async def test_unlink_master_endpoint_does_not_500_and_preserves_values(
     # NOTE: survivor promotion/dissolution is intentionally NOT asserted
     # here — it runs in a best-effort try/except inside ``unlink_position``
     # ("never block the unlink") so it is sensitive to the documented
-    # module-scoped aiosqlite harness flake. That behaviour is covered by
+    # module-scoped PostgreSQL harness. That behaviour is covered by
     # ``test_delete_master_promotes_an_instance`` and verified live against
     # the running server. This test guards only the actual regression: the
     # master-unlink path must 200 (not 500) and preserve the unlinked

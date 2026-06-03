@@ -244,9 +244,23 @@ async def _dispatch_integration_test(itype: str, cfg: dict) -> TestNotificationR
             )
 
         elif itype == "whatsapp":
-            return TestNotificationResponse(
-                success=False,
-                message="WhatsApp integration requires Meta Business verification. Coming soon.",
+            from app.modules.integrations.whatsapp import send_whatsapp_notification
+
+            phone_number_id = cfg.get("phone_number_id", "")
+            access_token = cfg.get("access_token", "")
+            to_phone = cfg.get("to_phone", "")
+            if not phone_number_id or not access_token or not to_phone:
+                return TestNotificationResponse(
+                    success=False,
+                    message="Missing phone_number_id, access_token or to_phone in config",
+                )
+            success = await send_whatsapp_notification(
+                phone_number_id=phone_number_id,
+                access_token=access_token,
+                to_phone=to_phone,
+                template_name=cfg.get("template_name", "erp_notification"),
+                template_language=cfg.get("template_language", "en"),
+                template_params=[message] if message else None,
             )
 
         else:
@@ -392,9 +406,23 @@ async def test_integration_config(
             )
 
         elif itype == "whatsapp":
-            return TestNotificationResponse(
-                success=False,
-                message="WhatsApp integration requires Meta Business verification. Coming soon.",
+            from app.modules.integrations.whatsapp import send_whatsapp_notification
+
+            phone_number_id = cfg.get("phone_number_id", "")
+            access_token = cfg.get("access_token", "")
+            to_phone = cfg.get("to_phone", "")
+            if not phone_number_id or not access_token or not to_phone:
+                return TestNotificationResponse(
+                    success=False,
+                    message="Missing phone_number_id, access_token or to_phone in config",
+                )
+            success = await send_whatsapp_notification(
+                phone_number_id=phone_number_id,
+                access_token=access_token,
+                to_phone=to_phone,
+                template_name=cfg.get("template_name", "erp_notification"),
+                template_language=cfg.get("template_language", "en"),
+                template_params=[message] if message else None,
             )
 
         else:

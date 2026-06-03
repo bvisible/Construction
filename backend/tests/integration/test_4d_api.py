@@ -1,8 +1,9 @@
 """Integration tests for the 4D module HTTP surface (Section 6 — MVP slice).
 
 Stands up a minimal FastAPI app with the 4D v2 routers mounted plus the
-session/user dependencies overridden to point at a per-test temp SQLite
-file (``feedback_test_isolation.md``).  The EAC predicate resolver is
+session/user dependencies overridden to point at a per-test throwaway
+PostgreSQL database (cloned from the schema-loaded template by
+``tests._pg.isolated_engine``).  The EAC predicate resolver is
 monkeypatched to a deterministic stub so we don't need a populated BIM
 model.
 
@@ -18,35 +19,22 @@ Coverage:
 from __future__ import annotations
 
 import io
-import tempfile
 import uuid
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
 from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database import Base
 from app.dependencies import get_current_user_id, get_session
+from tests._pg import isolated_engine
 
 PROJECT_ID = uuid.uuid4()
 TEST_USER_ID = str(uuid.uuid4())
-
-
-def _register_minimal_models() -> None:
-    """Pull FK-target modules into Base.metadata before create_all."""
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.schedule.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
 
 
 async def _seed_project(session: AsyncSession, project_id: uuid.UUID) -> None:
@@ -69,32 +57,22 @@ async def _seed_project(session: AsyncSession, project_id: uuid.UUID) -> None:
 
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    """Spin up a per-test SQLite file and return engine + session factory."""
-    tmp_db = Path(tempfile.mkdtemp()) / "fourd_api.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
 async def app(temp_engine_and_factory) -> AsyncGenerator[FastAPI, None]:
     """Minimal FastAPI app: only the 4D routers + auth/session overrides."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.modules.schedule.router_4d import (
         eac_schedule_links_router,
@@ -133,7 +111,7 @@ async def client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
 @pytest_asyncio.fixture
 async def schedule_id(temp_engine_and_factory) -> str:
     """Seed a project + an empty schedule row directly in the test DB."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.schedule.models import Schedule
 
     async with factory() as session:
@@ -190,7 +168,7 @@ async def test_import_csv_creates_activities(client: AsyncClient, schedule_id: s
 @pytest.mark.asyncio
 async def test_create_eac_schedule_link_runs_dry_run(client: AsyncClient, schedule_id: str, temp_engine_and_factory):
     # Seed an activity directly so we have a task_id to link to.
-    _engine, factory, _ = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.schedule.models import Activity
 
     async with factory() as session:
@@ -237,7 +215,7 @@ async def test_create_eac_schedule_link_runs_dry_run(client: AsyncClient, schedu
 @pytest.mark.asyncio
 async def test_create_link_requires_rule_or_predicate(client: AsyncClient, schedule_id: str, temp_engine_and_factory):
     """Body must carry either rule_id or predicate_json — 422 otherwise."""
-    _engine, factory, _ = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.schedule.models import Activity
 
     async with factory() as session:
@@ -263,7 +241,7 @@ async def test_create_link_requires_rule_or_predicate(client: AsyncClient, sched
 
 @pytest.mark.asyncio
 async def test_record_progress_and_history(client: AsyncClient, schedule_id: str, temp_engine_and_factory):
-    _engine, factory, _ = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.schedule.models import Activity
 
     async with factory() as session:
@@ -304,7 +282,7 @@ async def test_record_progress_and_history(client: AsyncClient, schedule_id: str
 
 @pytest.mark.asyncio
 async def test_snapshot_returns_status_map(client: AsyncClient, schedule_id: str, temp_engine_and_factory):
-    _engine, factory, _ = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.schedule.models import Activity, EacScheduleLink
 
     async with factory() as session:
@@ -362,7 +340,7 @@ async def test_snapshot_returns_status_map(client: AsyncClient, schedule_id: str
 
 @pytest.mark.asyncio
 async def test_dashboard_returns_evm_payload(client: AsyncClient, schedule_id: str, temp_engine_and_factory):
-    _engine, factory, _ = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.schedule.models import Activity
 
     async with factory() as session:

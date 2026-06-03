@@ -5,27 +5,23 @@ the platform in plaintext. The settings endpoint returns booleans
 (``*_api_key_set``) instead of the keys themselves, and at-rest storage
 is Fernet-encrypted.
 
-These tests drive the AI service against a per-test temp SQLite file
-(no shared ``openestimate.db``, see ``feedback_test_isolation``) so the
-encryption path is exercised end-to-end without hitting real LLM
+These tests drive the AI service against a transaction-isolated PostgreSQL
+session (no shared ``openestimate.db``, see ``feedback_test_isolation``) so
+the encryption path is exercised end-to-end without hitting real LLM
 providers or the production database.
 """
 
 from __future__ import annotations
 
 import json
-import tempfile
 import uuid
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests._pg import transactional_session
 
 if TYPE_CHECKING:
     from app.modules.ai.schemas import AISettingsUpdate
@@ -34,29 +30,10 @@ if TYPE_CHECKING:
 
 
 @pytest_asyncio.fixture
-async def session():
-    """Per-test fresh SQLite DB — never touches backend/openestimate.db."""
-    tmp_db = Path(tempfile.mkdtemp()) / "ai_key_leak.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    # Register the AI tables so create_all picks them up.
-    import app.modules.ai.models  # noqa: F401
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+async def session() -> AsyncSession:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
         yield s
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 @pytest.fixture

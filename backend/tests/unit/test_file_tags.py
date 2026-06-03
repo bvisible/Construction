@@ -14,22 +14,13 @@ Coverage:
 * **Seed defaults idempotency** — calling twice yields the same total
                 count and the same tag set.
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+The SQLAlchemy engine is bound to the conftest-provisioned PostgreSQL
+cluster before any test module is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
-
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-file-tags-"))
-_TMP_DB = _TMP_DIR / "file_tags.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
@@ -82,7 +73,7 @@ def test_slugify_empty_input_falls_back() -> None:
 
 @pytest_asyncio.fixture
 async def db_session():
-    """A real AsyncSession over a freshly create_all'd temp SQLite."""
+    """A real AsyncSession over the freshly create_all'd PostgreSQL DB."""
     from app.config import get_settings
 
     get_settings.cache_clear()

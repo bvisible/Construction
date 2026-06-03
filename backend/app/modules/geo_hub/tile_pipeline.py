@@ -376,6 +376,99 @@ def _emit_box_mesh(
     return new_vertex_offset, new_index_offset
 
 
+# Value encodings for the EXT_structural_metadata schema declared in
+# :func:`build_gltf_for_tile`. STRING values pack as UTF-8 bytes with a
+# companion UINT32 ``stringOffsets`` view; FLOAT32 values pack as
+# little-endian floats. The key order matches the schema's property order.
+_META_PROP_TYPES: dict[str, str] = {
+    "element_id": "STRING",
+    "category": "STRING",
+    "din276": "STRING",
+    "nrm": "STRING",
+    "masterformat": "STRING",
+    "area_m2": "FLOAT32",
+    "volume_m3": "FLOAT32",
+    "validation_status": "STRING",
+}
+
+
+def _encode_property_table(
+    binary: bytearray,
+    buffer_views: list[dict[str, Any]],
+    metadata_rows: dict[str, list[Any]],
+    count: int,
+) -> dict[str, Any]:
+    """Pack the per-feature property table into the glTF binary buffer.
+
+    Appends one buffer view per FLOAT32 property and two per STRING property
+    (a UTF-8 ``values`` view plus a UINT32 ``stringOffsets`` view) and returns
+    the ``propertyTables[].properties`` mapping. Per the EXT_structural_metadata
+    spec, each property's ``values`` (and a string's ``stringOffsets``) is a
+    bufferView INDEX into binary data, never an inline JSON array - getting
+    this wrong makes Cesium dereference ``bufferViews[<array>]`` -> undefined
+    and abort the entire tile load, so no geometry renders at all.
+
+    Mutates ``binary`` and ``buffer_views`` in place.
+    """
+
+    def _align8() -> None:
+        # 8-byte alignment satisfies the 4-byte component alignment that
+        # FLOAT32 / UINT32 views require, with margin to spare.
+        while len(binary) % 8 != 0:
+            binary.append(0)
+
+    def _add_view(start: int) -> int:
+        # A zero-length bufferView is invalid glTF; guarantee at least one
+        # byte. When every value is empty no offset ever points at it.
+        if len(binary) == start:
+            binary.append(0)
+        idx = len(buffer_views)
+        buffer_views.append(
+            {"buffer": 0, "byteOffset": start, "byteLength": len(binary) - start},
+        )
+        return idx
+
+    properties: dict[str, Any] = {}
+    for name, kind in _META_PROP_TYPES.items():
+        values = list(metadata_rows.get(name, []))[:count]
+        while len(values) < count:
+            values.append("" if kind == "STRING" else 0.0)
+
+        if kind == "FLOAT32":
+            _align8()
+            start = len(binary)
+            for val in values:
+                try:
+                    fval = float(val)
+                except (TypeError, ValueError):
+                    fval = 0.0
+                if not math.isfinite(fval):
+                    fval = 0.0
+                binary.extend(struct.pack("<f", fval))
+            properties[name] = {"values": _add_view(start)}
+        else:  # STRING
+            encoded = [str(v).encode("utf-8") for v in values]
+            _align8()
+            val_start = len(binary)
+            for chunk in encoded:
+                binary.extend(chunk)
+            values_view = _add_view(val_start)
+            _align8()
+            off_start = len(binary)
+            running = 0
+            binary.extend(struct.pack("<I", running))
+            for chunk in encoded:
+                running += len(chunk)
+                binary.extend(struct.pack("<I", running))
+            offsets_view = _add_view(off_start)
+            properties[name] = {
+                "values": values_view,
+                "stringOffsets": offsets_view,
+                "stringOffsetType": "UINT32",
+            }
+    return properties
+
+
 def build_gltf_for_tile(
     elements: Sequence[dict[str, Any]],
     tile_aabb: TileAABB | None = None,
@@ -561,6 +654,18 @@ def build_gltf_for_tile(
         index_offset = new_io
         feature_index += 1
 
+    # Encode the per-feature property table into binary buffer views BEFORE
+    # finalising the buffer length. EXT_structural_metadata needs bufferView
+    # indices here, not inline arrays (see :func:`_encode_property_table`).
+    property_table_properties: dict[str, Any] = {}
+    if add_structural_metadata and feature_index > 0:
+        property_table_properties = _encode_property_table(
+            binary,
+            buffer_views,
+            metadata_rows,
+            feature_index,
+        )
+
     # Pad the binary blob to a multiple of 4 bytes (glTF spec).
     while len(binary) % 4 != 0:
         binary.append(0)
@@ -616,16 +721,11 @@ def build_gltf_for_tile(
                         "name": "Elements",
                         "class": "Element",
                         "count": feature_index,
-                        "properties": {
-                            # Property values are inlined into the
-                            # tileset.json metadata in v1 (a binary
-                            # property table would shave bytes but
-                            # adds spec edge-cases — the JSON path is
-                            # the spec-compliant fallback and Cesium
-                            # reads it natively).
-                            k: {"values": v[:feature_index]}
-                            for k, v in metadata_rows.items()
-                        },
+                        # Each property points at the binary buffer views
+                        # packed above - a bufferView index (and a
+                        # stringOffsets index for STRING properties), as the
+                        # EXT_structural_metadata spec requires.
+                        "properties": property_table_properties,
                     },
                 ],
             },

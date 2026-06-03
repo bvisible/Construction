@@ -12,25 +12,16 @@ that "Beton" finds the seeded "Beton wall, 240mm" row.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# ── Per-module DB isolation BEFORE any app imports ─────────────────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-costs-textsearch-"))
-_TMP_DB = _TMP_DIR / "textsearch.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from app.database import Base  # noqa: E402
-from app.modules.costs.models import CostItem  # noqa: E402
-from app.modules.costs.repository import CostItemRepository  # noqa: E402
+from app.modules.costs.models import CostItem
+from app.modules.costs.repository import CostItemRepository
+from tests._pg import transactional_session
 
 
 def _row(code: str, description: str) -> CostItem:
@@ -53,13 +44,7 @@ def _row(code: str, description: str) -> CostItem:
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    db_path = _TMP_DIR / f"test-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[CostItem.__table__])
-
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    async with transactional_session() as s:
         s.add_all(
             [
                 _row("01.001", "Stahlbeton C30/37 Wand 240mm"),
@@ -72,8 +57,6 @@ async def session() -> AsyncIterator[AsyncSession]:
         )
         await s.commit()
         yield s
-
-    await engine.dispose()
 
 
 # ── q (canonical free-text) ─────────────────────────────────────────────

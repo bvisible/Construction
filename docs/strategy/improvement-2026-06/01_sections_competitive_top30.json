@@ -1,0 +1,598 @@
+{
+  "summary": "Deep analysis of 9 ERP sections, inter-module coordination, hacks/stubs hunt, and competitive top-30 missing features",
+  "agentCount": 32,
+  "logs": [],
+  "result": {
+    "top_30_missing": [
+      {
+        "rank": 1,
+        "feature": "Clash and validation lifecycle events into notifications and downstream work items",
+        "section": "Model Coordination",
+        "rationale": "The clash module publishes zero events (confirmed: grep for event_bus in backend/app/modules/clash returns nothing) and notifications/events.py subscribes to none of clash, document, or validation (confirmed _SUBSCRIPTIONS list, events.py:576-593). A high-severity clash or failed validation is silent until someone manually opens the page. Autodesk Construction IQ and ACC tie clash resolution into RFI/issue workflows; this is the cheapest high-value parity move because the event bus and the subscriber pattern already exist (bim_hub/service.py uses publish_detached).",
+        "effort": "M",
+        "impact": "high",
+        "competitors": [
+          "Autodesk ACC",
+          "Procore",
+          "Aconex Model Coordination"
+        ]
+      },
+      {
+        "rank": 2,
+        "feature": "Integrated mobile field time and attendance with payroll-to-job-cost pipeline",
+        "section": "Field Operations",
+        "rationale": "Three modules already count workforce in parallel (daily_diary labour_count, fieldreports.workforce, resources.assignment) with no single source of truth, and there is no labour-hours capture that flows to cost. Labour is 30-50 percent of construction cost and without actual hours per task, EVM and cost-to-complete are guesswork. Buildertrend, Trimble Vista/Spectrum, Procore all treat this as table stakes.",
+        "effort": "XL",
+        "impact": "high",
+        "competitors": [
+          "Buildertrend",
+          "Trimble Vista",
+          "Procore",
+          "Nevaris Baulohn"
+        ]
+      },
+      {
+        "rank": 3,
+        "feature": "Real-time, event-driven KPI refresh and live EVM with actuals integration",
+        "section": "Planning",
+        "rationale": "full_evm, eac and costmodel modules exist (confirmed) but EVM is snapshot-based and reporting KPIs only recompute on a 12-hour cron (auto_recalculate_kpis), so a closed risk or new finance transaction does not move the dashboard for hours. Finance, schedule, risk, safety already publish events; wiring them to invalidate/refresh KPIs converts day-old aggregates into live project health. Autodesk Cost Management and Primavera P6 2026 ship continuous EVM with forecast curves.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Autodesk Build Cost Management",
+          "Primavera P6",
+          "Procore Analytics"
+        ]
+      },
+      {
+        "rank": 4,
+        "feature": "Bi-directional ERP/accounting connectors (NetSuite, Sage, QuickBooks, DATEV, Oracle Fusion)",
+        "section": "Finance & Procurement",
+        "rationale": "OCERP has a finance module and webhooks but no turnkey bi-directional accounting sync, so contracts to change orders to invoices to GL is manual re-keying. Accounting teams spend 10-15 hours per month reconciling. Every enterprise competitor ships this (Agave for Autodesk, Procore ERP Connector, Nevaris on D365/DATEV). High enterprise-deal value, but a real connector per ERP is heavy.",
+        "effort": "XL",
+        "impact": "high",
+        "competitors": [
+          "Procore ERP Connector",
+          "Autodesk Agave",
+          "Nevaris Finance"
+        ]
+      },
+      {
+        "rank": 5,
+        "feature": "Cross-project portfolio resource leveling and capacity planning",
+        "section": "Planning",
+        "rationale": "Resources are per-project only; there is no global resource pool or cross-project conflict detection, so a contractor running 5+ sites juggles shared crews and equipment by hand. Primavera P6 EPS and Trimble Spectrum are built around this and it expands the addressable market to mid-to-large GCs. Builds on the existing resources model rather than greenfield.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Primavera P6",
+          "Trimble Spectrum",
+          "Asta Powerproject"
+        ]
+      },
+      {
+        "rank": 6,
+        "feature": "Unify schedule dependencies into one source of truth and add completion guards",
+        "section": "Planning",
+        "rationale": "Confirmed split-brain: Activity.dependencies JSON column (schedule/models.py:104) and the ScheduleRelationship table (models.py:244) both store edges; PATCH updates only the JSON, the relationship endpoint only the table, and CPM dedups both. A user deletes a relationship row but the JSON copy still blocks CPM. Tasks.complete_task enforces predecessor completion; schedule activities have no such guard. This is correctness, not a feature, and it underpins every planning feature above it.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Primavera P6",
+          "Asta Powerproject"
+        ]
+      },
+      {
+        "rank": 7,
+        "feature": "AI photo intelligence: jobsite image analysis, auto-tagging and georeferencing",
+        "section": "Field Operations",
+        "rationale": "Photos are the highest-volume unstructured data on site (thousands per project). The /photos route exists but does no AI extraction, batch upload, EXIF/GPS capture or defect classification. Procore Photo Intelligence and Buildertrend auto-organize and analyze; this saves 15-20 hours per week and feeds safety and quality. Distinct, well-scoped CV pipeline that aligns with the existing cv-pipeline service plan.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Procore Photo Intelligence",
+          "Buildertrend",
+          "Fieldwire"
+        ]
+      },
+      {
+        "rank": 8,
+        "feature": "Tendering and Bid Management reconciliation (single award source of truth)",
+        "section": "Commercial",
+        "rationale": "Two parallel modules (oe_tendering and oe_bid_management) each publish package.awarded and each triggers procurement auto-PO, so a project using both can create duplicate contracts and duplicate POs. This is a data-integrity defect that silently double-bills. Cheap to fix by making one module subscribe to the other; high impact because it removes a real financial footgun.",
+        "effort": "M",
+        "impact": "high",
+        "competitors": [
+          "Autodesk Build",
+          "RIB iTWO"
+        ]
+      },
+      {
+        "rank": 9,
+        "feature": "Lien waiver automation and invoice-approval enforcement",
+        "section": "Finance & Procurement",
+        "rationale": "No lien waiver tracking anywhere; in US mechanic-lien states paying an invoice without a waiver exposes the GC to supplier liens. Approval routes exist but do not gate payment on waiver receipt. Procore, Buildertrend and GCPay all enforce this. Self-contained finance/procurement workflow with clear legal value.",
+        "effort": "M",
+        "impact": "high",
+        "competitors": [
+          "Procore",
+          "Buildertrend",
+          "Autodesk GCPay"
+        ]
+      },
+      {
+        "rank": 10,
+        "feature": "Commitment management: PO and subcontract approval workflows with live budget sync",
+        "section": "Commercial",
+        "rationale": "Procurement has PO/GR but no PO-approval workflow or commitment-level budget tracking; commitments are the layer that actually drives project budget and prevents overruns. Procore Commitments and Autodesk Cost Management treat this as core. Builds on existing procurement and approval_routes.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Procore",
+          "Autodesk Cost Management"
+        ]
+      },
+      {
+        "rank": 11,
+        "feature": "Change Order AI auto-draft from RFI, daily log and scope plus impact simulator",
+        "section": "Commercial",
+        "rationale": "Change orders are the biggest profit killer; OCERP has the changeorders module but no AI draft and no what-if cost/schedule impact before signing. Procore and Trimble compress CO cycle from 5-15 days to 1-2. Variations cost impact already exists to seed the estimate, so this leverages prior work.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Procore Change Order AI",
+          "Trimble ProjectSight"
+        ]
+      },
+      {
+        "rank": 12,
+        "feature": "Inspection and Test Plan (ITP) workflow with hold points and quality gates",
+        "section": "Quality",
+        "rationale": "QMS has ITP fragments but there is no structured ITP with hold points, evidence capture and audit-ready sign-off connected to source specs, which design-build and EPC contractors require. Aconex Test Plans (2026) is built around this. Medium effort that closes a compliance gap for major contractors.",
+        "effort": "M",
+        "impact": "high",
+        "competitors": [
+          "Aconex",
+          "RIB iTWO"
+        ]
+      },
+      {
+        "rank": 13,
+        "feature": "Compute LTIFR/TRIR and surface safety trend and corrective-action analytics",
+        "section": "Safety & HSE",
+        "rationale": "Confirmed: safety/service.py:453-457 hardcodes ltifr and trir to None and never computes them despite the schema and the man_hours convention comment. OSHA-style rate reporting and near-miss trend analysis affect insurance premiums and bid eligibility. The formula is trivial (recordables * 200000 / hours) and hours can come from the schedule/equipment hours work above. Very low effort, real compliance value.",
+        "effort": "S",
+        "impact": "medium",
+        "competitors": [
+          "Procore",
+          "Oracle Aconex Advisor for Safety"
+        ]
+      },
+      {
+        "rank": 14,
+        "feature": "Native offline-first mobile app with sync-on-reconnect",
+        "section": "Field Operations",
+        "rationale": "The product is web-first; the /field shell is a confirmed stub (FieldShellPage.tsx:65,79 renders 'Project pending' and 'coming in pilot'). Sites have unreliable connectivity and crews expect native UX. Fieldwire, Buildertrend and Procore are mobile-first. Large effort but it is the gateway for most other field features (photos, time, diary, inspections).",
+        "effort": "XL",
+        "impact": "high",
+        "competitors": [
+          "Fieldwire",
+          "Buildertrend",
+          "Procore"
+        ]
+      },
+      {
+        "rank": 15,
+        "feature": "Automated client/owner progress reporting with narrative summarization",
+        "section": "Communication",
+        "rationale": "PMs spend 8-15 hours per week on owner updates; OCERP has a portal but no auto-generated progress report from photos, task completion and budget-vs-actual. Buildertrend claims an 85 percent reduction in reporting time. Medium effort that directly improves client retention and reduces PM overhead.",
+        "effort": "M",
+        "impact": "high",
+        "competitors": [
+          "Buildertrend",
+          "Procore"
+        ]
+      },
+      {
+        "rank": 16,
+        "feature": "Semantic AI assistant over project documents (Procore Assist equivalent)",
+        "section": "Analytics & Reports",
+        "rationale": "erp_chat is advisory only and global search is keyword based; there is no cross-module semantic retrieval that answers 'show me all NCRs on Electrical from June' across RFIs, submittals, logs and PDFs. The vector/Qdrant stack is already in the architecture. Reduces document-hunt time from hours to seconds and lifts engagement.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Procore Assist",
+          "Datagrid"
+        ]
+      },
+      {
+        "rank": 17,
+        "feature": "Auto-revision comparison for drawing/BIM changes with cost impact",
+        "section": "Takeoff",
+        "rationale": "Takeoff supports PDF/DWG but cannot diff two drawing revisions and quantify the delta. Design change is the number-one source of overruns; RIB CostX highlights added/removed geometry and rolls cost impact. High value for estimating accuracy, distinct algorithmic work.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "RIB CostX",
+          "Autodesk Forma Takeoff"
+        ]
+      },
+      {
+        "rank": 18,
+        "feature": "ML-based quantity extraction and symbol recognition from drawings",
+        "section": "Takeoff",
+        "rationale": "Match Elements is BETA but there is no production ML symbol/shape recognition that auto-populates BOQ from PDFs or models. Takeoff is 30 percent of the bid cycle; Forma Takeoff and Nemetschek Steel Genie cut it by half. Heavy CV/ML investment but central to the AI-first positioning.",
+        "effort": "XL",
+        "impact": "high",
+        "competitors": [
+          "Autodesk Forma Takeoff",
+          "Nemetschek Steel Genie"
+        ]
+      },
+      {
+        "rank": 19,
+        "feature": "Predictive schedule and cost risk analytics with early-warning alerts",
+        "section": "Planning",
+        "rationale": "project_intelligence and risk exist but there is no forward-looking ML that flags slippage or overrun weeks ahead. Primavera P6 2026 Predictive Performance Analytics and nPlan are built on this. Differentiates against Procore/Autodesk and buys mitigation time, but needs historical training data to be credible.",
+        "effort": "L",
+        "impact": "high",
+        "competitors": [
+          "Primavera P6 2026",
+          "nPlan",
+          "Procore Helix"
+        ]
+      },
+      {
+        "rank": 20,
+        "feature": "Vendor and subcontractor performance scorecards with prequalification",
+        "section": "Commercial",
+        "rationale": "subcontractors and supplier_catalogs exist and subcontractors already bumps a rating from ncr/safety/schedule events, but there is no aggregated scorecard, no prequalification gating, and the rating change publishes no event so Bid Management cannot filter by rating. Trimble Spectrum and TradeTapp ship this. Builds directly on existing rating plumbing.",
+        "effort": "M",
+        "impact": "high",
+        "competitors": [
+          "Trimble Spectrum",
+          "Autodesk TradeTapp"
+        ]
+      },
+      {
+        "rank": 21,
+        "feature": "ISO 19650 Common Data Environment maturity and suitability workflows",
+        "section": "Documents",
+        "rationale": "The CDE module exists with the ISO 19650 state machine, but suitability_code does not propagate to the Documents index and a direct document PATCH can bypass the state machine gates (two divergent transition validators). Formal information-maturity and suitability gating is mandated on many public and infrastructure projects. Medium effort to unify and propagate; mostly hardening existing code.",
+        "effort": "M",
+        "impact": "medium",
+        "competitors": [
+          "Autodesk Docs/Forma",
+          "Trimble Connect",
+          "Aconex"
+        ]
+      },
+      {
+        "rank": 22,
+        "feature": "Subcontractor portal with mobile invoice submission and payment tracking",
+        "section": "Commercial",
+        "rationale": "The /portal route exists but lacks sub-facing invoice submission, payment status and contract terms. Invoice cycles run 20-40 days; a self-serve portal cuts re-submission loops and payment time. Buildertrend and Procore ship this. Builds on the existing portal shell.",
+        "effort": "L",
+        "impact": "medium",
+        "competitors": [
+          "Buildertrend",
+          "Procore"
+        ]
+      },
+      {
+        "rank": 23,
+        "feature": "Persistent clash detection profiles and multi-property clash grouping",
+        "section": "Model Coordination",
+        "rationale": "Clash detection is per-run with no saved rule sets and no multi-dimension grouping (discipline + system + level), so weekly re-runs require re-tuning and a 500-item report is unmanageable. Autodesk Clash Checks and grouping make recurring coordination cheap. Low effort relative to value since the detection engine already exists.",
+        "effort": "M",
+        "impact": "medium",
+        "competitors": [
+          "Autodesk BIM Collaborate Pro"
+        ]
+      },
+      {
+        "rank": 24,
+        "feature": "Risk escalation auto-creates mitigation tasks; schedule slip auto-creates risk",
+        "section": "Planning",
+        "rationale": "risk publishes risk.updated but no Tasks subscriber creates mitigation tasks on tier escalation, and a critical-path slip never auto-raises a risk. Mitigation work is hand-typed, breaking traceability. Both directions are small event subscribers over modules that already publish, with clear day-to-day value.",
+        "effort": "S",
+        "impact": "medium",
+        "competitors": [
+          "Primavera P6",
+          "Procore"
+        ]
+      },
+      {
+        "rank": 25,
+        "feature": "Digital handover and closeout package assembly",
+        "section": "Documents",
+        "rationale": "There is document management but no closeout workflow that gathers as-builts, O&M manuals, warranties and asset status into a validated handover package. Average closeout takes 284 days and loses 30 percent of data; Autodesk Build Handover (2025) and OmTrak target this. Medium effort, strong owner-facing value, leverages the documents and CDE modules.",
+        "effort": "L",
+        "impact": "medium",
+        "competitors": [
+          "Autodesk Build Handover",
+          "OmTrak"
+        ]
+      },
+      {
+        "rank": 26,
+        "feature": "Equipment predictive maintenance and fleet utilization analytics",
+        "section": "Field Operations",
+        "rationale": "The equipment module already tracks hour_meter, telemetry, maintenance and fuel/parts, so OCERP is ahead here, but there is no ML failure forecasting or utilization optimization. Equipment downtime costs 5-20k per day. Builds on rich existing telemetry data; mostly analytics on data already captured.",
+        "effort": "M",
+        "impact": "medium",
+        "competitors": [
+          "Trimble Spectrum",
+          "Viewpoint",
+          "CMiC"
+        ]
+      },
+      {
+        "rank": 27,
+        "feature": "Compliance rule engine enforced at workflow level with pre-built rule packs",
+        "section": "Quality",
+        "rationale": "validation rules and a compliance DSL exist but are static and not enforced at the workflow boundary (you can still create an SCO on a draft contract), and there are no jurisdiction rule packs (ISO 19650, OSHA, IBC). Autodesk condition-based rules (2025+) block non-compliant data at entry. Builds on the existing DSL; mostly authoring and a workflow gate.",
+        "effort": "M",
+        "impact": "medium",
+        "competitors": [
+          "Autodesk Cost Management",
+          "Aconex"
+        ]
+      },
+      {
+        "rank": 28,
+        "feature": "Model-based progress visualization (asset status overlay in 3D viewer)",
+        "section": "Field Operations",
+        "rationale": "BIM viewer and progress tracking exist separately but are not fused; there is no color-coded completion overlay on the model linking elements to tasks, invoices and punch items. Autodesk Build (Nov 2025) ships this and Sablono pioneered QR-based 4D progress. Medium effort tying two existing capabilities together.",
+        "effort": "L",
+        "impact": "medium",
+        "competitors": [
+          "Autodesk Build",
+          "Sablono"
+        ]
+      },
+      {
+        "rank": 29,
+        "feature": "No-code agent builder for workflow automation",
+        "section": "Communication",
+        "rationale": "Beyond approval_routes there is no low-code automation; end users cannot define agents that draft an RFI from a log or compile a weekly status. Procore launched 18+ agents plus Agent Builder in 2025. High ceiling but it is a platform-grade build that should follow the event-coordination groundwork.",
+        "effort": "XL",
+        "impact": "medium",
+        "competitors": [
+          "Procore Agent Builder",
+          "Oracle Unifier"
+        ]
+      },
+      {
+        "rank": 30,
+        "feature": "Time-location (Takt / line-of-balance) scheduling for repetitive work",
+        "section": "Planning",
+        "rationale": "The schedule module is Gantt-only; heavy civil and repetitive vertical work (floors, units, roads) benefit from takt and line-of-balance views that smooth crew flow. RIB iTWO and Asta support both. Lower priority than the planning correctness and resource items above, but a recognized differentiator for civil contractors.",
+        "effort": "M",
+        "impact": "low",
+        "competitors": [
+          "RIB iTWO",
+          "Asta Powerproject"
+        ]
+      }
+    ],
+    "top_coordination_improvements": [
+      {
+        "title": "Make the clash module publish lifecycle events and wire notifications, punchlist and QA subscribers",
+        "detail": "ClashService.create_run (clash/service.py:1433-1529) updates status to completed but publishes nothing; a grep for event_bus in the clash module returns zero matches (confirmed). Add clash.run.completed and clash.result.discovered (carrying project_id, run_id, result_id, severity, cost_impact_estimated) using event_bus.publish_detached as bim_hub/service.py already does. Then add subscribers: notifications for high-severity results (notifications/events.py _SUBSCRIPTIONS at 576-593 currently subscribes to none of clash), and punchlist auto-creating a punch item for critical clashes. This single change unblocks the entire coordination-to-QA loop.",
+        "sections": [
+          "Model Coordination",
+          "Quality"
+        ],
+        "impact": "high",
+        "effort": "M"
+      },
+      {
+        "title": "Register the orphaned inspection.completed.failed handler in punchlist",
+        "detail": "inspections/service.py publishes inspection.completed.failed with a populated failed_items payload, but no module subscribes (confirmed: only inspections references the string; punchlist/events.py subscribes only to property_dev.snag.created). The event machinery is dead. Add a subscriber in punchlist/events.py that creates a punch item per failed item, replacing the manual POST /create-defect/ route. Smallest possible change for a real quality gap.",
+        "sections": [
+          "Quality"
+        ],
+        "impact": "high",
+        "effort": "S"
+      },
+      {
+        "title": "Route validation failures into NCR/punchlist escalation",
+        "detail": "validation/service.py emits validation.report.created only for vector indexing; nothing reacts when error_count crosses a threshold. Publish validation.critical_failure on high-severity/high-count results and subscribe NCR or QMS to create a linked escalation. Converts validation from silent feedback into a process trigger and closes the Import to Validate to Enrich workflow the CLAUDE.md describes.",
+        "sections": [
+          "Quality",
+          "Documents"
+        ],
+        "impact": "high",
+        "effort": "M"
+      },
+      {
+        "title": "Event-drive KPI and dashboard refresh from upstream module mutations",
+        "detail": "reporting.auto_recalculate_kpis runs only on a 12-hour cron and queries 6 modules; finance, schedule, risk, safety, rfi and submittals already publish events but nothing invalidates KPIs or the dashboards federation cache or the coordination_hub 30-second cache. Add lightweight subscribers that mark snapshots/caches stale so dashboards reflect live state within seconds. Also publish coordination_hub.cache.invalidate from bim_hub.delete_model and bim_requirements changes.",
+        "sections": [
+          "Analytics & Reports",
+          "Model Coordination",
+          "Planning"
+        ],
+        "impact": "high",
+        "effort": "M"
+      },
+      {
+        "title": "Reconcile Tendering and Bid Management award state to prevent duplicate contracts and POs",
+        "detail": "Both modules publish package.awarded and both drive procurement auto-PO independently, so a project using both can end up with two award records and duplicate POs. Pick one as source of truth: have bid_management subscribe to tendering.package.awarded (or vice versa) and propagate the award/selected-bid status instead of each emitting its own. Removes a real double-billing footgun.",
+        "sections": [
+          "Commercial"
+        ],
+        "impact": "high",
+        "effort": "M"
+      },
+      {
+        "title": "Harden the variation-to-contract sum update and notify affected parties",
+        "detail": "_on_variation_completed (notifications/_wave5_cross_module_subscribers.py:574) blindly bumps contract.total_value by delta_amount with no check that the contract is open or that delta matches the VO line items, and no idempotency key. Add state and amount validation plus a stored VO-id idempotency guard. Separately, variations.request.approved publishes (service.py:1189) but nobody subscribes, so the contract owner and affected subs are never told a cost change is pending. Add that notification subscriber.",
+        "sections": [
+          "Commercial"
+        ],
+        "impact": "high",
+        "effort": "M"
+      },
+      {
+        "title": "Establish one source of truth for schedule dependencies and add a completion guard",
+        "detail": "Activity.dependencies JSON (schedule/models.py:104) and the ScheduleRelationship table (models.py:244) both store edges; PATCH updates only the JSON, the relationships endpoint only the table, and CPM dedups both, so deleting a relationship row can leave a hidden JSON edge still blocking CPM. Deprecate the inline JSON, migrate it into the table, and read the table exclusively. Add a predecessor-complete guard on activity status changes mirroring tasks.complete_task (service.py:502-519).",
+        "sections": [
+          "Planning"
+        ],
+        "impact": "high",
+        "effort": "L"
+      },
+      {
+        "title": "Roll schedule progress and variations cost impact into the cost model",
+        "detail": "schedule.activity.progress_updated and variations.contract_sum.updated have no costmodel subscriber, so EVM curves, cash flow and the 5D budget stay stale after field-report progress or an approved variation. Subscribe costmodel to both and to boq.position.created so generate_budget_from_boq and generate_cash_flow run without a manual trigger. Keeps project financials in one place.",
+        "sections": [
+          "Planning",
+          "Commercial"
+        ],
+        "impact": "high",
+        "effort": "M"
+      },
+      {
+        "title": "Publish subcontractor rating changes and gate procurement/bidding on blacklist and rating",
+        "detail": "subcontractors bumps a rating from ncr/safety/schedule events but never publishes the result, so Bid Management cannot filter bidders by rating and Contracts is not warned when a sub goes red. Publish subcontractors.rating_updated. Also wire supplier_catalogs.vendor.blacklisted into a bid_management subscriber that disqualifies open invitations, and supplier_catalogs.kyc_doc_expiring into subcontractors so cert expiry is not siloed.",
+        "sections": [
+          "Commercial"
+        ],
+        "impact": "medium",
+        "effort": "M"
+      },
+      {
+        "title": "Bridge safety incidents and high-risk observations to HSE investigations and certification-gated permits",
+        "detail": "safety publishes safety.incident.created and safety.observation.high_risk but hse_advanced has no events.py and does not subscribe, so critical incidents never auto-open an investigation. And check_ptw_prerequisites validates hardcoded boolean flags without ever calling is_user_blocked_for_work, so an uncertified user can activate a permit. Add an hse_advanced subscriber for those safety events and call the certification check before transitioning a permit to active.",
+        "sections": [
+          "Safety & HSE"
+        ],
+        "impact": "high",
+        "effort": "M"
+      }
+    ],
+    "critical_hacks_stubs": [
+      {
+        "file": "backend/app/modules/clash/service.py:1433-1529",
+        "detail": "ClashService.create_run completes a clash run but publishes no event at all; a grep for event_bus across the entire clash module returns zero matches (confirmed). Every downstream consumer (notifications, punchlist, NCR, variations) is therefore unreachable, so discovered clashes sit unnoticed.",
+        "severity": "high",
+        "fix": "Add event_bus.publish_detached('clash.run.completed', ...) after the status flips to completed (around line 1516-1523) and 'clash.result.discovered' per high-severity result, carrying project_id, run_id, result_id, severity and cost_impact_estimated, mirroring bim_hub/service.py:81."
+      },
+      {
+        "file": "backend/app/modules/inspections/service.py (publishes inspection.completed.failed) and backend/app/modules/punchlist/events.py",
+        "detail": "inspection.completed.failed is published with a populated failed_items payload but no module subscribes to it (confirmed: the string appears only in inspections; punchlist/events.py subscribes only to property_dev.snag.created). It is dead event machinery, so a failed inspection never spawns a punch item automatically.",
+        "severity": "high",
+        "fix": "Register a subscriber in punchlist/events.py for inspection.completed.failed that calls the punchlist service to create one item per entry in failed_items, storing inspection_id in metadata_, and retire the manual POST /create-defect/ route."
+      },
+      {
+        "file": "backend/app/modules/safety/service.py:453-457",
+        "detail": "LTIFR and TRIR are hardcoded to None and never computed despite the schema fields, descriptions and the man_hours_total convention comment (confirmed). get_stats always returns None regardless of incident metadata, so the safety KPIs the UI advertises are permanently blank.",
+        "severity": "high",
+        "fix": "When incidents carry metadata.man_hours_total, compute LTIFR = lost_time_incidents * 1_000_000 / total_man_hours and TRIR = recordable_incidents * 200_000 / total_man_hours; fall back to None only when hours are genuinely absent, and optionally source hours from schedule/equipment logs."
+      },
+      {
+        "file": "backend/app/modules/procurement/events.py:221-234",
+        "detail": "_on_supplier_rating_update is a documented stub: it receives ncr_id, project_id, supplier_id and severity from qms but only logs at INFO and never adjusts any supplier standing, deferred pending a SupplierScorecard model (confirmed comment, TODO v4.2.2 audit). The NCR-to-supplier feedback loop is therefore a no-op.",
+        "severity": "high",
+        "fix": "Add a Supplier.rating column or a SupplierScorecard model and replace the log line with a real decrement or 'under_review' transition keyed by NCR severity; then publish subcontractors.rating_updated so bidding/contracts can react."
+      },
+      {
+        "file": "backend/app/core/plugin_manager.py:134-143",
+        "detail": "_install_from_zipfile finds the extracted manifest.py but ignores it and returns ModuleInfo with version hardcoded to 'unknown' and a display_name synthesized from the directory name (confirmed). The marketplace install path cannot report a real version, which also breaks update checks.",
+        "severity": "high",
+        "fix": "Parse the extracted manifest.py (regex extraction of name/version/display_name without importing, or import from a temp file then discard) and populate ModuleInfo from the real ModuleManifest values."
+      },
+      {
+        "file": "backend/app/core/plugin_manager.py:204-207",
+        "detail": "check_updates returns an empty list under a '# TODO: compare installed versions with registry' comment (confirmed), so the endpoint advertises update detection but silently always reports no updates.",
+        "severity": "high",
+        "fix": "Implement the comparison: list_installed for local versions, fetch each module's registry info, compare versions, and return [{name, installed_version, available_version, has_update}]. Depends on the manifest version parse above."
+      },
+      {
+        "file": "frontend/src/features/field/FieldShellPage.tsx:65,79",
+        "detail": "The field mobile shell ships a hardcoded 'Field - Project pending' header and a body that renders 'Tab \"{tab}\" - coming in pilot' for all four tabs (confirmed). The entire field surface is a placeholder with no working content.",
+        "severity": "high",
+        "fix": "Either gate the /field route until the pilot endpoints exist, or implement the per-tab renderers and load the active project name from context once /api/v1/field/* lands. Do not ship the placeholder as a reachable production route."
+      }
+    ],
+    "prioritized_waves": [
+      {
+        "wave": "Wave 1",
+        "theme": "Close the event-bus gaps and fix data-integrity footguns (cheap, high leverage, mostly wiring on infrastructure that already exists)",
+        "items": [
+          "Publish clash lifecycle events and subscribe notifications + punchlist + NCR",
+          "Register the orphaned inspection.completed.failed subscriber in punchlist",
+          "Compute LTIFR/TRIR in safety stats",
+          "Reconcile Tendering vs Bid Management award to stop duplicate contracts/POs",
+          "Harden _on_variation_completed (state + amount + idempotency) and add variation-approved notifications",
+          "Risk escalation auto-creates mitigation tasks; schedule slip auto-raises a risk",
+          "Implement the procurement supplier-rating stub and publish subcontractors.rating_updated",
+          "Implement plugin_manager manifest version parse and check_updates"
+        ]
+      },
+      {
+        "wave": "Wave 2",
+        "theme": "Planning and financial truth: one schedule graph, live EVM, cost model that stays current",
+        "items": [
+          "Unify schedule dependencies into the ScheduleRelationship table and add a completion guard",
+          "Event-drive KPI and dashboard/coordination-hub cache refresh from finance/schedule/risk/safety/rfi events",
+          "Roll schedule progress and variations cost impact into the cost model and auto-regenerate budget/cash flow",
+          "Live EVM with actuals integration (CPI/SPI/EAC/ETC, threshold alerts)",
+          "Cross-project portfolio resource leveling and capacity planning",
+          "Validation failures escalate into NCR/QMS"
+        ]
+      },
+      {
+        "wave": "Wave 3",
+        "theme": "Commercial depth and money flow: commitments, waivers, change orders, scorecards, ERP connectors",
+        "items": [
+          "Commitment management: PO/subcontract approval workflows with live budget sync",
+          "Lien waiver automation and invoice-approval enforcement",
+          "Change Order AI auto-draft plus cost/schedule impact simulator",
+          "Vendor and subcontractor performance scorecards with prequalification gating",
+          "Vendor blacklist and KYC-expiry bridges into bid_management and subcontractors",
+          "First bi-directional ERP/accounting connector (start with one: QuickBooks or DATEV)"
+        ]
+      },
+      {
+        "wave": "Wave 4",
+        "theme": "Field operations as a first-class surface: real mobile, time-to-cost, photos",
+        "items": [
+          "Native offline-first mobile app with sync-on-reconnect (replace the /field stub)",
+          "Mobile field time and attendance with payroll-to-job-cost pipeline and single workforce source of truth",
+          "AI photo intelligence: batch upload, EXIF/GPS georeferencing, auto-tagging and defect classification",
+          "Model-based progress visualization overlaid on the 3D viewer",
+          "Equipment predictive maintenance and utilization analytics on existing telemetry",
+          "Daily-diary and field-report cross-document state machine"
+        ]
+      },
+      {
+        "wave": "Wave 5",
+        "theme": "AI estimating and coordination differentiators",
+        "items": [
+          "ML quantity extraction and symbol recognition from drawings",
+          "Auto-revision drawing/BIM comparison with cost impact",
+          "Predictive schedule and cost risk analytics with early-warning alerts",
+          "Semantic AI assistant over project documents",
+          "Persistent clash profiles and multi-dimension clash grouping",
+          "ITP workflow with hold points and quality gates"
+        ]
+      },
+      {
+        "wave": "Wave 6",
+        "theme": "Compliance, lifecycle and platform reach",
+        "items": [
+          "ISO 19650 CDE maturity and suitability propagation, unify the two transition validators",
+          "Digital handover and closeout package assembly",
+          "Compliance rule engine enforced at workflow boundaries with jurisdiction rule packs",
+          "Automated client/owner progress reporting with narrative summarization",
+          "No-code agent builder for workflow automation",
+          "Time-location (Takt / line-of-balance) scheduling"
+        ]
+      }
+    ],
+    "markdown": "# OpenConstructionERP: Prioritized Engineering Report\n\nThis report merges three passes (inter-module coordination, a hacks/stubs hunt, and a competitive gap analysis against ten market products) into one ranked plan. I verified the load-bearing claims against the actual code before trusting them. Where I cite a line number, I opened the file.\n\nThe headline is simple. The platform has an unusually wide module surface (over 110 modules) and a working event bus, but a large share of the value is leaking through the seams between modules rather than inside any one module. The most expensive problems are not missing features, they are events that are published and never consumed, and entities that exist in two modules with no bridge. Several of these are one-day fixes that unlock workflows the product already advertises.\n\n## What the verification confirmed\n\nThe clash module publishes nothing. A search for `event_bus` across `backend/app/modules/clash` returns zero matches, and `ClashService.create_run` (clash/service.py:1433-1529) flips a run to completed without emitting an event. Notifications subscribes to none of clash, document, or validation; the `_SUBSCRIPTIONS` list (notifications/events.py:576-593) tops out at file-comment mentions. So a hard clash with a six-figure rework cost is invisible until a human opens the page.\n\n`inspection.completed.failed` is published by inspections with a populated `failed_items` payload, but the string appears in no other module. punchlist/events.py only subscribes to `property_dev.snag.created`. That is dead event machinery: a failed inspection never becomes a punch item on its own.\n\nSafety LTIFR and TRIR are hardcoded to None (safety/service.py:453-457) despite the schema fields, the descriptions, and a comment describing the man-hours convention. The KPIs the UI advertises are permanently blank.\n\nThe schedule dependency split-brain is real. `Activity.dependencies` is a JSON column (schedule/models.py:104) and `ScheduleRelationship` is a normalized table (models.py:244). PATCH updates only the JSON, the relationships endpoint updates only the table, and CPM dedups both. Delete a relationship row and a hidden JSON edge can still block the critical path.\n\nThe plugin manager install path returns version \"unknown\" and ignores the manifest it just extracted (plugin_manager.py:134-143), and `check_updates` is a `return []` behind a TODO (204-207). The field mobile shell is a placeholder that renders \"Field - Project pending\" and \"coming in pilot\" for all four tabs (FieldShellPage.tsx:65,79).\n\nOn the competitive side, I confirmed that EVM, EAC and the cost model are real modules, so the EVM gap is honestly \"partial\": the math exists but it is snapshot-based and KPIs only refresh on a 12-hour cron. The gap is live actuals integration, not EVM itself.\n\n## Top 30 missing features (ranked by impact over effort)\n\nThe full ranked list is in the structured payload. The shape of it: the cheapest wins are coordination wiring (clash and validation events, the inspection-to-punchlist bridge, LTIFR/TRIR), and the heaviest bets are the field platform (native offline mobile, time-to-cost, photo intelligence) and AI estimating (ML takeoff, drawing diff). In between sit the commercial money-flow features that competitors treat as table stakes: commitment management, lien waivers, change-order AI, vendor scorecards, and ERP connectors.\n\nA recurring honest caveat: a lot of these are tagged \"already partial\". OCERP has a carbon module, a CDE, a punchlist, EVM, equipment telemetry, supplier catalogs, and a portal. The work is rarely greenfield. It is finishing the loop, enforcing the workflow, and publishing the event that lets the next module react.\n\n## Top coordination improvements\n\nThese are the inter-module fixes with the best return, all drawn from the section findings and all building on infrastructure that already ships.\n\nThe clash module must publish its lifecycle, and notifications, punchlist and NCR must subscribe. That one change converts coordination from a dead end into the front of the QA pipeline. Right behind it: register the orphaned inspection-to-punchlist subscriber, route validation failures into NCR/QMS, and event-drive KPI and dashboard cache refresh so the analytics stop being a day behind reality.\n\nOn the commercial side, reconcile Tendering and Bid Management so one is the source of truth for awards (today both can auto-create contracts and POs, which is a real double-billing risk), and harden the variation-to-contract sum update with state checks, amount validation and an idempotency key. On planning, collapse the schedule dependency split-brain to a single table and roll schedule progress and variation cost impact into the cost model. On safety, give hse_advanced an events.py that opens investigations from critical safety events, and call the certification check before a permit goes active rather than trusting hardcoded checkboxes.\n\n## Critical hacks and stubs to remove\n\nSeven high-severity items, all verified. The clash module's silence and the orphaned inspection event are the two that block whole workflows. The safety LTIFR/TRIR stub ships blank KPIs. The procurement supplier-rating handler is a documented no-op that breaks the NCR-to-supplier feedback loop. The two plugin-manager stubs make the marketplace report fake versions and never detect updates. The field shell is a placeholder route that should be gated until its endpoints exist rather than shipped as reachable. Concrete fixes and exact locations are in the structured payload.\n\nThere is also a broad pattern worth a dedicated cleanup pass, even though no single instance is high severity: `_to_decimal` and `_project_fx_map` are duplicated across roughly ten to seventeen modules, and `_safe_publish` is copied verbatim into five. These belong in `app/core/decimal_utils.py` and `app/core/events`. Not urgent, but it is the kind of drift that turns one money-rounding bug into ten.\n\n## Delivery waves\n\nSix incremental waves, ordered so each one stands on the last.\n\nWave 1 closes the event-bus gaps and the data-integrity footguns. It is almost entirely wiring on infrastructure that exists, and it is where the impact-per-day is highest: clash events, the inspection bridge, LTIFR/TRIR, the tender/bid reconciliation, the variation-sum hardening, risk-to-task auto-creation, and the two plugin-manager stubs.\n\nWave 2 fixes planning and financial truth: one schedule graph, live EVM, a cost model that stays current, cross-project resource leveling, and validation-to-NCR escalation.\n\nWave 3 is commercial depth and money flow: commitments, lien waivers, change-order AI, vendor scorecards, and the first real ERP connector. Pick one accounting system and do it properly rather than five shallow ones.\n\nWave 4 makes field operations a first-class surface: a native offline mobile app to replace the stub, time-to-cost, photo intelligence, and progress overlaid on the 3D model.\n\nWave 5 is the AI estimating and coordination differentiators: ML takeoff, drawing-revision diff, predictive risk, a semantic document assistant, and persistent clash profiles.\n\nWave 6 covers compliance, lifecycle and platform reach: ISO 19650 maturity, digital handover, a workflow-enforced compliance engine, automated owner reporting, the no-code agent builder, and takt scheduling.\n\nThe discipline that matters most: do Wave 1 before chasing any headline AI feature. A predictive risk engine on top of a schedule that has two contradictory dependency graphs, and a coordination hub that never hears about a clash, will produce confident nonsense. Fix the seams first."
+  }
+}

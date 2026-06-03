@@ -13,34 +13,25 @@ Covers:
     * cost-impact-pct-of-budget without budget surfaces 0.0
     * model-age fires error when no model uploaded
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-per-module temp SQLite file BEFORE ``app`` is first imported.
+The test suite runs against the PostgreSQL cluster provisioned by
+``tests/conftest.py``, which binds the SQLAlchemy engine before this module
+is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-cohub-th-"))
-_TMP_DB = _TMP_DIR / "cohub-th.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

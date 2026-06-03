@@ -23,7 +23,6 @@ bug is marked ``xfail`` with a reason and documented in the report.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import uuid
 from collections.abc import AsyncGenerator
 from pathlib import Path
@@ -39,8 +38,9 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
+
+from tests._pg import isolated_engine
 
 # ── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -60,43 +60,30 @@ def _bypass_catalog_gate(monkeypatch):
     )
 
 
-def _register_minimal_models() -> None:
-    """Pull projects + users + audit models into Base.metadata."""
-    import app.core.audit  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    """Per-test temp SQLite engine + sessionmaker (test isolation)."""
-    tmp_db = Path(tempfile.mkdtemp()) / "phase0_edge.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL engine + sessionmaker (test isolation).
 
-    _register_minimal_models()
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    yield engine, factory, tmp_db
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    Uses ``isolated_engine()`` which clones a schema-loaded template
+    database and drops the clone on teardown. Cross-connection commit
+    visibility is real (unlike savepoint-rollback isolation), which is
+    required by tests that open multiple independent sessions concurrently
+    (e.g. ``test_concurrent_first_get_creates_one_row``).
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        # Yield a sentinel Path as the third element for backward-compat
+        # with callers that unpack ``_engine, factory, _tmp``.
+        yield engine, factory, None
 
 
 @pytest_asyncio.fixture
 async def project_id(temp_engine_and_factory) -> uuid.UUID:
-    """Create a real Project so MatchProjectSettings can FK to it."""
+    """Create a real Project row so MatchProjectSettings can FK to it."""
     _engine, factory, _tmp = temp_engine_and_factory
 
     from app.modules.projects.models import Project
@@ -415,7 +402,7 @@ class TestTranslationEdges:
         """
         from app.core.translation.cache import TranslationCache
 
-        cache = TranslationCache(str(tmp_path / "cache.db"))
+        cache = TranslationCache()
         await cache.upsert(
             text="wall",
             translated_text="Wand",
@@ -449,7 +436,7 @@ class TestTranslationEdges:
         """Conflicting upsert keeps the higher-confidence translation."""
         from app.core.translation.cache import TranslationCache
 
-        cache = TranslationCache(str(tmp_path / "cache.db"))
+        cache = TranslationCache()
         await cache.upsert(
             text="x",
             translated_text="low",
@@ -598,22 +585,17 @@ class TestTranslationEdges:
         assert result.translated == "wall"
 
     @pytest.mark.asyncio
-    async def test_concurrent_translate_calls_share_cache(
-        self,
-        tmp_path: Path,
-    ) -> None:
+    async def test_concurrent_translate_calls_share_cache(self) -> None:
         """N concurrent translate() calls produce one cache write per (text+langs+domain).
 
-        Why: race-on-cache-write must not corrupt the table — SQLite ON
-        CONFLICT handles this. Verifies the upsert clause behaves under
-        concurrency.
+        Why: race-on-cache-write must not corrupt the table - the PostgreSQL
+        INSERT ... ON CONFLICT upsert collapses the racers. Verifies the upsert
+        clause behaves under concurrency.
         """
         from app.core.translation.cache import TranslationCache
 
-        cache_path = str(tmp_path / "cache.db")
-
         async def _writer(i: int) -> None:
-            cache = TranslationCache(cache_path)
+            cache = TranslationCache()
             await cache.upsert(
                 text="parallel-text",
                 translated_text=f"v{i}",
@@ -626,10 +608,10 @@ class TestTranslationEdges:
 
         await asyncio.gather(*[_writer(i) for i in range(20)])
 
-        # End state: exactly one row, with the highest-confidence value.
-        cache = TranslationCache(cache_path)
-        stats = await cache.stats()
-        assert stats["rows"] == 1
+        # End state: exactly one row for this key, with the highest-confidence value.
+        cache = TranslationCache()
+        end = await cache.get("parallel-text", "en", "de", "construction")
+        assert end is not None
 
 
 # ╔══════════════════════════════════════════════════════════════════════════╗

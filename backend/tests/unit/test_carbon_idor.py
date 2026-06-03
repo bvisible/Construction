@@ -29,42 +29,28 @@ the security + correctness guarantees added in the Round-5 sweep:
   must treat them as Decimal (not float) and must NOT add them into
   the cradle-to-grave total (per ``compute_inventory_totals``).
 
-Per ``feedback_test_isolation.md`` we use a temp SQLite file set up
-BEFORE app imports so the test never touches dev/prod DB.
+Isolation runs on PostgreSQL via ``transactional_session``: each test gets a
+session inside an outer transaction that is rolled back on teardown, so the
+test never leaves rows behind in the shared schema database.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
+import pytest
+import pytest_asyncio
+from fastapi import HTTPException
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-carbon-idor-"))
-_TMP_DB = _TMP_DIR / "carbon_idor.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from fastapi import HTTPException  # noqa: E402
-from sqlalchemy.exc import IntegrityError  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.database import Base  # noqa: E402
-from app.modules.carbon.repository import (  # noqa: E402
+from app.modules.carbon.repository import (
     EmbodiedEntryRepository,
 )
-from app.modules.carbon.schemas import (  # noqa: E402
+from app.modules.carbon.schemas import (
     CarbonInventoryCreate,
     CarbonTargetCreate,
     EmbodiedCarbonEntryCreate,
@@ -72,10 +58,11 @@ from app.modules.carbon.schemas import (  # noqa: E402
     Scope1EntryCreate,
     SustainabilityReportCreate,
 )
-from app.modules.carbon.service import (  # noqa: E402
+from app.modules.carbon.service import (
     CarbonService,
     compute_inventory_totals,
 )
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -97,21 +84,14 @@ async def _make_owner(session: AsyncSession) -> uuid.UUID:
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncSession:
-    """Spin up a fresh in-memory SQLite engine with carbon + project tables."""
-    import app.modules.carbon.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+    """Yield a session inside a PostgreSQL transaction rolled back on teardown.
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    session = Session()
-    try:
+    The shared ``oe_test_unit`` database already carries the full schema, so no
+    ``create_all`` is needed; ``commit()`` becomes a savepoint release and the
+    outer transaction undoes everything when the test finishes.
+    """
+    async with transactional_session() as session:
         yield session
-    finally:
-        await session.close()
-        await engine.dispose()
 
 
 async def _setup_two_projects(session: AsyncSession) -> dict[str, Any]:

@@ -16,24 +16,14 @@ needed for the magic-byte checks).
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-# ── SQLite isolation (before app imports) ──────────────────────────────────
+import pytest
+from fastapi import HTTPException
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-carbon-epd-"))
-_TMP_DB = _TMP_DIR / "carbon_epd.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-from fastapi import HTTPException  # noqa: E402
-
-from app.modules.carbon.service import (  # noqa: E402
+from app.modules.carbon.service import (
     ALLOWED_EPD_MIME_TYPES,
     EPD_MAGIC_BYTES,
     ingest_epd_document,

@@ -17,7 +17,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 
-from app.dependencies import CurrentUserId, SessionDep
+from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.enterprise_workflows.schemas import (
     ApprovalDecision,
     ApprovalRequestCreate,
@@ -48,6 +48,7 @@ async def list_workflows(
     is_active: bool | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
+    _perm: None = Depends(RequirePermission("enterprise_workflows.read")),
     service: WorkflowService = Depends(_get_service),
 ) -> WorkflowListResponse:
     """‌⁠‍List approval workflows with optional filters."""
@@ -70,10 +71,11 @@ async def list_workflows(
 async def create_workflow(
     data: WorkflowCreate,
     user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("enterprise_workflows.manage")),
     service: WorkflowService = Depends(_get_service),
 ) -> WorkflowResponse:
     """‌⁠‍Create a new approval workflow."""
-    workflow = await service.create_workflow(data)
+    workflow = await service.create_workflow(data, user_id=user_id)
     return WorkflowResponse.model_validate(workflow)
 
 
@@ -81,6 +83,7 @@ async def create_workflow(
 async def get_workflow(
     workflow_id: uuid.UUID,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("enterprise_workflows.read")),
     service: WorkflowService = Depends(_get_service),
 ) -> WorkflowResponse:
     """Get a single workflow by ID."""
@@ -93,10 +96,11 @@ async def update_workflow(
     workflow_id: uuid.UUID,
     data: WorkflowUpdate,
     user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("enterprise_workflows.manage")),
     service: WorkflowService = Depends(_get_service),
 ) -> WorkflowResponse:
     """Update a workflow."""
-    workflow = await service.update_workflow(workflow_id, data)
+    workflow = await service.update_workflow(workflow_id, data, user_id=user_id)
     return WorkflowResponse.model_validate(workflow)
 
 
@@ -104,10 +108,11 @@ async def update_workflow(
 async def delete_workflow(
     workflow_id: uuid.UUID,
     user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("enterprise_workflows.manage")),
     service: WorkflowService = Depends(_get_service),
 ) -> None:
     """Delete a workflow and all its requests."""
-    await service.delete_workflow(workflow_id)
+    await service.delete_workflow(workflow_id, user_id=user_id)
 
 
 # ── Approval Requests ──────────────────────────────────────────────────────
@@ -121,6 +126,7 @@ async def list_approval_requests(
     status: str | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=100),
+    _perm: None = Depends(RequirePermission("enterprise_workflows.read")),
     service: WorkflowService = Depends(_get_service),
 ) -> ApprovalRequestListResponse:
     """List approval requests with optional filters."""
@@ -143,6 +149,7 @@ async def list_approval_requests(
 async def submit_approval_request(
     data: ApprovalRequestCreate,
     user_id: CurrentUserId,
+    _perm: None = Depends(RequirePermission("enterprise_workflows.submit")),
     service: WorkflowService = Depends(_get_service),
 ) -> ApprovalRequestResponse:
     """Submit an entity for approval."""
@@ -154,6 +161,7 @@ async def submit_approval_request(
 async def get_approval_request(
     request_id: uuid.UUID,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("enterprise_workflows.read")),
     service: WorkflowService = Depends(_get_service),
 ) -> ApprovalRequestResponse:
     """Get a single approval request by ID."""
@@ -166,6 +174,7 @@ async def approve_request(
     request_id: uuid.UUID,
     data: ApprovalDecision | None = None,
     user_id: CurrentUserId = "",  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("enterprise_workflows.decide")),
     service: WorkflowService = Depends(_get_service),
 ) -> ApprovalRequestResponse:
     """Approve an approval request."""
@@ -179,6 +188,7 @@ async def reject_request(
     request_id: uuid.UUID,
     data: ApprovalDecision | None = None,
     user_id: CurrentUserId = "",  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("enterprise_workflows.decide")),
     service: WorkflowService = Depends(_get_service),
 ) -> ApprovalRequestResponse:
     """Reject an approval request."""
@@ -191,6 +201,7 @@ async def reject_request(
 async def cancel_request(
     request_id: uuid.UUID,
     user_id: CurrentUserId = "",  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("enterprise_workflows.cancel")),
     service: WorkflowService = Depends(_get_service),
 ) -> ApprovalRequestResponse:
     """Withdraw a pending approval request.

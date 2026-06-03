@@ -14,30 +14,21 @@ Covers
 * the four global stamp templates seeded by the migration are present
   after applying the migration to a fresh DB
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+The engine is bound to the PostgreSQL cluster provisioned by ``conftest``
+before this module is imported, so these tests run against PostgreSQL.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-approvals-"))
-_TMP_DB = _TMP_DIR / "approvals.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
+import pytest
+import pytest_asyncio
 
 
 @pytest_asyncio.fixture(scope="module")
 async def db_session():
-    """An :class:`AsyncSession` over a freshly ``create_all``'d temp SQLite.
+    """An :class:`AsyncSession` over a freshly ``create_all``'d PostgreSQL.
 
     Also pre-seeds the four global stamp templates the migration would
     seed, so behavioural tests can rely on them being present.

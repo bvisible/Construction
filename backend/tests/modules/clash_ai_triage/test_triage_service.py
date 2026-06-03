@@ -4,7 +4,7 @@
 
 The LLM client is mocked (``app.modules.clash_ai_triage.service.call_ai``)
 so the suite is hermetic and fast. Per ``feedback_test_isolation.md``
-each session uses a per-test temp SQLite file via the conftest-supplied
+each session uses the conftest-supplied PostgreSQL cluster via the
 ``DATABASE_URL`` override (so the batch test, which spawns workers via
 ``async_session_factory``, talks to the same DB the fixture seeded).
 
@@ -63,7 +63,7 @@ def _register_models() -> None:
 
 @pytest_asyncio.fixture
 async def session():
-    """Per-test SQLite via the conftest-bound ``async_session_factory``.
+    """Per-test PostgreSQL session via the conftest-bound ``async_session_factory``.
 
     Uses the GLOBAL ``async_session_factory`` so the batch worker (which
     also spawns sessions via that factory) talks to the same DB the

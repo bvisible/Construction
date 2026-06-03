@@ -75,17 +75,20 @@ async def _verify_project_access(
             pass
 
         if str(getattr(project, "owner_id", "")) != str(user_id):
+            # Return 404 (not 403) for cross-project denials to match the R7
+            # standard used by the finance module: a 403 here would confirm the
+            # project UUID exists, enabling project enumeration.
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access denied: you do not own this project",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Project {project_id} not found",
             )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         logger.warning("Full EVM project access check failed for %s: %s", project_id, exc)
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authorization check failed",
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project {project_id} not found",
         )
 
 

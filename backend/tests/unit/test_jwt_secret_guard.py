@@ -43,8 +43,8 @@ def _build(**overrides):
     """
     defaults = {
         "_env_file": None,
-        "database_url": "sqlite+aiosqlite:///./test.db",
-        "database_sync_url": "sqlite:///./test.db",
+        "database_url": "postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+        "database_sync_url": "postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
     }
     defaults.update(overrides)
     return Settings(**defaults)

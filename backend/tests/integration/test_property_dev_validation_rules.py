@@ -10,26 +10,19 @@ Covers:
       effect.
     * 5 IDOR / RBAC tests on the compliance endpoints.
 
-Test isolation: pointed at a per-module temp SQLite (see
-``feedback_test_isolation.md``).
+Test isolation: runs against the PostgreSQL cluster provisioned by
+``tests/conftest.py`` (the SQLAlchemy engine is bound before this module
+imports).
 """
 
 from __future__ import annotations
 
 import json
 import os
-import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-rules-"))
-_TMP_DB = _TMP_DIR / "propdev_rules.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 # Skip the slow seed phases — tests don't need them and they 2x the boot time.
 os.environ.setdefault("SEED_DEMO", "false")
 os.environ.setdefault("SEED_SHOWCASE", "false")
@@ -43,7 +36,7 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()
@@ -68,7 +61,7 @@ async def client(app_instance):
 
 @pytest_asyncio.fixture
 async def session(app_instance):
-    """Fresh AsyncSession bound to the temp DB."""
+    """Fresh AsyncSession bound to the conftest PostgreSQL."""
     from app.database import async_session_factory
 
     async with async_session_factory() as s:
@@ -1042,9 +1035,9 @@ async def test_subscriber_finance_invoice_created_records_ref(session, seeded_de
 async def auth_headers(seeded_dev):
     """Mint a JWT directly for the admin owner seeded by ``seeded_dev``.
 
-    Avoids the httpx auth round-trip (which raced against sqlite locks
-    when both the registration and the seeded_dev fixture wrote to the
-    same DB on the same loop in earlier iterations).
+    Avoids the httpx auth round-trip (which raced when both the
+    registration and the seeded_dev fixture wrote to the same DB on the
+    same loop in earlier iterations).
     """
     from app.config import get_settings
     from app.modules.users.service import create_access_token

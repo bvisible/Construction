@@ -108,8 +108,10 @@ async def translate(
                         miss and the cascade falls through to fallback.
         thresholds:     Optional per-tier override map; missing keys keep
                         their default values.
-        cache_db_path:  Override path for the SQLite cache. Defaults to
-                        ``~/.openestimate/translations/cache.db``.
+        cache_db_path:  Deprecated and ignored. The translation-memory
+                        cache now lives in the main PostgreSQL database;
+                        the parameter is retained only for backward
+                        compatibility with existing callers.
         lookup_root:    Override root for MUSE/IATE TSV files. Defaults to
                         ``~/.openestimate/translations/``.
 
@@ -178,8 +180,8 @@ async def translate(
                 confidence=conf,
             )
 
-    # ── Tier 3: SQLite cache ──────────────────────────────────────────
-    cache = TranslationCache(cache_db_path)
+    # ── Tier 3: translation-memory cache (PostgreSQL) ─────────────────
+    cache = TranslationCache()
     try:
         cached = await cache.get(text_in, src, tgt, domain)
     except Exception as exc:  # pragma: no cover — defensive
@@ -250,11 +252,11 @@ async def _maybe_cache(
     domain: str,
     tier: TierUsed,
     confidence: float,
-    cache_db_path: str | None,
+    cache_db_path: str | None,  # noqa: ARG001 — kept for back-compat; cache is PostgreSQL now
 ) -> None:
     """Persist a successful translation. Errors are logged & swallowed."""
     try:
-        cache = TranslationCache(cache_db_path)
+        cache = TranslationCache()
         await cache.upsert(
             text=text,
             translated_text=translated,

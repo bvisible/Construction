@@ -16,9 +16,13 @@ Covers the three workflow touch-points the module owns end-to-end:
    router serialises for ``GET /pipelines/runs/{run_id}``.
 
 External I/O (Celery dispatch, embedding lookups) is mocked: the
-executor walks the in-process registry and writes to a file-backed
-temp SQLite. The prod ``openestimate.db`` is never touched (the strict
-``feedback_test_isolation.md`` rule).
+executor walks the in-process registry and writes to a per-test
+throwaway PostgreSQL database (cloned from the schema-loaded template
+by ``tests._pg.isolated_engine``). The prod database is never touched
+(the strict ``feedback_test_isolation.md`` rule), and because the
+executor opens its own sessions from the factory the test and executor
+must see each other's commits — hence a real throwaway database rather
+than a savepoint-rolled-back shared session.
 
 A fourth test pins the recent hardening: the pipeline-execution per-run
 node-count cap (``DEFAULT_MAX_NODES_PER_RUN``) refuses to start a graph
@@ -31,30 +35,26 @@ import uuid
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 # Importing pipeline_nodes registers the 6 Phase-1 node types so
 # validate_graph / execute_run can resolve them.
 import app.modules.pipelines.pipeline_nodes  # noqa: F401
-from app.core.job_run import JobRun
 from app.core.pipeline.executor import (
     GraphValidationError,
     execute_run,
 )
 from app.core.pipeline.registry import NodeContext, register_node
-from app.database import Base
 from app.modules.pipelines.models import (
     Pipeline,
-    PipelineNodeState,
     PipelineRun,
 )
 from app.modules.pipelines.service import PipelineService
-from app.modules.projects.models import Project
-from app.modules.users.models import User
+from tests._pg import isolated_engine
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -67,30 +67,17 @@ def _register_builtin_rules() -> None:
     register_builtin_rules()
 
 
-@pytest.fixture
-async def session_factory(tmp_path):
-    """File-backed async SQLite scoped to just the tables we touch."""
-    db_path = tmp_path / "pipelines_unit.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                Project.__table__,
-                JobRun.__table__,
-                Pipeline.__table__,
-                PipelineRun.__table__,
-                PipelineNodeState.__table__,
-            ],
-        )
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+@pytest_asyncio.fixture
+async def session_factory():
+    """Session factory bound to a per-test throwaway PostgreSQL database.
+
+    The executor opens its own sessions from this factory (separate
+    connections) and commits, so the test must see those commits across
+    connections — hence a real throwaway database rather than a
+    savepoint-rolled-back shared session.
+    """
+    async with isolated_engine() as engine:
+        yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 def _mock_graph() -> dict:
@@ -163,7 +150,7 @@ async def test_submit_run_enqueues_a_jobrun_and_drives_the_graph(
     """``submit_run`` + the registered handler walk the graph to completion.
 
     Celery dispatch is mocked (no broker required); the JobRun lands in
-    the same SQLite file as the pipeline so the test sees both sides.
+    the same throwaway database as the pipeline so the test sees both sides.
     """
     async with session_factory() as db:
         svc = PipelineService(db)

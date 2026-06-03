@@ -6,26 +6,17 @@ Validates the happy path (200 + persisted Tileset row + storage write),
 the missing-anchor 422, the cross-tenant 404, and the missing-import
 404.
 
-Scaffolding mirrors test_geo_hub_api.py — per-module temp SQLite
-registered BEFORE any ``from app...`` import.
+The suite runs on the PostgreSQL cluster provisioned by ``conftest.py``,
+which binds the SQLAlchemy engine before any ``from app...`` import.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-geo-hub-canonical-"))
-_TMP_DB = _TMP_DIR / "geo_hub_canonical.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 

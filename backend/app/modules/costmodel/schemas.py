@@ -330,6 +330,13 @@ class DashboardResponse(BaseModel):
     cpi: float = 0.0
     status: str = "on_budget"
     currency: str = ""
+    # True when the project's budget lines span more than one currency.
+    # The repository converts foreign lines to the project base via
+    # ``fx_rates``, but a missing rate leaves a foreign amount unconverted
+    # and silently blended into the totals. Surface the flag so the UI can
+    # warn instead of presenting a fictitious blended sum (mirrors
+    # ``SpineRollupResponse.mixed_currency``).
+    mixed_currency: bool = False
 
     @field_serializer("total_budget", "total_committed", "total_actual", when_used="json")
     def _ser_money(self, v: Decimal) -> str | None:

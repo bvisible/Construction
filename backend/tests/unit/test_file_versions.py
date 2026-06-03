@@ -18,26 +18,26 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.file_versions.models import FileVersion  # noqa: F401 — registers ORM
 from app.modules.file_versions.schemas import FileVersionCreate
 from app.modules.file_versions.service import FileVersionService
 from app.modules.projects.models import Project  # noqa: F401 — registers ORM
 from app.modules.users.models import User  # noqa: F401 — registers ORM
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test in-memory SQLite session with file_version DDL applied."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    """Per-test PostgreSQL session inside a rolled-back outer transaction.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    no per-test DDL is needed; the outer transaction is rolled back on teardown
+    to isolate each test.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _seed_project(session: AsyncSession) -> uuid.UUID:

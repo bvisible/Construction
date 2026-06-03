@@ -2,7 +2,7 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Tests for the file-saved-views (W5) module.
 
-Covers the full CRUD + telemetry surface against a temp SQLite:
+Covers the full CRUD + telemetry surface against PostgreSQL:
 
 * ``test_create_then_list_returns_pinned_first`` — pinning floats a
   view above unpinned siblings regardless of ``sort_order``.
@@ -14,79 +14,43 @@ Covers the full CRUD + telemetry surface against a temp SQLite:
 * ``test_shared_view_visible_to_other_user_in_same_project``.
 * ``test_non_owner_cannot_update_or_delete_shared_view``.
 
-We build the schema with ``Base.metadata.create_all`` against an
-isolated per-module temp SQLite — no FastAPI lifespan, no module
-loader. The mapper-init flake some other suites run into (double-
-registered ``ApprovalWorkflow``) does not apply because we never
-trigger ``configure_mappers``: the only tables imported here are
-the three we actually need plus ``Project`` / ``User``.
+Each test runs on a transaction-isolated PostgreSQL session from
+``tests._pg.transactional_session`` (the shared schema-loaded
+``oe_test_unit`` database, rolled back on teardown) so the tests stay
+fast and never touch the production database.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-saved-views-"))
-_TMP_DB = _TMP_DIR / "saved_views.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.database import Base  # noqa: E402
-from app.modules.file_saved_views.models import FileSavedView  # noqa: E402
-from app.modules.file_saved_views.schemas import (  # noqa: E402
+from app.modules.file_saved_views.schemas import (
     FilterSnapshot,
     SavedViewCreate,
     SavedViewUpdate,
 )
-from app.modules.file_saved_views.service import (  # noqa: E402
+from app.modules.file_saved_views.service import (
     SavedViewConflictError,
     SavedViewNotFoundError,
     SavedViewService,
 )
-from app.modules.projects.models import Project  # noqa: E402
-from app.modules.users.models import User  # noqa: E402
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── DB fixture ─────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncSession:
-    """A real AsyncSession over a fresh temp SQLite with our tables only."""
-    db_path = _TMP_DIR / f"sv-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path.as_posix()}",
-        echo=False,
-    )
-    async with engine.begin() as conn:
-        # Only the three tables this suite touches. Building Project +
-        # User explicitly keeps unrelated ``Base.metadata`` mappers
-        # (Approval Workflow et al) out of the mapper configure path,
-        # which is what trips other suites' lifespan-based fixtures.
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                Project.__table__,
-                FileSavedView.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as session:
-        yield session
-    await engine.dispose()
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
+        yield s
 
 
 async def _seed_user_and_project(session) -> tuple[uuid.UUID, uuid.UUID]:
@@ -188,7 +152,7 @@ async def test_use_bumps_use_count_and_last_used_at(db_session):
     await db_session.commit()
     assert bumped.use_count == 1
     assert bumped.last_used_at is not None
-    # ``last_used_at`` may come back tz-naive from SQLite — normalise.
+    # Normalise to tz-aware before comparing, just in case.
     last = bumped.last_used_at
     if last.tzinfo is None:
         last = last.replace(tzinfo=UTC)

@@ -3,45 +3,27 @@
 """Performance tests — Dashboard rollup at 50 projects × 10 widgets.
 
 Assertions:
-* Single ``compute_rollup`` call for all 10 widgets completes in < 2 s
-  on SQLite (CI has ~2× slower I/O than dev; production PostgreSQL is
-  faster). The wall-clock budget is intentionally generous here because
-  SQLite does not support true parallel reads.
+* Single ``compute_rollup`` call for all 10 widgets completes in < 2 s on the
+  transaction-isolated PostgreSQL test database. The wall-clock budget is
+  intentionally generous because CI has ~2× slower I/O than dev.
 * SQL query count is **O(1)** — stays constant as project count scales
   from 1 → 50. We instrument with a SQLAlchemy event listener that counts
   ``before_cursor_execute`` events.
 
-Note: the test uses SQLite + in-process seeding, not the production VPS.
+Note: the test seeds in-process through ``tests._pg.transactional_session``
+(the shared schema-loaded ``oe_test_unit`` database), not the production VPS.
 """
 
 from __future__ import annotations
 
-import tempfile
 import time
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.database import Base
-
-# ── Model registration ─────────────────────────────────────────────────────
-
-
-def _register_models() -> None:
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.changeorders.models  # noqa: F401
-    import app.modules.daily_diary.models  # noqa: F401
-    import app.modules.finance.models  # noqa: F401
-    import app.modules.procurement.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.safety.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-    import app.modules.validation.models  # noqa: F401
-
+from tests._pg import transactional_session
 
 # ── Query counter ─────────────────────────────────────────────────────────
 
@@ -65,22 +47,16 @@ N_PROJECTS = 50
 N_BOQS_PER_PROJECT = 10  # Each project gets 10 BOQs (10 positions each)
 
 
-@pytest_asyncio.fixture(scope="module")
+@pytest_asyncio.fixture
 async def perf_session():
-    """Module-scoped: seed once, reuse across all perf tests."""
-    tmp_db = Path(tempfile.mkdtemp()) / "perf.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Seed 50 projects worth of rollup data into a transaction-isolated session.
 
-    _register_models()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    # Seed data
-    async with factory() as session:
+    The schema-loaded ``oe_test_unit`` database is reused; everything seeded
+    here is rolled back on teardown. PostgreSQL enforces the cross-module FKs
+    (owner -> project -> BOQ -> position) natively, so the rows are inserted in
+    dependency order.
+    """
+    async with transactional_session() as session:
         from app.modules.boq.models import BOQ, Position
         from app.modules.projects.models import Project
         from app.modules.safety.models import SafetyIncident
@@ -160,15 +136,8 @@ async def perf_session():
                 )
             )
 
-        await session.commit()
+        await session.flush()
         yield session, projects, owner.id
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 # ── Performance assertions ─────────────────────────────────────────────────
@@ -207,19 +176,16 @@ class TestRollupPerformance:
         Run rollup with all 50 projects, capture C50.
         Assert C50 == C1 (no per-project loop queries).
 
-        We use a SQLAlchemy sync-engine ``before_cursor_execute`` listener
-        that we attach to the underlying connection-level sync engine.
-        Because aiosqlite wraps a sync sqlite3 connection, we intercept at
-        the sync layer via the ``aiosqlite`` engine's sync engine.
+        We attach a SQLAlchemy ``before_cursor_execute`` listener to the sync
+        bind behind the async session, counting every statement the service
+        issues across the call.
         """
         from app.modules.dashboard.service import KNOWN_WIDGETS, compute_rollup
 
         session, projects, _owner_id = perf_session
         widgets = sorted(KNOWN_WIDGETS)
 
-        # Attach listener to the sync engine wrapped by the async engine.
-        # ``session.get_bind()`` is not available on async sessions; use
-        # the ``bind`` attribute of the underlying sync session pool.
+        # Attach listener to the sync bind behind the async session.
         sync_engine = session.get_bind()
 
         counter = _QueryCounter()

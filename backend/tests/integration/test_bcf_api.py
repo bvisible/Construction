@@ -10,32 +10,22 @@ Covers:
 
 Test isolation
 ~~~~~~~~~~~~~~
-Per ``feedback_test_isolation.md`` we point ``DATABASE_URL`` at a fresh
-temp SQLite file BEFORE ``app.database`` is first imported.
+The PostgreSQL cluster and SQLAlchemy engine are provisioned by
+``tests/conftest.py`` before any test module imports, so this module runs
+against that shared PostgreSQL database.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
-import os
-import tempfile
 import uuid
 import zipfile
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-bcf-api-"))
-_TMP_DB = _TMP_DIR / "bcf_api.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import asyncio  # noqa: E402
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # 1x1 transparent PNG.
 _PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -46,7 +36,7 @@ _PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAC
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

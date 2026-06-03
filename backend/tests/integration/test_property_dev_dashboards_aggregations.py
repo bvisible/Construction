@@ -14,29 +14,21 @@ All endpoints are gated by ``RequirePermission("property_dev.read")`` and
 walked through ``_verify_owner_via_*`` IDOR closures.
 
 Seeding is done directly through the repository layer to avoid a
-pre-existing aiosqlite/Windows MissingGreenlet that surfaces only in the
+pre-existing MissingGreenlet that surfaces only in the
 Lead -> Reservation HTTP pipeline. The dashboard endpoints themselves
 are exercised via HTTP so the permission gate + IDOR closure are
-exercised end-to-end.
+exercised end-to-end. The suite runs on the PostgreSQL engine bound by
+``tests/conftest.py``.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-dashboards-"))
-_TMP_DB = _TMP_DIR / "propdev_dashboards.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -97,7 +89,7 @@ async def _login(client: AsyncClient, email: str, password: str) -> dict[str, st
     return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
 
-# ── Direct-DB seeders (bypass the buggy convert pipeline on Win+aiosqlite) ─
+# ── Direct-DB seeders (bypass the buggy convert pipeline) ─
 
 
 async def _seed_db_world(

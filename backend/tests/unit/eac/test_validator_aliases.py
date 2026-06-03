@@ -25,40 +25,24 @@ import pytest
 pytest.importorskip("simpleeval", reason="simpleeval is not in the [dev] install")
 
 import pytest_asyncio
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.eac.models  # noqa: F401 — register tables
-from app.database import Base
 from app.modules.eac.engine.validator import ValidatorIssue, validate_rule
 from app.modules.eac.models import EacGlobalVariable, EacParameterAlias
 from app.modules.eac.schemas import EacRuleDefinition
+from tests._pg import transactional_session
 
-# ── Fixture: in-memory SQLite session with a seeded alias ────────────────
+# ── Fixture: PostgreSQL session (rolled back per test) with a seeded alias ──
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-
-    @event.listens_for(engine.sync_engine, "connect")
-    def _enable_sqlite_fks(dbapi_conn, _conn_record) -> None:  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as sess:
-        try:
-            yield sess
-        finally:
-            await sess.close()
-    await engine.dispose()
+    # Runs against the shared schema-loaded ``oe_test_unit`` database inside an
+    # outer transaction that is rolled back on teardown, so each test starts
+    # from an empty database. PostgreSQL enforces foreign keys natively.
+    async with transactional_session() as s:
+        yield s
 
 
 @pytest_asyncio.fixture

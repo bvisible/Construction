@@ -34,7 +34,7 @@ This file fills the spec gaps NOT already exercised there:
   process restarts with a freshly-rotated JWT_SECRET, the prior
   token is rejected (same error code as expired).
 
-Shares the per-module SQLite fixture from ``conftest.py``; uses
+Shares the per-module PostgreSQL fixture from ``conftest.py``; uses
 ``_register_user`` for tenant setup. Mirrors ``test_portal.py`` style
 so it can run side-by-side without conflict.
 """

@@ -5,6 +5,36 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.6.0] - 2026-06-02
+
+### Changed
+
+- Embedded PostgreSQL is now the only database. SQLite has been removed from both the application and the test suite. This finishes the move that began in version 6.0.0, when an in-process PostgreSQL became the default with no Docker and no setup. The translation-memory cache now lives in the main database instead of its own SQLite file, the cost-database importer loads straight into PostgreSQL, and the SQLite engine and the dual-dialect database machinery are gone. The app still boots its own PostgreSQL on first run under ~/.openestimate/pgdata, or you can point DATABASE_URL at any external PostgreSQL. The one-time import of a legacy SQLite database on upgrade still works. There is no longer a SQLite fallback to run on.
+
+### Fixed
+
+- 3D models placed on the project map now render. The map tile builder was writing each model's per-feature metadata as inline arrays, but the 3D Tiles format wants those values stored in the binary buffer and referenced by index. The viewer could not read the inline shape, so it gave up on the whole model and the map stayed blank. The metadata is now written the way the spec expects, with a binary property table, so the geometry shows on the map as soon as a model is placed.
+- Database migrations now record correctly on PostgreSQL through the standard alembic path. The version table that alembic keeps for itself was capped at 32 characters, which is shorter than some of this project's revision names, so a plain incremental upgrade could fail the moment it recorded one of them. That column is now wide enough. A couple of migrations also created a boolean column with an integer default, which PostgreSQL rejects, and a set of older downgrade steps assumed SQLite behaviour, where a failed statement is harmless; on PostgreSQL the same failure aborts the whole transaction. The boolean defaults are fixed, and those downgrade steps now drop tables and columns with the database's own cascade and if-exists handling, so a downgrade no longer aborts on PostgreSQL. The recent migrations are exercised by an upgrade and downgrade roundtrip test against a real PostgreSQL server. The normal install path was never affected, since it creates the schema directly from the models and stamps it at the latest version.
+
+## [6.5.0] - 2026-06-02
+
+### Added
+
+- A redesigned AI Agents page. Agents are shown as a clear gallery that says what each one does, the tools it can use and a few example prompts, so it is obvious what you can ask before you start. Five new working agents come with it: an estimate reviewer that runs the validation rules over a bill of quantities, a cost classifier that maps an item to a CWICR code, a document analyst that searches your project files, a project analyst that summarises a project's cost position, and a rate benchmarker that compares a unit rate against the cost database. Each agent only reports what it can actually read and says so plainly when a source is not available, rather than inventing an answer.
+- WhatsApp notifications are wired into the integration test and send paths through the official Meta Cloud API. A delivery needs a verified Business phone number, an access token and a recipient in the config, plus a Meta-approved template. When any of those is missing the integration now surfaces the real Meta response instead of a placeholder message.
+
+### Fixed
+
+- Placing a file on the project map works from start to finish again. The result appears on the map, the camera moves to it, and the base map loads quickly because map tiles now go through one pooled client with caching and conditional requests instead of opening a fresh connection for every tile.
+- Multiple currencies are visible again in the bill of quantities. A position priced in a currency other than the project base shows a small currency badge next to its unit rate, and there is a per-position currency action in the row menu for lines that have no resources of their own. Nothing is blended: each position is still converted into the project currency through the project exchange rate before it rolls up into the line total and the grand total.
+- The linked-geometry preview in the bill of quantities no longer shows a blank panel when a model has no 3D mesh to display, which is common for data-only drawings that still need a converter. It now explains there is nothing to preview yet and offers to open the element in the BIM viewer, and it gives the same clear message when a model loads but no mesh matches the linked element.
+- The numbered screenshots in the README were recaptured from the current build. The old ones were taken with the product tour open, so they carried a dark dimming backdrop, and the projects shot also had the version-6 database notice across the top. The new ones show the real app with no overlays.
+
+### Changed
+
+- The unfinished field-worker mobile shell is no longer reachable in a normal build. It is gated behind a pilot flag until its screens and sign-in are ready, so nobody lands on a placeholder page by typing the address.
+- Build and release hygiene. The software bill of materials workflow runs on Python 3.12 to match the project, so its inventory artifacts are produced on release again, and the backend lint and formatting are clean.
+
 ## [6.4.2] - 2026-06-02
 
 ### Fixed

@@ -12,9 +12,11 @@ Scope (this is the FIRST test for this module — previously zero coverage):
     * Role gate: an "editor" actor cannot award (FSM contract requires
       admin / manager / owner).
 
-Uses an in-memory SQLite engine + real ORM models so the audit log row
-is genuinely persisted and observable — this is the load-bearing
-guarantee for the financial-traceability claim in the architecture guide.
+Runs against PostgreSQL via ``transactional_session`` (each test executes
+inside an outer transaction rolled back on teardown) with the real ORM
+models, so the audit log row is genuinely persisted and observable within
+the test - the load-bearing guarantee for the financial-traceability claim
+in the architecture guide.
 """
 
 from __future__ import annotations
@@ -23,35 +25,24 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.modules.projects.models  # noqa: E402,F401
-import app.modules.rfq_bidding.models  # noqa: E402,F401
-import app.modules.users.models  # noqa: E402,F401
 from app.core.audit_log import get_activity_for_entity
-
-# Ensure all module ORM tables are registered with Base.metadata before
-# we call create_all() — without this, FK targets (oe_projects_project,
-# oe_users_user, etc) would be missing on a clean per-test engine.
-from app.database import Base  # noqa: E402
 from app.modules.rfq_bidding.schemas import BidCreate, RFQCreate
 from app.modules.rfq_bidding.service import RFQService
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test isolated async SQLite session."""
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        future=True,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """Per-test PostgreSQL session inside a transaction rolled back on teardown.
 
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    The shared ``oe_test_unit`` database already carries the full schema, so no
+    ``create_all`` is needed; the outer transaction provides isolation between
+    tests.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 def _make_rfq_create(project_id: uuid.UUID) -> RFQCreate:

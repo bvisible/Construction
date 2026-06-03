@@ -1,9 +1,11 @@
 """Unit tests for scheduled report templates (v2.3.0).
 
 Exercises ``ReportingService.schedule_template``, ``list_due_templates``
-and ``mark_template_ran`` against an in-memory SQLite DB so we can
-verify the next-run computation, pause semantics and clean-up on
-invalid crons without having to spin up the full app lifespan.
+and ``mark_template_ran`` against PostgreSQL so we can verify the
+next-run computation, pause semantics and clean-up on invalid crons
+without having to spin up the full app lifespan. Each test runs inside
+an outer transaction that is rolled back on teardown, giving per-test
+isolation on the shared, fully-migrated test database.
 
 Router-level tests live under ``tests/integration/`` because they need
 the auth + project fixtures.
@@ -17,36 +19,24 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
-from app.modules.reporting.models import GeneratedReport, KPISnapshot, ReportTemplate
+from app.modules.reporting.models import ReportTemplate
 from app.modules.reporting.schemas import ReportScheduleRequest
 from app.modules.reporting.service import ReportingService
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Fresh in-memory SQLite — per-test isolation.
+    """PostgreSQL session inside a rolled-back outer transaction.
 
-    Scoped ``create_all(tables=[...])`` so that unrelated modules on
-    ``Base.metadata`` (with FKs to tables we don't need) don't break
-    the harness.
+    Per-test isolation: the shared test database already carries the
+    full schema, and any data committed by the service is undone on
+    teardown because the surrounding transaction is rolled back.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                ReportTemplate.__table__,
-                KPISnapshot.__table__,
-                GeneratedReport.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_template(session: AsyncSession, **overrides) -> ReportTemplate:

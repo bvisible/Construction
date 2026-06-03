@@ -6,100 +6,53 @@ attacker. Every such attempt must return HTTP 404 — not 403 and not 200.
 Returning 404 avoids leaking the existence of the UUID (the same behaviour
 used across every R6/R7-audited module).
 
-Router is mounted against a live in-memory SQLite session so the real
-``verify_project_access`` runs against persisted ``Project.owner_id`` rows.
+Router is mounted against a live PostgreSQL session (the shared unit
+database, isolated per test by an outer transaction that is rolled back on
+teardown) so the real ``verify_project_access`` runs against persisted
+``Project.owner_id`` rows.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import Any
 
-# ── Per-module SQLite isolation — MUST run before app imports ────────────
+import pytest
+import pytest_asyncio
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-qms-idor-"))
-_TMP_DB = _TMP_DIR / "qms_idor.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.database import Base  # noqa: E402
-from app.dependencies import (  # noqa: E402
+from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS  # noqa: E402
-from app.modules.qms.models import (  # noqa: E402
-    QMSNCR,
-    ITPItem,
-    ITPPlan,
-    ITPTemplate,
-    QMSAudit,
-    QMSAuditFinding,
-    QMSAuditLog,
-    QMSCalibration,
-    QMSInspection,
-    QMSInspectionSignature,
-    QMSNCRAction,
-    QMSPunchItem,
-)
-from app.modules.qms.router import router as qms_router  # noqa: E402
-from app.modules.qms.schemas import (  # noqa: E402
+from app.modules.projects.models import Project
+from app.modules.qms.router import router as qms_router
+from app.modules.qms.schemas import (
     InspectionCreate,
     NCRCreate,
 )
-from app.modules.qms.service import QMSService  # noqa: E402
-from app.modules.users.models import APIKey, User  # noqa: E402
-
-_ALL_TABLES = [
-    User.__table__,
-    APIKey.__table__,
-    Project.__table__,
-    ProjectWBS.__table__,
-    ProjectMilestone.__table__,
-    ITPPlan.__table__,
-    ITPItem.__table__,
-    ITPTemplate.__table__,
-    QMSInspection.__table__,
-    QMSInspectionSignature.__table__,
-    QMSNCR.__table__,
-    QMSNCRAction.__table__,
-    QMSPunchItem.__table__,
-    QMSAudit.__table__,
-    QMSAuditFinding.__table__,
-    QMSAuditLog.__table__,
-    QMSCalibration.__table__,
-]
-
+from app.modules.qms.service import QMSService
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_ALL_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
-        yield sess
-        await sess.rollback()
-    await engine.dispose()
+    """Function-scoped session on the shared PostgreSQL unit database.
+
+    Each test runs inside an outer transaction that is rolled back on
+    teardown, so the database starts empty for every test. The session's own
+    ``commit()`` calls become savepoint releases (visible within the test,
+    undone afterwards), which the router tests rely on after seeding rows.
+    """
+    async with transactional_session() as s:
+        yield s
 
 
 async def _make_user(session: AsyncSession) -> uuid.UUID:

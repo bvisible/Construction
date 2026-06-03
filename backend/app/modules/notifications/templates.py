@@ -102,6 +102,9 @@ _TEMPLATES: dict[str, str] = {
     # ── File comments (Epic B / B1) ──────────────────────────────────
     "notifications.file_comments.mention.title": "You were mentioned in a comment",
     "notifications.file_comments.mention.body": '"{excerpt}"',
+    # ── Clash coordination ───────────────────────────────────────────
+    "notifications.clash.high_severity.title": "High-severity clash detected",
+    "notifications.clash.high_severity.body": "{severity} clash: {a_name} vs {b_name}",
     # ── Digests (Epic B / B3) ────────────────────────────────────────
     "notifications.digest.title": "Notification digest",
     "notifications.digest.body": "You have {count} new updates on the {channel} channel.",
@@ -140,6 +143,8 @@ _TYPE_TO_ICON: dict[str, str] = {
     "transmittal_responded": "info",
     # File comment mention (Epic B / B1)
     "file_comment_mention": "info",
+    # Clash coordination — a serious interference needs attention
+    "clash_high_severity": "warning",
 }
 
 

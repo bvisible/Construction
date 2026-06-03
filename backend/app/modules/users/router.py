@@ -800,6 +800,36 @@ async def save_onboarding(
     )
 
 
+@router.post("/me/onboarding/complete/", response_model=OnboardingResponse)
+async def complete_onboarding(
+    user_id: CurrentUserId,
+    service: UserService = Depends(_get_service),
+) -> OnboardingResponse:
+    """Flag onboarding as completed without rewriting the user's choices.
+
+    Lightweight companion to ``save_onboarding``. The wizard calls this from
+    every exit path that has no module selection to persist (skip, the
+    "explore all modules" link, the apply-a-pack flow), so the per-user
+    ``completed`` flag is set reliably on the server and the dashboard
+    first-run redirect can trust it. Existing ``company_type`` /
+    ``enabled_modules`` / ``interface_mode`` and the user's
+    ``module_preferences`` are left untouched.
+    """
+    user = await service.get_user(uuid.UUID(user_id))
+    metadata: dict[str, Any] = dict(user.metadata_ or {})
+    onboarding: dict[str, Any] = dict(metadata.get("onboarding") or {})
+    onboarding["completed"] = True
+    metadata["onboarding"] = onboarding
+    await service.update_profile(uuid.UUID(user_id), metadata_=metadata)
+
+    return OnboardingResponse(
+        completed=True,
+        company_type=onboarding.get("company_type"),
+        enabled_modules=onboarding.get("enabled_modules", []),
+        interface_mode=onboarding.get("interface_mode"),
+    )
+
+
 @router.get("/onboarding-presets/")
 async def get_onboarding_presets() -> list[dict[str, Any]]:
     """Return all available company-type presets for the onboarding wizard.

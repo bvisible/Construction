@@ -53,24 +53,9 @@ import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import Role, permission_registry
-from app.database import Base
-from app.modules.daily_diary.models import (
-    DailyDiary,
-    DiaryArchiveSignature,
-    DiaryEntry,
-    DiaryPhoto,
-    DiaryVideo,
-    DroneSurvey,
-    RealityCaptureDataset,
-    WeatherRecord,
-)
 from app.modules.daily_diary.permissions import register_daily_diary_permissions
 from app.modules.daily_diary.schemas import (
     DailyDiaryCreate,
@@ -83,50 +68,25 @@ from app.modules.daily_diary.schemas import (
     WeatherRecordCreate,
 )
 from app.modules.daily_diary.service import DailyDiaryService
-
-# Import projects + users so the FK targets exist when create_all runs.
-from app.modules.projects.models import Project  # noqa: F401
-from app.modules.users.models import User  # noqa: F401
-
-_DD_TABLES = [
-    Project.__table__,  # FK target for project_id
-    User.__table__,  # FK target for site_supervisor_id / signed_by / etc.
-    DailyDiary.__table__,
-    WeatherRecord.__table__,
-    DiaryEntry.__table__,
-    DiaryPhoto.__table__,
-    DiaryVideo.__table__,
-    DroneSurvey.__table__,
-    RealityCaptureDataset.__table__,
-    DiaryArchiveSignature.__table__,
-]
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """‌⁠‍Per-test in-memory SQLite session with daily_diary tables only.
+    """Per-test PostgreSQL session, isolated by an outer transaction.
 
     daily_diary models carry FK references to ``oe_projects_project``
-    and ``oe_users_user``. We create those parent tables but leave
-    SQLite's ``foreign_keys`` pragma OFF so we don't have to seed
-    matching parent rows for every diary the test creates. The
-    cross-module FK referential integrity is verified by the alembic
-    migration tests against PostgreSQL, not here.
-    """
-    from sqlalchemy import text
+    and ``oe_users_user``. We run with ``disable_fks=True`` so the FK
+    triggers do not fire and we don't have to seed matching parent rows
+    for every diary the test creates. The cross-module FK referential
+    integrity is verified by the alembic migration tests, not here.
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        # Explicit pragma OFF — some sqlite builds default to ON.
-        await conn.execute(text("PRAGMA foreign_keys = OFF"))
-        await conn.run_sync(Base.metadata.create_all, tables=_DD_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
-        # Re-disable on the per-session connection (PRAGMA is per-conn).
-        await sess.execute(text("PRAGMA foreign_keys = OFF"))
-        yield sess
-        await sess.rollback()
-    await engine.dispose()
+    The session lives inside an outer transaction that is rolled back on
+    teardown, so each test starts from an empty database without any
+    ``create_all`` round-trip.
+    """
+    async with transactional_session(disable_fks=True) as s:
+        yield s
 
 
 @pytest_asyncio.fixture

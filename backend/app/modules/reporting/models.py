@@ -204,6 +204,16 @@ class GeneratedReport(Base):
         nullable=True,
         default=None,
     )
+    # Resolved ISO 4217 currency stamped at generation time (override >
+    # project currency > EUR fallback). Persisted so a report's money
+    # figures are forever interpretable in one currency even if the
+    # project's default currency later changes. Nullable for rows created
+    # before this column existed; new rows always carry a 3-letter code.
+    currency: Mapped[str | None] = mapped_column(
+        String(3),
+        nullable=True,
+        default=None,
+    )
     data_snapshot: Mapped[dict | None] = mapped_column(  # type: ignore[assignment]
         JSON,
         nullable=True,

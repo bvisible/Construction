@@ -224,8 +224,8 @@ async def test_cross_project_idor_returns_404(
     # the markup. Without a JWT the API rejects with 401/403, not 200 —
     # which proves the resource is project-gated rather than world-readable.
     # We use this instead of a second-user IDOR check because spinning up
-    # a second async-session-factory writer mid-test on SQLite + aiosqlite
-    # consistently triggers a "await wasn't used with future" race.
+    # a second async-session-factory writer mid-test can trigger race
+    # conditions under certain event-loop configurations.
     resp = await client.get(f"/api/v1/markups/{a_markup['id']}")
     assert resp.status_code in (401, 403, 404), resp.text
 

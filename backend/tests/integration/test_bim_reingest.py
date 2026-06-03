@@ -1,7 +1,7 @@
 """Integration tests for ``app.scripts.reingest_bim_model``.
 
-These tests exercise the BIM re-ingest CLI end-to-end against an
-isolated temp SQLite (set up by the shared ``tests/conftest.py``).  DDC
+These tests exercise the BIM re-ingest CLI end-to-end against the
+session-scoped PostgreSQL database (set up by the shared ``tests/conftest.py``).  DDC
 is mocked by default — we stub :func:`process_ifc_file` to feed
 pre-canned element dicts in, so the suite stays under one second.
 
@@ -23,13 +23,13 @@ from unittest.mock import patch
 import pytest
 
 # ── Real DB setup ────────────────────────────────────────────────────────────
-# We need actual SQLite tables for these tests; conftest pre-imports the
+# We need actual ORM tables for these tests; conftest pre-imports the
 # models so create_all sees them.
 
 
 @pytest.fixture(scope="module", autouse=True)
 def _create_tables() -> None:
-    """Create all ORM tables in the per-session SQLite."""
+    """Create all ORM tables in the per-session PostgreSQL database."""
     from sqlalchemy import create_engine
 
     from app.config import get_settings

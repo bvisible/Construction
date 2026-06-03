@@ -13,9 +13,7 @@ service layer:
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 
@@ -28,13 +26,8 @@ pytest.importorskip("itsdangerous", reason="itsdangerous is not in the [dev] ins
 
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.smart_views.schemas import (
     SmartViewActionArgs,
     SmartViewCreate,
@@ -42,36 +35,13 @@ from app.modules.smart_views.schemas import (
     SmartViewSelector,
 )
 from app.modules.smart_views.service import SmartViewService
-
-
-def _register_models() -> None:
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.smart_views.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-sv-scope-")) / "sv.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    from sqlalchemy import event as sa_event
-    from sqlalchemy.engine import Engine
-
-    @sa_event.listens_for(Engine, "connect")
-    def _fk_on(dbapi_conn: object, _: object) -> None:
-        cursor = dbapi_conn.cursor()  # type: ignore[union-attr]
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -108,12 +78,6 @@ async def session() -> AsyncSession:
         s.info["project_a_id"] = project_a.id
         s.info["project_b_id"] = project_b.id
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 def _basic_rule() -> SmartViewRule:

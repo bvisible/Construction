@@ -18,8 +18,9 @@ Verifies the seven wiring points the design doc calls out:
     7. ``MarkupsService.create_markup`` defaults ``file_version_id``
        to the chain head and the dropdown surfaces both versions.
 
-All tests use isolated in-memory SQLite — production DB is never
-touched (per ``feedback_test_isolation.md``).
+All tests run against PostgreSQL inside an outer transaction that is
+rolled back on teardown, so the production DB is never touched (per
+``feedback_test_isolation.md``).
 """
 
 from __future__ import annotations
@@ -31,13 +32,8 @@ from datetime import UTC, datetime
 import pytest
 import pytest_asyncio
 from fastapi import UploadFile
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.documents.models import Document, ProjectPhoto, Sheet  # noqa: F401
 from app.modules.documents.service import DocumentService, PhotoService, SheetService
 from app.modules.file_comments.models import FileComment, FileCommentMention  # noqa: F401
@@ -51,20 +47,21 @@ from app.modules.markups.schemas import MarkupCreate
 from app.modules.markups.service import MarkupsService
 from app.modules.projects.models import Project  # noqa: F401
 from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ───────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test in-memory SQLite session with the full schema applied."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    """Per-test PostgreSQL session inside an outer transaction.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    no ``create_all`` is needed. The outer transaction is rolled back on
+    teardown, leaving the database pristine for the next test.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _seed_project(session: AsyncSession) -> tuple[uuid.UUID, str]:

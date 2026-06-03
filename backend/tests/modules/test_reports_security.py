@@ -46,7 +46,7 @@ guarantees the audit added:
    integration test pins the boundary; here we pin the static
    invariant that the route uses ``project_id_scope`` to discriminate.
 
-The tests are unit-level (no FastAPI app boot, no SQLite) — the
+The tests are unit-level (no FastAPI app boot, no database) — the
 integration suite under ``tests/integration/test_reporting_idor.py``
 covers wire-level smoke where it matters.
 """

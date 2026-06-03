@@ -280,13 +280,21 @@ function maskApiKey(key: string): string {
   return key.slice(0, 8) + '\u2022'.repeat(Math.min(key.length - 8, 24));
 }
 
-/** Mark onboarding as completed in localStorage. */
+/** Mark onboarding as completed (local fast-path + best-effort server sync). */
 export function markOnboardingCompleted(): void {
   try {
     localStorage.setItem('oe_onboarding_completed', 'true');
   } catch {
     // Storage unavailable -- ignore.
   }
+  // Best-effort server sync so the per-user completed flag is set on every
+  // exit path (skip, the explore-all link, apply-a-pack), not just the full
+  // "finish" save. Fire-and-forget: the local flag already stops a re-prompt
+  // on this browser, and the dashboard first-run redirect reads the server
+  // flag for fresh browsers and brand-new accounts.
+  void apiPost('/v1/users/me/onboarding/complete/', undefined).catch(() => {
+    /* non-critical */
+  });
 }
 
 /** Check whether onboarding has been completed. */

@@ -16,36 +16,26 @@ Covers:
   row; an EDITOR GET *does* seed. Regression guard for the surgical
   fix in ``service.evaluate_thresholds(..., allow_seed=...)``.
 
-Per ``feedback_test_isolation.md`` the module redirects ``DATABASE_URL``
-to a fresh temp SQLite BEFORE any ``app`` import.
+The suite runs against the PostgreSQL engine bound by ``conftest`` before
+any ``app`` import.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-coord-hub-"))
-_TMP_DB = _TMP_DIR / "coordination_hub.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy import select  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_factory():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

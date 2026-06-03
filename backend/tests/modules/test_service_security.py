@@ -21,21 +21,12 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-svc-sec-"))
-_TMP_DB = _TMP_DIR / "svc.db"
-os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}")
-os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{_TMP_DB.as_posix()}")
-
 from fastapi import HTTPException  # noqa: E402
 from sqlalchemy import Float as SAFloat  # noqa: E402
 from sqlalchemy import Numeric as SANumeric  # noqa: E402

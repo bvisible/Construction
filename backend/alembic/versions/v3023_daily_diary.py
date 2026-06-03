@@ -614,17 +614,10 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
-    # Drop indexes first, then tables — reverse of upgrade.
-    for table, indexes in _INDEXES.items():
-        if not _has_table(inspector, table):
-            continue
-        for name, _cols, _unique in indexes:
-            if _has_index(inspector, table, name):
-                try:
-                    op.drop_index(name, table_name=table)
-                except sa.exc.OperationalError:
-                    pass
-
+    # DROP TABLE ... CASCADE removes each table together with its indexes,
+    # unique/PK constraints and inbound FKs. The old explicit per-index drop
+    # raised DependentObjectsStillExist on PostgreSQL for unique-constraint
+    # -backed indexes (e.g. uq_oe_daily_diary_diary_project_date).
     for table in (
         "oe_daily_diary_archive_signature",
         "oe_daily_diary_reality_capture",
@@ -636,4 +629,4 @@ def downgrade() -> None:
         "oe_daily_diary_diary",
     ):
         if _has_table(inspector, table):
-            op.drop_table(table)
+            op.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')

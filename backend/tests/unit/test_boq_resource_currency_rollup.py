@@ -20,9 +20,10 @@ as base ARS — a USD 25 000 resource is rolled up as 25 000 ARS instead of
 contributor circled: the per-position resource subtotal AND the section
 subtotal (both read the same un-converted number).
 
-These tests pin the resource-currency-aware rollup.  Test isolation
-(``feedback_test_isolation.md``): per-test temp SQLite, never prod
-``openestimate.db``.
+These tests pin the resource-currency-aware rollup.  Test isolation uses the
+shared PostgreSQL helpers in ``tests._pg``: each test runs inside an outer
+transaction that is rolled back on teardown, so the production database is
+never touched.
 
 Run:
     cd backend
@@ -31,47 +32,25 @@ Run:
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
 
-from app.database import Base
 from app.modules.boq.service import (
     BOQService,
     _leaf_total_base_with_resources,
     _resource_total_in_base,
 )
+from tests._pg import transactional_session
 
 OWNER_ID = uuid.uuid4()
 
 
-def _register_models() -> None:
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.catalog.models  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def session():
-    tmp_db = Path(tempfile.mkdtemp()) / "res_fx.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    async with transactional_session() as s:
         from app.modules.users.models import User
 
         s.add(
@@ -85,12 +64,6 @@ async def session():
         await s.flush()
         await s.commit()
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 # ── Pure helper: resource-currency-aware leaf total ──────────────────────

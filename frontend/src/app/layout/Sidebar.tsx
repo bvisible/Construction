@@ -619,10 +619,10 @@ const ROUTE_MODULE_KEY: Record<string, string> = {
   '/boq': 'boq',
   '/match-elements': 'match_elements',
   '/ai-estimate': 'ai',
-  // Catalogues & reference
-  '/costs': 'costs',
-  '/catalog': 'catalog',
-  '/assemblies': 'assemblies',
+  // Catalogues & reference (/costs, /catalog, /assemblies) are intentionally
+  // absent: the cost database, resource catalogue and assembly library are
+  // core to a cost-estimation platform, so a company profile must never hide
+  // them. They are forced on in onboarding_presets._CORE_MODULES too.
   // Takeoff
   '/takeoff': 'takeoff',
   '/dwg-takeoff': 'dwg_takeoff',

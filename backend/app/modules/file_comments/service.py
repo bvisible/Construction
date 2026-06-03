@@ -149,6 +149,23 @@ def _resolve_mentions(handles: list[str], users: list[User]) -> list[uuid.UUID]:
     return resolved
 
 
+# ── single-comment fetch ───────────────────────────────────────────────
+
+
+async def get_comment(
+    session: AsyncSession,
+    comment_id: uuid.UUID,
+) -> FileComment | None:
+    """Load a single comment by ID, or ``None`` if it does not exist.
+
+    Used by the router to resolve a comment's ``project_id`` so it can run
+    the project-access (IDOR) gate BEFORE any mutation. Returns the raw
+    ORM row — the caller is responsible for the access decision.
+    """
+    stmt = select(FileComment).where(FileComment.id == comment_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
 # ── thread fetch ───────────────────────────────────────────────────────
 
 
@@ -572,6 +589,7 @@ async def acknowledge_mention(
 __all__ = [
     "acknowledge_mention",
     "create_comment",
+    "get_comment",
     "list_threads",
     "list_unread_mentions",
     "soft_delete_comment",

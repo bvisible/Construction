@@ -11,25 +11,15 @@ contract holds.
 For the auth + timeout + provider checks we exercise the *resolver*
 helpers (``resolve_provider_key_model`` and ``AI_TIMEOUT``) directly
 since those are the points where the relevant invariants are enforced.
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-per-module temp SQLite file BEFORE ``app`` is first imported.
+The database engine is bound to the conftest-provisioned PostgreSQL
+cluster before any test module is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
+import pytest
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-ai-quick-"))
-_TMP_DB = _TMP_DIR / "ai_quick.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-
-from app.modules.ai.prompts import (  # noqa: E402
+from app.modules.ai.prompts import (
     SMART_IMPORT_PROMPT,
     TEXT_ESTIMATE_PROMPT,
     USER_FENCE_MAX_LEN,

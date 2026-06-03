@@ -4,8 +4,10 @@
 
 The runner wraps :func:`execute_rule` with the persistence envelope
 that ``POST /rulesets/{id}:run`` and the Celery worker share. We
-exercise the full path here against an in-memory SQLite session so
-``EacRun`` and ``EacRunResultItem`` writes are observable.
+exercise the full path here against a PostgreSQL session wrapped in an
+outer transaction that is rolled back on teardown, so ``EacRun`` and
+``EacRunResultItem`` writes are observable within the test and undone
+afterward.
 """
 
 from __future__ import annotations
@@ -22,12 +24,9 @@ import pytest
 pytest.importorskip("simpleeval", reason="simpleeval is not in the [dev] install")
 
 import pytest_asyncio
-from sqlalchemy import event, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Register EAC tables with Base.metadata.
-import app.modules.eac.models  # noqa: F401
-from app.database import Base
 from app.modules.eac.engine.runner import (
     bim_element_to_canonical,
     dry_run_rule,
@@ -38,30 +37,13 @@ from app.modules.eac.models import (
     EacRuleset,
     EacRunResultItem,
 )
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-
-    @event.listens_for(engine.sync_engine, "connect")
-    def _enable_sqlite_fks(dbapi_conn, _conn_record) -> None:  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as sess:
-        try:
-            yield sess
-        finally:
-            await sess.close()
-    await engine.dispose()
+    async with transactional_session() as s:
+        yield s
 
 
 # ── Helpers ────────────────────────────────────────────────────────────

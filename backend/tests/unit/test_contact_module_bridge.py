@@ -12,9 +12,9 @@ Covers the v3117 bridge:
 * Cross-tenant guard: a lead created by user A must not link to a
   contact created by user B even when the emails match.
 
-The tests run against an in-memory SQLite engine, exercising the real
-ORM so the JSON columns and FK linkages exercise their actual storage
-paths.
+The tests run against PostgreSQL inside a transaction that is rolled
+back on teardown, exercising the real ORM so the JSON columns and FK
+linkages exercise their actual storage paths.
 """
 
 from __future__ import annotations
@@ -24,55 +24,30 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.contacts import bridge
 from app.modules.contacts.models import Contact
 from app.modules.projects.models import Project
 from app.modules.property_dev.models import (
     Buyer,
     Development,
-    HouseType,
-    HouseTypeVariant,
     Lead,
-    Plot,
 )
 from app.modules.users.models import User
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Spin up a fresh in-memory database with the tables the bridge needs."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        # Pull in only the tables the bridge touches. The full
-        # PropDev set is listed here because Lead / Buyer FK to
-        # ``oe_property_dev_development`` / ``oe_property_dev_plot``
-        # transitively (development_id is nullable so the FK is the
-        # constraint that matters).
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                Project.__table__,
-                Contact.__table__,
-                Development.__table__,
-                HouseType.__table__,
-                HouseTypeVariant.__table__,
-                Plot.__table__,
-                Lead.__table__,
-                Buyer.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    """Yield a PostgreSQL session inside a transaction rolled back on teardown.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    no per-test table creation is needed. The bridge touches the contacts,
+    projects, users and PropDev tables; all are present in that schema.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 # ── Helpers ────────────────────────────────────────────────────────
@@ -123,7 +98,7 @@ async def _make_development(session: AsyncSession) -> Development:
     # need a parent Project row to satisfy the constraint. Project
     # itself FKs to oe_users_user via ``owner_id``, so we plant a
     # disposable user first. This is the minimal chain to get a valid
-    # Development row in an in-memory test database.
+    # Development row in the PostgreSQL test database.
     user = User(
         email=f"owner-{uuid.uuid4().hex[:6]}@example.com",
         hashed_password="not-a-real-hash",

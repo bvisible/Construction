@@ -16,35 +16,28 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.contacts.models import Contact
 from app.modules.contacts.repository import ContactRepository, _tenant_scope
 from app.modules.contacts.schemas import ContactCreate
 from app.modules.contacts.service import ContactService
-from app.modules.users.models import User
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Fresh in-memory SQLite scoped to Contact + User tables.
+    """Session bound to the shared PostgreSQL unit database.
 
-    Using ``create_all(tables=[...])`` keeps the test self-contained —
-    when the full unit suite runs, other modules pile onto
-    ``Base.metadata`` with FKs we don't care about here. ``User`` is
-    included because ``Contact.user_id`` FKs to it.
+    The session runs inside an outer transaction that is rolled back on
+    teardown, so each test starts against an empty schema (the full
+    ``oe_test_unit`` schema is materialised once per session, including
+    ``oe_users_user`` for ``Contact.user_id``). The session's own
+    ``commit()`` becomes a savepoint release, so committed data is visible
+    within the test but undone afterward.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[User.__table__, Contact.__table__],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _insert_raw(

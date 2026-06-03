@@ -21,27 +21,18 @@ Coverage targets:
   * Schema validation edge cases.
 
 Scaffolding mirrors ``test_property_dev_buyer_update.py`` (the existing
-Wave 0 test): per-module temp SQLite registered BEFORE any
-``from app...`` import to keep the production DB un-touched.
+Wave 0 test): the suite runs against the PostgreSQL cluster that
+``tests/conftest.py`` provisions and binds before any test module imports.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-lead-spa-"))
-_TMP_DB = _TMP_DIR / "propdev_lead_spa.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")

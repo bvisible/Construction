@@ -30,9 +30,28 @@ jobs:
   backend:
     name: Backend CI
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: backend
+
+    # The app is PostgreSQL-only at runtime, so the test suite runs against a
+    # real PostgreSQL 16 service. conftest honours an already-set DATABASE_URL
+    # (this service) and only boots an embedded cluster when none is provided.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: oe
+          POSTGRES_PASSWORD: oe
+          POSTGRES_DB: openconstructionerp_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oe -d openconstructionerp_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout repository
@@ -64,6 +83,11 @@ jobs:
         run: ruff format --check .
 
       - name: Run tests with pytest
+        # Point the suite at the postgres:16 service. conftest sees DATABASE_URL
+        # is already set and uses it instead of booting an embedded cluster.
+        env:
+          DATABASE_URL: postgresql+asyncpg://oe:oe@localhost:5432/openconstructionerp_test
+          DATABASE_SYNC_URL: postgresql+psycopg2://oe:oe@localhost:5432/openconstructionerp_test
         run: pytest
 
   zero-width-guard:

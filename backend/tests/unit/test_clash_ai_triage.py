@@ -21,34 +21,24 @@ Coverage
   and then ``(False, 0)``, which is what the
   ``check_ai_rate_limit`` dependency translates into a 429.
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-private SQLite file BEFORE any ``app.*`` import runs.
+The shared ``conftest`` provisions a PostgreSQL cluster and binds the
+SQLAlchemy engine before any ``app.*`` import runs, so these tests
+execute against that PostgreSQL instance.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
+from datetime import UTC
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
+import pytest
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-ai-triage-"))
-_TMP_DB = _TMP_DIR / "clash_ai_triage.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from datetime import UTC
-
-import pytest  # noqa: E402
-
-from app.core.rate_limiter import RateLimiter  # noqa: E402
-from app.modules.clash_ai_triage import service as triage_service  # noqa: E402
-from app.modules.clash_ai_triage.prompts import build_user_prompt  # noqa: E402
-from app.modules.clash_ai_triage.service import (  # noqa: E402
+from app.core.rate_limiter import RateLimiter
+from app.modules.clash_ai_triage import service as triage_service
+from app.modules.clash_ai_triage.prompts import build_user_prompt
+from app.modules.clash_ai_triage.service import (
     DEFAULT_COST_PER_1K,
     MODEL_COSTS,
     ClashTriageService,

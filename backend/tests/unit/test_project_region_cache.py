@@ -9,10 +9,8 @@ otherwise issue per match request.
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import uuid
 from collections.abc import AsyncGenerator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -20,41 +18,30 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from app.core.match_service import region_cache
+from tests._pg import isolated_engine
 
 # ── Minimal DB harness ──────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
-async def engine_factory() -> AsyncGenerator[tuple[Any, Any, Path], None]:
-    """Per-test SQLite + ORM metadata."""
-    tmp_db = Path(tempfile.mkdtemp()) / "region_cache.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+async def engine_factory() -> AsyncGenerator[tuple[Any, Any], None]:
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    # Force a coherent metadata snapshot (see conftest note).
-    import app.core.audit  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    yield engine, factory, tmp_db
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The cache layer opens its own sessions from this factory (and the tests seed
+    rows through a separate session), so they run on separate connections that
+    must see each other's commits - hence a real throwaway database rather than a
+    savepoint-rolled-back shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
@@ -62,7 +49,7 @@ async def project_with_region(
     engine_factory,
 ) -> tuple[uuid.UUID, str, Any]:
     """Create a real Project row so the cache layer can read it."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
 
     from app.modules.projects.models import Project
     from app.modules.users.models import User
@@ -139,7 +126,7 @@ async def test_cache_miss_falls_through_to_db(project_with_region) -> None:
 @pytest.mark.asyncio
 async def test_unknown_project_returns_none(engine_factory) -> None:
     """Project that doesn't exist → cache stores None and returns None."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     bogus = uuid.uuid4()
 
     async with factory() as session:

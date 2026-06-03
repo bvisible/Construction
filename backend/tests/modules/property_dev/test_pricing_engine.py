@@ -18,7 +18,7 @@ The first sections are pure-engine tests against hand-rolled fixture
 objects (no DB) — they verify the matcher contract that the docstring
 in :mod:`app.modules.property_dev.pricing_engine` promises. The
 end-to-end section reuses the existing ``conftest.py`` scaffolding
-(per-module SQLite, ``_register_user`` helper).
+(per-module PostgreSQL, ``_register_user`` helper).
 """
 
 from __future__ import annotations

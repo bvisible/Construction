@@ -13,25 +13,17 @@ End-to-end exercises:
 from __future__ import annotations
 
 import os
-import tempfile
 import uuid
-from pathlib import Path
 from typing import AsyncIterator
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-field-diary-"))
-_TMP_DB = _TMP_DIR / "field_diary.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 os.environ["APP_DEBUG"] = "true"  # so request-magic-link returns dev_token/dev_pin
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+from sqlalchemy.ext.asyncio import async_sessionmaker  # noqa: E402
 
-from app.database import Base  # noqa: E402
 from app.dependencies import get_session  # noqa: E402
 from app.modules.field_diary import models as fd_models  # noqa: E402,F401
 from app.modules.field_diary.router import router as fd_router  # noqa: E402
@@ -40,35 +32,23 @@ from app.modules.field_diary.service import (  # noqa: E402
     clear_sms_log,
     get_sms_log,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS  # noqa: E402
-from app.modules.users.models import APIKey, User  # noqa: E402
+from app.modules.projects.models import Project  # noqa: E402
+from app.modules.users.models import User  # noqa: E402
+from tests._pg import isolated_engine  # noqa: E402
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def engine_and_session():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Project.__table__,
-                ProjectWBS.__table__,
-                ProjectMilestone.__table__,
-                fd_models.DiaryEntry.__table__,
-                fd_models.DiaryActivity.__table__,
-                fd_models.DiaryAttachment.__table__,
-                fd_models.FieldModuleGrant.__table__,
-                fd_models.FieldMagicLink.__table__,
-                fd_models.FieldSession.__table__,
-            ],
-        )
-    SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
-    yield engine, SessionFactory
-    await engine.dispose()
+    # PostgreSQL isolation: a throwaway database cloned from the full-schema
+    # template. The app opens its OWN independent sessions per request from this
+    # engine and relies on data committed in the test's seeding sessions being
+    # visible across those separate connections, so a real engine (not a
+    # rolled-back transactional session) is required here.
+    async with isolated_engine() as engine:
+        SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+        yield engine, SessionFactory
 
 
 @pytest_asyncio.fixture

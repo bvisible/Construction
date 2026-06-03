@@ -8,9 +8,9 @@ only a DB session, so they were reachable unauthenticated (data exposure
 now carries a ``CurrentUserId`` gate. These tests pin that: an anonymous
 request must never reach pipeline data.
 
-Test isolation (``feedback_test_isolation.md``): the per-session temp
-SQLite redirect is provided by ``backend/tests/conftest.py``; the
-production ``openestimate.db`` is never touched.
+Test isolation (``feedback_test_isolation.md``): the per-session
+PostgreSQL database is provided by ``backend/tests/conftest.py``; the
+production database is never touched.
 
 Run:
     cd backend

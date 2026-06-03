@@ -21,25 +21,19 @@ Pins the fixes for the IDs triaged in this pass:
 * QR-003 — quantity-source extraction stays allowlist-only (no
   attribute/code access).
 
-DB-bound paths use a per-test temp SQLite engine (never the prod DB).
+DB-bound paths use a transaction-isolated PostgreSQL session (rolled back
+on teardown, never the prod DB).
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.bim_hub.schemas import (
     BIMQuantityMapCreate,
     BIMQuantityMapUpdate,
@@ -50,6 +44,7 @@ from app.modules.bim_hub.service import (
     normalize_unit_token,
 )
 from app.modules.takeoff.service import _map_table_columns
+from tests._pg import transactional_session
 
 # ════════════════════════════════════════════════════════════════════════
 # QR-001 — quantity-map numeric validation (pure schema, no DB)
@@ -169,24 +164,11 @@ def test_dtkc014_positional_fallback_when_no_headers() -> None:
 # ════════════════════════════════════════════════════════════════════════
 
 
-def _register_models() -> None:
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def session():
-    tmp_db = Path(tempfile.mkdtemp(prefix="tkc-remed-")) / "t.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_db.as_posix()}", future=True)
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _mk_project(s: AsyncSession) -> uuid.UUID:

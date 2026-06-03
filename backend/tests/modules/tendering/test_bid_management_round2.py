@@ -19,7 +19,7 @@ Covers three NEW issues found in the 2026-05-28 audit:
   POSTs for the same invitation produce a 409, not a 500 traceback or two
   silent duplicate rows.
 
-Tests are pure unit tests — no Postgres/SQLite required.
+Tests are pure unit tests — no database required.
 """
 
 from __future__ import annotations

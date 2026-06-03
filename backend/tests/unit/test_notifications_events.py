@@ -63,11 +63,35 @@ def _make_service() -> NotificationService:
 
 
 @pytest.fixture
-def captured_events():
+def captured_events(monkeypatch: pytest.MonkeyPatch):
+    """Capture every event the service publishes, deterministically.
+
+    The service normally publishes via ``event_bus.publish_detached`` (a
+    fire-and-forget ``asyncio.create_task``) so a request never blocks on a
+    subscriber while it holds a database connection. That makes the
+    *timing* of delivery non-deterministic in a test: the event lands on a
+    later loop turn, and pumping the loop to wait for it also drags in
+    fire-and-forget tasks leaked by earlier tests (which can raise cross-loop
+    errors). So for these unit tests we patch the service's ``_safe_publish``
+    to await ``event_bus.publish`` inline on the current loop — the event is
+    delivered to our capture before ``await svc.create(...)`` returns, with no
+    loop pumping and no dependence on test ordering.
+    """
     captured: list[Event] = []
 
     async def _capture(event: Event) -> None:
         captured.append(event)
+
+    async def _sync_publish(
+        name: str,
+        data: dict[str, Any],
+        source_module: str = "oe_notifications",
+    ) -> None:
+        await event_bus.publish(name, data, source_module=source_module)
+
+    from app.modules.notifications import service as _notif_service
+
+    monkeypatch.setattr(_notif_service, "_safe_publish", _sync_publish)
 
     event_bus.subscribe("*", _capture)
     try:

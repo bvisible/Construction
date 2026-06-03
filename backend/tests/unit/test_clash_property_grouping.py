@@ -7,35 +7,23 @@ Two layers (same isolation discipline as ``test_clash_triage_delta.py``):
   missing / None / non-scalar property dicts, and a *legacy*
   ``ClashSelectionSet`` payload WITHOUT ``properties`` still validating
   and behaving exactly as before.
-* **DB-backed** — a self-isolated SQLite exercising
-  :meth:`ClashRepository.grouping_facets_for_models`: per-property-key
-  enumeration excludes the four built-ins + noise (the < 1 % coverage,
-  > 500 distinct, top-60 caps) and ``group_by=property:<key>`` returns
-  the correct distinct value items + counts.
-
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+* **DB-backed** — exercising
+  :meth:`ClashRepository.grouping_facets_for_models` on the PostgreSQL
+  engine provisioned by ``conftest``: per-property-key enumeration
+  excludes the four built-ins + noise (the < 1 % coverage, > 500
+  distinct, top-60 caps) and ``group_by=property:<key>`` returns the
+  correct distinct value items + counts.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
+import pytest
+import pytest_asyncio
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-prop-"))
-_TMP_DB = _TMP_DIR / "clash_prop.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-
-from app.modules.clash.schemas import ClashSelectionSet  # noqa: E402
-from app.modules.clash.service import _in_set  # noqa: E402
+from app.modules.clash.schemas import ClashSelectionSet
+from app.modules.clash.service import _in_set
 
 # ── Pure: _in_set honours the open-ended ``properties`` map ────────────────
 
@@ -128,7 +116,7 @@ def test_legacy_selection_set_without_properties_still_validates():
 
 @pytest_asyncio.fixture(scope="module")
 async def db_session():
-    """A real AsyncSession over a freshly create_all'd temp SQLite."""
+    """A real AsyncSession over the freshly create_all'd PostgreSQL engine."""
     from app.config import get_settings
 
     get_settings.cache_clear()

@@ -23,9 +23,9 @@ Coverage map (mirrors the Wave-5 task list):
 
 Test isolation
 ~~~~~~~~~~~~~~
-Per ``feedback_test_isolation.md``: the suite uses a per-module temp SQLite
-file declared *before* any ``from app...`` import so the FastAPI app's
-``DATABASE_URL`` resolves to our throwaway DB.
+The suite runs against the PostgreSQL cluster provisioned by
+``tests/conftest.py``, which binds the SQLAlchemy engine before any test
+module imports.
 
 Run:
     cd backend
@@ -34,20 +34,11 @@ Run:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-match-elements-"))
-_TMP_DB = _TMP_DIR / "match_elements.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 

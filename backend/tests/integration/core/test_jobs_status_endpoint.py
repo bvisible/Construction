@@ -15,7 +15,9 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from tests._pg import isolated_engine
 
 # Celery is an optional dependency (the ``server`` extra, not ``dev``). The
 # eager-dispatch fixtures here drive the Celery transport via get_celery_app /
@@ -23,22 +25,27 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 # collection.
 pytest.importorskip("celery")
 
-from app.core.job_run import JobRun  # noqa: E402
 from app.core.job_runner import register_handler, submit_job, unregister_handler  # noqa: E402
 from app.core.jobs import get_celery_app  # noqa: E402
-from app.database import Base  # noqa: E402
 from app.dependencies import get_current_user_id  # noqa: E402
 from app.modules.jobs.router import router as jobs_router  # noqa: E402
 
 
 @pytest_asyncio.fixture
 async def session_factory():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[JobRun.__table__])
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    """Session factory bound to a throwaway PostgreSQL database.
+
+    The router and ``submit_job`` each open their own independent sessions
+    from this factory on separate connections, and the tests rely on rows
+    committed in one session being visible from another. That cross-connection
+    durability needs a real engine, so we use ``isolated_engine`` (a clone of
+    the schema-loaded template, dropped on teardown) rather than the
+    transaction-rollback ``transactional_session`` primitive. The clone already
+    carries the full schema, so no ``create_all`` is needed.
+    """
+    async with isolated_engine() as engine:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        yield maker
 
 
 @pytest_asyncio.fixture
@@ -46,7 +53,7 @@ async def client(session_factory):
     """Tiny FastAPI app mounting only the jobs router.
 
     The router resolves its async session via ``app.modules.jobs.router._get_session_factory``;
-    we monkey-patch that to point at the in-memory SQLite created above.
+    we monkey-patch that to point at the throwaway PostgreSQL factory created above.
     """
     app = FastAPI()
     app.include_router(jobs_router, prefix="/api/v1/jobs", tags=["Background Jobs"])

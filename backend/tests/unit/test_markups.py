@@ -3,8 +3,8 @@
 Pins the contract for the markups-module remediation done this round:
 
 * Calibration / measurement columns persist as ``Decimal``
-  (Float → ``Numeric(18, 6)`` on Postgres; SQLite stores as text but
-  SQLAlchemy round-trips Decimal unchanged).
+  (Float → ``Numeric(18, 6)`` on PostgreSQL; SQLAlchemy round-trips the
+  value as a ``Decimal`` unchanged).
 * Pagination on the list endpoint honours the platform-standard
   ``offset`` + ``limit`` slice rather than a confusing ``page`` rail
   (``page`` survives only as a deprecated *drawing-page* filter alias).
@@ -12,49 +12,30 @@ Pins the contract for the markups-module remediation done this round:
   not own — the auth gate cannot be silently dropped from the listing
   route in a future refactor.
 
-Per ``feedback_test_isolation.md`` the test uses an isolated temp
-SQLite — never ``backend/openestimate.db``.
+The test runs on a transaction-isolated PostgreSQL session (rolled back
+on teardown) via ``tests._pg.transactional_session`` — never
+``backend/openestimate.db``.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
 
-from app.database import Base
 from app.dependencies import verify_project_access
 from app.modules.markups.schemas import MarkupCreate, ScaleConfigCreate
 from app.modules.markups.service import MarkupsService
-
-
-def _register_models() -> None:
-    import app.modules.markups.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session_owner():
-    """Yield (session, owner_id, project_id) on a fresh per-test SQLite DB."""
-    tmp_db = Path(tempfile.mkdtemp()) / "markups.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Yield (session, owner_id, project_id) on an isolated PostgreSQL session."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -78,7 +59,6 @@ async def session_owner():
         )
         await s.commit()
         yield s, str(owner_id), project_id
-    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -101,8 +81,8 @@ async def test_create_markup_measurement_persists_as_decimal(session_owner) -> N
     await session.refresh(item)
 
     assert item.measurement_value is not None
-    # SQLAlchemy Numeric returns Decimal on Postgres; SQLite hands back
-    # the value as stored — both must compare exactly to the input.
+    # SQLAlchemy Numeric returns Decimal on PostgreSQL; it must compare
+    # exactly to the input with no float drift.
     assert Decimal(str(item.measurement_value)) == Decimal("12.345678")
 
 

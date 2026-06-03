@@ -31,31 +31,6 @@ logger = logging.getLogger(__name__)
 _vector_warn = _RateLimitedLogger(window_seconds=60.0)
 
 
-def _is_sqlite_dialect() -> bool:
-    """‌⁠‍Return True when the app database URL points at SQLite.
-
-    SQLite on SQLAlchemy async triggers ``MissingGreenlet`` when a
-    wildcard ``*`` event subscription writes to a separate session
-    outside the greenlet that published the event.  Detecting this once
-    at import time lets us skip registering the activity-log wildcard
-    handler on SQLite (the dev default) while keeping it on PostgreSQL
-    in production.  Uses a local import to avoid executing Settings
-    resolution at module-import time for every importer of this file.
-    """
-    try:
-        from app.config import get_settings
-
-        url = (get_settings().database_url or "").lower()
-    except Exception:  # pragma: no cover - config bootstrap should never fail
-        logger.warning(
-            "boq.events could not resolve database_url for dialect check — "
-            "assuming non-SQLite and registering the activity-log wildcard",
-            exc_info=True,
-        )
-        return False
-    return "sqlite" in url
-
-
 # ── Mapping from event names to human-readable descriptions ──────────────────
 
 _EVENT_DESCRIPTIONS: dict[str, str] = {
@@ -144,10 +119,9 @@ def _extract_project_id(data: dict) -> uuid.UUID | None:
 # ── Wildcard handler for all boq.* events ────────────────────────────────────
 
 
-# SQLite + async SQLAlchemy greenlet-bridge cannot safely handle a
-# wildcard subscription that opens its own session (MissingGreenlet
-# error), so we guard registration at import time: PostgreSQL registers,
-# SQLite skips with an INFO log.  The handler itself is unchanged.
+# The activity-log wildcard subscription opens its own session inside the
+# handler.  PostgreSQL + asyncpg bridges the separate session cleanly across
+# greenlets, so this handler is always registered.
 async def _log_boq_activity(event: Event) -> None:
     """Handle all events and log BOQ-related ones to the activity table.
 
@@ -271,33 +245,17 @@ async def _on_position_deleted(event: Event) -> None:
 
 
 def _register_handlers() -> None:
-    """Register event-bus handlers honouring the SQLite greenlet caveat.
+    """Register the BOQ event-bus handlers.
 
-    Vector-index handlers always register (they are per-event, not
-    wildcard, so the greenlet issue does not apply).  The activity-log
-    wildcard handler only registers on non-SQLite URLs.  Calling this
-    helper is idempotent — tests that monkeypatch settings can call
-    :func:`event_bus.clear` then re-invoke it to re-evaluate the
-    dialect guard.
+    Vector-index handlers register per-event (create / update / delete /
+    duplicate) and the activity-log wildcard handler subscribes to every
+    event.  Calling this helper is idempotent — tests can call
+    :func:`event_bus.clear` then re-invoke it.
     """
     event_bus.subscribe("boq.position.created", _on_position_created)
     event_bus.subscribe("boq.position.updated", _on_position_updated)
     event_bus.subscribe("boq.position.deleted", _on_position_deleted)
     event_bus.subscribe("boq.position.duplicated", _on_position_created)
-
-    if _is_sqlite_dialect():
-        # SQLite-safe path: the activity-log wildcard opens a fresh
-        # session inside the handler which trips MissingGreenlet under
-        # aiosqlite.  Skip registration until we solve the greenlet
-        # bridge properly; callers can still audit activity directly
-        # via the BOQ service layer which runs inside the original
-        # request greenlet.
-        logger.info(
-            "boq.events: skipping activity-log wildcard handler on SQLite "
-            "(MissingGreenlet with aiosqlite + separate session). "
-            "Activity log still functions via direct service calls."
-        )
-        return
 
     event_bus.subscribe("*", _log_boq_activity)
 

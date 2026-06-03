@@ -12,30 +12,21 @@ Covers
 * number allocation is per-project (``T-0001`` first, ``T-0002`` second)
 * removing an item works and respects per-transmittal scoping
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+Runs against the shared PostgreSQL engine bound by ``tests/conftest.py``
+before any test module is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-transmittals-"))
-_TMP_DB = _TMP_DIR / "transmittals.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
+import pytest
+import pytest_asyncio
 
 
 @pytest_asyncio.fixture(scope="module")
 async def db_session():
-    """An :class:`AsyncSession` backed by a freshly ``create_all``'d temp SQLite."""
+    """An :class:`AsyncSession` backed by a freshly ``create_all``'d PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

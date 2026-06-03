@@ -1,9 +1,9 @@
 """v2.8.0 — per-project match-settings integration tests.
 
 Stands up a minimal FastAPI app with the projects router mounted plus
-session/auth dependencies overridden against a per-test temp SQLite DB
-(see ``feedback_test_isolation.md`` — never touch the production
-``openestimate.db``).
+session/auth dependencies overridden against a per-test throwaway PostgreSQL
+database (cloned from the schema-loaded template by ``tests._pg.isolated_engine``)
+so the suite runs fast and never touches the production database.
 
 Coverage:
 
@@ -20,10 +20,8 @@ Coverage:
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -33,46 +31,25 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
+
+from tests._pg import isolated_engine
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
-def _register_minimal_models() -> None:
-    """Pull projects + users + audit models into Base.metadata."""
-    import app.core.audit  # noqa: F401  — AuditEntry table
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "match_settings_api.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 # Each test mutates this dict to swap the acting user.
@@ -81,7 +58,7 @@ _current_user_payload: dict[str, str] = {}
 
 @pytest_asyncio.fixture
 async def app(temp_engine_and_factory) -> AsyncGenerator[FastAPI, None]:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.dependencies import (
         get_current_user_id,
@@ -129,7 +106,7 @@ async def project_owned_by(temp_engine_and_factory):
     Returns ``(user_id, project_id)``. Persists via the temp factory so
     the row is visible inside the dependency-overridden session.
     """
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.modules.projects.models import Project
     from app.modules.users.models import User
@@ -303,7 +280,7 @@ async def test_patch_writes_audit_log_entry(
     temp_engine_and_factory,
 ) -> None:
     """Audit entry must include before+after snapshots."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     user_id, project_id = await project_owned_by()
     _set_acting_user(user_id)
 
@@ -351,7 +328,7 @@ async def test_reset_returns_settings_to_defaults(
     project_owned_by,
     temp_engine_and_factory,
 ) -> None:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     user_id, project_id = await project_owned_by()
     _set_acting_user(user_id)
 

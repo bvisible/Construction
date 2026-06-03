@@ -17,33 +17,25 @@ The fix:
   across requests even if the importer creates relationships in
   micro-second bursts.
 
-These tests pin all three properties against a real (file-backed)
-SQLite DB.
+These tests pin all three properties against an isolated, throwaway
+PostgreSQL database (provided by ``tests._pg.transactional_session``).
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
+import inspect
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# ── Per-module DB isolation BEFORE any app imports ─────────────────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-schedule-rels-limit-"))
-_TMP_DB = _TMP_DIR / "session.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from app.database import Base  # noqa: E402
-from app.modules.schedule.models import (  # noqa: E402
+from app.modules.schedule.models import (
     Schedule,
     ScheduleRelationship,
 )
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
@@ -53,33 +45,19 @@ async def seeded_schedule_id() -> tuple[uuid.UUID, AsyncSession]:
     700 is comfortably above the default cap (200) and the hard max
     (500) so both can be exercised against the same fixture without
     seeding twice.
+
+    ``disable_fks=True`` sets ``session_replication_role = replica`` on
+    the connection (the PostgreSQL equivalent of the old
+    ``PRAGMA foreign_keys=OFF``) so we can generate 700 relationships
+    with synthetic UUIDs instead of seeding real Project + Activity rows
+    through every dependent migration just to exercise the cap-and-order
+    behaviour that is the subject of this test. Production PostgreSQL
+    still enforces FK constraints natively.
     """
-    db_path = _TMP_DIR / f"test-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}", echo=False)
-    # ``app.database`` registers a global ``connect`` event listener
-    # that flips ``PRAGMA foreign_keys=ON`` for every SQLite connection
-    # produced by ANY engine. Layer a higher-priority listener here that
-    # immediately flips it back OFF on this test engine so we don't
-    # have to seed real Project + Activity rows through every dependent
-    # migration just to exercise the cap-and-order behaviour that is
-    # the subject of this test. Production Postgres still enforces FK
-    # constraints natively.
-    from sqlalchemy import event as _event
+    async with transactional_session(disable_fks=True) as s:
+        schedule_id = uuid.uuid4()
+        project_id = uuid.uuid4()
 
-    @_event.listens_for(engine.sync_engine, "connect")
-    def _disable_fk_for_test(dbapi_conn, _conn_record):
-        cur = dbapi_conn.cursor()
-        cur.execute("PRAGMA foreign_keys = OFF")
-        cur.close()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-
-    schedule_id = uuid.uuid4()
-    project_id = uuid.uuid4()
-
-    async with Session() as s:
         schedule = Schedule(
             id=schedule_id,
             project_id=project_id,
@@ -110,8 +88,7 @@ async def seeded_schedule_id() -> tuple[uuid.UUID, AsyncSession]:
         s.add_all(rels)
         await s.commit()
 
-    yield schedule_id, Session, db_path
-    await engine.dispose()
+        yield schedule_id, s
 
 
 # ── Direct handler unit tests (no auth dependency) ─────────────────────────
@@ -125,7 +102,7 @@ async def seeded_schedule_id() -> tuple[uuid.UUID, AsyncSession]:
 @pytest.mark.asyncio
 async def test_default_limit_caps_at_200(seeded_schedule_id) -> None:
     """No ?limit= → default 200 rows returned (not 700)."""
-    schedule_id, Session, _ = seeded_schedule_id
+    schedule_id, session = seeded_schedule_id
     from app.modules.schedule import router as schedule_router
 
     # Patch the owner-check to a no-op for this unit test.
@@ -135,15 +112,14 @@ async def test_default_limit_caps_at_200(seeded_schedule_id) -> None:
     original = schedule_router._verify_schedule_owner
     schedule_router._verify_schedule_owner = _noop_verify  # type: ignore[assignment]
     try:
-        async with Session() as s:
-            rels = await schedule_router.list_relationships(
-                schedule_id=schedule_id,
-                session=s,
-                _user_id=uuid.uuid4(),
-                payload={"role": "admin"},
-                service=None,  # type: ignore[arg-type]
-                limit=200,
-            )
+        rels = await schedule_router.list_relationships(
+            schedule_id=schedule_id,
+            session=session,
+            _user_id=uuid.uuid4(),
+            payload={"role": "admin"},
+            service=None,  # type: ignore[arg-type]
+            limit=200,
+        )
     finally:
         schedule_router._verify_schedule_owner = original  # type: ignore[assignment]
 
@@ -155,7 +131,7 @@ async def test_default_limit_caps_at_200(seeded_schedule_id) -> None:
 @pytest.mark.asyncio
 async def test_explicit_limit_500_caps_at_500(seeded_schedule_id) -> None:
     """?limit=500 → exactly 500 rows (the hard upper bound)."""
-    schedule_id, Session, _ = seeded_schedule_id
+    schedule_id, session = seeded_schedule_id
     from app.modules.schedule import router as schedule_router
 
     async def _noop_verify(*args, **kwargs):
@@ -164,15 +140,14 @@ async def test_explicit_limit_500_caps_at_500(seeded_schedule_id) -> None:
     original = schedule_router._verify_schedule_owner
     schedule_router._verify_schedule_owner = _noop_verify  # type: ignore[assignment]
     try:
-        async with Session() as s:
-            rels = await schedule_router.list_relationships(
-                schedule_id=schedule_id,
-                session=s,
-                _user_id=uuid.uuid4(),
-                payload={"role": "admin"},
-                service=None,  # type: ignore[arg-type]
-                limit=500,
-            )
+        rels = await schedule_router.list_relationships(
+            schedule_id=schedule_id,
+            session=session,
+            _user_id=uuid.uuid4(),
+            payload={"role": "admin"},
+            service=None,  # type: ignore[arg-type]
+            limit=500,
+        )
     finally:
         schedule_router._verify_schedule_owner = original  # type: ignore[assignment]
 
@@ -182,7 +157,7 @@ async def test_explicit_limit_500_caps_at_500(seeded_schedule_id) -> None:
 @pytest.mark.asyncio
 async def test_results_ordered_by_created_at_asc(seeded_schedule_id) -> None:
     """ORDER BY created_at ASC keeps pagination stable across requests."""
-    schedule_id, Session, _ = seeded_schedule_id
+    schedule_id, session = seeded_schedule_id
     from app.modules.schedule import router as schedule_router
 
     async def _noop_verify(*args, **kwargs):
@@ -191,15 +166,14 @@ async def test_results_ordered_by_created_at_asc(seeded_schedule_id) -> None:
     original = schedule_router._verify_schedule_owner
     schedule_router._verify_schedule_owner = _noop_verify  # type: ignore[assignment]
     try:
-        async with Session() as s:
-            rels = await schedule_router.list_relationships(
-                schedule_id=schedule_id,
-                session=s,
-                _user_id=uuid.uuid4(),
-                payload={"role": "admin"},
-                service=None,  # type: ignore[arg-type]
-                limit=100,
-            )
+        rels = await schedule_router.list_relationships(
+            schedule_id=schedule_id,
+            session=session,
+            _user_id=uuid.uuid4(),
+            payload={"role": "admin"},
+            service=None,  # type: ignore[arg-type]
+            limit=100,
+        )
     finally:
         schedule_router._verify_schedule_owner = original  # type: ignore[assignment]
 
@@ -253,6 +227,3 @@ def test_limit_above_500_rejected_by_query_schema() -> None:
     )
     assert bounds["ge"] == 1, f"Expected ``limit`` lower bound of 1, got {bounds['ge']}."
     assert bounds["default"] == 200, f"Expected ``limit`` default of 200, got {bounds['default']}."
-
-
-import inspect  # noqa: E402  — used above

@@ -8,32 +8,22 @@ Verifies the four key contracts:
    silently drops it (200 with that widget's by_project empty / no leak).
 4. Money fields are strings (Decimal-safe), never floats.
 
-Per ``feedback_test_isolation.md`` we redirect DATABASE_URL to a
-per-module temp SQLite file BEFORE the app is first imported.
+The test runs against the PostgreSQL engine provisioned and bound by
+``tests/conftest.py`` before any test module is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-dashroll-"))
-_TMP_DB = _TMP_DIR / "dashroll.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

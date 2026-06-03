@@ -6,7 +6,7 @@ and ORM metadata only.
 
 The GUID class and Base are imported carefully to avoid triggering
 the engine-creation side effect in app.database (which requires
-aiosqlite or asyncpg at import time).
+asyncpg at import time).
 """
 
 import uuid

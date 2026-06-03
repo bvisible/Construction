@@ -15,28 +15,19 @@ Test groups
   * HTTP endpoint — streaming + base64 + filename header.
   * Cross-tenant IDOR — 404 from a different tenant.
 
-Scaffolding mirrors :mod:`test_property_dev_lead_to_spa` — per-module
-SQLite registered BEFORE any ``app`` import so the production DB is
-never touched.
+Scaffolding mirrors :mod:`test_property_dev_lead_to_spa`. The
+PostgreSQL engine is provisioned and bound by ``tests/conftest.py``
+before any ``app`` import, so the suite runs entirely on that cluster.
 """
 
 from __future__ import annotations
 
 import base64
 import io
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-docs-"))
-_TMP_DB = _TMP_DIR / "propdev_docs.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
+import pytest
 
 # pypdf is a test-only dependency (used to parse the generated PDFs) that is not
 # declared in pyproject's base/[dev] extras, so it is absent in Backend CI. Skip

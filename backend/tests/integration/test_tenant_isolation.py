@@ -10,12 +10,10 @@ the leak surfaces as a red test rather than a customer-reported bug.
 
 Test scaffolding
 ~~~~~~~~~~~~~~~~
-* The DB is a per-module temp SQLite file (``tempfile.mkdtemp()`` +
-  ``sqlite+aiosqlite:///``). The ``DATABASE_URL`` env var is set
-  *before* ``app.database`` is imported so the global
-  ``async_session_factory`` binds to the temp file — the production
-  ``backend/openestimate.db`` is never touched. This is a hard
-  requirement (see ``feedback_test_isolation.md``).
+* The DB is the PostgreSQL cluster that ``tests/conftest.py`` provisions
+  and binds to the SQLAlchemy engine before any test module imports.
+  The global ``async_session_factory`` is already bound to that engine,
+  so every fixture and direct DB write here runs against PostgreSQL.
 
 * The two-tenant setup fixture is **module-scoped** because:
   (a) registering 2 users + lifespan boot is expensive (~25-30s on
@@ -53,28 +51,11 @@ suite still runs green for the rest of CI but the leak is loud.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-test SQLite isolation (must run BEFORE app imports) ────────────────
-#
-# ``app.database`` constructs the global async engine at import time using
-# the value of ``settings.database_url`` it sees on first import. We
-# therefore have to point that env var at a fresh temp file *now*, before
-# any ``from app...`` line runs. ``get_settings()`` is ``lru_cache``-d so
-# the first call wins — but we still call ``cache_clear()`` defensively
-# inside the fixture in case a sibling module pre-imported it.
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-tenant-iso-"))
-_TMP_DB = _TMP_DIR / "tenant_iso.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -83,8 +64,8 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 async def app_instance():
     """Boot the FastAPI app once for the whole module.
 
-    Lifespan startup runs ``Base.metadata.create_all`` on the temp
-    SQLite. After lifespan we explicitly import the dashboards models
+    Lifespan startup runs ``Base.metadata.create_all`` on the conftest
+    PostgreSQL. After lifespan we explicitly import the dashboards models
     (which ``app.main`` does NOT pre-import — they get pulled in by the
     module loader, but only after ``create_all`` has already run) and
     run ``create_all`` a second time to backfill the missing table.
@@ -159,7 +140,26 @@ async def _promote_to_admin(email: str) -> None:
     from app.modules.users.models import User
 
     async with async_session_factory() as session:
-        await session.execute(update(User).where(User.email == email.lower()).values(role="admin"))
+        await session.execute(update(User).where(User.email == email.lower()).values(role="admin", is_active=True))
+        await session.commit()
+
+
+async def _activate_user(email: str) -> None:
+    """Force ``is_active=True`` so a self-registered viewer can log in.
+
+    The default registration mode is ``admin-approve`` (BUG-RBAC03), which
+    leaves new non-bootstrap accounts inactive until an admin promotes them.
+    Tenant B must stay a *viewer* yet still authenticate, so we flip the
+    active flag directly via the DB to keep the test focused on cross-tenant
+    access enforcement, not on the registration policy.
+    """
+    from sqlalchemy import update
+
+    from app.database import async_session_factory
+    from app.modules.users.models import User
+
+    async with async_session_factory() as session:
+        await session.execute(update(User).where(User.email == email.lower()).values(is_active=True))
         await session.commit()
 
 
@@ -202,8 +202,9 @@ async def two_tenants(http_client):
     assert reg_b.status_code in (200, 201), reg_b.text
     b_uid = reg_b.json()["id"]
 
-    # Promote A so they can create contacts; B stays viewer.
+    # Promote A so they can create contacts; B stays viewer but must be active.
     await _promote_to_admin(a_email)
+    await _activate_user(b_email)
 
     # Re-login both to pick up role claim (and to obtain bearer tokens).
     a_headers = await _re_login(http_client, a_email, a_password)

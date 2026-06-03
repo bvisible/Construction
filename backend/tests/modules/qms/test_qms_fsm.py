@@ -6,9 +6,10 @@ raise ``ValueError``. Tests are service-level so they exercise the real FSM
 logic without a full HTTP stack.
 
 Design constraints:
-    - In-memory SQLite fixture (mirrors test_qms.py).
-    - No alembic migrations — the QMS tables alone are created via
-      ``Base.metadata.create_all``.
+    - PostgreSQL fixture with per-test transaction isolation (mirrors test_qms.py).
+      Each test runs inside an outer transaction that is rolled back on teardown,
+      so the shared ``oe_test_unit`` database always starts each test empty.
+    - No create_all - the shared test database already carries the full schema.
     - No network I/O.
 """
 
@@ -20,27 +21,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
-from app.modules.qms.models import (
-    QMSNCR,
-    ITPItem,
-    ITPPlan,
-    ITPTemplate,
-    QMSAudit,
-    QMSAuditFinding,
-    QMSAuditLog,
-    QMSCalibration,
-    QMSInspection,
-    QMSInspectionSignature,
-    QMSNCRAction,
-    QMSPunchItem,
-)
 from app.modules.qms.schemas import (
     AuditCreate,
     AuditUpdate,
@@ -57,35 +39,15 @@ from app.modules.qms.schemas import (
     PunchItemUpdate,
 )
 from app.modules.qms.service import QMSService
+from tests._pg import transactional_session
 
 _PROJECT_ID = uuid.uuid4()
-
-_QMS_TABLES = [
-    ITPPlan.__table__,
-    ITPItem.__table__,
-    ITPTemplate.__table__,
-    QMSInspection.__table__,
-    QMSInspectionSignature.__table__,
-    QMSNCR.__table__,
-    QMSNCRAction.__table__,
-    QMSPunchItem.__table__,
-    QMSAudit.__table__,
-    QMSAuditFinding.__table__,
-    QMSAuditLog.__table__,
-    QMSCalibration.__table__,
-]
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_QMS_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

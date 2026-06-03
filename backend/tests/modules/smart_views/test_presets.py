@@ -4,14 +4,13 @@
 
 Exercises the static catalogue surface (``BUILTIN_PRESETS``,
 ``list_presets``) and the service-layer ``install_preset`` path. Every
-test uses a per-test temp SQLite per ``feedback_test_isolation.md``.
+test uses a transaction-isolated PostgreSQL session (rolled back on
+teardown) seeded with one user + one project.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 
@@ -24,13 +23,8 @@ pytest.importorskip("itsdangerous", reason="itsdangerous is not in the [dev] ins
 
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.smart_views.evaluator import evaluate_smart_view
 from app.modules.smart_views.presets import BUILTIN_PRESETS, get_preset
 from app.modules.smart_views.schemas import (
@@ -39,38 +33,13 @@ from app.modules.smart_views.schemas import (
     SmartViewSelector,
 )
 from app.modules.smart_views.service import SmartViewService
-
-
-def _register_models() -> None:
-    """Eagerly register every ORM module referenced by the test DB."""
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.smart_views.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Spin up an isolated SQLite + seed one user + one project."""
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-sv-pres-")) / "sv.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    from sqlalchemy import event as sa_event
-    from sqlalchemy.engine import Engine
-
-    @sa_event.listens_for(Engine, "connect")
-    def _fk_on(dbapi_conn: object, _: object) -> None:
-        cursor = dbapi_conn.cursor()  # type: ignore[union-attr]
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session seeded with a user + project."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -93,12 +62,6 @@ async def session() -> AsyncSession:
         s.info["owner_id"] = owner.id
         s.info["project_id"] = project.id
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 # ── 1. Catalogue size is exactly 6 ────────────────────────────────────────

@@ -1,10 +1,9 @@
 """Integration tests for the per-user tour-state API.
 
-Mirrors the dashboard-rollup test suite (per-module SQLite isolation +
-single app boot per module) so the test runs fast and is independent
-of any other test's state. Per ``feedback_test_isolation.md`` we
-redirect ``DATABASE_URL`` to a per-module temp SQLite file BEFORE the
-app is first imported.
+Mirrors the dashboard-rollup test suite (single app boot per module)
+so the test runs fast and is independent of any other test's state.
+The engine is bound to the PostgreSQL cluster provisioned by
+``conftest.py`` before any test module imports.
 
 * ``GET  /api/v1/users/me/tour-state/`` — empty defaults when the user
   has never run a tour.
@@ -23,26 +22,16 @@ or, for a quick filter:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-tourstate-"))
-_TMP_DB = _TMP_DIR / "tourstate.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

@@ -14,9 +14,14 @@ Covers, with the LLM provider fully mocked so the suite runs offline:
   returns plain text emits ``session_id``, ``text``, ``done`` events
   in order and persists the user + assistant turn.
 
-Fixtures spin up an in-memory SQLite engine and create only the tables
-the suite needs (no FastAPI app, no migrations), keeping this file fast
-and independent of the live alembic graph.
+Fixtures run against the shared PostgreSQL ``oe_test_unit`` database, which is
+pre-built once with the full schema (no FastAPI app, no migrations, no
+per-test ``create_all``). Each test runs inside an outer transaction that is
+rolled back on teardown, so it starts from an empty chat schema and the live
+alembic graph is irrelevant. The ``session_factory`` hands out multiple
+sessions bound to that one outer transaction: a session's own ``commit()``
+becomes a SAVEPOINT release, so data committed in one ``session_factory()``
+context is visible to the next within the same test, then undone afterwards.
 """
 
 from __future__ import annotations
@@ -26,13 +31,13 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.rate_limiter import RateLimiter
-from app.database import Base
-from app.modules.erp_chat.models import ChatMessage, ChatSession, ChatTurnFeedback
+from app.modules.erp_chat.models import ChatMessage, ChatSession
 from app.modules.erp_chat.schemas import StreamChatRequest
 from app.modules.erp_chat.service import (
     DAILY_TOKEN_BUDGET,
@@ -40,23 +45,22 @@ from app.modules.erp_chat.service import (
     MAX_HISTORY_MESSAGES,
     ERPChatService,
 )
+from tests._pg import transactional_session
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def session_factory():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                ChatSession.__table__,
-                ChatMessage.__table__,
-                ChatTurnFeedback.__table__,
-            ],
+    # All sessions handed out share the one connection of a single outer
+    # transaction, so committed data is visible across the multiple
+    # ``session_factory()`` contexts a test opens, then rolled back on teardown.
+    async with transactional_session() as base_session:
+        maker = async_sessionmaker(
+            bind=base_session.bind,
+            class_=AsyncSession,
+            expire_on_commit=False,
+            join_transaction_mode="create_savepoint",
         )
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+        yield maker
 
 
 # ── Rate-limit: 429 after N calls ───────────────────────────────────────

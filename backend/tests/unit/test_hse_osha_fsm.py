@@ -12,35 +12,26 @@ Covers
 * FSM bad transition: pending → verified directly raises HTTP 409 with a
   message that names the rejected hop.
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+The SQLAlchemy engine is bound to the conftest PostgreSQL cluster before
+this module is imported, so these tests run on PostgreSQL.
 """
 
 from __future__ import annotations
 
 import csv
 import io
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-hse-osha-"))
-_TMP_DB = _TMP_DIR / "hse-osha.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from fastapi import HTTPException  # noqa: E402
+import pytest
+import pytest_asyncio
+from fastapi import HTTPException
 
 PROJECT_ID = uuid.uuid4()
 
 
 @pytest_asyncio.fixture(scope="module")
 async def db_session():
-    """An ``AsyncSession`` over a freshly ``create_all``'d temp SQLite."""
+    """An ``AsyncSession`` over a freshly ``create_all``'d PostgreSQL DB."""
     from app.config import get_settings
 
     get_settings.cache_clear()

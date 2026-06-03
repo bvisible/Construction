@@ -13,28 +13,18 @@ Covers the 8 scenarios in the spec:
     7. Cross-project IDOR: user with project A can't list project B.
     8. ``attachment_document_id`` must belong to the same project.
 
-Test scaffolding mirrors ``test_erp_chat_idor.py`` — a per-module temp
-SQLite file is wired up *before* ``app.database`` is imported so the
-production ``backend/openestimate.db`` is never touched.
+Test scaffolding mirrors ``test_erp_chat_idor.py`` — the engine is bound to
+the conftest-provisioned PostgreSQL cluster before any test module imports.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-compliance-docs-"))
-_TMP_DB = _TMP_DIR / "compliance_docs.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 

@@ -18,17 +18,19 @@ Covers the four security/correctness fixes shipped alongside this file:
    ``is_active=False`` users with HTTP 400 instead of silently creating
    a dangling membership row.
 
-All tests use a per-test temp SQLite file (``feedback_test_isolation.md``)
-and never touch the production database.
+All tests run against an isolated, throwaway PostgreSQL database (cloned from a
+schema-loaded template by ``tests._pg.isolated_engine``) so they run fast and
+never touch the production database. The fixtures open several independent
+sessions from a shared sessionmaker and rely on cross-connection commit
+visibility (the concurrent-create test in particular spins up 50 separately
+committing sessions), so a real throwaway engine is used rather than a single
+savepoint-rolled-back session.
 """
 
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import uuid
-from collections.abc import AsyncGenerator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -37,51 +39,27 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
-
-def _register_models() -> None:
-    """Import every model that Base.metadata.create_all needs to see."""
-    import app.core.audit  # noqa: F401
-    import app.core.audit_log  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.teams.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import isolated_engine
 
 
 @pytest_asyncio.fixture
-async def engine_factory() -> AsyncGenerator[tuple[Any, Any, Path], None]:
-    """Per-test SQLite + ORM metadata."""
-    tmp_db = Path(tempfile.mkdtemp()) / "projects_security.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    _register_models()
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    yield engine, factory, tmp_db
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+async def engine_factory():
+    """Per-test throwaway PostgreSQL database + ORM sessionmaker."""
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
 async def seeded_owner(engine_factory) -> tuple[uuid.UUID, Any]:
     """Create an owner User row so Project.owner_id FK is satisfied."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     from app.modules.users.models import User
 
     user_id = uuid.uuid4()

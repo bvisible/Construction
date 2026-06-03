@@ -16,10 +16,10 @@ i.e. nested sections AND nested partidas, usable up to
 every level and persisting across a refetch. The cap must be enforced (tier
 9 rejected) and surfaced via GET /v1/boq/limits/.
 
-Test isolation (``feedback_test_isolation.md``): the per-session temp SQLite
-redirect, eager model registration and the synchronous event-bus shim are
+Test isolation (``feedback_test_isolation.md``): the per-session PostgreSQL
+database, eager model registration and the synchronous event-bus shim are
 provided by ``backend/tests/conftest.py`` — the production
-``openestimate.db`` is never touched.
+database is never touched.
 
 Run:
     cd backend

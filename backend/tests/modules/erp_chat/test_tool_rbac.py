@@ -16,57 +16,39 @@ Coverage in this module:
   project gets the 404-style "project not found" card — never the role
   card, never a leak of project existence.
 
-Tests run against an in-memory SQLite database initialised with only the
-tables they need — no FastAPI app boot, no migrations.
+Tests run against a throwaway PostgreSQL database (cloned from a
+schema-loaded template by ``tests._pg.isolated_engine``) — no FastAPI app
+boot, no migrations.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# Per-module SQLite isolation — must run BEFORE any app.* import.
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-chat-rbac-"))
-_TMP_DB = _TMP_DIR / "chat_rbac.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+from tests._pg import isolated_engine
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session_factory():
-    """In-memory SQLite with every table create_all can reach.
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded
+    template.
 
-    We import the full module set so Project / User / Team /
-    TeamMembership / BOQ rows can coexist — the tools touch all of them.
+    The helpers below open several independent sessions from this factory and
+    commit through one to read through another, so the test needs a real
+    database with cross-connection commit visibility (not a savepoint-rolled-
+    back shared session). The template already carries every module table, so
+    Project / User / Team / TeamMembership / BOQ rows can coexist — the tools
+    touch all of them.
     """
-    # Import models so their tables are on Base.metadata before create_all.
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.teams.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-    from app.database import Base
-
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}",
-        echo=False,
-    )
-    # Per-test isolation: drop + recreate so leftover Position / Project
-    # rows from a previous case never bleed into the next ("no row was
-    # created" assertions must mean THIS test's row, not a stale one).
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    async with isolated_engine() as engine:
+        maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield maker
 
 
 async def _make_user(maker, *, email: str, role: str) -> str:

@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
 from app.modules.reporting.cron import CronParseError, next_occurrence
+from app.modules.reporting.currency_resolver import resolve_template_currency
 from app.modules.reporting.models import GeneratedReport, KPISnapshot, ReportTemplate
 from app.modules.reporting.renderer import ReportRenderer
 from app.modules.reporting.repository import (
@@ -455,6 +456,19 @@ class ReportingService:
         call. This matches the cron-worker contract (a failed render
         should not lose the audit trail of "we tried to render").
         """
+        # ── Resolve the report currency (override > project > EUR) ──
+        # Worldwide currency parameterisation (Wave 23). The resolved code
+        # is stamped onto the row *and* into the data_snapshot so every
+        # money figure in the report reads in a single, explicit currency.
+        # ``override_currency`` is already shape-validated (3-letter, upper)
+        # at the schema layer, so an invalid code never reaches here — it
+        # is rejected with HTTP 422 before this method runs.
+        currency = await resolve_template_currency(
+            session=self.session,
+            project_id=data.project_id,
+            override_currency=data.override_currency,
+        )
+
         # If the caller did not supply a data snapshot, assemble one
         # server-side from the project's live module state. Without this
         # the renderer falls straight through to its "No data available"
@@ -468,6 +482,7 @@ class ReportingService:
                 effective_snapshot = await self._build_default_snapshot(
                     data.project_id,
                     data.report_type,
+                    currency=currency,
                 )
             except Exception:
                 logger.warning(
@@ -479,6 +494,17 @@ class ReportingService:
                 )
                 effective_snapshot = None
 
+        # Stamp the resolved currency into the snapshot. A caller-supplied
+        # snapshot is copied (never mutated in place) so the request object
+        # stays pristine, and the stamped ``currency`` key always reflects
+        # the resolved code — overriding any stale currency the caller may
+        # have embedded. This is what guarantees a USD report never carries
+        # a euro sign and vice versa: money lives under one currency code.
+        if effective_snapshot is not None:
+            effective_snapshot = {**effective_snapshot, "currency": currency}
+        else:
+            effective_snapshot = {"currency": currency}
+
         report = GeneratedReport(
             project_id=data.project_id,
             template_id=data.template_id,
@@ -487,6 +513,7 @@ class ReportingService:
             generated_at=datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S"),
             generated_by=uuid.UUID(user_id) if user_id else None,
             format=data.format,
+            currency=currency,
             data_snapshot=effective_snapshot,
             metadata_=data.metadata,
         )
@@ -608,6 +635,8 @@ class ReportingService:
         self,
         project_id: uuid.UUID,
         report_type: str,
+        *,
+        currency: str,
     ) -> dict | None:
         """Assemble a ``data_snapshot`` from the project's live module state.
 
@@ -621,9 +650,17 @@ class ReportingService:
         Every figure is sourced from data the dashboards already compute:
         the most recent :class:`KPISnapshot` (CPI/SPI/budget/schedule/risk
         and open-item counts) plus the finance dashboard (payable /
-        receivable / budget / cash-flow with its ISO currency code). Money
-        values always carry their currency code, per the platform money
-        rule.
+        receivable / budget / cash-flow). Money values always carry the
+        report's *resolved* currency code (``currency`` arg) so the whole
+        report reads in one currency — we never blend the finance
+        dashboard's own currency with the resolved report currency.
+
+        Args:
+            project_id: Owning project UUID.
+            report_type: Report type (forward-compat; not branched on yet).
+            currency: The already-resolved ISO 4217 code for this report
+                (override > project > EUR). All money figures are stamped
+                with this single code.
 
         Returns ``None`` when neither a KPI snapshot nor finance data is
         available, so the caller still gets the explicit empty-snapshot
@@ -633,15 +670,13 @@ class ReportingService:
 
         snapshot: dict[str, dict] = {}
 
-        # ── Project header + resolved currency ──
+        # ── Project header ──
         project = None
-        currency = ""
         try:
             project = await ProjectRepository(self.session).get_by_id(project_id)
         except Exception:
             project = None
         if project is not None:
-            currency = (getattr(project, "currency", "") or "").strip().upper()
             header: dict[str, object] = {
                 "name": getattr(project, "name", "") or "",
                 "status": getattr(project, "status", "") or "",
@@ -695,11 +730,17 @@ class ReportingService:
 
             dash = await FinanceService(self.session).get_dashboard(project_id=project_id)
             dash_data = dash.model_dump() if hasattr(dash, "model_dump") else dict(dash)
-            fin_currency = (dash_data.get("currency") or currency or "").strip().upper()
 
+            # Money always reads in the report's *resolved* currency — never
+            # the finance dashboard's own currency. Blending the two would
+            # let a USD-override report show EUR-denominated finance figures
+            # (or vice versa), which is exactly the cross-currency leak the
+            # tests guard against. We do not FX-convert here: the values are
+            # presented under one declared code, and any real conversion is
+            # the caller's responsibility upstream.
             def _money(value: object) -> str:
                 num = value if value is not None else 0
-                return f"{num} {fin_currency}".strip()
+                return f"{num} {currency}".strip()
 
             summary_block: dict[str, object] = {}
             if dash_data.get("total_budget_revised") is not None:

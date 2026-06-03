@@ -46,34 +46,20 @@ Documents / Photos / Sheets / BIM-link surface:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
 import pytest_asyncio
-
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-docs-sec-"))
-_TMP_DB = _TMP_DIR / "docs_sec.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
 from fastapi import HTTPException  # noqa: E402
 from pydantic import ValidationError  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: E402
 
 import app.modules.bim_hub.models  # noqa: E402,F401
 import app.modules.documents.models  # noqa: E402,F401
 import app.modules.projects.models  # noqa: E402,F401
 import app.modules.users.models  # noqa: E402,F401
-from app.database import Base  # noqa: E402
 from app.modules.bim_hub.models import BIMElement, BIMModel  # noqa: E402
 from app.modules.documents.models import (  # noqa: E402
     Document,
@@ -101,21 +87,21 @@ from app.modules.documents.share_service import (  # noqa: E402
 )
 from app.modules.projects.models import Project  # noqa: E402
 from app.modules.users.models import User  # noqa: E402
+from tests._pg import transactional_session  # noqa: E402
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite session with the full schema."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    """Per-test PostgreSQL session in a rolled-back outer transaction.
+
+    Backed by the shared schema-loaded ``oe_test_unit`` database; the
+    session's own commits become savepoints and the whole transaction is
+    rolled back on teardown, so each test starts from an empty database.
+    """
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 async def _make_user(session: AsyncSession, *, role: str = "editor") -> User:

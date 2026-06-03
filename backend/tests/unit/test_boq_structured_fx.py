@@ -16,8 +16,9 @@ pin the export-side fix:
 * ``get_export_fx`` returns the frozen ``(base, {code: rate})`` the
   exporters embed as an audit appendix
 
-Test isolation (``feedback_test_isolation.md``): a per-test temp SQLite
-file, never the production ``openestimate.db``.
+Test isolation: a transaction-isolated PostgreSQL session on the shared
+schema-loaded ``oe_test_unit`` database (rolled back on teardown), never
+the production database.
 
 Run:
     cd backend
@@ -26,47 +27,27 @@ Run:
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.boq.service import (
     BOQService,
     _position_currency,
     _position_total_in_base,
 )
+from tests._pg import transactional_session
 
 OWNER_ID = uuid.uuid4()
 
 
-def _register_models() -> None:
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.catalog.models  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
-async def session():
-    tmp_db = Path(tempfile.mkdtemp()) / "structured_fx.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+async def session() -> AsyncSession:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
         from app.modules.users.models import User
 
         s.add(
@@ -80,12 +61,6 @@ async def session():
         await s.flush()
         await s.commit()
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 # ── Pure converter ───────────────────────────────────────────────────────

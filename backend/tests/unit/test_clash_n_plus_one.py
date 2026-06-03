@@ -27,19 +27,10 @@ we get a clean SQL count without auth overhead queries.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
+from collections.abc import AsyncIterator
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-n1-"))
-_TMP_DB = _TMP_DIR / "clash_n1.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from collections.abc import AsyncIterator  # noqa: E402
-
-import pytest_asyncio  # noqa: E402
+import pytest_asyncio
 
 # ── Fixture ────────────────────────────────────────────────────────────────
 
@@ -145,7 +136,8 @@ class _QueryCounter:
         self.count = 0
 
     def _handler(self, conn, cursor, statement, parameters, context, executemany) -> None:
-        # Skip PRAGMA and SAVEPOINT admin queries used by SQLite.
+        # Skip PRAGMA and SAVEPOINT/RELEASE admin statements (nested-transaction
+        # bookkeeping), which are not real data queries on PostgreSQL.
         stmt_upper = statement.strip().upper()
         if stmt_upper.startswith(("PRAGMA", "SAVEPOINT", "RELEASE")):
             return

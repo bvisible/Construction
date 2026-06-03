@@ -280,23 +280,25 @@ class CollabLockService:
         once per delete.  Returns the number of rows removed.
         """
         now = _now()
-        # First read the rows so we can publish events after delete.
-        stale_rows = [
-            row for row in await self.repo.list_by_user(uuid.UUID(int=0), now) if _as_aware(row.expires_at) <= now
+        # Snapshot the expired rows *before* the bulk delete so we can
+        # publish one event per removed lock.  ``list_expired`` selects
+        # exactly ``expires_at <= now`` (the same predicate the bulk
+        # delete uses), so every snapshotted row is genuinely removed.
+        stale_rows = await self.repo.list_expired(now)
+        snapshots = [
+            {
+                "lock_id": str(row.id),
+                "entity_type": row.entity_type,
+                "entity_id": str(row.entity_id),
+                "user_id": str(row.user_id),
+            }
+            for row in stale_rows
         ]
-        # The above filter only finds the zero-user edge case; for the
-        # real sweep we rely on bulk delete_expired.  We still want to
-        # publish events, so do a direct scan if there are expired rows.
         removed = await self.repo.delete_expired(now)
-        for row in stale_rows:
+        for snapshot in snapshots:
             event_bus.publish_detached(
                 COLLAB_LOCK_EXPIRED,
-                {
-                    "lock_id": str(row.id),
-                    "entity_type": row.entity_type,
-                    "entity_id": str(row.entity_id),
-                    "user_id": str(row.user_id),
-                },
+                snapshot,
                 source_module="collaboration_locks",
             )
         return removed

@@ -14,7 +14,7 @@ Covers the bugs fixed in the v3.0.x Tasks audit:
 * Excel export + template + CSV import round-trip
 * private-task visibility
 
-Test isolation: the session-scoped temp SQLite from ``tests/conftest.py``
+Test isolation: the session-scoped PostgreSQL database from ``tests/conftest.py``
 is used; no production DB is touched.
 
 Run:

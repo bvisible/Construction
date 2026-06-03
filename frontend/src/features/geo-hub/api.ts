@@ -122,9 +122,18 @@ export function placeBimModelOnMap(
 ): Promise<Tileset> {
   const qs = new URLSearchParams({ project_id: options.projectId });
   if (options.developmentId) qs.set('development_id', options.developmentId);
+  // Packaging a model into a 3D Tileset is heavy CAD work: the backend
+  // loads every canonical element, builds a glTF + b3dm, and uploads the
+  // artifacts synchronously. On a large model this comfortably exceeds the
+  // default 30 s mutation budget, and when the client-side abort fired the
+  // user got a spurious "Request timed out" toast (plus a generic
+  // "placement failed") even though the server kept working and the tileset
+  // landed a moment later. Opt into the long-running budget so the success
+  // path actually waits for the real response.
   return apiPost<Tileset>(
     `${BASE}/from-canonical/${cadImportId}?${qs.toString()}`,
     {},
+    { longRunning: true },
   );
 }
 

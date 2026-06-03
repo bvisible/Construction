@@ -24,16 +24,8 @@ import uuid
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.audit_log  # noqa: F401 — registers ActivityLog with Base
-from app.database import Base
-from app.modules.approval_routes.models import (  # noqa: F401 — registers ORM
-    Instance,
-    Route,
-    Step,
-    StepState,
-)
 from app.modules.approval_routes.schemas import (
     DecisionSubmit,
     InstanceCreate,
@@ -43,18 +35,19 @@ from app.modules.approval_routes.schemas import (
 from app.modules.approval_routes.service import ApprovalRouteService
 from app.modules.projects.models import Project  # noqa: F401 — registers ORM
 from app.modules.users.models import User  # noqa: F401 — registers ORM
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test in-memory SQLite session with all DDL applied."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    """Per-test PostgreSQL session inside an outer transaction.
+
+    Backed by the shared ``oe_test_unit`` database (full schema pre-built).
+    The outer transaction is rolled back on teardown, so committed data is
+    visible within the test but undone afterwards.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _seed_project(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:

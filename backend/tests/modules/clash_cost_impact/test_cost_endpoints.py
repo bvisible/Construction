@@ -4,35 +4,25 @@ Covers:
     * GET /clash/{id}/impact     — happy path, 401, 403, 404
     * GET /project/{id}/rollup   — happy path, 403 (IDOR), 404
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-per-module temp SQLite file BEFORE ``app`` is first imported, mirroring
-the pattern in ``test_clash_a4_endpoints.py``.
+The engine is bound to the PostgreSQL cluster provisioned by
+``tests/conftest.py`` before any test module imports, so these tests run
+against PostgreSQL.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-cost-"))
-_TMP_DB = _TMP_DIR / "clash_cost.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── App / auth / project fixtures ─────────────────────────────────────────
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

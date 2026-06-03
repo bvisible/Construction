@@ -2,8 +2,8 @@
 
 Builds :class:`ElementGeom` objects by hand and drives
 :class:`ClashService` directly with lightweight fake ``ClashRun`` /
-element objects, so the correctness gate runs without PostgreSQL,
-SQLite-prod, or any GLB asset.
+element objects, so the correctness gate runs without a live PostgreSQL session
+or any GLB asset.
 
 Coverage:
   * two unit cubes overlapping 0.3 m  → 1 HARD, pen ≈ 0.3, gating honoured
@@ -17,8 +17,8 @@ Coverage:
     recall against ground truth must both be 1.0
 
 Per ``feedback_test_isolation.md`` the import-time env guard in
-``tests/conftest.py`` already redirects ``DATABASE_URL`` to a per-session
-temp SQLite file; these tests never open a session anyway.
+``tests/conftest.py`` already redirects ``DATABASE_URL`` to the per-session
+embedded PostgreSQL cluster; these tests never open a session anyway.
 """
 
 from __future__ import annotations

@@ -23,27 +23,18 @@ Read endpoints (``GET /{id}``, ``GET /``, ``GET /export/``) and
 regression guards live alongside the write-IDOR tests below to lock
 the boundary in.
 
-Scaffolding mirrors ``test_schedule_idor.py``: per-module temp
-SQLite, registered BEFORE any ``from app...`` import (see
-``feedback_test_isolation.md``).
+Scaffolding mirrors ``test_schedule_idor.py``: the test runs on the
+PostgreSQL cluster provisioned by ``tests/conftest.py`` (the engine is
+bound to PostgreSQL before any test module imports).
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-inspections-idor-"))
-_TMP_DB = _TMP_DIR / "inspections_idor.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 

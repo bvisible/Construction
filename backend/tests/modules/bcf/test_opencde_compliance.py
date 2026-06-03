@@ -18,21 +18,11 @@ OpenCDE BCF-API 3.0 spec (``release_3_0/Schemas_draft-03``):
 from __future__ import annotations
 
 import base64
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation ──────────────────────────────────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-bcf-opencde-compliance-"))
-_TMP_DB = _TMP_DIR / "bcf_opencde_compliance.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 _API = "/api/v1/bcf/3.0"
 

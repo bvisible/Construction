@@ -1491,6 +1491,12 @@ class PropertyDevCustomTemplate(Base):
     storage_path: Mapped[str] = mapped_column(String(512), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # Optional per-template ISO 4217 override (Wave 23 currency
+    # parameterisation). When set it wins over the project's currency in
+    # ``app.modules.reporting.currency_resolver.resolve_template_currency``;
+    # ``None`` inherits the project currency (then the EUR fallback). Kept
+    # nullable so existing templates keep deferring to the project default.
+    override_currency: Mapped[str | None] = mapped_column(String(3), nullable=True, default=None)
     created_by: Mapped[uuid.UUID | None] = mapped_column(GUID(), nullable=True, index=True)
 
     def __repr__(self) -> str:

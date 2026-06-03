@@ -43,7 +43,7 @@ Covers six guarantees the R7 sweep pinned down:
    ``completed → active`` — the lifecycle is one-way for terminal
    states.
 
-The tests run with in-memory repository stubs (no SQLite, no FastAPI
+The tests run with in-memory repository stubs (no database, no FastAPI
 app boot) to stay fast and reproducible. The full integration test
 suite under ``tests/integration`` covers wire-level smoke.
 """
@@ -140,7 +140,7 @@ class _StubGenericRepo:
 
 class _StubSession:
     """Async-session shim that records add() calls so the clone path can
-    flush sub-config rows without a real SQLite engine.
+    flush sub-config rows without a real database engine.
 
     Also implements ``.get(Model, id)`` for the router-level
     ``_load_contract_or_404`` helper, which goes straight to

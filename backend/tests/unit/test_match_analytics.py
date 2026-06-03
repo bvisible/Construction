@@ -4,16 +4,15 @@
 
 Two surfaces under test:
 
-* Pure helpers — :func:`_percentile` linear-interpolation contract.
-* End-to-end ``compute_match_analytics`` — seed real ``MatchSearchLog``
-  rows in a per-test SQLite file, then assert the JSON-serialisable
+* Pure helpers - :func:`_percentile` linear-interpolation contract.
+* End-to-end ``compute_match_analytics`` - seed real ``MatchSearchLog``
+  rows in a per-test PostgreSQL database, then assert the JSON-serialisable
   response carries the expected counters, distributions, and §10 alerts.
 
 Why a real DB and not a mock: the function does the analytics aggregation
 in-Python from a single ``select(...).all()`` pass, so a mocked session
-would just be re-implementing the same logic. The real fixture is fast
-(<300 ms total) and catches a class of bugs (column types, index decls,
-default values) that a mock can't.
+would just be re-implementing the same logic. The real fixture catches a
+class of bugs (column types, index decls, default values) that a mock can't.
 """
 
 from __future__ import annotations
@@ -22,16 +21,17 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database import Base
 from app.modules.match_elements.analytics import (
     _percentile,
     compute_match_analytics,
     get_alert_thresholds,
 )
 from app.modules.match_elements.models import MatchSearchLog
+from tests._pg import isolated_engine
 
 # ── Pure helpers ────────────────────────────────────────────────────────
 
@@ -79,34 +79,21 @@ def test_get_alert_thresholds_exposes_env_overridable_keys() -> None:
     }
 
 
-# ── End-to-end against a real SQLite ────────────────────────────────────
+# ── End-to-end against a real PostgreSQL ─────────────────────────────────
 
 
-@pytest.fixture
-async def session_factory(tmp_path):
-    """Per-test file-backed SQLite holding only ``MatchSearchLog``.
+@pytest_asyncio.fixture
+async def session_factory():
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    SQLite doesn't enforce foreign keys by default, so we can insert
-    rows referencing arbitrary project_id UUIDs without bootstrapping
-    the projects table.
+    The test seeds ``MatchSearchLog`` rows through one session and reads them
+    back through a separate session (``compute_match_analytics`` opens its own
+    query session), so they must see each other's commits - hence a real
+    throwaway database rather than a savepoint-rolled-back shared session.
     """
-    db_path = tmp_path / "match_analytics.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
-        # Disable FK enforcement so we can insert search-log rows
-        # referencing arbitrary project/session/group UUIDs without
-        # bootstrapping every parent table. The aggregator never JOINs
-        # against those FKs — it only reads the search-log row itself.
-        await conn.execute(text("PRAGMA foreign_keys=OFF"))
-        await conn.run_sync(Base.metadata.create_all, tables=[MatchSearchLog.__table__])
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield factory
 
 
 async def _seed(
@@ -118,6 +105,12 @@ async def _seed(
     """Insert a list of MatchSearchLog kwargs dicts. Defaults fill the FK."""
     pid = project_id or uuid.uuid4()
     async with maker() as db:
+        # Disable FK triggers so we can insert search-log rows referencing
+        # arbitrary project/session/group UUIDs without bootstrapping every
+        # parent table. The aggregator never JOINs against those FKs - it only
+        # reads the search-log row itself. This is the PostgreSQL equivalent of
+        # the old SQLite ``PRAGMA foreign_keys=OFF``.
+        await db.execute(text("SET session_replication_role = replica"))
         for r in rows or []:
             payload = {
                 "project_id": pid,

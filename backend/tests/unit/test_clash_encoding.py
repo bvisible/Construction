@@ -20,16 +20,7 @@ The guard here is direct DB write + read via the ORM (no HTTP layer needed).
 from __future__ import annotations
 
 import io
-import os
-import tempfile
 import uuid
-from pathlib import Path
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-enc-"))
-_TMP_DB = _TMP_DIR / "clash_encoding.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
 from collections.abc import AsyncIterator  # noqa: E402
 
 import pytest  # noqa: E402

@@ -14,25 +14,23 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_log import (
     get_activity_for_entity,
     get_recent_activity,
     log_activity,
 )
-from app.database import Base
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    # PostgreSQL session inside an outer transaction that is rolled back on
+    # teardown, so each test starts from an empty audit table. The shared
+    # "oe_test_unit" database is pre-built with the full schema.
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 @pytest.mark.asyncio
@@ -210,12 +208,13 @@ async def test_metadata_defaults_to_empty_dict(session: AsyncSession) -> None:
 async def test_recent_activity_is_newest_first(session: AsyncSession) -> None:
     """The ORDER BY ``created_at DESC`` ensures newest rows surface first.
 
-    SQLite stores ``DateTime(timezone=True)`` at second precision in
-    server_default=func.now(), so two log_activity calls in the same
-    second tie on ``created_at``. We assert on set membership for the
-    "is filter correct" path and rely on the inserted-order assertion
-    in :func:`test_get_activity_for_entity_orders_chronologically`
-    (which uses entity-scoped ASC ordering) for ordering correctness.
+    Two log_activity calls within the same transaction can share the same
+    ``created_at`` value from server_default=func.now() (statement_timestamp
+    is stable within a statement), so they may tie on ``created_at``. We
+    assert on set membership for the "is filter correct" path and rely on the
+    inserted-order assertion in
+    :func:`test_get_activity_for_entity_orders_chronologically` (which uses
+    entity-scoped ASC ordering) for ordering correctness.
     """
     await log_activity(
         session,

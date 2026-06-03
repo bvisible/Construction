@@ -1,9 +1,11 @@
 """Unit tests for the translation cascade.
 
-These tests are pure unit — no real network, no real LLM, no shared
-filesystem state. The cascade modules accept ``cache_db_path`` and
-``lookup_root`` overrides specifically so each test can point at its
-own ``tmp_path`` and stay isolated.
+These tests are pure unit — no real network, no real LLM. The cascade
+modules accept a ``lookup_root`` override so each test can point at its
+own ``tmp_path`` for MUSE/IATE dictionaries and stay isolated. The
+translation-memory cache lives in the shared PostgreSQL test database;
+tests use distinct text envelopes so their cache rows do not collide,
+and the in-process LRU is reset between tests.
 
 LLM tier is exercised by monkey-patching ``llm_translate`` so we never
 hit a real API. The tests verify cascade ordering, short-circuiting,
@@ -13,14 +15,37 @@ fallback when nothing else fires.
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import pytest_asyncio
 
 from app.core.translation import TierUsed, translate
+from app.core.translation import cache as cache_mod
 from app.core.translation.cache import TranslationCache
 from app.core.translation.lookup import lookup_phrase
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_translation_lru() -> AsyncGenerator[None, None]:
+    """Reset the in-process LRU and the shared engine pool around each test.
+
+    The cache now lives in the shared main database, so the LRU is keyed
+    on a constant ``"pg"`` namespace rather than a per-test file path.
+    Resetting it keeps the in-process layer from leaking cached rows or
+    ``None`` sentinels across tests. Disposing the global engine drops the
+    pooled asyncpg connections so the next test (run on its own event loop
+    by pytest-asyncio) opens fresh connections on that loop.
+    """
+    from app.database import engine
+
+    cache_mod._lru_invalidate()
+    yield
+    cache_mod._lru_invalidate()
+    await engine.dispose()
+
 
 # ── Helpers ────────────────────────────────────────────────────────────
 
@@ -44,8 +69,14 @@ def lookup_root(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def cache_path(tmp_path: Path) -> str:
-    """Temp SQLite cache file. ``cache.db`` is created lazily on first use."""
-    return str(tmp_path / "translation_cache.db")
+    """Deprecated ``cache_db_path`` value, retained for the cascade signature.
+
+    The translation-memory cache now lives in the shared PostgreSQL test
+    database, so this value is ignored by ``translate()``. It is kept only
+    so the existing ``cache_db_path=`` call sites stay valid while we
+    exercise the cascade's other behaviour.
+    """
+    return str(tmp_path / "ignored-cache-path")
 
 
 # ── Lookup phrase-aware behaviour ──────────────────────────────────────
@@ -256,21 +287,27 @@ class TestCascade:
         # Same call count — second translate didn't reach the LLM.
         assert len(calls) == 1
 
-    async def test_cache_isolated_per_temp_db(self, tmp_path: Path, lookup_root: Path) -> None:
-        """Verify temp-DB isolation: two paths = two independent caches."""
+    async def test_cache_shared_regardless_of_path(self, tmp_path: Path, lookup_root: Path) -> None:
+        """The cache is one shared DB store; the ``cache_db_path`` arg is ignored.
+
+        Populating the cache through one (ignored) ``cache_db_path`` value
+        and then reading it back through a different one must still hit the
+        same shared PostgreSQL store — the per-file isolation of the old
+        SQLite cache no longer exists.
+        """
         cache_a = str(tmp_path / "a.db")
         cache_b = str(tmp_path / "b.db")
 
         async def _fake_llm(text, src, tgt, *, domain, user_settings):  # noqa: ANN001
-            return ("X", 0.0001, 0.9)
+            return ("Sdelka", 0.0001, 0.9)
 
-        # Populate cache_a.
+        # Populate the shared cache via the first (ignored) path value.
         with patch(
             "app.core.translation.cascade.llm_translate",
             side_effect=_fake_llm,
         ):
             await translate(
-                "Stuff",
+                "SharedCacheProbe",
                 source_lang="en",
                 target_lang="bg",
                 user_settings=object(),
@@ -278,19 +315,17 @@ class TestCascade:
                 lookup_root=str(lookup_root),
             )
 
-        # cache_b is untouched — second translate must miss and call LLM again.
-        called: list = []
-
-        async def _fake_llm_2(text, src, tgt, *, domain, user_settings):  # noqa: ANN001
-            called.append(text)
-            return ("Y", 0.0001, 0.9)
+        # A different path value must still resolve to the same shared store,
+        # so the LLM tier must NOT be reached on the second call.
+        async def _explode(*args, **kwargs):  # noqa: ANN001, ANN002
+            raise AssertionError("LLM tier must not be reached — cache is shared")
 
         with patch(
             "app.core.translation.cascade.llm_translate",
-            side_effect=_fake_llm_2,
+            side_effect=_explode,
         ):
             r = await translate(
-                "Stuff",
+                "SharedCacheProbe",
                 source_lang="en",
                 target_lang="bg",
                 user_settings=object(),
@@ -298,8 +333,8 @@ class TestCascade:
                 lookup_root=str(lookup_root),
             )
 
-        assert r.tier_used == TierUsed.LLM
-        assert called == ["Stuff"]
+        assert r.tier_used == TierUsed.CACHE
+        assert r.translated == "Sdelka"
 
 
 # ── Cache primitives ───────────────────────────────────────────────────
@@ -307,10 +342,13 @@ class TestCascade:
 
 @pytest.mark.asyncio
 class TestCacheStore:
-    async def test_upsert_then_get(self, cache_path: str) -> None:
-        c = TranslationCache(cache_path)
+    # The cache is one shared PostgreSQL store, so each test uses a distinct
+    # text envelope to keep its row from colliding with the others.
+
+    async def test_upsert_then_get(self) -> None:
+        c = TranslationCache()
         await c.upsert(
-            text="Wall",
+            text="CacheStore-Wall",
             translated_text="Wand",
             source_lang="en",
             target_lang="de",
@@ -318,16 +356,16 @@ class TestCacheStore:
             tier_used="llm",
             confidence=0.9,
         )
-        row = await c.get("Wall", "en", "de", "construction")
+        row = await c.get("CacheStore-Wall", "en", "de", "construction")
         assert row is not None
         assert row["translated_text"] == "Wand"
         assert row["tier_used"] == "llm"
         assert row["usage_count"] == 1
 
-    async def test_upsert_keeps_higher_confidence(self, cache_path: str) -> None:
-        c = TranslationCache(cache_path)
+    async def test_upsert_keeps_higher_confidence(self) -> None:
+        c = TranslationCache()
         await c.upsert(
-            text="Wall",
+            text="CacheStore-Conf",
             translated_text="Wand-A",
             source_lang="en",
             target_lang="de",
@@ -336,7 +374,7 @@ class TestCacheStore:
             confidence=0.6,
         )
         await c.upsert(
-            text="Wall",
+            text="CacheStore-Conf",
             translated_text="Wand-B",
             source_lang="en",
             target_lang="de",
@@ -344,7 +382,7 @@ class TestCacheStore:
             tier_used="lookup_muse",
             confidence=0.95,
         )
-        row = await c.get("Wall", "en", "de", "construction")
+        row = await c.get("CacheStore-Conf", "en", "de", "construction")
         assert row is not None
         # Higher-confidence translation wins.
         assert row["translated_text"] == "Wand-B"
@@ -352,10 +390,10 @@ class TestCacheStore:
         # And usage_count incremented.
         assert row["usage_count"] == 2
 
-    async def test_mark_used_bumps_count(self, cache_path: str) -> None:
-        c = TranslationCache(cache_path)
+    async def test_mark_used_bumps_count(self) -> None:
+        c = TranslationCache()
         await c.upsert(
-            text="Floor",
+            text="CacheStore-Floor",
             translated_text="Boden",
             source_lang="en",
             target_lang="de",
@@ -363,10 +401,10 @@ class TestCacheStore:
             tier_used="cache",
             confidence=1.0,
         )
-        row = await c.get("Floor", "en", "de", "construction")
+        row = await c.get("CacheStore-Floor", "en", "de", "construction")
         assert row is not None
         await c.mark_used(row["id"])
         await c.mark_used(row["id"])
-        row2 = await c.get("Floor", "en", "de", "construction")
+        row2 = await c.get("CacheStore-Floor", "en", "de", "construction")
         assert row2 is not None
         assert row2["usage_count"] == 3

@@ -16,27 +16,18 @@ Covers the new entities introduced in v3104:
   * Role gates on every MANAGER+ endpoint.
   * IDOR closure on broker / agreement / accrual / escrow endpoints.
 
-Scaffolding mirrors ``test_property_dev_buyer_update.py``: per-module
-temp SQLite is registered BEFORE any ``from app...`` import.
+Scaffolding mirrors ``test_property_dev_buyer_update.py``: the engine is
+bound to the conftest PostgreSQL cluster before any ``from app...`` import.
 """
 
 from __future__ import annotations
 
 import base64
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-broker-escrow-"))
-_TMP_DB = _TMP_DIR / "propdev_broker_escrow.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────
 
@@ -253,10 +244,13 @@ async def test_broker_license_uniqueness(http_client, manager_headers):
         )
         assert dup.status_code != 201, dup.text
     except Exception as exc:
-        # SQLite + the shared module-scoped session can surface the
-        # IntegrityError through the ASGI transport instead of mapping
-        # it to a 500. That still proves the constraint is enforced.
-        assert "UNIQUE" in str(exc) or "Integrity" in str(exc), exc
+        # The IntegrityError can surface through the ASGI transport instead of
+        # being mapped to a 500. That still proves the constraint is enforced.
+        # Match the violation across drivers: asyncpg raises
+        # UniqueViolationError ("duplicate key value violates unique
+        # constraint"); SQLAlchemy wraps it as IntegrityError.
+        detail = f"{type(exc).__name__}: {exc}".lower()
+        assert "integrity" in detail or "unique" in detail or "duplicate" in detail, exc
 
 
 # ── Tests: CommissionAgreement structure validation ───────────────────
@@ -694,7 +688,8 @@ async def test_escrow_account_unique_dev_currency_regulator(
         )
         assert r2.status_code != 201, r2.text
     except Exception as exc:
-        assert "UNIQUE" in str(exc) or "Integrity" in str(exc), exc
+        detail = f"{type(exc).__name__}: {exc}".lower()
+        assert "integrity" in detail or "unique" in detail or "duplicate" in detail, exc
 
 
 # ── Tests: Escrow Transactions + balance + reconcile ──────────────────
@@ -895,7 +890,8 @@ async def test_phase_unique_code(http_client, manager_headers, development):
         )
         assert r2.status_code != 201
     except Exception as exc:
-        assert "UNIQUE" in str(exc) or "Integrity" in str(exc), exc
+        detail = f"{type(exc).__name__}: {exc}".lower()
+        assert "integrity" in detail or "unique" in detail or "duplicate" in detail, exc
 
 
 # ── Tests: PriceMatrix evaluation ─────────────────────────────────────

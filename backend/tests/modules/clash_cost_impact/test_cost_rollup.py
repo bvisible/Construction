@@ -1,7 +1,7 @@
 """Unit tests for the clash → BOQ cost-impact service.
 
 The service is a pure read-projection — no clash module mutation, no
-BOQ module mutation. The tests therefore build a tiny in-memory SQLite
+BOQ module mutation. The tests therefore build a small PostgreSQL
 fixture per test that materialises just enough of the upstream models'
 shape (project + BOQ + position + clash run + clash result) to drive
 the computation, then assert on the rounded wire-shape payload.
@@ -50,7 +50,7 @@ from app.modules.users.models import User
 
 @pytest_asyncio.fixture
 async def db_session():
-    """Per-test SQLite session with the tables freshly created.
+    """Per-test PostgreSQL session with the tables freshly created.
 
     Each test gets a clean slate so cross-test bleed-through (e.g. one
     test's "closed" clash polluting another's open-rollup) is impossible.

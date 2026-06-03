@@ -20,17 +20,7 @@ one session); the DB-level guard is verified in
 
 from __future__ import annotations
 
-import os
-import tempfile
-from pathlib import Path
-
 import pytest
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-crm-dedup-"))
-_TMP_DB = _TMP_DIR / "crm.db"
-os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}")
-os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{_TMP_DB.as_posix()}")
-
 import pytest_asyncio  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
@@ -46,7 +36,7 @@ from app.modules.crm.service import CrmService  # noqa: E402
 
 @pytest_asyncio.fixture
 async def session():
-    """Per-test session against a fresh in-memory SQLite."""
+    """Per-test session against the conftest-provisioned PostgreSQL."""
     from app.database import Base, async_session_factory, engine
 
     async with engine.begin() as conn:
@@ -54,7 +44,7 @@ async def session():
 
     async with async_session_factory() as sess:
         yield sess
-        # Best-effort cleanup so the per-module DB doesn't accumulate.
+        # Best-effort cleanup so test rows don't accumulate.
         await sess.rollback()
 
     async with engine.begin() as conn:

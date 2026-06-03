@@ -53,7 +53,7 @@ credential-bearing connectors (chat / webhook / email):
 
 The tests use lightweight unit-level checks (Pydantic schema +
 permission registry + helper functions) rather than spinning up the
-full FastAPI app — much faster, no SQLite required, and the
+full FastAPI app — much faster, no database required, and the
 integration suite under ``tests/integration`` covers wire-level smoke
 where it matters.
 """

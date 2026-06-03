@@ -1,11 +1,12 @@
 """‌⁠‍Database engine​‌‍⁠​‌‍⁠​‌‍⁠​‌‍⁠, session, and base model.
 
-Supports both PostgreSQL (production) and SQLite (local dev without Docker).
-Set DATABASE_URL to 'sqlite+aiosqlite:///./openestimate.db' for SQLite mode.
+PostgreSQL only. The app runs embedded PostgreSQL 16 by default (no Docker);
+set DATABASE_URL to point at an external PostgreSQL to override.
 """
 
 import json
 import logging
+import os
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -198,9 +199,22 @@ def _tolerant_json_loads(value: object) -> object:
 
 
 def create_engine_from_settings():
-    """Create async engine from application settings."""
+    """Create async engine from application settings.
+
+    PostgreSQL only. The URL must be a PostgreSQL DSN; the app runs embedded
+    PostgreSQL by default (set by the CLI bootstrap) or an external PostgreSQL
+    via ``DATABASE_URL``. A non-PostgreSQL URL (empty or otherwise) raises so a
+    misconfigured import fails loudly instead of silently falling back.
+    """
     settings = get_settings()
     url = settings.database_url
+
+    if not url.startswith("postgresql"):
+        raise RuntimeError(
+            "DATABASE_URL must be a PostgreSQL URL. The app runs embedded PostgreSQL "
+            "by default (pip install 'openconstructionerp[server]') or set DATABASE_URL "
+            "to an external PostgreSQL."
+        )
 
     kwargs: dict = {
         "echo": settings.database_echo,
@@ -208,47 +222,36 @@ def create_engine_from_settings():
         "json_deserializer": _tolerant_json_loads,
     }
 
-    if _is_sqlite(url):
-        # Enable WAL mode for concurrent reads during writes.
-        # ``sa_event`` and ``Engine`` are imported at module top so the
-        # slow-query listeners share the same symbols.
-        @sa_event.listens_for(Engine, "connect")
-        def _set_sqlite_pragma(dbapi_conn: object, _: object) -> None:
-            # This listener is bound to the ``Engine`` base class, so it fires
-            # for EVERY engine created in this process — including a PostgreSQL
-            # engine if one is ever created after this SQLite engine (e.g. the
-            # embedded-PG test lane, or a mixed-dialect tool run). Sending
-            # ``PRAGMA`` to PostgreSQL is a syntax error, so gate on the actual
-            # DBAPI module of the connection rather than the registering URL.
-            if "sqlite" not in (type(dbapi_conn).__module__ or ""):
-                return
-            cursor = dbapi_conn.cursor()  # type: ignore[union-attr]
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA busy_timeout=30000")
-            # Enforce ON DELETE CASCADE / SET NULL declared in models.
-            # Without this pragma SQLite treats every ForeignKey(...) as advisory.
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.close()
-
-        kwargs["connect_args"] = {"check_same_thread": False}
-
-    # Apply pool sizing for both SQLite (aiosqlite) and Postgres.
     # AsyncAdaptedQueuePool defaults to size=5/overflow=10 which exhausts under
     # parallel load (parallel crawlers, multi-tab clients). Honour configured
-    # pool size for both backends.
+    # pool size.
     kwargs["pool_size"] = settings.database_pool_size
     kwargs["max_overflow"] = settings.database_max_overflow
 
-    if not _is_sqlite(url):
-        # PostgreSQL: validate each pooled connection with a lightweight
-        # round-trip before handing it to a request, and recycle connections
-        # periodically. Without this, a server-side idle timeout, a Postgres
-        # restart, or a failover leaves dead sockets in the pool that surface
-        # as ``OperationalError: server closed the connection unexpectedly`` on
-        # the next query. pool_pre_ping costs one cheap round-trip on checkout;
-        # pool_recycle caps connection age below typical infra idle timeouts.
-        kwargs["pool_pre_ping"] = True
-        kwargs["pool_recycle"] = settings.database_pool_recycle
+    # Validate each pooled connection with a lightweight round-trip before
+    # handing it to a request, and recycle connections periodically. Without
+    # this, a server-side idle timeout, a Postgres restart, or a failover
+    # leaves dead sockets in the pool that surface as
+    # ``OperationalError: server closed the connection unexpectedly`` on the
+    # next query. pool_pre_ping costs one cheap round-trip on checkout;
+    # pool_recycle caps connection age below typical infra idle timeouts.
+    kwargs["pool_pre_ping"] = True
+    kwargs["pool_recycle"] = settings.database_pool_recycle
+
+    # Test mode: use NullPool so every checkout opens a fresh asyncpg
+    # connection on the current event loop. pytest-asyncio runs each test in its
+    # own loop, and a pooled asyncpg connection created on one loop and reused on
+    # another raises "attached to a different loop". NullPool sidesteps that
+    # entirely (the local cluster makes per-connect cheap). Production keeps the
+    # sized pool above. Gated by an env var the test conftest sets before this
+    # module is imported, so production never takes this branch.
+    if os.environ.get("OE_TEST_NULLPOOL") == "1":
+        from sqlalchemy.pool import NullPool
+
+        kwargs.pop("pool_size", None)
+        kwargs.pop("max_overflow", None)
+        kwargs.pop("pool_recycle", None)
+        kwargs["poolclass"] = NullPool
 
     return create_async_engine(url, **kwargs)
 

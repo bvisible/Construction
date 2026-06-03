@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Integration tests for EAC v2 alias service (RFC 35 §6 EAC-2.1).
 
-Drives the service layer (no HTTP) against an in-memory SQLite engine
-so we exercise the SQLAlchemy mappings and the actual cascade rules.
+Drives the service layer (no HTTP) against PostgreSQL so we exercise the
+SQLAlchemy mappings and the actual cascade rules. Each test runs inside an
+outer transaction that is rolled back on teardown for isolation.
 """
 
 from __future__ import annotations
@@ -13,11 +14,9 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.modules.eac.models  # noqa: F401 — register metadata
-from app.database import Base
 from app.modules.eac.aliases.schemas import (
     EacAliasSynonymCreate,
     EacParameterAliasCreate,
@@ -33,31 +32,14 @@ from app.modules.eac.aliases.service import (
     update_alias,
 )
 from app.modules.eac.models import EacRule
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Yield an isolated in-memory SQLite session per test."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-
-    @event.listens_for(engine.sync_engine, "connect")
-    def _enable_sqlite_fks(dbapi_conn, _conn_record) -> None:  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as sess:
-        try:
-            yield sess
-        finally:
-            await sess.close()
-    await engine.dispose()
+    """Yield a PostgreSQL session per test, rolled back on teardown."""
+    async with transactional_session() as sess:
+        yield sess
 
 
 def _alias_payload(name: str = "_TestLength") -> EacParameterAliasCreate:

@@ -18,7 +18,7 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # Celery is an optional dependency (the ``server`` extra, not ``dev``). This
 # whole module exercises the Celery transport (get_celery_app, eager dispatch,
@@ -29,17 +29,20 @@ pytest.importorskip("celery")
 from app.core.job_run import JobRun  # noqa: E402
 from app.core.job_runner import register_handler, submit_job, unregister_handler  # noqa: E402
 from app.core.jobs import get_celery_app  # noqa: E402
-from app.database import Base  # noqa: E402
+from tests._pg import isolated_engine  # noqa: E402
 
 
 @pytest.fixture
 async def session_factory():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[JobRun.__table__])
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    # The eager Celery dispatch task opens its OWN session from this factory
+    # (and commits the JobRun there), while the test reads the row back from a
+    # SEPARATE session. That cross-connection commit visibility rules out the
+    # transactional-savepoint primitive, so we use a real throwaway PostgreSQL
+    # database (schema preloaded from the template) and hand out a sessionmaker
+    # bound to its engine. The database is dropped on teardown.
+    async with isolated_engine() as engine:
+        maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield maker
 
 
 @pytest.fixture
@@ -79,7 +82,7 @@ async def test_celery_eager_dispatch_runs_handler_to_completion(
     register_handler("celery_int.echo", echo_handler)
 
     # Patch the session factory used inside the dispatch task so the
-    # eager worker reads our in-memory SQLite (not the global one).
+    # eager worker reads our throwaway PostgreSQL database (not the global one).
     with patch("app.core.jobs_tasks._get_session_factory", return_value=session_factory):
         jr = await submit_job(
             kind="celery_int.echo",

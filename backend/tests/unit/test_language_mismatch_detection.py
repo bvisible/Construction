@@ -4,32 +4,32 @@
 
 The helper compares the project region's language with the bound CWICR
 catalogue's language so the UI can surface a "wrong catalogue" warning.
-This file isolates the helper from the HTTP layer — the integration
+This file isolates the helper from the HTTP layer - the integration
 test in ``tests/integration/test_match_catalog_binding.py`` covers the
 full /vector/v3-status endpoint round trip.
+
+All tests use a transaction-isolated PostgreSQL session from
+``tests._pg.transactional_session`` (rolled back on teardown) so they run
+fast and never touch the production database.
 """
 
 from __future__ import annotations
 
-import asyncio
-import tempfile
 import uuid
-from pathlib import Path
 
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.costs.router import _detect_language_mismatch
+from tests._pg import transactional_session
 
 
-def _register_models() -> None:
-    import app.core.audit  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+@pytest_asyncio.fixture
+async def session() -> AsyncSession:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
+        yield s
 
 
 async def _make_project(
@@ -82,68 +82,41 @@ async def _bind(
     await s.commit()
 
 
-async def _run_with_session(callback):
-    """Build a fresh DB session per test — async fixtures need plumbing."""
-    tmp_db = Path(tempfile.mkdtemp()) / "lang_mismatch.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_models()
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with factory() as s:
-            return await callback(s)
-    finally:
-        await engine.dispose()
-
-
-def test_unknown_when_project_missing() -> None:
-    async def go(s: AsyncSession) -> dict:
-        return await _detect_language_mismatch(s, uuid.uuid4())
-
-    out = asyncio.run(_run_with_session(go))
+@pytest.mark.asyncio
+async def test_unknown_when_project_missing(session: AsyncSession) -> None:
+    out = await _detect_language_mismatch(session, uuid.uuid4())
     assert out["status"] == "unknown"
 
 
-def test_unbound_when_no_catalogue() -> None:
-    async def go(s: AsyncSession) -> dict:
-        pid = await _make_project(s, region="USA_NEWYORK")
-        # Settings row absent ⇒ unbound
-        return await _detect_language_mismatch(s, pid)
-
-    out = asyncio.run(_run_with_session(go))
+@pytest.mark.asyncio
+async def test_unbound_when_no_catalogue(session: AsyncSession) -> None:
+    pid = await _make_project(session, region="USA_NEWYORK")
+    # Settings row absent => unbound
+    out = await _detect_language_mismatch(session, pid)
     assert out["status"] == "unbound"
     assert out["project_region"] == "USA_NEWYORK"
     assert out["project_language"] == "en"
 
 
-def test_ok_when_languages_match() -> None:
-    async def go(s: AsyncSession) -> dict:
-        pid = await _make_project(s, region="USA_NEWYORK")
-        await _bind(s, pid, "USA_USD")  # also "en"
-        return await _detect_language_mismatch(s, pid)
-
-    out = asyncio.run(_run_with_session(go))
+@pytest.mark.asyncio
+async def test_ok_when_languages_match(session: AsyncSession) -> None:
+    pid = await _make_project(session, region="USA_NEWYORK")
+    await _bind(session, pid, "USA_USD")  # also "en"
+    out = await _detect_language_mismatch(session, pid)
     assert out["status"] == "ok"
     assert out["project_language"] == "en"
     assert out["bound_language"] == "en"
 
 
-def test_mismatch_us_project_with_russian_catalogue() -> None:
+@pytest.mark.asyncio
+async def test_mismatch_us_project_with_russian_catalogue(session: AsyncSession) -> None:
     """The motivating bug: US project auto-bound to RU_MOSCOW because the
     Russian catalogue had the most rows globally (auto_bind_dominant_catalogue
     pre-2.9.34 picked by row count). The /match-elements UI must now flag
     this as a mismatch so the user can re-bind."""
-
-    async def go(s: AsyncSession) -> dict:
-        pid = await _make_project(s, region="USA_NEWYORK")
-        await _bind(s, pid, "RU_MOSCOW")
-        return await _detect_language_mismatch(s, pid)
-
-    out = asyncio.run(_run_with_session(go))
+    pid = await _make_project(session, region="USA_NEWYORK")
+    await _bind(session, pid, "RU_MOSCOW")
+    out = await _detect_language_mismatch(session, pid)
     assert out["status"] == "mismatch"
     assert out["project_language"] == "en"
     assert out["bound_language"] == "ru"
@@ -151,13 +124,11 @@ def test_mismatch_us_project_with_russian_catalogue() -> None:
     assert out["bound_catalogue"] == "RU_MOSCOW"
 
 
-def test_mismatch_de_project_with_french_catalogue() -> None:
-    async def go(s: AsyncSession) -> dict:
-        pid = await _make_project(s, region="DE_BERLIN")
-        await _bind(s, pid, "FR_PARIS")
-        return await _detect_language_mismatch(s, pid)
-
-    out = asyncio.run(_run_with_session(go))
+@pytest.mark.asyncio
+async def test_mismatch_de_project_with_french_catalogue(session: AsyncSession) -> None:
+    pid = await _make_project(session, region="DE_BERLIN")
+    await _bind(session, pid, "FR_PARIS")
+    out = await _detect_language_mismatch(session, pid)
     assert out["status"] == "mismatch"
     assert out["project_language"] == "de"
     assert out["bound_language"] == "fr"

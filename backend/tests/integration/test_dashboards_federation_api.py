@@ -30,54 +30,29 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.storage import LocalStorageBackend
-from app.database import Base
 from app.dependencies import get_current_user_payload, get_session
 from app.modules.dashboards.models import Snapshot
 from app.modules.dashboards.snapshot_storage import write_parquet
-
-# ── Helpers ────────────────────────────────────────────────────────────────
-
-
-def _register_minimal_models() -> None:
-    """Pull dashboards + FK-target modules into Base.metadata."""
-    import app.modules.dashboards.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
+from tests._pg import isolated_engine
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "federation_api.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    yield engine, factory, tmp_db
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
@@ -103,7 +78,7 @@ _current_user_payload: dict[str, str] = {}
 
 @pytest_asyncio.fixture
 async def app(temp_engine_and_factory, local_backend, monkeypatch) -> AsyncGenerator[FastAPI, None]:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     # Federation reads parquet through the global storage backend
     # accessor — point it at our temp local backend for the test.
@@ -168,8 +143,8 @@ async def _ensure_user_and_project(
 
     The dashboards Snapshot model references both
     ``oe_users_user.id`` and ``oe_projects_project.id`` via ON-DELETE
-    CASCADE foreign keys, so SQLite (with FK enforcement on by default
-    in our test bootstrap) refuses inserts that lack a parent row.
+    CASCADE foreign keys, so PostgreSQL refuses inserts that lack a
+    parent row.
     """
     from sqlalchemy import select
 
@@ -259,7 +234,7 @@ async def test_build_happy_path_intersect(
     local_backend: LocalStorageBackend,
     user_a: uuid.UUID,
 ) -> None:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     _set_acting_user(user_a)
     project_id = uuid.uuid4()
 
@@ -342,7 +317,7 @@ async def test_aggregate_count_with_provenance(
     local_backend: LocalStorageBackend,
     user_a: uuid.UUID,
 ) -> None:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     _set_acting_user(user_a)
     project_id = uuid.uuid4()
 
@@ -402,7 +377,7 @@ async def test_aggregate_invalid_measure_returns_422(
     local_backend: LocalStorageBackend,
     user_a: uuid.UUID,
 ) -> None:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     _set_acting_user(user_a)
     project_id = uuid.uuid4()
 
@@ -440,7 +415,7 @@ async def test_tenant_b_cannot_federate_tenant_a_snapshots(
     """Federation must surface 404 (snapshot.not_found) when a caller
     references a snapshot owned by another tenant — same defence as
     every other dashboards endpoint."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     project_id = uuid.uuid4()
 
     # Tenant A seeds.

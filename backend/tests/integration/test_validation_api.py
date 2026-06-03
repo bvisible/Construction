@@ -8,31 +8,19 @@ task tracker #224:
 
 Test isolation
 ~~~~~~~~~~~~~~
-Per ``feedback_test_isolation.md`` we MUST point ``DATABASE_URL`` at a
-fresh temp SQLite file BEFORE ``app.database`` is first imported, otherwise
-the tests would hammer ``backend/openestimate.db``. We therefore set the
-env var at the top of the module, before any ``from app...`` line runs.
+The engine is bound to the conftest-provisioned PostgreSQL cluster before
+any test module imports, so these tests run against that PostgreSQL.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
+import asyncio
 import uuid
 from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-validation-api-"))
-_TMP_DB = _TMP_DIR / "validation_api.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import asyncio  # noqa: E402
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "ids"
 
@@ -42,7 +30,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "ids"
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

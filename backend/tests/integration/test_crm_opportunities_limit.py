@@ -13,106 +13,76 @@ the two ends of the contract:
 
 Uses the lightweight test pattern (mount just the CRM router on a
 minimal FastAPI app with auth/perm/session dependencies stubbed) to
-avoid the full ``create_app()`` boot path, which on Windows aiosqlite
-collides with the BOQ-backfill writer and 423s with "database is
-locked" — environmental noise unrelated to the contract we want to
-lock here.
+avoid the full ``create_app()`` boot path. The app opens its own
+sessions via the ``get_session`` override, so the fixture hands it a
+throwaway PostgreSQL database (cloned from the schema-loaded template)
+rather than a savepoint-rolled-back shared session.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-
-def _register_minimal_models() -> None:
-    import app.core.audit  # noqa: F401
-    import app.modules.crm.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import isolated_engine
 
 
 @pytest_asyncio.fixture
 async def app() -> AsyncGenerator[tuple[FastAPI, async_sessionmaker], None]:
-    tmp_db = Path(tempfile.mkdtemp()) / "crm_limit.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{tmp_db.as_posix()}",
-        future=True,
-    )
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
 
-    _register_minimal_models()
+        from app.dependencies import (
+            RequirePermission,
+            get_current_user_id,
+            get_current_user_payload,
+            get_session,
+        )
+        from app.modules.crm.router import router as crm_router
 
-    from app.database import Base
+        fastapi_app = FastAPI()
+        fastapi_app.include_router(crm_router, prefix="/api/v1/crm")
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        async def _override_session() -> AsyncGenerator[AsyncSession, None]:
+            async with factory() as s:
+                try:
+                    yield s
+                    await s.commit()
+                except Exception:
+                    await s.rollback()
+                    raise
 
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
+        async def _override_user_id() -> str:
+            return str(uuid.uuid4())
 
-    from app.dependencies import (
-        RequirePermission,
-        get_current_user_id,
-        get_current_user_payload,
-        get_session,
-    )
-    from app.modules.crm.router import router as crm_router
+        async def _override_payload() -> dict[str, str]:
+            return {"sub": str(uuid.uuid4()), "role": "admin"}
 
-    fastapi_app = FastAPI()
-    fastapi_app.include_router(crm_router, prefix="/api/v1/crm")
+        async def _allow() -> None:
+            return None
 
-    async def _override_session() -> AsyncGenerator[AsyncSession, None]:
-        async with factory() as s:
-            try:
-                yield s
-                await s.commit()
-            except Exception:
-                await s.rollback()
-                raise
+        fastapi_app.dependency_overrides[get_session] = _override_session
+        fastapi_app.dependency_overrides[get_current_user_id] = _override_user_id
+        fastapi_app.dependency_overrides[get_current_user_payload] = _override_payload
 
-    async def _override_user_id() -> str:
-        return str(uuid.uuid4())
+        for route in fastapi_app.routes:
+            deps = getattr(route, "dependencies", None) or []
+            for dep in deps:
+                call = getattr(dep, "dependency", None)
+                if isinstance(call, RequirePermission):
+                    fastapi_app.dependency_overrides[call] = _allow
 
-    async def _override_payload() -> dict[str, str]:
-        return {"sub": str(uuid.uuid4()), "role": "admin"}
-
-    async def _allow() -> None:
-        return None
-
-    fastapi_app.dependency_overrides[get_session] = _override_session
-    fastapi_app.dependency_overrides[get_current_user_id] = _override_user_id
-    fastapi_app.dependency_overrides[get_current_user_payload] = _override_payload
-
-    for route in fastapi_app.routes:
-        deps = getattr(route, "dependencies", None) or []
-        for dep in deps:
-            call = getattr(dep, "dependency", None)
-            if isinstance(call, RequirePermission):
-                fastapi_app.dependency_overrides[call] = _allow
-
-    yield fastapi_app, factory
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+        yield fastapi_app, factory
 
 
 @pytest_asyncio.fixture

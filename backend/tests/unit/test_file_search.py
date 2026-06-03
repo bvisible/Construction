@@ -14,22 +14,15 @@ Three layers:
                    works without an indexed row; reindex_project runs
                    over every file kind without error.
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+The suite runs on the PostgreSQL engine that ``tests/conftest.py``
+provisions and binds before any test module is imported.
 """
 
 from __future__ import annotations
 
-import os
 import tempfile
 import uuid
 from pathlib import Path
-
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-file-search-"))
-_TMP_DB = _TMP_DIR / "file_search.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
@@ -105,7 +98,7 @@ def test_build_snippet_empty_text_returns_empty() -> None:
 
 @pytest_asyncio.fixture
 async def db_session():
-    """A real AsyncSession over a freshly create_all'd temp SQLite."""
+    """A real AsyncSession over the freshly create_all'd PostgreSQL engine."""
     from app.config import get_settings
 
     get_settings.cache_clear()

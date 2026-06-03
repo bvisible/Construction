@@ -5,7 +5,10 @@ The user needs a verified Business phone number ID and a permanent access token.
 Messages are sent as pre-approved templates (Meta requires template approval).
 
 Legal: Uses official Meta Cloud API v20.0. Requires Meta Business verification.
-Status: Coming Soon — requires Meta Business verification before production use.
+Status: Wired into the integrations test/send paths. A delivery needs a
+verified Business phone number ID, a permanent access token and a recipient
+in the config, plus a Meta-approved template; without those Meta returns an
+error that the integration surfaces to the user.
 """
 
 import logging

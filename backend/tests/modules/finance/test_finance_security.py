@@ -8,7 +8,7 @@ Pins the five R7 invariants for the finance module:
    gate before service logic.
 2. **Decimal-as-string**: every money field on every response schema
    is typed ``str``. The ORM uses ``MoneyType`` (Decimal in Python,
-   NUMERIC on Postgres, VARCHAR on SQLite) and the response schemas
+   NUMERIC on PostgreSQL) and the response schemas
    coerce via a ``mode="before"`` field validator.
 3. **Magic-byte uploads**: ``/budgets/import/file/`` rejects non-ZIP /
    non-OLE content with a magic-byte signature mismatch (HTTP 415).

@@ -17,59 +17,32 @@ Coverage:
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from tests._pg import isolated_engine
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
-def _register_models() -> None:
-    """Pull every ORM model the catalogue gate touches into Base.metadata."""
-    import app.core.audit  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def engine_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "match_catalog_binding.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_models()
-
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override and
+    the test seeds rows through separate sessions, so test and app run on separate
+    connections that must see each other's commits - hence a real throwaway database
+    rather than a savepoint-rolled-back shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 async def _add_cost_items(factory, region: str, count: int) -> None:
@@ -99,7 +72,7 @@ _current_user_payload: dict[str, str] = {}
 @pytest_asyncio.fixture
 async def client_app(engine_factory) -> AsyncGenerator[FastAPI, None]:
     """FastAPI client with the costs router mounted + DB overridden."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
 
     from app.dependencies import (
         get_current_user_id,
@@ -170,7 +143,7 @@ async def test_no_catalog_no_rows_returns_no_catalogs_loaded(
     engine_factory,
 ) -> None:
     """Empty DB + no binding → ``no_catalogs_loaded``."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
 
     from app.core.match_service.ranker_qdrant import _resolve_catalog_status
 
@@ -187,7 +160,7 @@ async def test_no_catalog_with_rows_returns_no_catalog_selected(
     engine_factory,
 ) -> None:
     """Catalogues loaded but no binding → ``no_catalog_selected``."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     await _add_cost_items(factory, "RU_STPETERSBURG", 3)
 
     from app.core.match_service.ranker_qdrant import _resolve_catalog_status
@@ -206,7 +179,7 @@ async def test_picked_unknown_catalog_with_others_loaded_falls_to_no_catalog_sel
     """v2.8.2 fix: if user picked a stale id but other catalogues exist,
     don't claim "no catalogues loaded", degrade to ``no_catalog_selected``
     so the picker can recover the user with one click."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     await _add_cost_items(factory, "RU_STPETERSBURG", 3)
 
     # Stub the Qdrant probe so the resolver doesn't reach the real local
@@ -236,7 +209,7 @@ async def test_picked_unknown_catalog_with_no_others_returns_no_catalogs_loaded(
     monkeypatch,
 ) -> None:
     """Pure-empty DB + binding to a non-loaded id → ``no_catalogs_loaded``."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
 
     async def _zero(_catalog_id):  # noqa: ANN001
         return 0
@@ -260,7 +233,7 @@ async def test_picked_loaded_catalog_no_vectors_returns_catalog_not_vectorized(
     monkeypatch,
 ) -> None:
     """SQL rows present but Qdrant collection empty for this region → not_vectorized."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     await _add_cost_items(factory, "DE_BERLIN", 5)
 
     # The Qdrant ranker calls a private helper to count points in the
@@ -290,7 +263,7 @@ async def test_picked_loaded_catalog_with_vectors_returns_ok(
     monkeypatch,
 ) -> None:
     """Happy path: SQL rows + vectors → ``ok``."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     await _add_cost_items(factory, "DE_BERLIN", 5)
 
     async def _twelve(_catalog_id):  # noqa: ANN001
@@ -405,7 +378,7 @@ async def test_loaded_databases_returns_one_entry_per_region(
     monkeypatch,
 ) -> None:
     """Every distinct region with at least one active row gets one entry."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     await _add_cost_items(factory, "RU_STPETERSBURG", 3)
     await _add_cost_items(factory, "BG_SOFIA", 2)
 
@@ -457,7 +430,7 @@ async def test_loaded_databases_skips_inactive_rows(
     monkeypatch,
 ) -> None:
     """Soft-deleted rows are ignored — they shouldn't count toward the badge."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
     from app.modules.costs.models import CostItem
 
     async with factory() as session:

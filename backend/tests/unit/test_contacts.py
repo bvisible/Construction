@@ -20,32 +20,25 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.contacts.models import Contact
 from app.modules.contacts.schemas import ContactCreate, ContactUpdate
 from app.modules.contacts.service import ContactService
-from app.modules.users.models import User
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Scoped to Contact + User tables — see test_contact_tenancy for the rationale."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    # Audit table is needed because the service writes to it on every
-    # mutating call. Importing it here also registers it on Base.metadata.
-    from app.core.audit import AuditEntry
+    """A session inside a transaction rolled back on teardown.
 
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[User.__table__, Contact.__table__, AuditEntry.__table__],
-        )
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    Runs against the shared ``oe_test_unit`` PostgreSQL database, which is
+    built once with the full schema (User, Contact, AuditEntry and every
+    other module table), so no per-test ``create_all`` is needed. Each
+    test's writes are undone by the outer rollback for isolation.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 # ---------------------------------------------------------------------------

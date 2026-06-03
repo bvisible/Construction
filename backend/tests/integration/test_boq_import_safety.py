@@ -322,7 +322,7 @@ async def test_upload_does_not_block_event_loop(
     verify the contract directly by calling the parse helper from the
     event-loop thread and asserting it yields control: while the parse
     is in flight, ``asyncio.sleep(0)`` ticks must complete promptly.
-    Doing this at the function level avoids the SQLite-single-writer
+    Doing this at the function level avoids the connection-pool
     contention that an in-process gathered HTTP test would trigger.
     """
     # Sanity-check the production path STRUCTURALLY: the import handler

@@ -12,24 +12,18 @@ Pins the cross-run contract:
 * reopened — a resolved issue that resurfaces flips back to persisted
 * state-machine guards — no invalid transitions
 
-Per ``feedback_test_isolation.md`` each test gets a fresh temp SQLite.
+Each test runs against a transaction-isolated PostgreSQL session
+(rolled back on teardown) from ``tests._pg.transactional_session``.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.clash.models import (
     ClashIssue,
     ClashResult,
@@ -40,36 +34,20 @@ from app.modules.clash.service import (
     ClashService,
     _compute_signature_hash,
 )
-
-
-def _register_models() -> None:
-    """Eagerly register every ORM module referenced by the test DB."""
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.clash.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test SQLite + a project owned by a test user.
+    """Transaction-isolated PostgreSQL session + a project owned by a test user.
 
     The fixture seeds:
         * one User (owner)
         * one Project (the smart-issue scope)
-    and yields an open :class:`AsyncSession`. Tear-down disposes the
-    engine so the temp file can be cleaned up.
+    and yields an open :class:`AsyncSession`. The outer transaction is
+    rolled back on teardown, so the database stays empty between tests.
     """
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-clash-issue-")) / "test.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -92,7 +70,6 @@ async def session() -> AsyncSession:
         s.info["project_id"] = project.id
         s.info["owner_id"] = str(owner.id)
         yield s
-    await engine.dispose()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

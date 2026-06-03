@@ -1,30 +1,21 @@
 """Shared fixtures for accommodation tests.
 
-Per ``feedback_test_isolation.md`` we redirect ``DATABASE_URL`` to a
-per-module temp SQLite file BEFORE the app is first imported.
+These tests run against the PostgreSQL engine provisioned by the top-level
+``tests/conftest.py``, which binds the SQLAlchemy engine before any test
+module is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-accom-"))
-_TMP_DB = _TMP_DIR / "accom.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()
@@ -113,8 +104,8 @@ async def admin_auth(
 
     The tag includes the module's short name so each test file gets its
     own admin row and the second module's fixture doesn't 409 on the
-    first module's email (we share one temp SQLite across the whole
-    directory via env vars set at conftest import time).
+    first module's email (the whole directory shares the one PostgreSQL
+    database provisioned by the top-level conftest).
     """
     mod_tag = request.module.__name__.rsplit(".", 1)[-1][-12:]
     uid, _email, header = await _register_user(

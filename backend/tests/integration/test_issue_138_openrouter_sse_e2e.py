@@ -41,28 +41,20 @@ A v3.6.1 backend would fail ``test_*_streams_nonzero_body`` (0-byte
 body). A v3.6.1 frontend parser would fail ``test_*_renders_in_ui``.
 
 No network: ``httpx.AsyncClient.post`` is monkeypatched to return canned
-OpenRouter-shaped bodies. Per-module temp SQLite — the production
-``backend/openestimate.db`` is never touched.
+OpenRouter-shaped bodies. The test runs on the PostgreSQL cluster that
+``conftest`` provisions and binds before any test module imports — the
+production database is never touched.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
-from pathlib import Path
 from typing import Any
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-138-sse-"))
-_TMP_DB = _TMP_DIR / "issue138_sse.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ════════════════════════════════════════════════════════════════════════════
 # Faithful port of the production frontend SSE parser

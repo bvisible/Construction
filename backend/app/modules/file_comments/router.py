@@ -37,6 +37,7 @@ from app.modules.file_comments.schemas import (
 from app.modules.file_comments.service import (
     acknowledge_mention,
     create_comment,
+    get_comment,
     list_threads,
     list_unread_mentions,
     soft_delete_comment,
@@ -189,6 +190,17 @@ async def patch_file_comment(
             )
 
     actor_uuid = _coerce_user_uuid(user_id)
+
+    # Project-access (IDOR) gate must run BEFORE the mutation: a stranger
+    # who cannot see the comment's project must never cause us to write to
+    # it, and a cross-project caller should get a 404 (existence-hiding)
+    # rather than a successful edit. Load the row first to resolve its
+    # project_id, 404 if it is missing.
+    existing = await get_comment(session, comment_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+    await verify_project_access(existing.project_id, user_id, session)
+
     try:
         result = await update_comment(session, comment_id, payload, actor_uuid)
     except PermissionError as exc:
@@ -199,11 +211,6 @@ async def patch_file_comment(
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
     comment, mentions = result
-
-    # Author boundary + project access guard — even though the body /
-    # resolve gates run above, a stranger should not be able to mutate
-    # a comment in a project they cannot see.
-    await verify_project_access(comment.project_id, user_id, session)
 
     return FileCommentResponse(
         id=comment.id,
@@ -247,6 +254,16 @@ async def delete_file_comment(
 ) -> None:
     """Soft-delete a comment (body replaced with ``[deleted]``)."""
     actor_uuid = _coerce_user_uuid(user_id)
+
+    # Project-access (IDOR) gate must run BEFORE the soft delete: a caller
+    # who cannot see the comment's project must never be able to tombstone
+    # it, and a cross-project caller gets a 404 rather than a 403 (so we do
+    # not leak the existence of comments in projects they cannot see).
+    existing = await get_comment(session, comment_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Comment not found")
+    await verify_project_access(existing.project_id, user_id, session)
+
     try:
         ok = await soft_delete_comment(session, comment_id, actor_uuid)
     except PermissionError as exc:

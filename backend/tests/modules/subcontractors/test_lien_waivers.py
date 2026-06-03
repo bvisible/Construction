@@ -12,9 +12,10 @@ Scope:
        without leaking which UUIDs exist.
     6. Listing lien waivers returns the freshly-created row.
 
-Mirrors ``tests/modules/rfi/test_rfi_attachments.py`` — in-memory SQLite
-with the subcontractor router mounted on a fresh FastAPI app and the
-auth + permission dependencies overridden.
+Mirrors ``tests/modules/rfi/test_rfi_attachments.py`` — runs against a
+transaction-isolated PostgreSQL session (rolled back on teardown) with the
+subcontractor router mounted on a fresh FastAPI app and the auth + permission
+dependencies overridden.
 """
 
 from __future__ import annotations
@@ -26,61 +27,31 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
 )
-from app.modules.subcontractors.models import (
-    Certificate,
-    LienWaiver,
-    PaymentApplication,
-    PaymentApplicationLine,
-    PrequalificationApplication,
-    RetentionLedger,
-    SubcontractAgreement,
-    Subcontractor,
-    SubcontractorContact,
-    SubcontractorRating,
-    WorkPackage,
-)
+from app.modules.subcontractors.models import Subcontractor
 from app.modules.subcontractors.permissions import register_subcontractors_permissions
 from app.modules.subcontractors.router import router as subs_router
-from app.modules.users.models import APIKey, User
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    """Fresh in-memory SQLite with the subcontractor tables present."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Subcontractor.__table__,
-                SubcontractorContact.__table__,
-                PrequalificationApplication.__table__,
-                Certificate.__table__,
-                SubcontractAgreement.__table__,
-                WorkPackage.__table__,
-                PaymentApplication.__table__,
-                PaymentApplicationLine.__table__,
-                RetentionLedger.__table__,
-                SubcontractorRating.__table__,
-                LienWaiver.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown).
+
+    The shared ``oe_test_unit`` database already carries the full schema, so no
+    per-test ``create_all`` is needed; the session's commits become savepoints
+    and the outer transaction is rolled back when the fixture exits.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session) -> str:

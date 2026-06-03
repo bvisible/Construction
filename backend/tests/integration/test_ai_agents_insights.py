@@ -11,27 +11,18 @@ separate insight table: each insight is distilled from a real completed
 * a project with no runs returns an empty list (not an error), so the widget
   shows its empty state.
 
-Scaffolding mirrors the other schedule/geo integration tests - per-module
-temp SQLite registered BEFORE any ``from app...`` import.
+Runs against the PostgreSQL cluster provisioned by ``tests/conftest.py``,
+which binds the SQLAlchemy engine before any ``from app...`` import.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-ai-insights-"))
-_TMP_DB = _TMP_DIR / "ai_insights.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")

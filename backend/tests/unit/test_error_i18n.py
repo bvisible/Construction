@@ -155,9 +155,9 @@ def test_get_lang_strips_region_suffix() -> None:
 # the same way real routers do — call ``translate("errors.X",
 # locale=get_locale())`` inside an ``HTTPException`` — and run them
 # through the project's ``AcceptLanguageMiddleware`` so the contextvar
-# resolution path is exercised end-to-end. This avoids the lifespan +
-# aiosqlite event-loop coupling that makes spinning up the full app
-# inside pytest-asyncio fragile on Windows / Python 3.13.
+# resolution path is exercised end-to-end. This avoids the lifespan + asyncpg event-loop coupling that makes
+# spinning up the full app inside pytest-asyncio fragile on Windows /
+# Python 3.13.
 
 
 @pytest.fixture(scope="module")

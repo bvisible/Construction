@@ -165,6 +165,17 @@ async def install_flagship(
             if gpath.exists():
                 content = gzip.decompress(gpath.read_bytes())
                 canonical_key = await save_geometry(pid, mid, ".dae", content)
+        # Status must match what is actually on storage. Only a model whose
+        # geometry blob was written can be "ready" — the geometry endpoint
+        # treats a "ready" model with no blob as a data-loss error and
+        # returns the alarming `geometry_missing` 404 ("marked ready but its
+        # 3D geometry file is no longer on the server"). The flagship DWG is
+        # a data-only drawing with no bundled mesh; mark it "needs_converter"
+        # so the same endpoint returns the honest `geometry_absent` state
+        # ("no 3D geometry: the converter for its format is not available")
+        # instead of pretending geometry was lost. The BOQ "Linked Geometry"
+        # preview reads the same endpoint and so becomes honest too.
+        model_status = "ready" if canonical_key else "needs_converter"
         session.add(
             BIMModel(
                 id=mid,
@@ -173,7 +184,7 @@ async def install_flagship(
                 discipline=m.get("discipline"),
                 model_format=m["model_format"],
                 version="1",
-                status="ready",
+                status=model_status,
                 element_count=m.get("element_count", 0),
                 storey_count=m.get("storey_count", 0),
                 canonical_file_path=canonical_key,

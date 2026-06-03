@@ -61,9 +61,6 @@ from app.dependencies import RequireRole, get_current_user_id
 logger = logging.getLogger(__name__)
 
 
-from app.core.sql_json import json_path_text
-
-
 def configure_logging(settings: Settings) -> None:
     """‌⁠‍Configure structured logging."""
     structlog.configure(
@@ -168,7 +165,7 @@ async def _auto_backfill_vector_collections() -> None:
     This helper closes that gap automatically.  For each registered
     collection it:
 
-    1. Reads the live row count from Postgres / SQLite
+    1. Reads the live row count from Postgres
     2. Reads the indexed row count from the vector store
     3. If the vector store is short, runs ``reindex_collection`` for the
        missing rows (capped by ``vector_backfill_max_rows`` per pass)
@@ -495,33 +492,6 @@ def _persist_demo_credentials(creds: dict[str, str]) -> Path | None:
         return None
 
 
-def _resolve_sqlite_db_path() -> str | None:
-    """On-disk path of the SQLite DB, or ``None`` when not SQLite.
-
-    The showcase snapshot loader writes through a raw ``sqlite3``
-    connection, so it needs the exact file the SQLAlchemy engine
-    resolves to. Mirrors SQLAlchemy's rule that a relative SQLite path
-    is taken relative to the process CWD.
-    """
-    from pathlib import Path
-
-    url = (get_settings().database_sync_url or "").strip()
-    if not url.startswith("sqlite:") or "sqlite://" not in url:
-        return None
-    rest = url.split("sqlite://", 1)[1].split("?", 1)[0]
-    if not rest:
-        return None
-    # Drop the single netloc slash: ``sqlite:///rel`` -> ``rel`` (CWD),
-    # ``sqlite:////abs`` -> ``/abs`` (absolute).
-    cand = rest[1:] if rest.startswith("/") else rest
-    if not cand:
-        return None
-    p = Path(cand)
-    if not p.is_absolute():
-        p = Path.cwd() / cand
-    return str(p)
-
-
 async def _seed_demo_account() -> None:
     """Create demo user + showcase projects if they don't exist yet.
 
@@ -661,53 +631,54 @@ async def _seed_demo_account() -> None:
                 await session.execute(select(func.count()).select_from(Project).where(Project.owner_id == demo.id))
             ).scalar() or 0
 
-            # Persist the demo users now so the showcase snapshot loader
-            # (a separate sqlite3 connection) does not contend for a
-            # write lock with this async session.
+            # The two headline demo accounts (demo@ admin and manager@) are the
+            # ones shown in the account switcher, so they should always display
+            # every menu, regardless of any company-profile gating a tester
+            # applied in the browser. Company-profile choices live in the user's
+            # module_preferences, and that server map wins over the browser's
+            # localStorage on sync, so writing the full_enterprise map here
+            # forces all menus on for them on every login. Idempotent: it is
+            # re-applied on each startup, which also backfills accounts that
+            # were created before this.
+            from app.core.onboarding_presets import get_preset, modules_for
+
+            _full_preset = get_preset("full_enterprise")
+            if _full_preset is not None:
+                _full_modules = list(_full_preset.enabled_modules)
+                _full_prefs = modules_for(_full_modules)
+                for _u in (demo, manager_user):
+                    if _u is None:
+                        continue
+                    _md = dict(_u.metadata_ or {})
+                    _md["module_preferences"] = _full_prefs
+                    _md["onboarding"] = {
+                        "completed": True,
+                        "company_type": "full_enterprise",
+                        "enabled_modules": _full_modules,
+                        "interface_mode": "advanced",
+                    }
+                    _u.metadata_ = _md
+
+            # Persist the demo users now, before the project seed runs in a
+            # separate session below.
             await session.commit()
 
         # ── 3. Project seed (outside the user session) ────────────────
-        # Preferred: bulk-restore the committed 7-project localized
-        # showcase snapshot so a new user immediately sees the whole
-        # platform working end-to-end in seven languages. Falls back to
-        # the classic 5 ORM demo projects when the snapshot is
-        # unavailable (SEED_SHOWCASE disabled, non-sqlite DB, or the
-        # artifact is missing).
+        # Installs the classic 5 ORM demo projects when SEED_SHOWCASE is
+        # enabled. The ORM installer below is the seeding path on PostgreSQL.
         if project_count == 0:
-            showcase_done = False
             # The flagship "Residential House" project (installed below) is now
             # the single, deeply-worked reference showcase: real DDC-converted
             # IFC/RVT/DWG models, geometry, and a CWICR-priced BIM-linked BOQ.
-            # The older multi-region localized snapshot (shallow auto-generated
-            # projects) and the 5 ORM demo projects are OPT-IN only now — set
-            # SEED_SHOWCASE=1 to restore them. A clean install therefore shows
-            # the flagship (plus a partner-pack project when a pack is active).
+            # The 5 ORM demo projects are OPT-IN only now — set SEED_SHOWCASE=1
+            # to restore them. A clean install therefore shows the flagship
+            # (plus a partner-pack project when a pack is active).
             showcase_enabled = os.environ.get("SEED_SHOWCASE", "false").lower() in (
                 "1",
                 "true",
                 "yes",
             )
             if showcase_enabled:
-                db_path = _resolve_sqlite_db_path()
-                if db_path:
-                    import asyncio
-
-                    from app.scripts.seed_showcase_snapshot import (
-                        seed_showcase_from_snapshot,
-                    )
-
-                    result = await asyncio.to_thread(
-                        seed_showcase_from_snapshot,
-                        db_path,
-                        demo_user_id,
-                        estimator_user_id,
-                        manager_user_id,
-                    )
-                    logger.info("Showcase snapshot seed: %s", result)
-                    if result.get("status") in ("ok", "already") and result.get("projects"):
-                        showcase_done = True
-
-            if showcase_enabled and not showcase_done:
                 # Fresh-install fallback: cap strictly at 5 (DEFAULT_DEMO_IDS).
                 # Drift-prevention: if the constant ever exceeds five, we abort
                 # so a future PR can't silently re-introduce demo bloat.
@@ -737,9 +708,9 @@ async def _seed_demo_account() -> None:
 
             # Partner-pack flagship: when a pack is active, also install its
             # country project so the fresh workspace reflects the partner's
-            # region, currency and classification (runs after either the
-            # showcase snapshot or the fallback seed). Independent session so
-            # a failure never rolls back the base seed.
+            # region, currency and classification (runs after the ORM demo
+            # seed). Independent session so a failure never rolls back the
+            # base seed.
             try:
                 from app.core.partner_pack.discovery import get_active_pack
 
@@ -768,34 +739,27 @@ async def _seed_demo_account() -> None:
             except Exception:
                 logger.debug("Partner-pack demo auto-install skipped", exc_info=True)
 
-            # Restore bundled 3D geometry for the showcase models so the BIM
-            # viewer renders out-of-the-box on lightweight self-hosted installs
-            # (issue #168). The snapshot ships DB rows only; the two hero mesh
-            # blobs are shipped gzip-compressed and decompressed here. Idempotent
-            # and fail-soft — never blocks startup.
-            if showcase_done:
-                try:
-                    from app.scripts.seed_showcase_geometry import seed_showcase_geometry
+        # Flagship "Residential House" reference project — an ORM installer
+        # running on PostgreSQL so the full CAD-to-BOQ showcase (real
+        # DDC-converted IFC/RVT geometry + a CWICR-priced, BIM-linked Bill of
+        # Quantities) is present out of the box. Idempotent, so it also
+        # backfills existing databases on the next startup. Runs regardless of
+        # project_count so an upgrade picks it up.
+        if os.environ.get("OE_TEST_FAST_STARTUP", "").lower() in ("1", "true", "yes"):
+            # The flagship installer writes a 6640-element model and ~16MB of
+            # geometry; no test needs it, and it adds several seconds to every
+            # per-module app startup. Skip it when the test suite asks for a
+            # fast startup.
+            logger.debug("Flagship seed skipped (OE_TEST_FAST_STARTUP)")
+        else:
+            try:
+                from app.scripts.seed_flagship import install_flagship
 
-                    geo_result = await seed_showcase_geometry()
-                    logger.info("Showcase geometry seed: %s", geo_result)
-                except Exception:
-                    logger.debug("Showcase geometry seed skipped", exc_info=True)
-
-        # Flagship "Residential House" reference project — a dialect-agnostic
-        # ORM installer (works on the embedded-Postgres default AND on SQLite)
-        # so the full CAD-to-BOQ showcase (real DDC-converted IFC/RVT geometry +
-        # a CWICR-priced, BIM-linked Bill of Quantities) is present out of the
-        # box. Idempotent, so it also backfills existing databases on the next
-        # startup. Runs regardless of project_count so an upgrade picks it up.
-        try:
-            from app.scripts.seed_flagship import install_flagship
-
-            async with async_session_factory() as fl_session:
-                fl_result = await install_flagship(fl_session, demo_user_id)
-                logger.info("Flagship seed: %s", fl_result)
-        except Exception:
-            logger.warning("Flagship seed skipped (non-fatal)", exc_info=True)
+                async with async_session_factory() as fl_session:
+                    fl_result = await install_flagship(fl_session, demo_user_id)
+                    logger.info("Flagship seed: %s", fl_result)
+            except Exception:
+                logger.warning("Flagship seed skipped (non-fatal)", exc_info=True)
     except Exception:
         logger.exception("Failed to seed demo account (non-fatal)")
 
@@ -1028,15 +992,6 @@ def create_app() -> FastAPI:
     from app.middleware.slow_request_logger import SlowRequestLoggerMiddleware
 
     app.add_middleware(SlowRequestLoggerMiddleware)
-
-    # ── SQLite lock retry (transient "database is locked" → retry) ─────────
-    # Only retries on sqlite-specific lock errors — PostgreSQL paths pass
-    # through untouched. Smooths over Part 5 BUG-118/119 on single-file
-    # SQLite deployments without masking real write failures.
-    if "sqlite" in settings.database_url.lower():
-        from app.middleware.sqlite_retry import SQLiteLockRetryMiddleware
-
-        app.add_middleware(SQLiteLockRetryMiddleware)
 
     # ── Accept-Language (sets i18n context locale per request) ────────────
     from app.middleware.accept_language import AcceptLanguageMiddleware
@@ -1331,7 +1286,7 @@ def create_app() -> FastAPI:
                 await conn.execute(text("SELECT 1"))
             result["database"] = {
                 "status": "connected",
-                "engine": "sqlite" if "sqlite" in settings.database_url else "postgresql",
+                "engine": "postgresql",
             }
         except Exception as exc:
             result["database"] = {"status": "error", "error": str(exc)[:100]}
@@ -1912,7 +1867,7 @@ def create_app() -> FastAPI:
         """Store user feedback (bug reports, ideas, general comments).
 
         Public endpoint (no auth) with per-IP rate limit and body-size cap —
-        same posture as ``POST /api/v1/users/register`` so the shared SQLite
+        same posture as ``POST /api/v1/users/register`` so the shared
         ``oe_feedback`` table cannot be flooded by anonymous clients.
         """
         from datetime import datetime
@@ -1957,12 +1912,11 @@ def create_app() -> FastAPI:
                 detail="'subject' must be ≥3 chars and 'description' ≥10 chars.",
             )
 
-        # Auto-create table if needed — dialect-aware so it works on both
-        # SQLite (dev) and PostgreSQL (prod). The INSERT below is identical
-        # on both back-ends because it binds ``created_at`` explicitly.
+        # Auto-create the table if needed. The INSERT below binds
+        # ``created_at`` explicitly with an aware datetime — asyncpg's
+        # TIMESTAMPTZ column rejects an ISO *string*.
         async with engine.begin() as conn:
-            if conn.dialect.name == "postgresql":
-                create_sql = """
+            create_sql = """
                 CREATE TABLE IF NOT EXISTS oe_feedback (
                     id BIGSERIAL PRIMARY KEY,
                     category TEXT NOT NULL DEFAULT 'general',
@@ -1973,26 +1927,7 @@ def create_app() -> FastAPI:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
             """
-            else:
-                create_sql = """
-                CREATE TABLE IF NOT EXISTS oe_feedback (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    category TEXT NOT NULL DEFAULT 'general',
-                    subject TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    email TEXT,
-                    page_path TEXT,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                )
-            """
             await conn.execute(text(create_sql))
-            # PostgreSQL's ``created_at`` is TIMESTAMPTZ: asyncpg rejects an ISO
-            # *string* ("expected datetime, got 'str'"), so bind a real aware
-            # datetime there. SQLite's column is TEXT, where binding a datetime
-            # object trips Python 3.12's deprecated default adapter — keep the
-            # ISO string for that dialect.
-            now_utc = datetime.now(UTC)
-            created_at_val: object = now_utc if conn.dialect.name == "postgresql" else now_utc.isoformat()
             await conn.execute(
                 text("""
                     INSERT INTO oe_feedback (category, subject, description, email, page_path, created_at)
@@ -2004,7 +1939,7 @@ def create_app() -> FastAPI:
                     "description": description,
                     "email": email,
                     "page_path": page_path,
-                    "created_at": created_at_val,
+                    "created_at": datetime.now(UTC),
                 },
             )
 
@@ -2144,18 +2079,17 @@ def create_app() -> FastAPI:
 
         register_core_permissions()
 
-        # Auto-create tables for SQLite AND PostgreSQL on first start.
-        # Why for both: the v0.9.0 baseline Alembic migration is a no-op
-        # (it documents that tables are created via SQLAlchemy create_all),
-        # and the docker-compose.quickstart.yml entrypoint does not run
+        # Auto-create tables on PostgreSQL on first start.
+        # Why: the v0.9.0 baseline Alembic migration is a no-op (it documents
+        # that tables are created via SQLAlchemy create_all), and the
+        # docker-compose.quickstart.yml entrypoint does not run
         # `alembic upgrade head` before uvicorn. Result on a fresh PG
         # volume: schema never created, login fails with
         # `relation "oe_users_user" does not exist` (issue #42).
         # SQLAlchemy create_all is idempotent on PG and harmless on existing
         # databases — it only creates tables that do not yet exist.
         _section("Database")
-        if "sqlite" in settings.database_url or "postgresql" in settings.database_url:
-            # SQLite auto-migration: add missing columns before create_all
+        if "postgresql" in settings.database_url:
             import importlib
             import pkgutil
 
@@ -2166,16 +2100,15 @@ def create_app() -> FastAPI:
             # FSM ``log_activity()`` helper (submittals/RFI/etc. status
             # transitions). It lives in app.core (not app.modules.*) so the
             # dynamic module-models loop below never reaches it. Without this
-            # explicit import the table is absent on a fresh SQLite dev DB,
-            # so every status-changing action raised OperationalError, which
-            # poisoned the request session and cascaded into a 500 on the
-            # subsequent re-fetch. Register it before create_all.
+            # explicit import the table is absent on a fresh database, so every
+            # status-changing action raised an error, which poisoned the request
+            # session and cascaded into a 500 on the subsequent re-fetch.
+            # Register it before create_all.
             from app.core import audit_log as _audit_log_core  # noqa: F401
-            from app.core.sqlite_migrator import sqlite_auto_migrate
             from app.database import Base, engine
 
             # Register EVERY module's SQLAlchemy models before create_all so
-            # a fresh SQLite/PostgreSQL database gets all tables. This was
+            # a fresh PostgreSQL database gets all tables. This was
             # previously a hand-maintained import list that silently omitted
             # ~18 modules (service, resources, equipment, portal,
             # daily_diary, schedule_advanced, crm, contracts, variations,
@@ -2199,19 +2132,32 @@ def create_app() -> FastAPI:
                     if exc.name != _models_mod:
                         raise
 
-            # SQLite-only: add missing columns to existing tables before
-            # create_all runs. PostgreSQL deployments must use Alembic for
-            # column-level migrations — sqlite_auto_migrate uses SQLite-
-            # specific PRAGMA / ALTER syntax.
-            if "sqlite" in settings.database_url:
-                migrated = await sqlite_auto_migrate(engine, Base)
+            # Add missing columns to existing tables before create_all runs.
+            # create_all only ever creates whole new *tables*; it never adds a
+            # *column* to a table that already exists. So after an app upgrade
+            # that added a column to an existing model (for example
+            # oe_boq_position.cost_line_id from the v6.4.0 cost spine), that
+            # column is absent on a database first created under the older
+            # version, and every ORM read of the table fails with a missing-
+            # column error.
+            #
+            # Embedded PostgreSQL is the default no-Docker runtime and is not
+            # managed by Alembic, so it needs an auto-heal via
+            # ADD COLUMN IF NOT EXISTS. External PostgreSQL (a user-supplied
+            # DATABASE_URL, where embedded_pg is not running) keeps managing
+            # columns with Alembic and is left alone.
+            from app.core import embedded_pg as _embedded_pg
+
+            if _embedded_pg.is_running():
+                from app.core.postgres_migrator import postgres_auto_migrate
+
+                migrated = await postgres_auto_migrate(engine, Base)
                 if migrated:
-                    logger.info("SQLite auto-migration: %d columns added", migrated)
+                    logger.info("PostgreSQL auto-migration: %d columns added", migrated)
 
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-            db_kind = "SQLite" if "sqlite" in settings.database_url else "PostgreSQL"
-            logger.info("%s tables created/verified", db_kind)
+            logger.info("PostgreSQL tables created/verified")
         else:
             logger.info("Using external database (Alembic manages schema)")
 
@@ -2383,55 +2329,69 @@ def create_app() -> FastAPI:
                 "until an operator re-runs alembic or restarts the app"
             )
 
-        # Initialize vector database (LanceDB embedded, no Docker)
-        _section("Vector DB")
-        _init_vector_db()
-
-        # Pre-warm the embedder + boot the inference process pool. Both
-        # are env-var-gated so dev startup stays fast unless the
-        # operator opted in. See ``app.core.embedding_pool`` for the
-        # full rationale and trade-offs.
+        # Initialize vector database (LanceDB embedded, no Docker).
         #
-        # We unconditionally call get_embedder() here as well: the
-        # auto-backfill task (scheduled below) and /match-elements
-        # vector matcher both call ``encode_texts_async`` from worker
-        # threads. On Windows + Anaconda the first SentenceTransformer
-        # load from a worker thread can race with concurrent torch
-        # imports and silently leave the singleton at None — every
-        # subsequent encode then raises "No embedding model available".
-        # Loading on the main thread once primes the singleton so
-        # later calls just hit the cache.
-        try:
-            from app.core.vector import get_embedder as _ge
+        # Skipped under OE_TEST_FAST_STARTUP: connecting to the vector backend
+        # and loading the embedding model adds ~45s to startup, and the test
+        # suite stands up a fresh app per test module. Vector endpoints still
+        # work in tests because get_embedder() loads the model lazily on the
+        # first call that actually needs it.
+        _section("Vector DB")
+        _fast_startup = os.environ.get("OE_TEST_FAST_STARTUP", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if _fast_startup:
+            logger.info("Vector DB init + embedding warm-up skipped (OE_TEST_FAST_STARTUP)")
+        else:
+            _init_vector_db()
 
-            _ge()
-        except Exception as exc:  # noqa: BLE001 — never fatal for startup
-            logger.info("Embedder main-thread prime skipped: %s", exc)
+            # Pre-warm the embedder + boot the inference process pool. Both
+            # are env-var-gated so dev startup stays fast unless the
+            # operator opted in. See ``app.core.embedding_pool`` for the
+            # full rationale and trade-offs.
+            #
+            # We unconditionally call get_embedder() here as well: the
+            # auto-backfill task (scheduled below) and /match-elements
+            # vector matcher both call ``encode_texts_async`` from worker
+            # threads. On Windows + Anaconda the first SentenceTransformer
+            # load from a worker thread can race with concurrent torch
+            # imports and silently leave the singleton at None — every
+            # subsequent encode then raises "No embedding model available".
+            # Loading on the main thread once primes the singleton so
+            # later calls just hit the cache.
+            try:
+                from app.core.vector import get_embedder as _ge
 
-        try:
-            from app.core.embedding_pool import init_pool, maybe_preload_in_process
+                _ge()
+            except Exception as exc:  # noqa: BLE001 — never fatal for startup
+                logger.info("Embedder main-thread prime skipped: %s", exc)
 
-            preloaded = maybe_preload_in_process()
-            workers = init_pool()
-            if preloaded or workers:
-                logger.info(
-                    "Embedding warm-up: preload=%s pool_workers=%d",
-                    preloaded,
-                    workers,
-                )
-        except Exception as exc:  # noqa: BLE001 — never fatal for startup
-            logger.warning("Embedding pool init skipped: %s", exc)
+            try:
+                from app.core.embedding_pool import init_pool, maybe_preload_in_process
 
-        # Auto-backfill the multi-collection vector store from existing
-        # rows.  Detached as a background task so a slow embedding model
-        # download or a large dataset doesn't delay startup — semantic
-        # search remains available the moment the model finishes loading.
-        try:
-            import asyncio as _asyncio_bf
+                preloaded = maybe_preload_in_process()
+                workers = init_pool()
+                if preloaded or workers:
+                    logger.info(
+                        "Embedding warm-up: preload=%s pool_workers=%d",
+                        preloaded,
+                        workers,
+                    )
+            except Exception as exc:  # noqa: BLE001 — never fatal for startup
+                logger.warning("Embedding pool init skipped: %s", exc)
 
-            _asyncio_bf.create_task(_auto_backfill_vector_collections())
-        except Exception:
-            logger.debug("Could not schedule vector backfill", exc_info=True)
+            # Auto-backfill the multi-collection vector store from existing
+            # rows.  Detached as a background task so a slow embedding model
+            # download or a large dataset doesn't delay startup — semantic
+            # search remains available the moment the model finishes loading.
+            try:
+                import asyncio as _asyncio_bf
+
+                _asyncio_bf.create_task(_auto_backfill_vector_collections())
+            except Exception:
+                logger.debug("Could not schedule vector backfill", exc_info=True)
 
         # ── KPI auto-recalculation scheduler (24-hour interval) ──────────
         import asyncio
@@ -2475,9 +2435,9 @@ def create_app() -> FastAPI:
         # The "Add from Database" modal in the BOQ editor calls three
         # endpoints on open: /costs/regions/, /costs/category-tree/, and
         # /costs/search/. The first two issue full-table aggregations
-        # (SELECT DISTINCT region, GROUP BY 4 json_extract paths) that
-        # can take 18 s and 86 s respectively on cold SQLite when the
-        # active catalog holds 100 k+ rows. The user reported the modal
+        # (SELECT DISTINCT region, GROUP BY 4 JSON paths) that can be slow
+        # on a cold database when the active catalog holds 100 k+ rows. The
+        # user reported the modal
         # "loading forever" — this prewarm pays the aggregation cost
         # once at boot so every subsequent click is a cache hit.
         async def _prewarm_cost_caches() -> None:
@@ -2527,12 +2487,7 @@ def create_app() -> FastAPI:
                     # 3) Distinct top-level categories — drives the category
                     #    filter dropdown. Warm the all-regions list (the
                     #    page's default before any region tab is clicked).
-                    from app.database import engine as __engine
-
-                    if "sqlite" in str(__engine.url):
-                        coll_expr = json_path_text(CostItem.classification, "$.collection")
-                    else:
-                        coll_expr = CostItem.classification["collection"].as_string()
+                    coll_expr = CostItem.classification["collection"].as_string()
                     c = await cost_session.execute(
                         select(distinct(coll_expr))
                         .where(CostItem.is_active.is_(True))
@@ -2689,6 +2644,15 @@ def create_app() -> FastAPI:
             shutdown_pool()
         except Exception:
             logger.debug("embedding pool shutdown failed", exc_info=True)
+
+        # Close the Geo Hub basemap tile proxy's shared httpx connection
+        # pool so a reload / Ctrl-C doesn't leave kept-alive sockets open.
+        try:
+            from app.modules.geo_hub.router import close_tile_client
+
+            await close_tile_client()
+        except Exception:
+            logger.debug("geo tile client shutdown failed", exc_info=True)
 
         await engine.dispose()
 

@@ -20,8 +20,8 @@ care about most for v4.3 Round-3 Wave-A:
    ``Decimal`` (no float drift). Guards the Float -> Numeric migration
    added in ``v3097_dwg_takeoff_decimal_quantities``.
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+The engine is bound to the conftest-provisioned PostgreSQL cluster before
+any test module imports; these tests run against that PostgreSQL.
 """
 
 from __future__ import annotations
@@ -33,11 +33,8 @@ import uuid
 from decimal import Decimal
 from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
+# ── Per-module temp data dir (MUST run BEFORE app imports) ────────────────
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-dwg-takeoff-"))
-_TMP_DB = _TMP_DIR / "dwg.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 os.environ["DATA_DIR"] = str(_TMP_DIR)
 
 import pytest  # noqa: E402
@@ -77,7 +74,7 @@ def _make_upload(payload: bytes, filename: str) -> UploadFile:
 
 @pytest_asyncio.fixture
 async def db_session():
-    """A real AsyncSession over a freshly create_all'd temp SQLite."""
+    """A real AsyncSession over the conftest-provisioned PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()
@@ -211,7 +208,7 @@ def test_every_router_endpoint_has_auth_or_permission() -> None:
 @pytest.mark.asyncio
 async def test_annotation_persists_decimal_measurement(db_session) -> None:
     """``measurement_value`` and ``scale_override`` survive the round-trip
-    through SQLite as exact Decimals — no Float drift.
+    through PostgreSQL as exact Decimals — no Float drift.
 
     Guards the v3097 Float -> Numeric migration: regressing the column
     type would surface here as ``Decimal != float`` or a precision-loss

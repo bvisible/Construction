@@ -16,28 +16,19 @@ not 403 — same as ``verify_project_access``. 404 keeps "resource missing"
 and "access denied" indistinguishable from the caller, so attackers can't
 turn the endpoint into a UUID-existence oracle.
 
-Test scaffolding mirrors ``test_tenant_isolation.py``: a per-module temp
-SQLite file is wired up *before* ``app.database`` is imported, so the
-production ``backend/openestimate.db`` is never touched
-(see ``feedback_test_isolation.md``).
+Test scaffolding mirrors ``test_tenant_isolation.py``: ``tests/conftest.py``
+provisions an isolated PostgreSQL cluster and binds the SQLAlchemy engine to
+it *before* any test module imports, so the production database is never
+touched (see ``feedback_test_isolation.md``).
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-chat-idor-"))
-_TMP_DB = _TMP_DIR / "chat_idor.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 

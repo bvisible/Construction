@@ -85,6 +85,7 @@ async def list_correspondences(
     limit: int = Query(default=50, ge=1, le=100),
     direction: str | None = Query(default=None),
     type_filter: str | None = Query(default=None, alias="type"),
+    _perm: None = Depends(RequirePermission("correspondence.read")),
     service: CorrespondenceService = Depends(_get_service),
 ) -> list[CorrespondenceResponse]:
     await verify_project_access(project_id, user_id, session)
@@ -116,6 +117,7 @@ async def get_correspondence(
     correspondence_id: uuid.UUID,
     session: SessionDep,
     user_id: CurrentUserId = None,  # type: ignore[assignment]
+    _perm: None = Depends(RequirePermission("correspondence.read")),
     service: CorrespondenceService = Depends(_get_service),
 ) -> CorrespondenceResponse:
     correspondence = await service.get_correspondence(correspondence_id)

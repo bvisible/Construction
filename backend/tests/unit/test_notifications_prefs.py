@@ -9,52 +9,34 @@ Covers the four behavioural contracts of the new
   notification per (user, channel) group.
 * default (no pref row) → realtime via the in-app channel.
 
-Per ``feedback_test_isolation.md`` every test uses an isolated temp
-SQLite — never ``backend/openestimate.db``.
+Every test runs on a transaction-isolated PostgreSQL session (rolled back on
+teardown by ``tests._pg.transactional_session``) so they are fast and never
+touch the production database.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
 
-from app.database import Base
 from app.modules.notifications.models import (
     Notification,
     NotificationDigestQueue,
     NotificationPreference,
 )
 from app.modules.notifications.service import NotificationService
+from tests._pg import transactional_session
 
 USER_ID = uuid.uuid4()
 
 
-def _register_models() -> None:
-    import app.modules.notifications.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def session():
-    tmp_db = Path(tempfile.mkdtemp()) / "notif_prefs.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    async with transactional_session() as s:
         from app.modules.users.models import User
 
         owner = User(
@@ -66,12 +48,6 @@ async def session():
         s.add(owner)
         await s.commit()
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 # ── set_preference / get_preferences ──────────────────────────────────────
@@ -210,8 +186,8 @@ async def test_hourly_pref_queues_no_immediate_dispatch(session):
     assert row.event_type == "changeorders.approval.advanced"
     assert row.channel == "email"
     assert row.sent_at is None
-    # scheduled_for is roughly now + 1h.  SQLite hands back a naive
-    # datetime even though we wrote a tz-aware one — compare in UTC.
+    # scheduled_for is roughly now + 1h.  Normalise to a tz-aware UTC
+    # value before comparing in case the column hands back a naive datetime.
     sched = row.scheduled_for
     if sched.tzinfo is None:
         sched = sched.replace(tzinfo=UTC)

@@ -1,0 +1,306 @@
+{
+  "summary": "Deep per-module correctness, data-flow, event-wiring and transaction-integrity audit across all backend modules",
+  "agentCount": 19,
+  "logs": [
+    "Mapped 117 modules into 17 audit batches",
+    "parallel[13] failed: agent({schema}): subagent completed without calling StructuredOutput (after 2 in-conversation nudges)"
+  ],
+  "result": {
+    "total_findings": 96,
+    "by_category_counts": {
+      "permission_gap": 18,
+      "transaction_integrity": 16,
+      "error_handling": 12,
+      "data_flow": 11,
+      "broken_reference": 10,
+      "n_plus_1": 6,
+      "idempotency": 5,
+      "event_wiring": 5,
+      "stub_or_hack": 5,
+      "validation_gap": 4,
+      "dead_code": 2,
+      "money_currency": 2
+    },
+    "high_severity": [
+      {
+        "module": "collaboration_locks",
+        "category": "event_wiring",
+        "title": "Expired locks never publish COLLAB_LOCK_EXPIRED (verified)",
+        "file": "backend/app/modules/collaboration_locks/service.py:284",
+        "detail": "sweep_expired builds stale_rows from repo.list_by_user(uuid.UUID(int=0), now). Confirmed: repository.list_by_user (repository.py:174-182) filters expires_at > now, then service.py:285 keeps only rows with expires_at <= now. The two conditions are mutually exclusive, so stale_rows is ALWAYS empty. delete_expired removes rows, but the event loop at 291 never iterates. No COLLAB_LOCK_EXPIRED event is ever fired, so the presence hub can never notify subscribers that a lock was released by expiry.",
+        "fix": "Add repo.list_expired(now) (select where expires_at <= now), read those rows BEFORE delete_expired, then publish one COLLAB_LOCK_EXPIRED per deleted row."
+      },
+      {
+        "module": "ai",
+        "category": "dead_code",
+        "title": "CAD enrichment metadata built then discarded (verified)",
+        "file": "backend/app/modules/ai/service.py:1071",
+        "detail": "Confirmed at service.py:1071-1075: meta dict is populated with cad_elements and cad_format, but the update_fields call at 1077-1085 never passes it. The CAD enrichment metadata is silently dropped from the estimate job record.",
+        "fix": "Pass metadata_=meta into the update_fields call at line 1077, or delete the dead dict if unneeded."
+      },
+      {
+        "module": "backup",
+        "category": "transaction_integrity",
+        "title": "Partial restore persists corrupt DB on per-table flush failure (verified)",
+        "file": "backend/app/modules/backup/router.py:200",
+        "detail": "Confirmed at router.py:149-207. In replace mode all tables are delete()'d in reverse order first (150-154). Then the import loop flushes per table (201). On flush failure it rollback()s (204) and continues to the next table (loop at 156). The rollback also discards any prior tables' added-but-unflushed rows, and the final commit() at 207 persists a partial restore (some tables emptied, never re-populated). The reverse delete order can also hit FK violations.",
+        "fix": "In replace mode, on flush failure raise HTTPException immediately (abort the whole restore) or wrap each table in a SAVEPOINT. Delete parents last, not first."
+      },
+      {
+        "module": "correspondence",
+        "category": "permission_gap",
+        "title": "GET list and GET detail endpoints have no RequirePermission",
+        "file": "backend/app/modules/correspondence/router.py:79",
+        "detail": "GET / (list, line 79) and GET /{id} (detail, line 114) lack the correspondence.read gate that the CRUD writes declare. Any authenticated user can read correspondence (detail has project-scoped IDOR but no permission).",
+        "fix": "Add dependencies=[Depends(RequirePermission('correspondence.read'))] to both GET decorators."
+      },
+      {
+        "module": "costmodel",
+        "category": "broken_reference",
+        "title": "Dashboard silently blends mixed-currency budget lines",
+        "file": "backend/app/modules/costmodel/service.py:322",
+        "detail": "get_dashboard sums planned/actual amounts across budget lines at 328 without a distinct-currency check. The router has _distinct_budget_currencies (router.py:81) but the dashboard aggregator never calls it, so EUR + USD totals are added as bare numbers.",
+        "fix": "Check distinct currencies before aggregating; either FX-convert to a base currency or return a mixed_currency flag so the UI warns instead of blending."
+      },
+      {
+        "module": "changeorders",
+        "category": "idempotency",
+        "title": "Non-idempotent re-approval via chain path re-runs side effects",
+        "file": "backend/app/modules/changeorders/service.py:420",
+        "detail": "approve_order's status=='approved' early return (line 420) sits AFTER the gate check (443). When entered via advance_approval(_from_chain=True) at 1427, two concurrent retries can both pass the gate while status is still 'submitted' and both re-run budget writeback and BOQ section creation.",
+        "fix": "Move the idempotence check to the very top of approve_order, before any gate logic, so any re-entry returns immediately."
+      },
+      {
+        "module": "changeorders",
+        "category": "transaction_integrity",
+        "title": "_recalculate_cost_impact has no re-entrancy guard",
+        "file": "backend/app/modules/changeorders/service.py:1069",
+        "detail": "_recalculate_cost_impact runs after every item add/update/delete with a sum() + single UPDATE and no guard. A flush failure at 1070 leaves cost_impact diverged from sum(items.cost_delta); a retry of the parent op double-counts.",
+        "fix": "Compute expected total in one SELECT, only UPDATE if it differs, or roll back the item change if the cost_impact update fails."
+      },
+      {
+        "module": "enterprise_workflows",
+        "category": "permission_gap",
+        "title": "Entire router is unauthorized (no RequirePermission, no project gate)",
+        "file": "backend/app/modules/enterprise_workflows/router.py:43",
+        "detail": "create/update/delete workflow, approve/reject request, and the list endpoints declare zero RequirePermission and no verify_project_access. Any authenticated user can create, modify, and approve workflows across all projects.",
+        "fix": "Add RequirePermission to every state-changing endpoint and verify_project_access(workflow.project_id) in service methods. Also gate cancel_request (router.py:191)."
+      },
+      {
+        "module": "file_comments",
+        "category": "permission_gap",
+        "title": "DELETE comment has no project-access check",
+        "file": "backend/app/modules/file_comments/router.py:251",
+        "detail": "DELETE /{comment_id}/ runs soft_delete_comment without verify_project_access. Anyone with file_comments.write in any project can delete comments in projects they cannot access.",
+        "fix": "Load the comment, call verify_project_access(comment.project_id, user_id, session) before soft_delete_comment."
+      },
+      {
+        "module": "file_comments",
+        "category": "permission_gap",
+        "title": "PATCH comment verifies project access AFTER the mutation",
+        "file": "backend/app/modules/file_comments/router.py:206",
+        "detail": "PATCH /{comment_id}/ writes the update at line 193 and only checks project access at line 206, defeating the control. An attacker can mutate comments in projects they cannot access.",
+        "fix": "Load comment, verify_project_access before update_comment (move the check to ~line 177)."
+      },
+      {
+        "module": "file_references",
+        "category": "broken_reference",
+        "title": "No subscriber purges file_references on document delete (verified gap)",
+        "file": "backend/app/modules/file_references/service.py:572",
+        "detail": "Confirmed: documents/service.py:785 publishes documents.document.deleted and documents/events.py:93 subscribes (its own handler), but file_references has NO events.py (verified absent). Orphaned FileReference rows survive every file delete.",
+        "fix": "Add file_references/events.py subscribing to documents.document.deleted -> purge_references_for_file(); register via event_bus.subscribe()."
+      },
+      {
+        "module": "file_search",
+        "category": "broken_reference",
+        "title": "No subscriber clears search index on document delete (verified gap)",
+        "file": "backend/app/modules/file_search/service.py:213",
+        "detail": "file_search has no events.py (verified absent). Deleted documents/photos/sheets keep stale FileSearchIndex rows and appear in search forever.",
+        "fix": "Add file_search/events.py subscribing to documents.document.deleted -> delete_index_for_file()."
+      },
+      {
+        "module": "full_evm",
+        "category": "permission_gap",
+        "title": "IDOR denial returns 403 instead of 404, leaking project existence",
+        "file": "backend/app/modules/full_evm/router.py:79",
+        "detail": "full_evm._verify_project_access returns 403 (line 79) while finance._require_project_access returns 404 (the R7 standard to avoid project-UUID enumeration). The 403 confirms a project exists.",
+        "fix": "Change lines 79 and 87 to HTTP_404_NOT_FOUND to match finance and R7."
+      },
+      {
+        "module": "integrations",
+        "category": "transaction_integrity",
+        "title": "Webhook delivery + auto-disable state flushed but never committed (verified)",
+        "file": "backend/app/modules/integrations/service.py:219",
+        "detail": "WebhookService._deliver creates the WebhookDelivery and mutates hook state (failure_count, is_active after 10 failures, last_status_code) then only flush()es at 219. If the caller never commits, or an exception fires after _deliver returns, the delivery record and the auto-disable mutation are lost.",
+        "fix": "commit() after the flush in _deliver, or document that every caller (dispatch_event, send_test) must commit."
+      },
+      {
+        "module": "match_elements",
+        "category": "data_flow",
+        "title": "apply_to_boq writes positions without verifying BOQ belongs to session project",
+        "file": "backend/app/modules/match_elements/service.py:3252",
+        "detail": "When dry_run=False, apply_to_boq writes Position rows to the supplied boq_id but never checks boq.project_id == session.project_id. The router asserts session access, not boq ownership, so a caller can write positions into a sibling tenant's BOQ.",
+        "fix": "Verify boq.project_id == session.project_id before writing; raise 403 (or 404) on mismatch."
+      },
+      {
+        "module": "progress",
+        "category": "permission_gap",
+        "title": "POST /entries/ and POST /plan/ have no RequirePermission",
+        "file": "backend/app/modules/progress/router.py:65",
+        "detail": "record_entry (line 65) and upsert_plan_point (line 196) are POST mutations with no permission gate. A read-only project member can create progress entries and edit the plan. The module registers progress.create and progress.plan_edit but never enforces them here.",
+        "fix": "Add RequirePermission('progress.create') to /entries/ and RequirePermission('progress.plan_edit') to /plan/."
+      },
+      {
+        "module": "notifications",
+        "category": "permission_gap",
+        "title": "Webhook target create/update/delete have no permission gate",
+        "file": "backend/app/modules/notifications/router.py:254",
+        "detail": "create/update/delete_webhook_target use CurrentUserPayload but no RequirePermission, so any authenticated user can manage webhook targets (an exfiltration vector).",
+        "fix": "Add RequirePermission('notifications.admin.webhooks') (or equivalent admin perm) to all three endpoints."
+      },
+      {
+        "module": "portal",
+        "category": "permission_gap",
+        "title": "portal.admin.* permissions referenced but never registered",
+        "file": "backend/app/modules/portal/router.py:95",
+        "detail": "Endpoints use RequirePermission('portal.admin.users.invite') etc., but portal has no permissions.py/manifest registering them. An unregistered permission is not validated reliably by the engine (always-pass/always-fail depending on engine behavior).",
+        "fix": "Create portal/permissions.py registering all portal.admin.* with permission_registry and call it from portal/__init__.py."
+      },
+      {
+        "module": "punchlist",
+        "category": "permission_gap",
+        "title": "GET /summary/ has no RequirePermission",
+        "file": "backend/app/modules/punchlist/router.py:92",
+        "detail": "get_summary calls verify_project_access but declares no RequirePermission. Any authenticated user with project access can read punch-list stats, bypassing punchlist.read RBAC.",
+        "fix": "Add _perm: None = Depends(RequirePermission('punchlist.read')) to get_summary."
+      },
+      {
+        "module": "punchlist",
+        "category": "error_handling",
+        "title": "create_item and create_item_root_alias swallow HTTPException into 500",
+        "file": "backend/app/modules/punchlist/router.py:123",
+        "detail": "Both handlers (lines 118-128 and 212-222) use bare except Exception that catches the HTTPException raised by verify_project_access (the IDOR path) and converts it to a generic 500, masking 403/404 denials.",
+        "fix": "Add 'except HTTPException: raise' before the broad except in both handlers."
+      },
+      {
+        "module": "reporting",
+        "category": "permission_gap",
+        "title": "GET /kpi/ and /kpi/history/ have no RequirePermission",
+        "file": "backend/app/modules/reporting/router.py:46",
+        "detail": "get_latest_kpi (46) and list_kpi_history (61) verify project access but declare no permission gate, exposing CPI/SPI/budget/defect KPIs to any authenticated user with project access.",
+        "fix": "Add RequirePermission('reporting.read') to both. Also gate/scope GET /templates/ (line 120)."
+      },
+      {
+        "module": "property_dev",
+        "category": "event_wiring",
+        "title": "update_buyer changes status without publishing the transition event (verified)",
+        "file": "backend/app/modules/property_dev/service.py:1533",
+        "detail": "Confirmed: update_buyer gates the transition via _ensure_transition (1538) and persists (1569) but never publishes a status event, unlike convert_buyer_to_contracted (1611-1624) which fires property_dev.buyer.contracted. A PATCH /buyers/{id}?status=reserved|contracted never notifies subscribers, so reservation-expiry, payment-schedule creation, and CRM sync never trigger.",
+        "fix": "After refresh, if new_status differs from prior status, publish_detached the matching event (property_dev.buyer.reserved / .contracted) mirroring convert_buyer_to_contracted."
+      },
+      {
+        "module": "supplier_catalogs",
+        "category": "n_plus_1",
+        "title": "import_price_list does a per-row get_by_sku in a loop",
+        "file": "backend/app/modules/supplier_catalogs/service.py:486",
+        "detail": "get_by_sku is called inside the per-CSV-row loop. 1000 SKUs = 1000 queries. The seen dict already holds all SKU keys for a single IN(...) batch.",
+        "fix": "Batch-load: items_by_sku = {i.sku: i for i in await self.items.list_by_sku(list(seen.keys()))}, then look up from the dict in the loop."
+      },
+      {
+        "module": "supplier_catalogs",
+        "category": "transaction_integrity",
+        "title": "Goods-receipt posting can write partial ledger then advance PO",
+        "file": "backend/app/modules/supplier_catalogs/service.py:981",
+        "detail": "post_goods_receipt creates the GR header (981), then a loop (985-1049) inserts GR lines, updates PO received_qty, updates stock balances, and writes movements. A mid-loop failure (e.g. record_movement at 1035) leaves the GR header committed and lines/PO/stock partially written; the PO status advance at 1071 compounds it.",
+        "fix": "Wrap 969-1071 in async with self.session.begin() so any failure rolls back the whole GR, PO, and stock updates."
+      },
+      {
+        "module": "takeoff",
+        "category": "data_flow",
+        "title": "Volume update can bypass server validation using stale depth",
+        "file": "backend/app/modules/takeoff/service.py:1178",
+        "detail": "recompute_volume_value reads effective_depth as fields.get('depth') only when 'depth' in fields else item.depth. A client sending {volume, depth:null} can have null skipped so the OLD depth recomputes, opening a window to push a volume that the new depth would have rejected. measurement_value/points are merged correctly; depth is not.",
+        "fix": "Use effective_depth = fields.get('depth', item.depth) so an explicit depth (incl. null) in the patch is honored."
+      }
+    ],
+    "coordination_wiring_gaps": [
+      {
+        "title": "File lifecycle has no fan-out: deleting a document orphans five satellite modules",
+        "detail": "documents/service.py:785 publishes documents.document.deleted and documents/events.py:93 wires its own handler, but file_references, file_search, file_comments, file_favorites, and file_tags ALL lack an events.py (verified absent on disk). Every file delete leaves orphaned references, stale search-index rows (deleted files keep appearing in search), orphaned comment threads, broken favorites, and orphaned tag assignments. This is the single highest-leverage wiring fix because one published event already exists and five consumers are simply not subscribed.",
+        "modules": [
+          "documents",
+          "file_references",
+          "file_search",
+          "file_comments",
+          "file_favorites",
+          "file_tags"
+        ],
+        "fix": "Add an events.py to each of the five satellite modules subscribing to documents.document.deleted, each calling its existing cleanup function (purge_references_for_file / delete_index_for_file / delete FileComment by (file_kind,file_id) / delete FileFavorite / remove_assignments_for_file). Consider broadening the producer to also emit on photo/sheet/BIM-model deletes so the same subscribers cover all file kinds."
+      },
+      {
+        "title": "Lock expiry events are wired but unreachable due to a self-cancelling filter",
+        "detail": "collaboration_locks.sweep_expired (service.py:284) intends to publish COLLAB_LOCK_EXPIRED per deleted lock, but it sources rows from repo.list_by_user(UUID(int=0), now) which only returns expires_at > now (repository.py:178), then filters expires_at <= now (service.py:285). The two conditions never overlap, so the event is never fired even though delete_expired does remove the rows. The presence hub and any expiry subscribers are silently starved.",
+        "modules": [
+          "collaboration_locks"
+        ],
+        "fix": "Add repo.list_expired(now) selecting expires_at <= now, read those rows before delete_expired, and publish one COLLAB_LOCK_EXPIRED per row."
+      },
+      {
+        "title": "Buyer status transitions don't notify downstream modules",
+        "detail": "property_dev.update_buyer (service.py:1533) gates and persists status transitions but never publishes property_dev.buyer.reserved/.contracted, while convert_buyer_to_contracted (1611) does. Reservation-expiry, payment-schedule generation, and CRM sync subscribe to those events and therefore never trigger when status changes through the generic PATCH path.",
+        "modules": [
+          "property_dev",
+          "crm",
+          "finance"
+        ],
+        "fix": "On status change in update_buyer, publish_detached the matching buyer event mirroring convert_buyer_to_contracted so all subscribers fire regardless of which endpoint moved the status."
+      },
+      {
+        "title": "Polymorphic file_tags assignments never cleaned on cross-module deletes",
+        "detail": "file_tags references files by (file_kind, file_id) with no FK and exposes remove_assignments_for_file (service.py:436), but nothing subscribes to file-deletion events from documents/bim_hub/photos. Orphan oe_file_tag_assignment rows accumulate. Same root cause as the file-lifecycle gap, but spanning more producers than just documents.",
+        "modules": [
+          "file_tags",
+          "documents",
+          "bim_hub"
+        ],
+        "fix": "Subscribe file_tags to documents.document.deleted and bim_hub model-deleted events, extracting file_kind/file_id and calling remove_assignments_for_file; document this as a hard requirement for any module that owns files."
+      },
+      {
+        "title": "Invoice payment leaves budget actuals stale on a swallowed failure",
+        "detail": "finance.pay_invoice (service.py:591) updates budget actuals inside a try/except that logs and swallows, so a transient DB issue marks the invoice paid while budget utilization stays wrong until the next payment re-syncs. The reconciliation should be decoupled via an event rather than an in-line best-effort write.",
+        "modules": [
+          "finance",
+          "costmodel"
+        ],
+        "fix": "Publish an invoice.paid event and let a background subscriber recompute budget actuals (idempotently), so payment forward-progress and budget consistency are no longer coupled inside one swallowed except."
+      },
+      {
+        "title": "Task dependency-graph changes publish no event for cache/index invalidation",
+        "detail": "tasks.update_task (service.py:384) validates new depends_on (cycle + project membership) but never publishes task.dependency.changed, so any rollup-cache or vector-index layer that needs to recompute downstream availability sees stale dependency chains until a full reindex.",
+        "modules": [
+          "tasks",
+          "search"
+        ],
+        "fix": "After the status-transition event, if depends_on changed publish task.dependency.changed with task_id/project_id/old+new depends_on."
+      },
+      {
+        "title": "MoC reviewed event is published with no subscriber",
+        "detail": "moc.transition (service.py:273) publishes moc.entry.reviewed, but moc/events.py (247) only wires candidate_from_ncr, accepted, and implemented. If notifications or workflow orchestration should alert approvers when a MoC is ready for approval, that never happens. Either wire a subscriber or remove the dead publish.",
+        "modules": [
+          "moc",
+          "notifications"
+        ],
+        "fix": "Either add a notification subscriber for moc.entry.reviewed or document/remove it as an internal-only no-op event."
+      },
+      {
+        "title": "cost_match is a shell that declares events with no producer or consumer",
+        "detail": "cost_match has only a _health router (router.py:12), a manifest, and an events.py defining MATCH_COMPLETED/MATCH_REVIEWED with no publisher or subscriber. Other modules that might key off match completion have nothing to bind to.",
+        "modules": [
+          "cost_match"
+        ],
+        "fix": "Either complete the module (service/repository + publish the events) or remove the event definitions until shipped so the event namespace reflects reality."
+      }
+    ],
+    "markdown": "## OpenConstructionERP defect backlog (96 findings)\n\nThis is the prioritized backlog from the per-module audit. We verified the highest-impact claims against the actual source before ranking them. One reported high-severity item (crm.compute_and_store_forecast, \"tuple unpacking error\") is a false positive: OpportunityRepository.list_all returns a (list, count) tuple, so opps[0] correctly extracts the opportunity list. The code is stylistically odd but functionally correct, so it is excluded from the high-severity list below.\n\n### Coordination and wiring gaps (fix these first)\n\nThese are the cross-module event and data-flow gaps that most improve how the platform holds together. They are cheap to fix and broad in effect.\n\nThe biggest one is the file lifecycle. documents/service.py publishes documents.document.deleted and the documents module subscribes its own handler, but five satellite modules that anchor data to files (file_references, file_search, file_comments, file_favorites, file_tags) have no events.py at all. We confirmed all five are missing on disk. The result is that every file delete leaves orphaned references, comment threads, favorites, and tag assignments, and deleted files keep showing up in search forever. One event already exists; five consumers just are not listening. Adding a small events.py to each, each calling the cleanup function it already exposes, closes the whole class of orphan bugs.\n\nLock expiry is wired but unreachable. collaboration_locks.sweep_expired tries to publish COLLAB_LOCK_EXPIRED per deleted lock, but it sources rows from list_by_user(UUID(int=0), now), which only returns locks with expires_at greater than now, then filters for expires_at less than or equal to now. Those two conditions can never both be true, so the list is always empty and the event never fires even though the rows do get deleted. The presence hub never learns a lock was released.\n\nBuyer status transitions do not notify anyone. property_dev.update_buyer gates and persists status changes but never publishes the reserved/contracted events, while convert_buyer_to_contracted does. So a PATCH that moves a buyer to reserved or contracted never triggers reservation-expiry, payment-schedule creation, or CRM sync.\n\nThree smaller wiring gaps round out the theme: invoice payment recomputes budget actuals inside a swallowed except (finance), task dependency edits publish no invalidation event (tasks), and there are two orphan-event cases where events are published or declared with no subscriber (moc.entry.reviewed, and the cost_match shell module). The fixes are in the structured list.\n\n### High-severity correctness defects\n\nThe transaction-integrity defects are the dangerous ones because they corrupt data silently. Backup restore is the worst: in replace mode it deletes all tables first, then imports table by table, and on a per-table flush failure it rolls back and keeps going, so the final commit persists a database where some tables were emptied and never refilled. Supplier-catalogs goods-receipt posting can write a GR header, then partially write lines, PO quantities, and stock movements, then still advance the PO if a step mid-loop fails. The integrations webhook delivery record and the auto-disable-after-10-failures state are flushed but never committed, so both can be lost. ChangeOrders has two related issues: a non-idempotent re-approval path where two concurrent retries can both run budget writeback and BOQ section creation, and a cost-impact recompute with no re-entrancy guard.\n\nTwo data-integrity and IDOR defects let one tenant touch another's data. match_elements.apply_to_boq writes Position rows into a supplied boq_id without verifying the BOQ belongs to the session's project, so a caller can write into a sibling project's BOQ. file_comments PATCH verifies project access only after the mutation, and file_comments DELETE has no project check at all.\n\nThe ai module silently drops CAD enrichment metadata: service.py builds a meta dict from cad_elements and cad_format and then never passes it to the update_fields call, so the data is lost. takeoff has a validation-bypass window where a volume update can recompute against stale depth instead of the patched depth. costmodel's dashboard sums budget lines across currencies with no distinct-currency check, so EUR and USD totals are blended into a meaningless number even though the router already has a helper to detect the mismatch.\n\n### Permission gaps (the largest category, 18 findings)\n\nPermission_gap is the single biggest bucket. The serious ones are whole-router exposure: enterprise_workflows has zero authorization on any endpoint, so any authenticated user can create, modify, and approve workflows across all projects. portal references portal.admin.* permissions that are never registered, which means the gate cannot be enforced reliably. notifications webhook create/update/delete have no permission gate. progress POST endpoints, correspondence read endpoints, reporting KPI endpoints, and punchlist summary all skip RequirePermission. full_evm returns 403 on access denial where the R7 standard (and the finance module) return 404, leaking project existence. Most of these are one-line dependency additions, but they are real RBAC holes today.\n\nA related error-handling trap: punchlist create_item and create_item_root_alias wrap everything in a bare except Exception that catches the HTTPException raised by the IDOR check and turns it into a 500, so the access denial is masked.\n\n### Money and currency\n\nTwo findings, both about ambiguous currency. costmodel blends mixed currencies in the dashboard rollup (also listed high above), and procurement persists empty-string currency_code on POs, which produces nonsense when a downstream finance rollup sums across projects with mixed or missing currency. The fix in both cases is to either enforce a currency before the write or tag ambiguous rows so aggregations can skip or warn rather than blend.\n\n### Performance (N+1, 6 findings)\n\nThe clearest one is supplier_catalogs.import_price_list calling get_by_sku per CSV row (1000 SKUs equals 1000 queries) when the seen dict already has every key for a single batch lookup. equipment.generate_due_work_orders fetches equipment by id inside a loop and then lists work orders per schedule. file_tags renders per-tag COUNT queries when a batched variant already exists. tasks bulk-delete pulls the full owned-project list into Python instead of using a subquery. All are straightforward batch rewrites.\n\n### Idempotency and races\n\nFive findings around check-then-insert windows: assemblies import suffix generation, costs bulk_import duplicate checks, procurement PO auto-number retry, and file_transmittals number allocation all have a TOCTOU gap where two concurrent callers can pick the same value. The right fix is generally a single atomic SELECT MAX or reliance on a unique constraint plus IntegrityError handling rather than count-then-parse.\n\n### Stubs and lower-severity items\n\ncost_match is a router-only shell with declared but unused events. search has no SQL fallback for chat, validation, and BIM-element collections, so those silently return empty when the vector index is down. full_evm hardcodes the forecast date and ignores the schema field. uploads reconstructs multipart sessions with a placeholder started_at. These are tracked but lower priority than the wiring and correctness work above.\n\n### Suggested order of work\n\nStart with the file-lifecycle subscribers and the lock-expiry filter, since they are cheap and broadly correct the platform's event fabric. Then the transaction-integrity set (backup restore, goods receipt, integrations webhook commit, changeorders idempotency). Then sweep the permission gaps as a batch, since most are one-line dependency additions, leading with enterprise_workflows and portal. The IDOR fixes (match_elements, file_comments) belong with the permission sweep. Performance and idempotency can follow once correctness is locked."
+  }
+}

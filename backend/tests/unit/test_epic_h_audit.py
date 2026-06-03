@@ -25,11 +25,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_gates import gate_registry
 from app.core.audit_log import (
@@ -42,17 +38,17 @@ from app.core.audit_log import (
 )
 from app.core.audit_prune import prune_audit_pii
 from app.database import Base
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    # Function-scoped: each test runs inside an outer PostgreSQL transaction
+    # that is rolled back on teardown, so the shared schema-loaded database
+    # starts empty for every test. The session's own commit() becomes a
+    # SAVEPOINT release, keeping committed data visible within the test.
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 # ── (1) Persistence of new columns ────────────────────────────────────
@@ -158,9 +154,9 @@ def test_out_of_request_audit_context_is_none() -> None:
 @pytest.mark.asyncio
 async def test_composite_entity_created_index_exists() -> None:
     # The model declares the index via ``Index(...)`` in ``__table_args__``;
-    # verifying it from ``Base.metadata`` is enough — sqlite reflects it
-    # back through ``create_all`` and the prod migration creates the
-    # same name idempotently.
+    # verifying it from ``Base.metadata`` is enough. PostgreSQL materialises
+    # it through ``create_all`` and the prod migration creates the same name
+    # idempotently.
     tbl = Base.metadata.tables["oe_activity_log"]
     names = {ix.name for ix in tbl.indexes}
     assert "ix_activity_log_entity_created" in names

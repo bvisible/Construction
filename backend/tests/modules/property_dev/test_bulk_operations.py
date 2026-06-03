@@ -12,7 +12,7 @@ Covers:
   * Cross-development merge rejection
   * Buyer-merge audit-log written into same SAVEPOINT
 
-Re-uses the ``conftest.py`` per-module SQLite scaffold so the suite
+Re-uses the ``conftest.py`` per-module PostgreSQL scaffold so the suite
 runs side-by-side with test_security / test_r8_security.
 """
 

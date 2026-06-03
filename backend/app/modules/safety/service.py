@@ -378,6 +378,10 @@ class SafetyService:
         total_days_lost = 0
         recordable_incidents = 0
         lost_time_incidents = 0
+        # Sum of exposure hours, sourced from each incident's
+        # ``metadata.man_hours_total`` (the documented convention below).
+        # Used as the denominator for the OSHA-style frequency rates.
+        total_hours_worked = 0.0
         incidents_by_type: dict[str, int] = defaultdict(int)
         incidents_by_status: dict[str, int] = defaultdict(int)
         open_corrective_actions = 0
@@ -403,6 +407,25 @@ class SafetyService:
                 recordable_incidents += 1
             if inc.days_lost and inc.days_lost > 0:
                 lost_time_incidents += 1
+
+            # Accumulate exposure hours for the frequency-rate denominator.
+            # Convention (documented at the LTIFR/TRIR computation below and in
+            # the schema): man-hours live in ``metadata.man_hours_total``.
+            # Tolerate strings/ints from JSON and ignore non-numeric or
+            # negative junk rather than letting it corrupt the denominator.
+            raw_hours = (getattr(inc, "metadata_", None) or {}).get("man_hours_total")
+            if raw_hours is not None:
+                try:
+                    hours = float(raw_hours)
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Safety incident %s has a non-numeric man_hours_total %r; ignored",
+                        getattr(inc, "incident_number", inc.id),
+                        raw_hours,
+                    )
+                else:
+                    if hours > 0:
+                        total_hours_worked += hours
 
             # Track latest incident date robustly. An unparseable date is
             # NOT silently dropped — it is counted so the metric can fail
@@ -450,11 +473,23 @@ class SafetyService:
             tier = _compute_risk_tier(obs.risk_score)
             observations_by_risk_tier[tier] += 1
 
-        # LTIFR and TRIR -- require man-hours to compute properly
-        # Convention: if any incident has metadata.man_hours_total, use it
-        # Otherwise return None (not enough data)
+        # LTIFR and TRIR -- standard OSHA-style frequency rates.
+        # Convention: man-hours come from each incident's
+        # ``metadata.man_hours_total`` (summed into ``total_hours_worked``
+        # in the loop above). When no incident carries man-hours the
+        # denominator is unknown, so both rates stay None (not enough data)
+        # rather than reporting a falsely-precise 0.0.
+        #
+        #   TRIR  = recordable_incidents * 200_000 / total_hours_worked
+        #           (per 200k hours -> ~100 full-time workers per year)
+        #   LTIFR = lost_time_incidents * 1_000_000 / total_hours_worked
+        #           (per 1M hours, the international ILO/AS-1885 base the
+        #            schema documents)
         ltifr: float | None = None
         trir: float | None = None
+        if total_hours_worked > 0:
+            trir = round(recordable_incidents * 200_000 / total_hours_worked, 2)
+            ltifr = round(lost_time_incidents * 1_000_000 / total_hours_worked, 2)
 
         return SafetyStatsResponse(
             total_incidents=total_incidents,

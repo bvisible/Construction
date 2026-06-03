@@ -30,64 +30,24 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
-from app.modules.daily_diary.models import (
-    DailyDiary,
-    DiaryArchiveSignature,
-    DiaryEntry,
-    DiaryPhoto,
-    DiaryVideo,
-    DroneSurvey,
-    RealityCaptureDataset,
-    WeatherRecord,
-)
 from app.modules.daily_diary.schemas import DailyDiaryCreate
 from app.modules.daily_diary.service import DailyDiaryService
-
-# Import projects + users so the FK targets exist when create_all runs.
-from app.modules.projects.models import Project  # noqa: F401
-from app.modules.users.models import User  # noqa: F401
-
-_DD_TABLES = [
-    Project.__table__,
-    User.__table__,
-    DailyDiary.__table__,
-    WeatherRecord.__table__,
-    DiaryEntry.__table__,
-    DiaryPhoto.__table__,
-    DiaryVideo.__table__,
-    DroneSurvey.__table__,
-    RealityCaptureDataset.__table__,
-    DiaryArchiveSignature.__table__,
-]
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """‌⁠‍Per-test in-memory SQLite session with the daily-diary tables.
+    """‌⁠‍Per-test PostgreSQL session, isolated in a rolled-back transaction.
 
-    FK pragma OFF — see test_daily_diary_security.py for rationale.
-    The cross-module FK integrity is checked by the alembic-migration
-    tests against PostgreSQL, not here.
+    Foreign keys are disabled on the connection (``session_replication_role
+    = replica``) so the tests can insert diary rows without materialising the
+    cross-module ``Project`` / ``User`` FK targets. The cross-module FK
+    integrity is checked by the alembic-migration tests, not here.
     """
-    from sqlalchemy import text
-
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA foreign_keys = OFF"))
-        await conn.run_sync(Base.metadata.create_all, tables=_DD_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
-        await sess.execute(text("PRAGMA foreign_keys = OFF"))
+    async with transactional_session(disable_fks=True) as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

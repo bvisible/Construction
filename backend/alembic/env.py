@@ -127,6 +127,50 @@ except Exception:  # noqa: BLE001
     # behaviour (only the explicitly-listed modules above are registered).
     pass
 
+# --------------------------------------------------------------------------
+# Widen alembic's own version table column from the default VARCHAR(32).
+#
+# Alembic's ``DefaultImpl.version_table_impl`` hardcodes
+# ``version_num VARCHAR(32)``. Several of this project's revision IDs are
+# long human-readable slugs - the longest, ``v3103_propdev_lead_reservation_
+# spa_schedule_parties``, is 51 characters, and 23 revisions exceed 32. SQLite
+# silently ignores declared VARCHAR length, so this was invisible there, but
+# PostgreSQL enforces it strictly: a plain ``alembic upgrade head`` (or any
+# incremental up/downgrade that records one of those revisions) fails with
+# ``value too long for type character varying(32)`` the moment alembic writes
+# the revision into its own version table. The production boot path never hits
+# this because it does create_all + stamp head, jumping straight to the short
+# head id - but the canonical incremental migration path on PostgreSQL was
+# broken. ``version_table_impl`` is a documented override hook, so we widen the
+# column to VARCHAR(255). Existing databases keep whatever table their stamp
+# already created (head id is short); the wider column only applies when the
+# version table is created fresh.
+# --------------------------------------------------------------------------
+from alembic.ddl.impl import DefaultImpl as _AlembicDefaultImpl  # noqa: E402
+
+
+def _wide_version_table_impl(  # noqa: ANN202
+    self,  # noqa: ANN001
+    *,
+    version_table: str,
+    version_table_schema,  # noqa: ANN001
+    version_table_pk: bool,
+    **kw,  # noqa: ANN003, ARG001
+):
+    vt = sa.Table(
+        version_table,
+        sa.MetaData(),
+        sa.Column("version_num", sa.String(255), nullable=False),
+        schema=version_table_schema,
+    )
+    if version_table_pk:
+        vt.append_constraint(sa.PrimaryKeyConstraint("version_num", name=f"{version_table}_pkc"))
+    return vt
+
+
+_AlembicDefaultImpl.version_table_impl = _wide_version_table_impl
+
+
 config = context.config
 settings = get_settings()
 

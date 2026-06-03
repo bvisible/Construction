@@ -17,106 +17,58 @@ Covers the v3.12.0 Stream-E deliverables that the unit suites do not:
   matching project + kind receives an in-app notification when a
   new version supersedes the current row.
 
-The suite uses the same temp-SQLite pattern as the W4 / W5 unit tests
-so it stays insulated from the FastAPI lifespan / module-loader
-mapper-init flake.
+The suite runs on a transaction-isolated PostgreSQL session (rolled back on
+teardown by ``tests._pg.transactional_session``) so it stays insulated from the
+FastAPI lifespan / module-loader mapper-init flake.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-files-cde-"))
-_TMP_DB = _TMP_DIR / "files_cde.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
+import pytest
+import pytest_asyncio
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from sqlalchemy import select  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.database import Base  # noqa: E402
-from app.modules.documents.models import Document  # noqa: E402
-from app.modules.file_distribution.models import (  # noqa: E402
-    FileDistributionSubscription,
-)
-from app.modules.file_distribution.schemas import SubscriptionCreate  # noqa: E402
-from app.modules.file_distribution.service import (  # noqa: E402
+from app.modules.file_distribution.schemas import SubscriptionCreate
+from app.modules.file_distribution.service import (
     SubscriptionService,
     on_file_new_revision,
 )
-from app.modules.file_saved_views.models import FileSavedView  # noqa: E402
-from app.modules.file_saved_views.schemas import (  # noqa: E402
+from app.modules.file_saved_views.schemas import (
     FilterSnapshot,
     SavedViewCreate,
 )
-from app.modules.file_saved_views.service import SavedViewService  # noqa: E402
-from app.modules.file_tags.models import FileTag, FileTagAssignment  # noqa: E402
-from app.modules.file_tags.schemas import TagCreate  # noqa: E402
-from app.modules.file_tags.service import (  # noqa: E402
+from app.modules.file_saved_views.service import SavedViewService
+from app.modules.file_tags.schemas import TagCreate
+from app.modules.file_tags.service import (
     assign_tag,
     create_tag,
     tags_for_file,
 )
-from app.modules.file_trash.models import FileTrash  # noqa: E402
-from app.modules.file_trash.service import (  # noqa: E402
+from app.modules.file_trash.models import FileTrash
+from app.modules.file_trash.service import (
     FileTrashService,
     purge_expired_trash,
 )
-from app.modules.file_versions.models import FileVersion  # noqa: E402
-from app.modules.file_versions.schemas import FileVersionCreate  # noqa: E402
-from app.modules.file_versions.service import FileVersionService  # noqa: E402
-from app.modules.notifications.models import Notification  # noqa: E402
-from app.modules.projects.models import Project  # noqa: E402
-from app.modules.users.models import User  # noqa: E402
+from app.modules.file_versions.models import FileVersion
+from app.modules.file_versions.schemas import FileVersionCreate
+from app.modules.file_versions.service import FileVersionService
+from app.modules.notifications.models import Notification
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── DB fixture ─────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncSession:
-    """Per-test temp SQLite with only the tables this suite touches.
-
-    Mirrors the isolation pattern used by ``test_file_saved_views.py``
-    et al — we build a fresh DB per test, list every table we need
-    explicitly (so we never trigger ``configure_mappers`` against
-    unrelated ORM rows), and dispose the engine on teardown.
-    """
-    db_path = _TMP_DIR / f"cde-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path.as_posix()}",
-        echo=False,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                Project.__table__,
-                Document.__table__,
-                FileSavedView.__table__,
-                FileTag.__table__,
-                FileTagAssignment.__table__,
-                FileTrash.__table__,
-                FileVersion.__table__,
-                FileDistributionSubscription.__table__,
-                Notification.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as session:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as session:
         yield session
-    await engine.dispose()
 
 
 async def _seed_user_and_project(

@@ -390,15 +390,11 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
-    # Drop in reverse-dependency order to avoid FK violations.
+    # Drop in reverse-dependency order. CASCADE removes each table's indexes,
+    # unique/PK constraints and inbound FKs in one statement; dropping a
+    # constraint-backed index directly raises DependentObjectsStillExist on
+    # PostgreSQL.
     for table in reversed(_TABLES):
         if _has_table(inspector, table):
-            # Drop any explicit indexes first (op.drop_table handles unnamed ones).
-            for idx in inspector.get_indexes(table):
-                if idx.get("name"):
-                    try:
-                        op.drop_index(idx["name"], table_name=table)
-                    except Exception:
-                        pass
-            op.drop_table(table)
+            op.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
             inspector = sa.inspect(bind)

@@ -175,41 +175,16 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
-    if inspector.has_table(_BUYER_TABLE) and "contact_id" in _columns(inspector, _BUYER_TABLE):
-        buyer_indexes = {idx["name"] for idx in inspector.get_indexes(_BUYER_TABLE)}
-        if "ix_oe_property_dev_buyer_contact_id" in buyer_indexes:
-            op.drop_index("ix_oe_property_dev_buyer_contact_id", _BUYER_TABLE)
-        with op.batch_alter_table(_BUYER_TABLE) as batch_op:
-            try:
-                batch_op.drop_constraint(
-                    "fk_oe_property_dev_buyer_contact_id",
-                    type_="foreignkey",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            batch_op.drop_column("contact_id")
+    # ``DROP COLUMN ... CASCADE`` removes each column together with its FK
+    # constraint and index in one statement, so we don't depend on the FK's
+    # exact name. On the create_all path the FK is auto-named by the model
+    # (not ``fk_oe_property_dev_buyer_contact_id``), so the old hardcoded
+    # drop_constraint raised UndefinedObject on PostgreSQL.
+    for table in (_BUYER_TABLE, _LEAD_TABLE):
+        if "contact_id" in _columns(inspector, table):
+            op.execute(f'ALTER TABLE "{table}" DROP COLUMN IF EXISTS contact_id CASCADE')
 
-    inspector = sa.inspect(bind)
-    if inspector.has_table(_LEAD_TABLE) and "contact_id" in _columns(inspector, _LEAD_TABLE):
-        lead_indexes = {idx["name"] for idx in inspector.get_indexes(_LEAD_TABLE)}
-        if "ix_oe_property_dev_lead_contact_id" in lead_indexes:
-            op.drop_index("ix_oe_property_dev_lead_contact_id", _LEAD_TABLE)
-        with op.batch_alter_table(_LEAD_TABLE) as batch_op:
-            try:
-                batch_op.drop_constraint(
-                    "fk_oe_property_dev_lead_contact_id",
-                    type_="foreignkey",
-                )
-            except Exception:  # noqa: BLE001
-                pass
-            batch_op.drop_column("contact_id")
-
-    inspector = sa.inspect(bind)
-    if inspector.has_table(_CONTACT_TABLE):
-        contact_cols = _columns(inspector, _CONTACT_TABLE)
-        if "custom_properties" in contact_cols:
-            with op.batch_alter_table(_CONTACT_TABLE) as batch_op:
-                batch_op.drop_column("custom_properties")
-        if "module_tags" in contact_cols:
-            with op.batch_alter_table(_CONTACT_TABLE) as batch_op:
-                batch_op.drop_column("module_tags")
+    contact_cols = _columns(inspector, _CONTACT_TABLE)
+    for col in ("custom_properties", "module_tags"):
+        if col in contact_cols:
+            op.execute(f'ALTER TABLE "{_CONTACT_TABLE}" DROP COLUMN IF EXISTS {col} CASCADE')

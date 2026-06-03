@@ -18,9 +18,10 @@ import uuid
 from collections.abc import AsyncIterator
 
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.audit import AuditEntry
 from app.core.permissions import (
@@ -29,12 +30,12 @@ from app.core.permissions import (
     permission_registry,
     register_core_permissions,
 )
-from app.database import Base
 from app.dependencies import (
     get_current_user_payload,
     get_session,
 )
 from app.modules.admin.permissions_router import _build_matrix_payload, router
+from tests._pg import isolated_engine
 
 
 @pytest.fixture
@@ -112,9 +113,15 @@ class TestPermissionsMatrixPayload:
 # ── Edit-surface tests (PATCH + POST preset) ─────────────────────────────
 
 
-@pytest.fixture
-async def edit_app(fresh_registry, tmp_path):
-    """Mount the permissions router with an isolated SQLite + admin user."""
+@pytest_asyncio.fixture
+async def edit_app(fresh_registry):
+    """Mount the permissions router with a throwaway PostgreSQL DB + admin user.
+
+    The app under test opens its own sessions via the ``get_session`` override,
+    and the tests assert on the audit-log rows through a SEPARATE session, so the
+    two run on different connections that must see each other's commits - hence a
+    real throwaway database rather than a savepoint-rolled-back shared session.
+    """
     # Seed the clean registry with a couple of perms to mutate.
     fresh_registry.register_module_permissions(
         "projects",
@@ -126,29 +133,19 @@ async def edit_app(fresh_registry, tmp_path):
     )
     fresh_registry.register("permissions.admin", Role.ADMIN)
 
-    # Per-test SQLite so the audit-log table can hold inserts without
-    # touching the session-wide DB.
-    db_file = tmp_path / "perms-edit.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file.as_posix()}")
-    async with engine.begin() as conn:
-        # Create the audit-log table — that's the only schema this
-        # endpoint touches. Pulling in the whole Base.metadata is wasteful
-        # but safe with a fresh in-memory DB.
-        await conn.run_sync(Base.metadata.create_all)
-    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    async with isolated_engine() as engine:
+        sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    async def _override_session() -> AsyncIterator[AsyncSession]:
-        async with sessionmaker() as session:
-            yield session
-            await session.commit()
+        async def _override_session() -> AsyncIterator[AsyncSession]:
+            async with sessionmaker() as session:
+                yield session
+                await session.commit()
 
-    app = FastAPI()
-    app.include_router(router, prefix="/v1/admin")
-    app.dependency_overrides[get_session] = _override_session
+        app = FastAPI()
+        app.include_router(router, prefix="/v1/admin")
+        app.dependency_overrides[get_session] = _override_session
 
-    yield app, sessionmaker
-
-    await engine.dispose()
+        yield app, sessionmaker
 
 
 def _set_admin(app: FastAPI, role: str = "admin", user_id: str | None = None) -> None:

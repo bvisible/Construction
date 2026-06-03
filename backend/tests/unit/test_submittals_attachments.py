@@ -31,47 +31,37 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.audit_log import ActivityLog
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
     verify_project_access,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.submittals.models import Submittal
+from app.modules.projects.models import Project
 from app.modules.submittals.router import router as submittals_router
 from app.modules.submittals.schemas import SubmittalCreate, SubmittalUpdate
 from app.modules.submittals.service import SubmittalService
-from app.modules.users.models import APIKey, User
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    """Fresh in-memory SQLite with only the tables this suite needs."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Project.__table__,
-                ProjectWBS.__table__,
-                ProjectMilestone.__table__,
-                Submittal.__table__,
-                ActivityLog.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    """A session on the shared PostgreSQL unit database, wrapped in an outer
+    transaction that is rolled back on teardown.
+
+    The full schema is materialised once for the test session, so every table
+    this suite touches (users, projects, submittals, activity log) is already
+    present. The session's own ``commit()`` calls become savepoint releases:
+    committed rows are visible within the test (including to the app, which the
+    client tests hand this same session via ``dependency_overrides``) and are
+    undone afterward, keeping the database empty between tests.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, email: str | None = None) -> uuid.UUID:

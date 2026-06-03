@@ -14,27 +14,18 @@ Also verifies the negative assertions required by the audit spec:
   the data_snapshot is rendered.
 - A DACH (EUR) project's report must NOT contain the dollar sign (``$``).
 
-Scaffolding mirrors ``test_reporting_idor.py`` — per-module SQLite
-registered BEFORE any ``app`` import to keep the production database
-untouched.
+Scaffolding mirrors ``test_reporting_idor.py`` — runs against the
+PostgreSQL cluster provisioned by ``conftest`` before any ``app`` import,
+which binds the SQLAlchemy engine to PostgreSQL for the whole suite.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation ────────────────────────────────────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-reporting-currency-"))
-_TMP_DB = _TMP_DIR / "reporting_currency.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 

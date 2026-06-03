@@ -522,6 +522,10 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
+    # DROP TABLE ... CASCADE lets PostgreSQL remove each table's indexes,
+    # unique/PK constraints and any inbound FK constraints in one statement.
+    # Dropping a unique-constraint-backed index directly (the old per-index
+    # loop) raises DependentObjectsStillExist on PostgreSQL.
     for table in (
         _SESSION,
         _MAGIC,
@@ -531,10 +535,4 @@ def downgrade() -> None:
         _GRANT,
     ):
         if _has_table(inspector, table):
-            existing_ix = _existing_indexes(inspector, table)
-            for ix in list(existing_ix):
-                try:
-                    op.drop_index(ix, table_name=table)
-                except sa.exc.OperationalError:
-                    pass
-            op.drop_table(table)
+            op.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')

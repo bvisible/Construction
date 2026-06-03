@@ -5,18 +5,14 @@
 These exercise the group-operation methods that used to raise
 ``NotImplementedError("Phase A.5b")`` plus the RFQ wiring that replaced
 the "procurement integration pending" placeholder note. They run against
-a real (throwaway) SQLite DB seeded with a BIM model + elements, driving
-the service directly (the router merely forwards to these methods, so the
-service is the load-bearing surface).
+the conftest-provisioned PostgreSQL database seeded with a BIM model +
+elements, driving the service directly (the router merely forwards to
+these methods, so the service is the load-bearing surface).
 
 Consistency is the key invariant under test: after a split or merge the
 sum of element counts and quantities across the affected groups must
 equal what it was before, and the session must contain no orphaned or
 duplicated element ids.
-
-Test isolation: a per-module temp SQLite file declared BEFORE any
-``from app...`` import (per ``feedback_test_isolation.md``), matching
-``tests/integration/test_match_elements_api.py``.
 
 Run:
     cd backend
@@ -25,16 +21,7 @@ Run:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
-
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-me-groups-"))
-_TMP_DB = _TMP_DIR / "me_groups.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
@@ -54,12 +41,11 @@ from app.modules.match_elements.service import get_service  # noqa: E402
 
 @pytest_asyncio.fixture(scope="module", autouse=True)
 async def _create_schema():
-    """Create all tables on the throwaway SQLite DB.
+    """Create all tables on the conftest-provisioned PostgreSQL database.
 
     We deliberately do NOT boot the full app lifespan here - these tests
     drive the service layer directly (no HTTP, no auth dependency), so we
-    only need the schema. Skipping the lifespan also avoids spinning up
-    the embedded-Postgres supervisor on a run that uses SQLite.
+    only need the schema.
     """
     from app.config import get_settings
 

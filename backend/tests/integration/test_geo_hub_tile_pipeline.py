@@ -140,7 +140,63 @@ class TestBuildGltf:
         build = build_gltf_for_tile(_elements(5))
         tbl = build.gltf["extensions"]["EXT_structural_metadata"]["propertyTables"][0]
         assert tbl["count"] == 5
-        assert len(tbl["properties"]["din276"]["values"]) == 5
+        # EXT_structural_metadata stores values as a bufferView INDEX, not an
+        # inline array; that index must address a real buffer view. Inlining
+        # the array (the old bug) made Cesium abort the whole tile load.
+        din = tbl["properties"]["din276"]
+        assert isinstance(din["values"], int)
+        assert 0 <= din["values"] < len(build.gltf["bufferViews"])
+        # STRING properties also carry a UINT32 stringOffsets view.
+        assert isinstance(din["stringOffsets"], int)
+        # A numeric property points at a single values view, no offsets.
+        area = tbl["properties"]["area_m2"]
+        assert isinstance(area["values"], int)
+        assert "stringOffsets" not in area
+
+    def test_string_property_round_trips_from_binary(self):
+        """A STRING property must decode from its values + stringOffsets
+        buffer views exactly as Cesium reads it. A wrong encoding silently
+        breaks the entire tile load (no geometry renders)."""
+        build = build_gltf_for_tile(_elements(3))
+        blob = build.binary_blob
+        tbl = build.gltf["extensions"]["EXT_structural_metadata"]["propertyTables"][0]
+        prop = tbl["properties"]["element_id"]
+        bvs = build.gltf["bufferViews"]
+        vals_bv = bvs[prop["values"]]
+        offs_bv = bvs[prop["stringOffsets"]]
+        offsets = struct.unpack_from(
+            f"<{tbl['count'] + 1}I", blob, offs_bv["byteOffset"]
+        )
+        base = vals_bv["byteOffset"]
+        decoded = [
+            blob[base + offsets[i] : base + offsets[i + 1]].decode("utf-8")
+            for i in range(tbl["count"])
+        ]
+        assert decoded == ["elem_000", "elem_001", "elem_002"]
+
+    def test_float_property_round_trips_from_binary(self):
+        build = build_gltf_for_tile(_elements(2))
+        blob = build.binary_blob
+        tbl = build.gltf["extensions"]["EXT_structural_metadata"]["propertyTables"][0]
+        prop = tbl["properties"]["area_m2"]
+        bv = build.gltf["bufferViews"][prop["values"]]
+        floats = struct.unpack_from(f"<{tbl['count']}f", blob, bv["byteOffset"])
+        assert len(floats) == 2
+        assert all(f >= 0.0 for f in floats)
+
+    def test_metadata_buffer_views_have_no_target(self):
+        """EXT_structural_metadata views are not vertex/index data, so they
+        must omit the ARRAY/ELEMENT_ARRAY ``target`` hint."""
+        build = build_gltf_for_tile(_elements(4))
+        tbl = build.gltf["extensions"]["EXT_structural_metadata"]["propertyTables"][0]
+        bvs = build.gltf["bufferViews"]
+        meta_view_indices = set()
+        for prop in tbl["properties"].values():
+            meta_view_indices.add(prop["values"])
+            if "stringOffsets" in prop:
+                meta_view_indices.add(prop["stringOffsets"])
+        for i in meta_view_indices:
+            assert "target" not in bvs[i]
 
     def test_binary_blob_is_4_byte_aligned(self):
         build = build_gltf_for_tile(_elements(3))

@@ -11,9 +11,13 @@ Scope:
     * Illegal status transitions raise ValueError
     * Notification / variation-creation events captured via AsyncMock spy
 
-Uses a per-test in-memory SQLite via :func:`sqlalchemy.create_async_engine`
-so models exercise the real ORM. The QMS tables alone are created via
-``Base.metadata.create_all(tables=[...])`` to avoid cross-module FK noise.
+Each test runs against PostgreSQL via :func:`tests._pg.transactional_session`,
+which opens an outer transaction on the shared, fully-schema-loaded
+``oe_test_unit`` database and rolls it back on teardown. The session's own
+``commit()`` calls become savepoint releases, so committed data is visible
+within the test but undone afterwards - giving per-test isolation without any
+``create_all`` round-trip. PostgreSQL enforces foreign keys natively, so the
+escalation happy-path test inserts real User/Project/VariationOrder rows.
 """
 
 from __future__ import annotations
@@ -25,28 +29,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.projects.models import Project
-from app.modules.qms.models import (
-    QMSNCR,
-    ITPItem,
-    ITPPlan,
-    ITPTemplate,
-    QMSAudit,
-    QMSAuditFinding,
-    QMSAuditLog,
-    QMSCalibration,
-    QMSInspection,
-    QMSInspectionSignature,
-    QMSNCRAction,
-    QMSPunchItem,
-)
+from app.modules.qms.models import QMSNCRAction
 from app.modules.qms.schemas import (
     AuditCreate,
     AuditFindingCreate,
@@ -62,51 +48,22 @@ from app.modules.qms.schemas import (
 )
 from app.modules.qms.service import QMSService
 from app.modules.users.models import User
-from app.modules.variations.models import (
-    Notice,
-    VariationOrder,
-    VariationRequest,
-)
+from app.modules.variations.models import VariationOrder
+from tests._pg import transactional_session
 
 PROJECT_ID = uuid.uuid4()
-
-_QMS_TABLES = [
-    ITPPlan.__table__,
-    ITPItem.__table__,
-    ITPTemplate.__table__,
-    QMSInspection.__table__,
-    QMSInspectionSignature.__table__,
-    QMSNCR.__table__,
-    QMSNCRAction.__table__,
-    QMSPunchItem.__table__,
-    QMSAudit.__table__,
-    QMSAuditFinding.__table__,
-    QMSAuditLog.__table__,
-    QMSCalibration.__table__,
-    # Escalation links an NCR to an existing VariationOrder, so the order
-    # table (plus the request/notice tables it FK-references, and the
-    # user/project tables those reference) must exist for the escalate
-    # happy-path test. The process-wide SQLite engine listener turns
-    # ``PRAGMA foreign_keys=ON``, so a real Project row is required.
-    User.__table__,
-    Project.__table__,
-    Notice.__table__,
-    VariationRequest.__table__,
-    VariationOrder.__table__,
-]
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite session with QMS tables created."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_QMS_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    """Per-test PostgreSQL session inside a rolled-back outer transaction.
+
+    The full schema already exists on the shared ``oe_test_unit`` database, so
+    no table creation is needed. Everything done in the test is undone on
+    teardown, giving clean isolation. FKs are enforced natively by PostgreSQL.
+    """
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -511,7 +468,7 @@ async def test_escalate_ncr_publishes_event(svc: QMSService) -> None:
     fabricate one. The escalation links the NCR to that variation.
     """
     # A real owner + project so the VariationOrder FK is satisfied
-    # (the process-wide SQLite listener enables foreign_keys=ON).
+    # (PostgreSQL enforces foreign keys natively).
     owner = User(email=f"u{uuid.uuid4().hex[:6]}@test.com", hashed_password="x")
     svc.session.add(owner)
     await svc.session.flush()

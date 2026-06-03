@@ -19,28 +19,18 @@ Covers the 14 endpoints of the minimum compliance profile mounted at
     GET    .../viewpoints/{vp}/snapshot
     GET    /current-user
 
-Per ``feedback_test_isolation.md`` we point ``DATABASE_URL`` at a fresh
-temp SQLite *before* importing any ``app`` module.
+The engine is bound to the conftest-provisioned PostgreSQL cluster before
+any ``app`` module is imported.
 """
 
 from __future__ import annotations
 
 import base64
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-bcf-opencde-routes-"))
-_TMP_DB = _TMP_DIR / "bcf_opencde_routes.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # 1x1 transparent PNG.
 _PNG_BYTES = (

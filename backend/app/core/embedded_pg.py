@@ -2,10 +2,9 @@
 
 Boots a PostgreSQL 16 cluster from the ``pixeltable-pgserver`` wheel (bundled PG
 binaries) and points the app's ``DATABASE_URL`` / ``DATABASE_SYNC_URL`` at it, so
-the whole app runs on PostgreSQL with zero external setup. Opt-in only:
-
-* ``openconstructionerp serve --embedded-pg``  (sets ``OE_USE_EMBEDDED_PG=1``), or
-* ``OE_USE_EMBEDDED_PG=1`` in the environment (honoured by every CLI command).
+the whole app runs on PostgreSQL with zero external setup. This is the default
+runtime; the operator opts out only by supplying an external ``DATABASE_URL`` or
+setting ``OE_USE_EMBEDDED_PG`` to a falsy value (see :func:`is_requested`).
 
 The cluster's data directory is ``<data_dir>/pgdata`` so it survives restarts.
 On first boot ``initdb`` runs once (a few seconds); subsequent boots attach to the
@@ -42,17 +41,15 @@ _FALSY = {"0", "false", "no", "off"}
 def is_requested() -> bool:
     """True when the app should run on the embedded PostgreSQL cluster.
 
-    As of v6.0.0 embedded PostgreSQL is the **default** runtime — a fresh
+    Embedded PostgreSQL is the **default** runtime — a fresh
     ``openconstructionerp serve`` boots a real in-process PG16 (no Docker). The
-    operator opts out in any of three ways, checked in order:
+    operator opts out in either of two ways, checked in order:
 
-    * ``OE_USE_SQLITE`` truthy — keep the legacy single-file SQLite database
-      (the documented escape hatch while PostgreSQL is proven in production);
     * an explicit ``DATABASE_URL`` in the environment — "use my own database",
       so we never override it with an embedded cluster;
     * ``OE_USE_EMBEDDED_PG`` set to a falsy value (``0``/``false``/``no``/``off``)
-      — explicit opt-out without switching to SQLite (e.g. an external PG set
-      via ``DATABASE_URL`` is also covered by the rule above).
+      — explicit opt-out (typically paired with an external PG set via
+      ``DATABASE_URL``, which is also covered by the rule above).
 
     Otherwise (the default, and any truthy ``OE_USE_EMBEDDED_PG``) it returns
     ``True``. An explicit truthy ``OE_USE_EMBEDDED_PG`` wins over an ambient
@@ -60,8 +57,6 @@ def is_requested() -> bool:
     the clearer intent).
     """
     explicit = os.environ.get("OE_USE_EMBEDDED_PG", "").strip().lower()
-    if os.environ.get("OE_USE_SQLITE", "").strip().lower() in _TRUTHY:
-        return False
     if explicit in _TRUTHY:
         return True
     if os.environ.get("DATABASE_URL", "").strip():
@@ -80,8 +75,9 @@ def boot(data_dir: Path | str) -> bool:
     """Boot embedded PostgreSQL and point DATABASE_URL/DATABASE_SYNC_URL at it.
 
     Idempotent (a second call is a no-op once running). Never raises: on any
-    failure it logs and returns ``False``, leaving the existing (SQLite) URLs in
-    place so the app can still come up. Returns ``True`` on success.
+    failure it logs and returns ``False``. There is no SQLite fallback, so a
+    ``False`` here is fatal at the CLI layer (``_setup_env`` exits with an
+    actionable message). Returns ``True`` on success.
     """
     global _server
     if _server is not None:

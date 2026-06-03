@@ -103,7 +103,7 @@ class _StubSession:
     ``apply_winner`` reaches for ``session.get(Position, uuid)`` to read
     the position and ``session.execute(update(...))`` to write it back.
     Both are stubbed against an in-memory position store so the test
-    can assert on the final rates without standing up SQLite.
+    can assert on the final rates without standing up a database.
     """
 
     def __init__(self) -> None:

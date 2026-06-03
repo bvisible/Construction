@@ -35,16 +35,15 @@ pytest.importorskip("simpleeval", reason="simpleeval is not in the [dev] install
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Register EAC tables with Base.metadata.
 import app.modules.eac.models  # noqa: F401
-from app.database import Base
 from app.main import create_app
 from app.modules.eac.engine import api as engine_api
 from app.modules.eac.engine.runner import run_ruleset
 from app.modules.eac.models import EacRule, EacRuleset, EacRun
+from tests._pg import transactional_session
 
 # ── HTTP client / auth fixtures ────────────────────────────────────────
 
@@ -108,27 +107,14 @@ async def auth_headers(client):
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """In-memory SQLite session for engine-API tests that bypass HTTP."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    """PostgreSQL session for engine-API tests that bypass HTTP.
 
-    @event.listens_for(engine.sync_engine, "connect")
-    def _enable_sqlite_fks(dbapi_conn, _conn_record) -> None:  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as sess:
-        try:
-            yield sess
-        finally:
-            await sess.close()
-    await engine.dispose()
+    Runs inside an outer transaction on the shared ``oe_test_unit`` database
+    that is rolled back on teardown, so each test starts from an empty schema.
+    Foreign keys are enforced natively by PostgreSQL.
+    """
+    async with transactional_session() as sess:
+        yield sess
 
 
 # ── Sample data ────────────────────────────────────────────────────────

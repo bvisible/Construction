@@ -111,6 +111,13 @@ class _StubBudgetRepo:
     async def aggregate_by_project(self, project_id: uuid.UUID) -> dict[str, str]:
         return dict(self._aggregate)
 
+    async def distinct_currencies(self, project_id: uuid.UUID) -> set[str]:
+        return {
+            (getattr(r, "currency", "") or "").strip().upper()
+            for r in self.rows.values()
+            if r.project_id == project_id and (getattr(r, "currency", "") or "").strip()
+        }
+
     async def aggregate_by_category(self, project_id: uuid.UUID) -> list[dict[str, str]]:
         return list(self._by_category)
 

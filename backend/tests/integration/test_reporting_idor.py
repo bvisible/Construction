@@ -30,27 +30,18 @@ Coverage
 * ``GET /templates/scheduled/`` — list-leak vector. Pre-fix the router
   returned every scheduled template regardless of ownership.
 
-Test scaffolding mirrors ``test_tenant_isolation.py``: per-module temp
-SQLite, registered before any ``from app...`` import (see
-``feedback_test_isolation.md``).
+Test scaffolding mirrors ``test_tenant_isolation.py``: the shared
+PostgreSQL engine is provisioned by ``conftest.py`` before any
+``from app...`` import (see ``feedback_test_isolation.md``).
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-reporting-idor-"))
-_TMP_DB = _TMP_DIR / "reporting_idor.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 

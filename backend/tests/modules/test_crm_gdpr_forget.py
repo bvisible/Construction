@@ -24,17 +24,9 @@ loop so module-level state stays predictable.
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
 import uuid as _uuid
-from pathlib import Path
 
 import pytest
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-crm-forget-"))
-_TMP_DB = _TMP_DIR / "crm.db"
-os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}")
-os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{_TMP_DB.as_posix()}")
 
 import app.modules.crm.models  # noqa: E402,F401
 import app.modules.projects.models  # noqa: E402,F401

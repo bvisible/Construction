@@ -47,9 +47,16 @@ import numpy as np
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.events import event_bus
 from app.modules.bcf.bcf_xml import BCFParseError, parse_bcfzip
 from app.modules.bcf.schemas import PerspectiveCamera, TopicCreate, Vec3, ViewpointCreate
 from app.modules.bcf.service import BCFService
+from app.modules.clash.events import (
+    CLASH_HIGH_SEVERITY_DETECTED,
+    HIGH_SEVERITIES,
+    TRIGGER_CONFIRMED,
+    TRIGGER_CREATED,
+)
 from app.modules.clash.models import (
     ClashCluster,
     ClashIssue,
@@ -93,6 +100,12 @@ _EPS = 1e-9
 # Sentinel for "caller did not pass a precomputed value" — distinct from
 # ``None`` which legitimately means "this element has no usable mesh".
 _UNSET: object = object()
+
+# Statuses that mean a human has confirmed the clash is a real, accepted
+# interference worth coordinating (as opposed to ``new`` / ``active`` which
+# are pre-triage, or ``ignored`` which is a false positive). Moving a
+# high/critical clash into one of these fires the high-severity event.
+_CONFIRMED_CLASH_STATUSES: frozenset[str] = frozenset({"reviewed", "approved"})
 
 
 def _now() -> datetime:
@@ -1526,6 +1539,19 @@ class ClashService:
             run.error = f"{type(exc).__name__}: {exc}"[:2000]
             run.completed_at = _now()
         await self.session.flush()
+        # Fan a high-severity alert out per critical/high clash so the run
+        # owner learns about serious interferences without polling. Detached
+        # so the publish never blocks the synchronous run response; the
+        # helper itself filters out non-high severities.
+        if run.status == "completed":
+            for clash in results:
+                self._publish_high_severity(
+                    clash,
+                    project_id=project_id,
+                    run_id=run.id,
+                    trigger=TRIGGER_CREATED,
+                    actor=str(user_id),
+                )
         return run
 
     async def _load_geometry(self, model_ids: list[uuid.UUID]) -> dict[str, object]:
@@ -2976,6 +3002,44 @@ class ClashService:
             i = end + 5
         return out
 
+    def _publish_high_severity(
+        self,
+        result: ClashResult,
+        *,
+        project_id: uuid.UUID,
+        run_id: uuid.UUID,
+        trigger: str,
+        actor: str | None,
+    ) -> None:
+        """Emit ``clash.high_severity.detected`` for a high/critical clash.
+
+        Fire-and-forget via :meth:`EventBus.publish_detached` so the
+        request commits (and releases the writer lock) before the
+        notifications subscriber opens its own session. Only ``critical``
+        and ``high`` severities publish; everything else is a no-op so
+        subscribers are never spammed with routine clashes.
+        """
+        severity = str(getattr(result, "severity", "") or "").lower()
+        if severity not in HIGH_SEVERITIES:
+            return
+        event_bus.publish_detached(
+            CLASH_HIGH_SEVERITY_DETECTED,
+            {
+                "project_id": str(project_id),
+                "run_id": str(run_id),
+                "result_id": str(result.id),
+                "severity": severity,
+                "trigger": trigger,
+                "clash_type": result.clash_type,
+                "a_name": result.a_name,
+                "b_name": result.b_name,
+                "assigned_to": str(result.assigned_to) if result.assigned_to else "",
+                "watchers": [str(w) for w in (result.watchers or []) if w],
+                "actor": str(actor) if actor else "",
+            },
+            source_module="clash",
+        )
+
     async def _notify(
         self,
         recipients: list[str],
@@ -3159,6 +3223,23 @@ class ClashService:
                         "b_name": result.b_name,
                     },
                 )
+
+        # ── High-severity confirmation alert ──────────────────────────
+        # A clash is "confirmed" when a human moves it into a review state
+        # (reviewed / approved) or raises its severity into the high band.
+        # Publish the cross-module event in both cases so notifications can
+        # alert the relevant users. ``_publish_high_severity`` no-ops when
+        # the current severity is not critical/high.
+        confirmed_status = "status" in changed_fields and result.status in _CONFIRMED_CLASH_STATUSES
+        raised_severity = "severity" in changed_fields
+        if confirmed_status or raised_severity:
+            self._publish_high_severity(
+                result,
+                project_id=project_id,
+                run_id=run_id,
+                trigger=TRIGGER_CONFIRMED,
+                actor=actor_id,
+            )
         return result
 
     async def bulk_update_results(

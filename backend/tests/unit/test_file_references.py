@@ -20,13 +20,8 @@ import uuid
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.documents.models import Document  # noqa: F401 — registers ORM
 from app.modules.file_references.models import (  # noqa: F401 — registers ORM
     FileNamingViolation,
@@ -45,18 +40,19 @@ from app.modules.file_references.service import (
 )
 from app.modules.projects.models import Project  # noqa: F401 — registers ORM
 from app.modules.users.models import User  # noqa: F401 — registers ORM
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test in-memory SQLite with full schema applied."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    """Per-test PostgreSQL session inside an outer transaction.
+
+    Runs against the shared ``oe_test_unit`` database (full schema, no
+    ``create_all`` needed). The outer transaction is rolled back on teardown,
+    so every test starts from an empty database.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _seed_user(session: AsyncSession) -> User:
@@ -309,13 +305,17 @@ async def test_create_reference_and_list_by_target_and_file(
     assert created.relation == "references"
 
     # By file ─ Returns the RFI link.
-    by_file, total = await list_references_for_file(session, file_kind="document", file_id=file_id)
+    by_file, total = await list_references_for_file(
+        session, project_id=project.id, file_kind="document", file_id=file_id
+    )
     assert total == 1
     assert by_file[0].target_type == "rfi"
     assert by_file[0].target_id == rfi_id
 
     # By target — same row, viewed from the other end.
-    by_target, total_t = await list_files_for_target(session, target_type="rfi", target_id=rfi_id)
+    by_target, total_t = await list_files_for_target(
+        session, project_id=project.id, target_type="rfi", target_id=rfi_id
+    )
     assert total_t == 1
     assert by_target[0].file_kind == "document"
     assert by_target[0].file_id == file_id
@@ -361,13 +361,13 @@ async def test_delete_reference_removes_link(session: AsyncSession) -> None:
         actor_id=user.id,
     )
 
-    ok = await delete_reference(session, created.id)
+    ok = await delete_reference(session, created.id, project_id=project.id)
     assert ok is True
 
-    items, total = await list_files_for_target(session, target_type="rfi", target_id=rfi_id)
+    items, total = await list_files_for_target(session, project_id=project.id, target_type="rfi", target_id=rfi_id)
     assert total == 0
     assert items == []
 
     # Idempotent failure mode — second delete is False, not an error.
-    again = await delete_reference(session, created.id)
+    again = await delete_reference(session, created.id, project_id=project.id)
     assert again is False

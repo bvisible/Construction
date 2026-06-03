@@ -19,87 +19,30 @@ Covers:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-# ── Per-module SQLite isolation — MUST run before app imports ────────────
+import pytest
+import pytest_asyncio
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-qms-ncr-"))
-_TMP_DB = _TMP_DIR / "qms_ncr.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.database import Base  # noqa: E402
-from app.dependencies import (  # noqa: E402
+from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS  # noqa: E402
-from app.modules.qms.models import (  # noqa: E402
-    QMSNCR,
-    ITPItem,
-    ITPPlan,
-    ITPTemplate,
-    QMSAudit,
-    QMSAuditFinding,
-    QMSAuditLog,
-    QMSCalibration,
-    QMSInspection,
-    QMSInspectionSignature,
-    QMSNCRAction,
-    QMSPunchItem,
-)
-from app.modules.qms.router import router as qms_router  # noqa: E402
-from app.modules.qms.schemas import NCRActionCreate, NCRCreate, NCRUpdate  # noqa: E402
-from app.modules.qms.service import QMSService  # noqa: E402
-from app.modules.users.models import APIKey, User  # noqa: E402
-from app.modules.variations.models import (  # noqa: E402
-    Notice,
-    VariationOrder,
-    VariationRequest,
-)
-
-_ALL_TABLES = [
-    User.__table__,
-    APIKey.__table__,
-    Project.__table__,
-    ProjectWBS.__table__,
-    ProjectMilestone.__table__,
-    ITPPlan.__table__,
-    ITPItem.__table__,
-    ITPTemplate.__table__,
-    QMSInspection.__table__,
-    QMSInspectionSignature.__table__,
-    QMSNCR.__table__,
-    QMSNCRAction.__table__,
-    QMSPunchItem.__table__,
-    QMSAudit.__table__,
-    QMSAuditFinding.__table__,
-    QMSAuditLog.__table__,
-    QMSCalibration.__table__,
-    # Escalation links an NCR to an existing VariationOrder (plus the
-    # request/notice tables it FK-references).
-    Notice.__table__,
-    VariationRequest.__table__,
-    VariationOrder.__table__,
-]
+from app.modules.projects.models import Project
+from app.modules.qms.router import router as qms_router
+from app.modules.qms.schemas import NCRActionCreate, NCRCreate, NCRUpdate
+from app.modules.qms.service import QMSService
+from app.modules.users.models import User
+from app.modules.variations.models import VariationOrder
+from tests._pg import transactional_session
 
 _PROJECT_ID = uuid.uuid4()
 
@@ -109,14 +52,12 @@ _PROJECT_ID = uuid.uuid4()
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_ALL_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    # PostgreSQL isolation: each test runs inside an outer transaction that is
+    # rolled back on teardown. The session's own commit() becomes a SAVEPOINT
+    # release, so committed data is visible within the test (and to the app when
+    # this same session is injected via dependency_overrides) but undone after.
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -346,7 +287,7 @@ async def test_ncr_escalation_publishes_decimal_as_string(
     fabricates one).
     """
     # A real owner + project so the VariationOrder FK is satisfied
-    # (the process-wide SQLite listener enables foreign_keys=ON).
+    # (PostgreSQL enforces foreign keys natively).
     owner = User(email=f"u{uuid.uuid4().hex[:6]}@test.com", hashed_password="x")
     svc.session.add(owner)
     await svc.session.flush()

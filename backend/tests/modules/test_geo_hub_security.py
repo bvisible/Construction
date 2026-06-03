@@ -37,32 +37,18 @@ file pins down the R7 sweep over the **rest** of the Geo Hub surface:
 
 The fixtures here are deliberately self-contained (do NOT import from
 ``tests/modules/geo_hub/conftest.py``) so this file runs cleanly under
-``pytest tests/modules/test_geo_hub_security.py`` without the parent
-package's per-module SQLite isolation.
+``pytest tests/modules/test_geo_hub_security.py`` on the PostgreSQL
+cluster that ``conftest.py`` provisions and binds before any test
+module is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# Per-module SQLite isolation MUST be set BEFORE any ``app.*`` import.
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-geo-r7-"))
-_TMP_DB = _TMP_DIR / "geo_r7.db"
-os.environ.setdefault(
-    "DATABASE_URL",
-    f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}",
-)
-os.environ.setdefault(
-    "DATABASE_SYNC_URL",
-    f"sqlite:///{_TMP_DB.as_posix()}",
-)
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── App / client / auth fixtures ─────────────────────────────────────────
 

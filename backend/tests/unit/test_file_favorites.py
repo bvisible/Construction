@@ -2,64 +2,36 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Tests for the file-favourites module (W11 — file-manager cluster).
 
-Covers the service layer end-to-end against a temp SQLite so the dead-
-code follow-up that re-introduced router + service has at least one
-regression net before it gets composed into the dashboard.
+Covers the service layer end-to-end against a transaction-isolated
+PostgreSQL session so the dead-code follow-up that re-introduced router +
+service has at least one regression net before it gets composed into the
+dashboard.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-file-favorites-"))
-_TMP_DB = _TMP_DIR / "favorites.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.database import Base  # noqa: E402
-from app.modules.file_favorites.models import FileFavorite  # noqa: E402
-from app.modules.file_favorites.service import (  # noqa: E402
+from app.modules.file_favorites.service import (
     get_favorite,
     list_favorites,
     toggle_favorite,
     unstar,
 )
-from app.modules.projects.models import Project  # noqa: E402
-from app.modules.users.models import User  # noqa: E402
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncSession:
-    db_path = _TMP_DIR / f"fv-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path.as_posix()}",
-        echo=False,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                Project.__table__,
-                FileFavorite.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as session:
-        yield session
-    await engine.dispose()
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
+        yield s
 
 
 async def _seed(session) -> tuple[uuid.UUID, uuid.UUID]:

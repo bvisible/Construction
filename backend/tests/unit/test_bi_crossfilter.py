@@ -24,37 +24,22 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """In-memory SQLite session with the bi_dashboards tables only."""
-    from app.modules.bi_dashboards import models as _m
+    """PostgreSQL session wrapped in an outer transaction.
 
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        echo=False,
-    )
-    tables = [
-        _m.KPIDefinition.__table__,
-        _m.Dashboard.__table__,
-        _m.DashboardWidget.__table__,
-        _m.DashboardWidgetSnapshot.__table__,
-        _m.KPIValue.__table__,
-    ]
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=tables)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as s:
+    The shared ``oe_test_unit`` database already carries the full schema
+    (including the bi_dashboards tables), so no create_all is needed. The
+    outer transaction is rolled back on teardown, giving each test a clean
+    slate while keeping the test's own commits visible as savepoints.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 class _ComputeSpy:

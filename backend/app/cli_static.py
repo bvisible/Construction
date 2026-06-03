@@ -9,6 +9,7 @@ Frontend is found in two locations (checked in order):
 """
 
 import logging
+import mimetypes
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -17,6 +18,30 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, Response
 
 logger = logging.getLogger(__name__)
+
+# Pin JavaScript-family MIME types at import time.
+#
+# Both ``StaticFiles`` (the ``/assets`` mount) and ``FileResponse`` (the root
+# SPA fallback) derive ``Content-Type`` from the stdlib ``mimetypes`` table.
+# That table is seeded from the host OS, and on a fresh wheel install it does
+# NOT reliably contain ``.mjs`` (Python only added it to the bundled table in
+# recent 3.x point releases), while the Windows registry has historically
+# mapped ``.js`` to ``text/plain``.  When the worker chunk
+# ``/assets/pdf.worker.min-<hash>.mjs`` is then served as ``text/plain`` or
+# ``application/octet-stream`` the browser refuses the module import and
+# pdf.js fails with "Setting up fake worker failed: Failed to fetch
+# dynamically imported module" on /takeoff.  Registering the types here makes
+# every served build deterministic regardless of the host's registry state.
+# Same root cause as the earlier Vite-PWA ``sw.js`` / ``registerSW.js`` fix.
+for _suffix, _mime in (
+    (".js", "text/javascript"),
+    (".mjs", "text/javascript"),
+    (".css", "text/css"),
+    (".wasm", "application/wasm"),
+    (".json", "application/json"),
+    (".svg", "image/svg+xml"),
+):
+    mimetypes.add_type(_mime, _suffix)
 
 
 def get_frontend_dir() -> Path:

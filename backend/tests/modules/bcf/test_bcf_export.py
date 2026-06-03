@@ -1,11 +1,11 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 """Integration tests for the BCF 3.0 clash-export endpoint.
 
-Per ``feedback_test_isolation.md`` every test points
-``DATABASE_URL`` at a fresh temp SQLite *before* importing any ``app``
-module. The fixture seeds the schema, creates a project, then writes
-``ClashRun`` + ``ClashResult`` rows directly so the test is independent
-of the clash engine.
+The test suite runs against the PostgreSQL cluster provisioned by
+``tests/conftest.py`` (the engine is already bound to PostgreSQL before
+this module imports). The fixture seeds the schema, creates a project,
+then writes ``ClashRun`` + ``ClashResult`` rows directly so the test is
+independent of the clash engine.
 
 The endpoint under test:
 
@@ -26,23 +26,13 @@ The test suite exercises:
 from __future__ import annotations
 
 import io
-import os
-import tempfile
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-bcf-export-"))
-_TMP_DB = _TMP_DIR / "bcf_export.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── App / auth / project fixtures ─────────────────────────────────────────
 

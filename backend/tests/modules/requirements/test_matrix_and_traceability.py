@@ -19,7 +19,8 @@ Scope:
     5. Requirements upload endpoint — magic-byte gate for Excel (.xlsx)
        and CSV (no magic-byte required, but content-type check).
 
-Pattern: in-memory SQLite + pytest-asyncio, no Alembic migration.
+Pattern: PostgreSQL transaction-isolated session + pytest-asyncio, no Alembic
+migration (the shared test database carries the full schema).
 """
 
 from __future__ import annotations
@@ -33,17 +34,11 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Ensure FK targets are in metadata.
 import app.modules.boq.models  # noqa: F401
 import app.modules.projects.models  # noqa: F401
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
@@ -58,36 +53,32 @@ from app.modules.requirements.models import (
 )
 from app.modules.requirements.service import RequirementsService
 from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """In-memory SQLite session with FK enforcement OFF (avoids cross-module FK pain)."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA foreign_keys=OFF"))
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
-        await s.execute(text("PRAGMA foreign_keys=OFF"))
+    """PostgreSQL session in a rolled-back transaction, FK enforcement OFF.
+
+    Foreign keys are disabled (``session_replication_role = replica``) so the
+    tests can insert requirement rows under synthetic ``project_id`` UUIDs that
+    have no backing Project row, avoiding cross-module FK pain.
+    """
+    async with transactional_session(disable_fks=True) as s:
         yield s
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator[AsyncSession]:
-    """Full schema session (FK OFF) — used for router tests needing User/Project tables."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA foreign_keys=OFF"))
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
-        await s.execute(text("PRAGMA foreign_keys=OFF"))
+    """PostgreSQL session (FK OFF) — used for router tests needing User/Project tables.
+
+    Runs inside an outer transaction that is rolled back on teardown, so each
+    test starts from an empty database.
+    """
+    async with transactional_session(disable_fks=True) as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, email: str | None = None) -> uuid.UUID:

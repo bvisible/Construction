@@ -123,10 +123,39 @@ class WorkflowService:
         self.workflows = WorkflowRepository(session)
         self.requests = ApprovalRequestRepository(session)
 
+    async def _verify_workflow_project_access(
+        self,
+        workflow: ApprovalWorkflow,
+        user_id: str,
+    ) -> None:
+        """Enforce project-scoped access for a workflow's owning project.
+
+        ``ApprovalWorkflow.project_id`` is nullable: global / template
+        workflows have no project and stay open to any authenticated
+        caller (the router still gates them by RBAC permission). When a
+        project is set, delegate to the shared ``verify_project_access``
+        helper, which raises 404 on both "missing" and "denied" so a
+        cross-project caller cannot learn the project exists.
+        """
+        if workflow.project_id is None:
+            return
+        # Deferred import keeps this module light at import time and avoids
+        # a circular import with app.dependencies.
+        from app.dependencies import verify_project_access
+
+        await verify_project_access(workflow.project_id, str(user_id), self.session)
+
     # ── Workflows ───────────────────────────────────────────────────────────
 
-    async def create_workflow(self, data: WorkflowCreate) -> ApprovalWorkflow:
+    async def create_workflow(self, data: WorkflowCreate, user_id: str) -> ApprovalWorkflow:
         """‌⁠‍Create a new approval workflow definition."""
+        # Project-scope (IDOR) gate: a caller may only attach a workflow to
+        # a project they can access. Global / template workflows (no
+        # project_id) are allowed for any authenticated caller.
+        if data.project_id is not None:
+            from app.dependencies import verify_project_access
+
+            await verify_project_access(data.project_id, str(user_id), self.session)
         _validate_steps(data.steps)
         workflow = ApprovalWorkflow(
             project_id=data.project_id,
@@ -173,9 +202,11 @@ class WorkflowService:
         self,
         workflow_id: uuid.UUID,
         data: WorkflowUpdate,
+        user_id: str,
     ) -> ApprovalWorkflow:
         """Update workflow fields."""
-        await self.get_workflow(workflow_id)  # 404 check
+        workflow = await self.get_workflow(workflow_id)  # 404 check
+        await self._verify_workflow_project_access(workflow, user_id)
 
         fields = data.model_dump(exclude_unset=True)
         if "steps" in fields:
@@ -195,9 +226,10 @@ class WorkflowService:
         logger.info("Workflow updated: %s", workflow_id)
         return updated
 
-    async def delete_workflow(self, workflow_id: uuid.UUID) -> None:
+    async def delete_workflow(self, workflow_id: uuid.UUID, user_id: str) -> None:
         """Delete a workflow and its requests."""
-        await self.get_workflow(workflow_id)  # 404 check
+        workflow = await self.get_workflow(workflow_id)  # 404 check
+        await self._verify_workflow_project_access(workflow, user_id)
         await self.workflows.delete(workflow_id)
         logger.info("Workflow deleted: %s", workflow_id)
 
@@ -209,7 +241,8 @@ class WorkflowService:
         user_id: str,
     ) -> ApprovalRequest:
         """Submit an entity for approval against a workflow."""
-        await self.get_workflow(data.workflow_id)  # 404 check
+        workflow = await self.get_workflow(data.workflow_id)  # 404 check
+        await self._verify_workflow_project_access(workflow, user_id)
 
         request = ApprovalRequest(
             workflow_id=data.workflow_id,
@@ -366,6 +399,7 @@ class WorkflowService:
 
         # Load workflow to check total steps
         workflow = await self.get_workflow(request.workflow_id)
+        await self._verify_workflow_project_access(workflow, user_id)
         total_steps = len(workflow.steps) if workflow.steps else 1
         current_step = request.current_step
 
@@ -434,6 +468,7 @@ class WorkflowService:
             )
 
         workflow = await self.get_workflow(request.workflow_id)
+        await self._verify_workflow_project_access(workflow, user_id)
         await self._require_step_role(workflow.steps, request.current_step, user_id)
 
         new_metadata = self._append_audit(
@@ -476,6 +511,13 @@ class WorkflowService:
         from app.modules.users.models import User as _UserModel
 
         request = await self.get_request(request_id)
+
+        # Project-scope (IDOR) gate before any ownership / status logic so a
+        # caller outside the workflow's project gets a 404 and never learns
+        # the request exists.
+        workflow = await self.get_workflow(request.workflow_id)
+        await self._verify_workflow_project_access(workflow, user_id)
+
         if request.status != "pending":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

@@ -30,6 +30,43 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # entity, never an opening bracket.
 _HTML_TAG_RE = re.compile(r"<[^>]*>")
 
+# ── ISO 4217 currency shape guard ─────────────────────────────────────────
+#
+# Reports stamp a resolved ISO 4217 currency onto the generated row and into
+# the ``data_snapshot`` so every money figure reads in a single, explicit
+# currency (the platform never blends currencies). The caller-supplied
+# ``override_currency`` is the highest-priority source in that resolution
+# chain, so it must be a well-formed 3-letter code before it can win.
+#
+# Soft shape check (3 uppercase letters), not a closed ISO-4217 enum — this
+# mirrors ``app.modules.projects.schemas._normalise_currency``: OpenEstimate
+# is a global product and we do not want to reject a valid but obscure code
+# just because it is not on a hand-maintained list. A 4-letter code such as
+# ``"EURO"`` or a 2-letter code is still rejected with HTTP 422.
+_CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def _normalise_override_currency(value: str | None) -> str | None:
+    """Normalise / validate a caller-supplied ISO 4217 override.
+
+    ``None`` / empty → ``None`` (inherit from project, then EUR fallback).
+    A non-empty value is stripped, upper-cased, and shape-checked against
+    ``^[A-Z]{3}$``. Anything that is not a 3-letter code raises
+    ``ValueError`` so FastAPI surfaces it as HTTP 422 before the handler
+    touches the database.
+    """
+    if value is None:
+        return None
+    code = value.strip().upper()
+    if not code:
+        return None
+    if not _CURRENCY_CODE_RE.match(code):
+        raise ValueError(
+            f"override_currency: '{value}' is not a 3-letter ISO 4217 currency code "
+            "(e.g. EUR, USD, GBP, JPY). Leave empty to inherit the project currency."
+        )
+    return code
+
 
 def _strip_html(value: str) -> str:
     """Return *value* with HTML tags removed and ``<>&`` HTML-escaped.
@@ -206,11 +243,26 @@ class GenerateReportRequest(BaseModel):
     )
     data_snapshot: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    override_currency: str | None = Field(
+        default=None,
+        max_length=10,
+        description=(
+            "ISO 4217 currency code (e.g. EUR, USD, GBP). When set it wins over "
+            "the project's currency for this report. Leave empty to inherit the "
+            "project currency (then the EUR fallback)."
+        ),
+        examples=["USD"],
+    )
 
     @field_validator("title")
     @classmethod
     def _sanitize_title(cls, v: str) -> str:
         return _strip_html(v)
+
+    @field_validator("override_currency", mode="after")
+    @classmethod
+    def _normalise_override_currency(cls, v: str | None) -> str | None:
+        return _normalise_override_currency(v)
 
 
 class GeneratedReportResponse(BaseModel):
@@ -227,6 +279,7 @@ class GeneratedReportResponse(BaseModel):
     generated_by: UUID | None = None
     format: str = "pdf"
     storage_key: str | None = None
+    currency: str | None = None
     data_snapshot: dict[str, Any] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict, validation_alias="metadata_")
     created_at: datetime

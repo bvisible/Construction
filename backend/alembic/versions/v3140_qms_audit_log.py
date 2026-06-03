@@ -115,6 +115,11 @@ def downgrade() -> None:
     if not _has_table(inspector, _TABLE):
         return
 
+    # ``if_exists`` keeps each drop idempotent without a try/except that
+    # swallows the error. On PostgreSQL a failed ``DROP INDEX`` (e.g. an
+    # index that create_all never made) aborts the whole transaction, so a
+    # caught-and-ignored failure would poison every later statement,
+    # including the ``drop_table`` below.
     for idx in (
         "ix_qms_audit_log_tenant_created",
         "ix_qms_audit_log_entity",
@@ -122,8 +127,5 @@ def downgrade() -> None:
         f"ix_{_TABLE}_entity_type",
         f"ix_{_TABLE}_tenant_id",
     ):
-        try:
-            op.drop_index(idx, table_name=_TABLE)
-        except Exception:  # noqa: BLE001 — idempotent drop
-            pass
+        op.drop_index(idx, table_name=_TABLE, if_exists=True)
     op.drop_table(_TABLE)

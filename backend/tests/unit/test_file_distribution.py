@@ -18,81 +18,44 @@ Covers both sub-features:
     (mocked via a service-level patch)
   - empty / whitespace query → no hits, never raises
 
-Like ``test_file_saved_views.py``, we build only the tables this
-suite needs against a per-test temp SQLite so the mapper-init flake
-that hits suites going through ``create_app`` + module-loader does
-not apply here.
+Each test runs against a transaction-isolated PostgreSQL session from
+``tests._pg.transactional_session`` (the full schema is materialised once
+per session and every test is rolled back on teardown).
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-file-dist-"))
-_TMP_DB = _TMP_DIR / "file_distribution.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
+import pytest
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.database import Base  # noqa: E402
-from app.modules.documents.models import Document  # noqa: E402
-from app.modules.file_distribution.models import (  # noqa: E402
-    FileDistributionList,
-    FileDistributionMember,
-    FileDistributionSubscription,
-)
-from app.modules.file_distribution.schemas import (  # noqa: E402
+from app.modules.documents.models import Document
+from app.modules.file_distribution.schemas import (
     DistributionListCreate,
     DistributionMemberCreate,
     SubscriptionCreate,
 )
-from app.modules.file_distribution.service import (  # noqa: E402
+from app.modules.file_distribution.service import (
     CrossProjectSearchService,
     DistributionConflictError,
     DistributionListService,
     DistributionValidationError,
     SubscriptionService,
 )
-from app.modules.projects.models import Project  # noqa: E402
-from app.modules.users.models import User  # noqa: E402
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── DB fixture ─────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncSession:
-    db_path = _TMP_DIR / f"dist-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path.as_posix()}",
-        echo=False,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                Project.__table__,
-                Document.__table__,
-                FileDistributionList.__table__,
-                FileDistributionMember.__table__,
-                FileDistributionSubscription.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as session:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as session:
         yield session
-    await engine.dispose()
 
 
 async def _seed_user_and_project(

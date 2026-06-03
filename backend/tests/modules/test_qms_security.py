@@ -48,28 +48,9 @@ from decimal import Decimal
 import pytest
 import pytest_asyncio
 from pydantic import ValidationError
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permissions import Role, permission_registry
-from app.database import Base
-from app.modules.qms.models import (
-    QMSNCR,
-    ITPItem,
-    ITPPlan,
-    ITPTemplate,
-    QMSAudit,
-    QMSAuditFinding,
-    QMSAuditLog,
-    QMSCalibration,
-    QMSInspection,
-    QMSInspectionSignature,
-    QMSNCRAction,
-    QMSPunchItem,
-)
 from app.modules.qms.permissions import register_qms_permissions
 from app.modules.qms.schemas import (
     AuditCreate,
@@ -84,34 +65,19 @@ from app.modules.qms.schemas import (
     PunchItemCreate,
 )
 from app.modules.qms.service import QMSService
-
-_QMS_TABLES = [
-    ITPPlan.__table__,
-    ITPItem.__table__,
-    ITPTemplate.__table__,
-    QMSInspection.__table__,
-    QMSInspectionSignature.__table__,
-    QMSNCR.__table__,
-    QMSNCRAction.__table__,
-    QMSPunchItem.__table__,
-    QMSAudit.__table__,
-    QMSAuditFinding.__table__,
-    QMSAuditLog.__table__,
-    QMSCalibration.__table__,
-]
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """‌⁠‍Per-test in-memory SQLite session with QMS tables."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_QMS_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    """‌⁠‍Per-test session in a rolled-back PostgreSQL transaction.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    no table creation is needed. The outer transaction is rolled back on
+    teardown, so each test starts from an empty database.
+    """
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

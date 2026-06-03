@@ -570,6 +570,75 @@ async def _on_file_comment_mention(event: Event) -> None:
         logger.debug("notifications: _on_file_comment_mention failed", exc_info=True)
 
 
+async def _on_clash_high_severity(event: Event) -> None:
+    """``clash.high_severity.detected`` → alert the relevant users.
+
+    Fires when the clash engine finds a critical/high interference
+    (``trigger="created"``) or a reviewer confirms one
+    (``trigger="confirmed"``). Recipients are the clash assignee, every
+    watcher, and the project owner - de-duplicated, with the actor who
+    triggered the event filtered out so nobody is alerted about their
+    own action. Best-effort: any failure is logged and swallowed.
+    """
+    if not await _can_open_isolated_session():
+        return
+    data = event.data or {}
+    result_id = data.get("result_id")
+    project_id = data.get("project_id")
+    run_id = data.get("run_id")
+    if not result_id:
+        return
+
+    actor = str(data.get("actor") or "").strip()
+    targets: set[str] = set()
+    assignee = str(data.get("assigned_to") or "").strip()
+    if assignee:
+        targets.add(assignee)
+    for watcher in data.get("watchers") or []:
+        wid = str(watcher or "").strip()
+        if wid:
+            targets.add(wid)
+
+    try:
+        async with async_session_factory() as session:
+            if project_id:
+                owner_id = await _resolve_project_owner(session, str(project_id))
+                if owner_id:
+                    targets.add(owner_id)
+            # Filter out the actor so they aren't notified of their own action.
+            recipients = [t for t in targets if t and t != actor]
+            if not recipients:
+                return
+            severity = str(data.get("severity") or "").strip()
+            trigger = str(data.get("trigger") or "").strip()
+            action_url = f"/clash?run={run_id}&result={result_id}" if run_id else f"/clash?result={result_id}"
+            svc = NotificationService(session)
+            await svc.notify_users(
+                recipients,
+                notification_type="clash_high_severity",
+                title_key="notifications.clash.high_severity.title",
+                body_key="notifications.clash.high_severity.body",
+                body_context={
+                    "severity": severity,
+                    "trigger": trigger,
+                    "a_name": (data.get("a_name") or "")[:200],
+                    "b_name": (data.get("b_name") or "")[:200],
+                },
+                entity_type="clash_result",
+                entity_id=str(result_id),
+                action_url=action_url,
+                metadata={
+                    "project_id": str(project_id or ""),
+                    "run_id": str(run_id or ""),
+                    "severity": severity,
+                    "trigger": trigger,
+                },
+            )
+            await session.commit()
+    except Exception:
+        logger.debug("notifications: _on_clash_high_severity failed", exc_info=True)
+
+
 # Declarative subscription map.  Adding a new event to this list
 # is the ONE place to wire a new notification trigger — keeps the
 # event topology auditable from a single grep.
@@ -590,6 +659,8 @@ _SUBSCRIPTIONS: list[tuple[str, callable]] = [  # type: ignore[type-arg]
     ("transmittal.responded", _on_transmittal_responded),
     # Epic B / B1: file-comment @mention bridge
     ("file_comments.mention.created", _on_file_comment_mention),
+    # Clash coordination: alert relevant users on a high/critical clash
+    ("clash.high_severity.detected", _on_clash_high_severity),
 ]
 
 

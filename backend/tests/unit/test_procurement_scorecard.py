@@ -7,7 +7,8 @@ Scope:
       rate, edge case (zero POs returns all-zero fields, no crash).
     * ``_classify_line_match`` — pure helper.
 
-The service is exercised against a fully in-memory SQLite engine so the
+The service is exercised against a real PostgreSQL database (the shared
+``oe_test_unit`` DB inside a rolled-back outer transaction) so the
 SQLAlchemy aggregates run against real SQL, not stubs (which would not
 catch column-name mismatches between the new code and the model layer).
 """
@@ -20,9 +21,8 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.procurement.models import (
     GoodsReceipt,
     GoodsReceiptItem,
@@ -30,6 +30,7 @@ from app.modules.procurement.models import (
     PurchaseOrderItem,
 )
 from app.modules.procurement.service import ProcurementService
+from tests._pg import transactional_session
 
 PROJECT_ID = uuid.uuid4()
 SUPPLIER_ID = "11111111-1111-1111-1111-111111111111"
@@ -37,19 +38,15 @@ SUPPLIER_ID = "11111111-1111-1111-1111-111111111111"
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:  # type: ignore[misc]
-    """Per-test SQLite engine — Base.metadata.create_all gives us every table.
+    """Per-test PostgreSQL session inside a rolled-back outer transaction.
 
-    The procurement module owns four tables; we create the full schema so
-    optional cross-module lookups (finance Invoice) degrade gracefully via
-    the service's broad ``except Exception``.
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    every table (including optional cross-module lookups like finance Invoice,
+    which the service handles via its broad ``except Exception``) is present.
+    Anything written here is undone on teardown.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as sess:
+    async with transactional_session() as sess:
         yield sess
-    await engine.dispose()
 
 
 def _make_po(
@@ -102,7 +99,7 @@ def test_classify_line_match_over_invoiced() -> None:
     assert ProcurementService._classify_line_match(Decimal("10"), Decimal("5"), Decimal("8")) == "over_invoiced"
 
 
-# ── get_match_status (E2E with SQLite) ─────────────────────────────────
+# ── get_match_status (E2E with PostgreSQL) ─────────────────────────────
 
 
 @pytest.mark.asyncio

@@ -1,9 +1,10 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 """Unit tests for the dedicated field-module grant table.
 
-These exercise the grant repository + service against a real in-memory
-SQLite engine so the partial-unique-index migration semantics and the
-service-layer collision guard both stay honest.
+These exercise the grant repository + service against a real PostgreSQL
+database inside an outer transaction that is rolled back on teardown, so the
+partial-unique-index migration semantics and the service-layer collision guard
+both stay honest while leaving no residue.
 
 The grant table is independent of the standard RBAC stack — these tests
 deliberately use users with no role + no permissions to prove that
@@ -20,44 +21,19 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import Base
 from app.modules.field_diary.models import FieldModuleGrant
 from app.modules.field_diary.schemas import FieldModuleGrantCreate
 from app.modules.field_diary.service import FieldDiaryService
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.users.models import APIKey, User
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    # Touch every column we'll reference so the metadata is complete.
-    async with engine.begin() as conn:
-        # Import every field_diary table so create_all picks them up.
-        from app.modules.field_diary import models as _fd_models  # noqa: F401
-
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Project.__table__,
-                ProjectWBS.__table__,
-                ProjectMilestone.__table__,
-                _fd_models.DiaryEntry.__table__,
-                _fd_models.DiaryActivity.__table__,
-                _fd_models.DiaryAttachment.__table__,
-                _fd_models.FieldModuleGrant.__table__,
-                _fd_models.FieldMagicLink.__table__,
-                _fd_models.FieldSession.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, role: str = "viewer") -> User:

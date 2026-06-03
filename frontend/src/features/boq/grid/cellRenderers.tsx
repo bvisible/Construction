@@ -1840,8 +1840,15 @@ const BimLinkPopover = forwardRef<
 
         {/* MIDDLE column: 3D preview + element cards */}
         <div className={canApply ? 'w-[380px] shrink-0 border-r border-border-light dark:border-border-dark flex flex-col' : 'w-full'}>
-          {/* 3D Preview */}
-          {glbOk && (
+          {/* 3D Preview — render the viewer while the model still serves
+              geometry. When the GLB request fails (e.g. the linked element
+              belongs to a data-only DWG model that is `needs_converter`, so
+              the geometry endpoint 404s), `onError` flips `glbOk` to false.
+              Previously the preview was simply dropped, leaving a blank
+              panel with no explanation. Show a clear, actionable message
+              in the same footprint instead, keeping the "Open in BIM"
+              affordance reachable from the header above. */}
+          {glbOk ? (
             <MiniGeometryPreview
               modelId={modelId}
               elementIds={elementIds}
@@ -1850,6 +1857,42 @@ const BimLinkPopover = forwardRef<
               className="bg-gray-50 dark:bg-gray-900 border-b border-border-light dark:border-border-dark"
               onError={() => setGlbOk(false)}
             />
+          ) : (
+            <div
+              className="flex flex-col items-center justify-center gap-2 px-6 text-center
+                         bg-gray-50 dark:bg-gray-900 border-b border-border-light dark:border-border-dark"
+              style={{ width: canApply ? 380 : '100%', height: 220 }}
+              data-testid="bim-link-no-geometry"
+            >
+              <AlertTriangle size={22} className="text-amber-500" />
+              <p className="text-xs font-medium text-content-secondary">
+                {t('boq.linked_geometry_unavailable', {
+                  defaultValue: 'No 3D geometry to preview',
+                })}
+              </p>
+              <p className="text-[10px] leading-snug text-content-tertiary max-w-[300px]">
+                {t('boq.linked_geometry_unavailable_hint', {
+                  defaultValue:
+                    'The linked element belongs to a model that has no displayable mesh yet (for example a data-only drawing still waiting on the CAD converter). The link and its quantities are intact.',
+                })}
+              </p>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const params = new URLSearchParams();
+                  if (elementIds[0]) params.set('focus', elementIds[0]);
+                  if (elementIds.length > 1) params.set('select', elementIds.join(','));
+                  popoverNavigate(`/bim/${modelId}?${params.toString()}`);
+                  onClose();
+                }}
+                className="mt-1 inline-flex items-center gap-1 px-2.5 py-1 rounded text-[10px] font-semibold
+                           text-oe-blue bg-oe-blue/10 hover:bg-oe-blue/20 transition-colors"
+              >
+                <ExternalLink size={11} />
+                {t('boq.open_in_bim', { defaultValue: 'Open in BIM' })}
+              </button>
+            </div>
           )}
 
           {/* Element info cards */}
@@ -4833,7 +4876,18 @@ export function UnitRateCellRenderer(params: ICellRendererParams) {
   const stats = meta.cost_item_variant_stats as VariantStats | undefined;
   const variant = (meta as { variant?: { label: string; price: number; index: number } }).variant;
   const variantDefault = meta.variant_default as 'mean' | 'median' | undefined;
-  const currency = (meta.currency as string | undefined) || ctx?.currencyCode || 'USD';
+  const baseCurrency = ctx?.currencyCode || 'USD';
+  const currency = (meta.currency as string | undefined) || baseCurrency;
+  // A position whose own `metadata.currency` differs from the project base
+  // currency must SHOW that currency on the line — otherwise a USD position
+  // in a EUR смета reads as a bare number identical to its EUR neighbours.
+  // `currencyFormatter` used to do this on the unit_rate column before the
+  // renderer replaced it (see the breadcrumb in columnDefs.ts); restore it
+  // here as a compact badge so multi-currency BOQs are legible again.
+  const isForeignCurrency =
+    !!currency &&
+    !!baseCurrency &&
+    currency.trim().toUpperCase() !== baseCurrency.trim().toUpperCase();
   const unit = data.unit as string | undefined;
   const resources = meta.resources;
   const isResourceDriven = Array.isArray(resources) && resources.length > 0;
@@ -4915,10 +4969,36 @@ export function UnitRateCellRenderer(params: ICellRendererParams) {
     [ctx, data, meta, numericVal, stats],
   );
 
-  // No variant cache → just render the formatted number.  Cell is still
-  // editable (click → AG Grid mounts agNumberCellEditor).
+  // No variant cache → render the formatted number, prefixed with a
+  // compact currency badge when the position is priced in a non-base
+  // currency. Cell is still editable (click → AG Grid mounts the number
+  // editor; the badge is non-interactive and does not block the click).
   if (!hasVariants) {
     const colorClass = isResourceDriven ? 'text-content-tertiary' : '';
+    if (isForeignCurrency) {
+      return (
+        <span
+          className={`flex items-center justify-end gap-1 w-full h-full text-xs tabular-nums leading-[32px] ${colorClass}`}
+          title={t('boq.position_currency_tooltip', {
+            defaultValue:
+              'This position is priced in {{code}} ({{symbol}}), not the project currency {{base}}. Totals are converted to {{base}} using the project FX rate.',
+            code: currency,
+            symbol: CURRENCY_SYMBOL[currency] ?? currency,
+            base: baseCurrency,
+          })}
+        >
+          <span
+            className="shrink-0 inline-flex items-center gap-0.5 h-4 px-1 rounded text-[9px] font-bold
+                       bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300
+                       font-mono uppercase tracking-wide"
+            data-testid={`boq-position-currency-${data.id}`}
+          >
+            {CURRENCY_SYMBOL[currency] ?? ''}{currency}
+          </span>
+          <span>{formatted}</span>
+        </span>
+      );
+    }
     return (
       <span className={`block text-right text-xs tabular-nums w-full h-full leading-[32px] ${colorClass}`}>
         {formatted}
@@ -4987,6 +5067,23 @@ export function UnitRateCellRenderer(params: ICellRendererParams) {
             count: optsCount,
           })}
         </button>
+      )}
+      {isForeignCurrency && (
+        <span
+          className="shrink-0 inline-flex items-center gap-0.5 h-4 px-1 rounded text-[9px] font-bold
+                     bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300
+                     font-mono uppercase tracking-wide"
+          title={t('boq.position_currency_tooltip', {
+            defaultValue:
+              'This position is priced in {{code}} ({{symbol}}), not the project currency {{base}}. Totals are converted to {{base}} using the project FX rate.',
+            code: currency,
+            symbol: CURRENCY_SYMBOL[currency] ?? currency,
+            base: baseCurrency,
+          })}
+          data-testid={`boq-position-currency-${data.id}`}
+        >
+          {CURRENCY_SYMBOL[currency] ?? ''}{currency}
+        </span>
       )}
       <span className={isResourceDriven ? 'text-content-tertiary' : ''}>{formatted}</span>
       {pickerOpen && hasVariants && (

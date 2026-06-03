@@ -14,17 +14,11 @@ Covers (end-to-end through the FastAPI router):
 from __future__ import annotations
 
 import os
-import tempfile
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-costs-intel-"))
-_TMP_DB = _TMP_DIR / "costs_intel.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
+# The engine is bound to PostgreSQL by conftest before this module imports.
 # Skip the auto-seed so the test fixture controls every row.
 os.environ.setdefault("SEED_SHOWCASE", "false")
 

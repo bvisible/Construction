@@ -2,8 +2,9 @@
 """Unit tests for :class:`CoordinationHubService` aggregator logic.
 
 These tests bypass HTTP entirely and drive the service against a fresh
-per-test SQLite + minimal seed (one project + a few clash / federation
-/ bcf rows). They pin the cross-module SELECT contracts:
+transaction-isolated PostgreSQL session + minimal seed (one project + a
+few clash / federation / bcf rows). They pin the cross-module SELECT
+contracts:
 
 * trade-matrix grouping (symmetric pair key + status bucketing)
 * timeline ordering (ts DESC, multi-source union)
@@ -15,51 +16,25 @@ per-test SQLite + minimal seed (one project + a few clash / federation
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.coordination_hub.service import (
     _DASHBOARD_CACHE,
     CoordinationHubService,
     _normalise_trade,
 )
-
-
-def _register_models() -> None:
-    """Eagerly register every ORM module referenced by the test DB."""
-    import app.modules.bcf.models  # noqa: F401
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.bim_requirements.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.clash.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.smart_views.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test SQLite + seeded user + project."""
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-cohub-agg-")) / "test.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session + seeded user + project."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -85,7 +60,6 @@ async def session() -> AsyncSession:
         # state into each other.
         _DASHBOARD_CACHE.clear()
         yield s
-    await engine.dispose()
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

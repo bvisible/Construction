@@ -38,65 +38,47 @@ estimate / advisor surface:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-ai-sec-"))
-_TMP_DB = _TMP_DIR / "ai_sec.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from fastapi import FastAPI, HTTPException  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-import app.modules.ai.models  # noqa: E402,F401
-import app.modules.boq.models  # noqa: E402,F401
-import app.modules.costs.models  # noqa: E402,F401
-import app.modules.projects.models  # noqa: E402,F401
-import app.modules.users.models  # noqa: E402,F401
-from app.database import Base  # noqa: E402
-from app.modules.ai.models import AIEstimateJob  # noqa: E402
-from app.modules.ai.prompts import (  # noqa: E402
+import app.modules.ai.models  # noqa: F401
+import app.modules.boq.models  # noqa: F401
+import app.modules.costs.models  # noqa: F401
+import app.modules.projects.models  # noqa: F401
+import app.modules.users.models  # noqa: F401
+from app.modules.ai.models import AIEstimateJob
+from app.modules.ai.prompts import (
     SMART_IMPORT_PROMPT,
     fence_user_content,
     sanitize_user_text,
 )
-from app.modules.ai.schemas import CreateBOQFromEstimateRequest  # noqa: E402
-from app.modules.ai.service import AIService  # noqa: E402
-from app.modules.projects.models import Project  # noqa: E402
-from app.modules.users.models import User  # noqa: E402
+from app.modules.ai.schemas import CreateBOQFromEstimateRequest
+from app.modules.ai.service import AIService
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite session with the full schema.
+    """Per-test PostgreSQL session with the full schema.
 
-    Uses ``Base.metadata.create_all`` (not the targeted table list) so
-    the FK from ``oe_ai_estimate_job.user_id → oe_users_user.id``
-    resolves cleanly without import-order surprises.
+    Runs inside an outer transaction that is rolled back on teardown
+    (see ``tests._pg.transactional_session``). The shared ``oe_test_unit``
+    database carries the complete schema, so the FK from
+    ``oe_ai_estimate_job.user_id → oe_users_user.id`` resolves cleanly
+    and no ``create_all`` is needed.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
-        yield sess
-        await sess.rollback()
-    await engine.dispose()
+    async with transactional_session() as s:
+        yield s
 
 
 async def _make_user(session: AsyncSession, *, role: str = "editor") -> User:
@@ -175,7 +157,7 @@ async def test_get_estimate_job_cross_user_returns_404_not_403(
     other = await _make_user(session)
     job = await _make_job(session, owner)
 
-    # Import inside the test so DATABASE_URL is already pinned.
+    # Import inside the test to keep module import order side-effect free.
     from app.modules.ai.router import get_estimate_job
 
     service = AIService(session)

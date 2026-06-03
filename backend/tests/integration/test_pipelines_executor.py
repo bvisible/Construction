@@ -2,7 +2,7 @@
 
 Two concerns, one file:
 
-1. **Executor / node correctness** (in-memory SQLite, no Celery): the
+1. **Executor / node correctness** (PostgreSQL, no Celery): the
    DAG executor must topo-order deterministically, surface a node
    failure as an ``error`` state, skip every dependent of a failed node
    (without aborting sibling branches), and persist a small envelope per
@@ -16,9 +16,10 @@ Two concerns, one file:
    BOQ rows). Pre-fix every pipeline endpoint authenticated but never
    authorized.
 
-Test isolation (``feedback_test_isolation.md``): a per-module temp
-SQLite file is registered BEFORE any ``from app...`` import; the
-production ``openestimate.db`` is never touched.
+Test isolation: the executor tests run against a throwaway PostgreSQL
+database (``isolated_engine``) so the seed-then-execute flow can see data
+committed across separate sessions; the HTTP suite runs the app against the
+session PostgreSQL cluster provisioned by ``conftest``.
 
 Run:
     cd backend
@@ -27,50 +28,35 @@ Run:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-pipelines-exec-"))
-_TMP_DB = _TMP_DIR / "pipelines_exec.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
-from sqlalchemy.ext.asyncio import (  # noqa: E402
-    async_sessionmaker,
-    create_async_engine,
-)
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 # The executor only ever calls *registered* node runners. Outside full
 # app startup the module loader has not imported pipeline_nodes yet, so
 # import it here for its registration side-effect (mirrors how
 # conftest.py eagerly imports module models).
-import app.modules.pipelines.pipeline_nodes  # noqa: E402,F401
+import app.modules.pipelines.pipeline_nodes  # noqa: F401
+from tests._pg import isolated_engine
 
-# ── In-memory executor harness ─────────────────────────────────────────────
+# ── PostgreSQL executor harness ─────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def mem_factory():
-    """Fresh in-memory DB with every table the executor path touches."""
-    from app.core.job_run import JobRun  # noqa: F401
-    from app.database import Base
-    from app.modules.boq import models as _boq  # noqa: F401
-    from app.modules.pipelines import models as _pl  # noqa: F401
-    from app.modules.projects import models as _proj  # noqa: F401
-    from app.modules.users import models as _users  # noqa: F401
+    """Sessionmaker over a throwaway, schema-loaded PostgreSQL database.
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    The executor flow seeds a run in one session, commits, then opens
+    *separate* sessions to execute it and read back node states. Those
+    cross-session reads require committed data to be visible on independent
+    connections, so this binds to a real ``isolated_engine`` (dropped on
+    teardown) rather than a single rolled-back transactional session.
+    """
+    async with isolated_engine() as engine:
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def _seed_run(maker, graph: dict) -> uuid.UUID:

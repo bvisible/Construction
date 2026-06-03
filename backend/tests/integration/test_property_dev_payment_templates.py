@@ -9,27 +9,18 @@ UI can drive Reservations → SPA → Payment Schedule end-to-end:
 * GET  /api/v1/property-dev/sales-contracts/?development_id=…
 
 Scaffolding follows the existing ``test_property_dev_lead_to_spa.py``
-pattern: per-module temporary SQLite registered BEFORE any ``from app…``
-import keeps the production DB untouched.
+pattern: the conftest-provisioned PostgreSQL engine is bound before any
+``from app…`` import, so these tests run against that cluster.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-templates-"))
-_TMP_DB = _TMP_DIR / "propdev_templates.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")

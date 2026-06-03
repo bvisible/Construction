@@ -18,23 +18,13 @@ Covers the contract a future maintainer is likely to break first:
   ``ai_caller`` only when ``use_ai=True`` and that a broken AI reply
   (invalid YAML) degrades to a low-confidence envelope, not a 500.
 
-Per ``feedback_test_isolation.md`` the module redirects ``DATABASE_URL``
-to a fresh temp SQLite BEFORE any ``app`` import.
+The test runs against the PostgreSQL engine that ``tests/conftest.py``
+provisions and binds before any ``app`` import.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
-
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-compliance-ai-"))
-_TMP_DB = _TMP_DIR / "compliance_ai.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 
 import pytest_asyncio  # noqa: E402
 from fastapi import HTTPException, status  # noqa: E402
@@ -45,7 +35,7 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 @pytest_asyncio.fixture(scope="module")
 async def app_factory():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

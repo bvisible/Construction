@@ -3,19 +3,19 @@
 Test isolation
 ~~~~~~~~~~~~~~
 Per ``feedback_test_isolation.md``: backend tests must NEVER touch the
-production ``backend/openestimate.db``. Several integration suites
+production database. Several integration suites
 (``test_api_smoke``, ``test_boq_regression``, ``test_boq_import_safety``,
 ``test_boq_cycle_detection``, ``test_boq_cost_item_link``) construct the
 FastAPI app via ``create_app()`` which imports ``app.database`` and
 binds ``async_session_factory`` to whatever ``DATABASE_URL`` is set at
-that moment — so the env var has to be redirected to a per-session temp
-SQLite file *before* any ``from app...`` import runs.
+that moment — so the env vars have to point at a throwaway PostgreSQL
+cluster *before* any ``from app...`` import runs.
 
 Doing it here in ``tests/conftest.py`` (which pytest loads before any
 test module) guarantees the override beats every test-module import
 order, regardless of which suite is collected first. Tests that already
 self-redirect (``test_tenant_isolation``, ``test_register_bootstrap``,
-etc.) are still fine — they overwrite this with their own temp file.
+etc.) are still fine — they overwrite this with their own connection.
 """
 
 import os
@@ -24,8 +24,8 @@ import os
 # On Windows the default ProactorEventLoop leaves asyncpg socket transports to
 # be finalized by the GC after the per-test loop has closed, surfacing as a
 # noisy "RuntimeError: Event loop is closed" at teardown. The SelectorEventLoop
-# policy (the default on Linux/macOS) closes them deterministically. Harmless
-# for the aiosqlite lane. Must run before any event loop is created.
+# policy (the default on Linux/macOS) closes them deterministically. Must run
+# before any event loop is created.
 import sys as _sys  # noqa: E402
 import tempfile
 from pathlib import Path
@@ -35,11 +35,30 @@ if _sys.platform == "win32":
 
     _asyncio.set_event_loop_policy(_asyncio.WindowsSelectorEventLoopPolicy())
 
-# ── Per-session SQLite isolation (must run before app imports) ─────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-tests-"))
-_TMP_DB = _TMP_DIR / "session.db"
-os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}")
-os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{_TMP_DB.as_posix()}")
+# ── Per-session PostgreSQL isolation (must run before app imports) ──────────
+# The app is PostgreSQL-only at runtime, so the test suite runs on PostgreSQL
+# too. Two ways to provide it:
+#   * CI sets ``DATABASE_URL`` (a postgres service container) — honour it as-is.
+#   * Otherwise boot a throwaway embedded PostgreSQL 16 cluster (no Docker) into
+#     a temp data dir for the session. ``embedded_pg.boot`` points
+#     ``DATABASE_URL`` / ``DATABASE_SYNC_URL`` at the embedded cluster and is
+#     registered for shutdown via ``atexit`` so the postmaster is stopped when
+#     the run ends (the temp dir is reclaimed by the OS regardless).
+# This must happen before any ``from app...`` import that pulls in
+# ``app.database`` (which builds the engine from ``settings.database_url`` at
+# import time).
+if not os.environ.get("DATABASE_URL", "").strip():
+    import atexit
+
+    from app.core import embedded_pg
+
+    _PG_DATA_DIR = Path(tempfile.mkdtemp(prefix="oe-tests-pg-"))
+    if not embedded_pg.boot(_PG_DATA_DIR):
+        raise RuntimeError(
+            "could not boot embedded PostgreSQL for the test session; set "
+            "DATABASE_URL to point the suite at an external PostgreSQL instead"
+        )
+    atexit.register(embedded_pg.shutdown)
 
 # ── Rate-limiter relaxation for tests ──────────────────────────────────────
 # The integration suites repeatedly hit ``/auth/register`` and ``/auth/login``
@@ -51,6 +70,44 @@ os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{_TMP_DB.as_posix()}")
 os.environ.setdefault("LOGIN_RATE_LIMIT", "10000")
 os.environ.setdefault("API_RATE_LIMIT", "100000")
 os.environ.setdefault("AI_RATE_LIMIT", "10000")
+
+# ── Open registration for the suite ────────────────────────────────────────
+# The default registration mode is "admin-approve" (every registrant after the
+# first bootstrap admin is created inactive and cannot log in). The integration
+# suites register a fresh user per module and immediately log in, so under the
+# default they get a 401 and the auth fixture errors out. Open mode keeps every
+# registrant active. The two mode-specific suites (test_register_modes,
+# test_register_bootstrap) set the mode themselves and are unaffected.
+os.environ.setdefault("REGISTRATION_MODE", "open")
+
+# ── Skip demo account seeding for tests ───────────────────────────────────
+# The startup lifespan creates demo@openconstructionerp.com (and two sibling
+# accounts) every time create_app() boots. Although has_admin() is designed
+# to exclude those demo emails from the bootstrap check, the seeding still
+# costs time and writes rows that can interact with per-module auth fixtures.
+# test_demo_login_endpoint.py sets SEED_DEMO=true inside its own fixture and
+# is unaffected. All other suites work without the demo accounts.
+os.environ.setdefault("SEED_DEMO", "false")
+
+# ── Fast app startup for tests ─────────────────────────────────────────────
+# Each integration module stands up its own FastAPI app via create_app() and
+# runs the full lifespan. In production that lifespan connects to the vector
+# backend, loads the embedding model (~35s) and installs the flagship showcase
+# project (6640 elements + ~16MB of geometry). None of that is needed by the
+# test suite, and paid per module it is the dominant cost of the whole run.
+# This flag skips the vector init/warm-up and the flagship seed; vector
+# endpoints still work because the embedder loads lazily on first use.
+os.environ.setdefault("OE_TEST_FAST_STARTUP", "1")
+
+# ── NullPool for the shared app engine under tests ─────────────────────────
+# pytest-asyncio runs each test in its own event loop. asyncpg connections are
+# loop-bound, so a connection pooled on one test's loop and reused on the next
+# raises "Task ... attached to a different loop". The production engine uses a
+# sized QueuePool; here we tell the engine factory to use NullPool so every
+# checkout opens a fresh connection on the current loop. Must be set before the
+# first ``import app...`` below builds the engine. The fast per-test isolation
+# helpers in ``tests/_pg.py`` already use NullPool for the same reason.
+os.environ.setdefault("OE_TEST_NULLPOOL", "1")
 
 import pytest  # noqa: E402
 
@@ -78,7 +135,7 @@ import app.modules.users.models  # noqa: E402,F401
 
 # ── Synchronous event publishing in tests ──────────────────────────────────
 # Production wraps ``event_bus.publish`` in ``asyncio.create_task`` via
-# :meth:`EventBus.publish_detached` so the SQLite single-writer lock isn't
+# :meth:`EventBus.publish_detached` so the database connection isn't
 # held by the request session while subscribers open theirs. Tests, however,
 # typically do ``await service.X()`` then immediately assert on a captured
 # events fixture — the scheduled task hasn't yielded to the loop yet. To

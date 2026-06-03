@@ -2,14 +2,17 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Epic C — alembic ``v3143`` backfill regression test.
 
-Builds a fresh in-memory SQLite that mirrors prod: source rows in
+Runs against PostgreSQL (the only supported dialect) inside an outer
+transaction that is rolled back on teardown, so the database starts
+empty for each test. We mirror prod: source rows in
 ``oe_documents_document``, ``oe_documents_photo``, ``oe_documents_sheet``
 and ``oe_bim_model`` exist but ``oe_file_version`` is empty. Then we
-invoke the migration's ``_backfill_chain`` helper for each kind and
-assert that exactly one v1 chain seed is created per source row.
+run the migration's backfill SQL (the PostgreSQL branch of
+``_backfill_chain``) for each kind and assert that exactly one v1 chain
+seed is created per source row.
 
 This is the test that closes the design-doc requirement: "Did the
-backfill SQL execute on the local sqlite DB?".
+backfill SQL execute against the prod PostgreSQL DB?".
 """
 
 from __future__ import annotations
@@ -21,13 +24,8 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.bim_hub.models import BIMModel  # noqa: F401 — registers ORM
 from app.modules.documents.models import (  # noqa: F401 — registers ORM
     Document,
@@ -36,6 +34,7 @@ from app.modules.documents.models import (  # noqa: F401 — registers ORM
 )
 from app.modules.projects.models import Project
 from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Load the alembic migration module by path ──────────────────────────
 
@@ -60,13 +59,8 @@ def _load_migration():
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _seed(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID, uuid.UUID]:
@@ -125,19 +119,14 @@ async def test_v3143_backfill_inserts_one_chain_row_per_source(
     session: AsyncSession,
 ) -> None:
     project_id, doc_id, photo_id, sheet_id, bim_id = await _seed(session)
-    mod = _load_migration()
+    # Side-load the migration module to confirm it imports cleanly; the
+    # backfill SQL it emits is mirrored inline below.
+    _load_migration()
 
-    # We need a sync connection for the migration's ``_backfill_chain``
-    # helper (alembic's bind is always sync). Pull one out of the
-    # async session's engine.
-    sync_conn = await session.connection()
-    raw = await sync_conn.get_raw_connection()
-    # raw is a DBAPI connection wrapper; call through sqlalchemy ``text``
-    # via the async session directly to avoid greenlet trouble.
-
-    # Use the async session executor + the raw SQL the migration emits.
-    # Calling _backfill_chain expects a sync Connection — we adapt by
-    # mirroring the body inline against the async session for SQLite.
+    # Run the backfill SQL the migration emits for PostgreSQL (the
+    # ``_backfill_chain`` else-branch) directly against the async session.
+    # We mirror it inline rather than calling ``_backfill_chain`` because
+    # that helper expects alembic's sync Connection bind.
     inserted_total = 0
     for kind, table, id_col, name_col, project_col, uploaded_at_col, uploaded_by_col in (
         ("document", "oe_documents_document", "id", "name", "project_id", "created_at", "uploaded_by"),
@@ -145,16 +134,16 @@ async def test_v3143_backfill_inserts_one_chain_row_per_source(
         ("sheet", "oe_documents_sheet", "id", "sheet_number", "project_id", "created_at", "created_by"),
         ("bim_model", "oe_bim_model", "id", "name", "project_id", "created_at", "created_by"),
     ):
-        # SQLite path mirrors the migration verbatim.
+        # PostgreSQL path mirrors the migration verbatim.
         canonical_expr = (
             f"COALESCE({table}.document_id, '') || ':' || "
             f"COALESCE(NULLIF(TRIM({table}.{name_col}), ''), "
-            f"'page-' || printf('%03d', {table}.page_number))"
+            f"'page-' || lpad({table}.page_number::text, 3, '0'))"
             if kind == "sheet"
             else f"COALESCE(NULLIF(TRIM({table}.{name_col}), ''), 'untitled')"
         )
-        uploaded_by_expr = f"CAST({table}.{uploaded_by_col} AS TEXT)" if uploaded_by_col else "NULL"
-        id_cast = f"CAST({table}.{id_col} AS TEXT)"
+        uploaded_by_expr = f"{table}.{uploaded_by_col}::text" if uploaded_by_col else "NULL"
+        id_cast = f"{table}.{id_col}::text"
         sql = text(
             f"""
             INSERT INTO oe_file_version (
@@ -166,16 +155,16 @@ async def test_v3143_backfill_inserts_one_chain_row_per_source(
                 file_size, checksum
             )
             SELECT
-                lower(hex(randomblob(16))),
-                datetime('now'),
-                datetime('now'),
-                CAST({table}.{project_col} AS TEXT),
+                gen_random_uuid()::text,
+                now(),
+                now(),
+                {table}.{project_col}::text,
                 :kind,
                 {id_cast},
                 1,
                 {canonical_expr},
                 NULL,
-                1,
+                TRUE,
                 NULL,
                 NULL,
                 NULL,
@@ -186,7 +175,7 @@ async def test_v3143_backfill_inserts_one_chain_row_per_source(
             FROM {table}
             WHERE NOT EXISTS (
                 SELECT 1 FROM oe_file_version fv
-                WHERE fv.project_id = CAST({table}.{project_col} AS TEXT)
+                WHERE fv.project_id = {table}.{project_col}::text
                   AND fv.file_kind = :kind
                   AND fv.file_id = {id_cast}
             )
@@ -237,15 +226,15 @@ async def test_v3143_backfill_inserts_one_chain_row_per_source(
         "file_kind, file_id, version_number, canonical_name, previous_version_id, "
         "is_current, superseded_at, superseded_by_id, notes, uploaded_by_id, "
         "uploaded_at, file_size, checksum) "
-        "SELECT lower(hex(randomblob(16))), datetime('now'), datetime('now'), "
-        "CAST(oe_documents_document.project_id AS TEXT), 'document', "
-        "CAST(oe_documents_document.id AS TEXT), 1, oe_documents_document.name, "
-        "NULL, 1, NULL, NULL, NULL, NULL, oe_documents_document.created_at, 0, NULL "
+        "SELECT gen_random_uuid()::text, now(), now(), "
+        "oe_documents_document.project_id::text, 'document', "
+        "oe_documents_document.id::text, 1, oe_documents_document.name, "
+        "NULL, TRUE, NULL, NULL, NULL, NULL, oe_documents_document.created_at, 0, NULL "
         "FROM oe_documents_document WHERE NOT EXISTS ("
         "SELECT 1 FROM oe_file_version fv WHERE "
-        "fv.project_id = CAST(oe_documents_document.project_id AS TEXT) "
+        "fv.project_id = oe_documents_document.project_id::text "
         "AND fv.file_kind = 'document' "
-        "AND fv.file_id = CAST(oe_documents_document.id AS TEXT))"
+        "AND fv.file_id = oe_documents_document.id::text)"
     )
     result2 = await session.execute(sql2)
     assert (result2.rowcount or 0) == 0  # nothing to insert; chain seed already present

@@ -4,9 +4,10 @@ Pins the bug where ``GET /api/v1/service/tickets/`` with no ``contract_id``
 and no ``project_id`` returned ``[]`` — which left the default ``/service``
 Tickets tab (and the work-order create ticket picker) permanently empty.
 
-Uses a per-test in-memory SQLite session with only the service tables
-created (per ``feedback_test_isolation.md`` — production DB is never
-touched). Mirrors the fixture style used by ``tests/unit/test_qms.py``.
+Uses a PostgreSQL session wrapped in an outer transaction that is rolled
+back on teardown (per ``feedback_test_isolation.md`` — production DB is
+never touched). The shared unit database already carries the full schema,
+so no per-test ``create_all`` is needed.
 """
 
 from __future__ import annotations
@@ -17,53 +18,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
-from app.modules.projects.models import Project
-from app.modules.service.models import (
-    AssetInspectionChecklist,
-    DebriefReport,
-    ServiceAsset,
-    ServiceContract,
-    ServiceSchedule,
-    ServiceTicket,
-    ServiceWorkOrder,
-    ServiceWorkOrderItem,
-    SLADefinition,
-)
+from app.modules.service.models import ServiceContract, ServiceTicket
 from app.modules.service.repository import TicketRepository
-
-# ServiceContract FKs oe_service_sla_definition; include the whole module's
-# table set so create_all() resolves every intra-module FK.
-_SERVICE_TABLES = [
-    Project.__table__,
-    SLADefinition.__table__,
-    AssetInspectionChecklist.__table__,
-    ServiceContract.__table__,
-    ServiceAsset.__table__,
-    ServiceTicket.__table__,
-    ServiceWorkOrder.__table__,
-    ServiceWorkOrderItem.__table__,
-    DebriefReport.__table__,
-    ServiceSchedule.__table__,
-]
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_SERVICE_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
-        yield sess
-        await sess.rollback()
-    await engine.dispose()
+    async with transactional_session() as s:
+        yield s
 
 
 async def _make_contract(session: AsyncSession) -> ServiceContract:

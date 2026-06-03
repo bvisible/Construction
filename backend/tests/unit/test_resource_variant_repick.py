@@ -4,7 +4,7 @@ These tests exercise the pure-data branch of
 ``BOQService.repick_resource_variant`` indirectly through the
 ``_stamp_resource_variant_snapshots`` helper plus the validation path
 the service runs before mutating the row. They are intentionally
-DB-free — the in-process SQLite session is not required to verify:
+DB-free — no database session is required to verify:
 
 * available_variants must be present and non-empty
 * variant_code must resolve in available_variants

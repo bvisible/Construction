@@ -18,13 +18,8 @@ import uuid
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.file_comments.models import (  # noqa: F401 — registers ORM
     FileComment,
     FileCommentMention,
@@ -41,24 +36,20 @@ from app.modules.file_comments.service import (
     soft_delete_comment,
     update_comment,
 )
-
-# Epic C: FileComment now has an FK to oe_file_version — the test's
-# Base.metadata.create_all() needs the version table registered too.
-from app.modules.file_versions.models import FileVersion  # noqa: F401 — registers ORM
 from app.modules.projects.models import Project  # noqa: F401 — registers ORM
 from app.modules.users.models import User  # noqa: F401 — registers ORM
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Per-test in-memory SQLite with full schema applied."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    """Per-test session inside a PostgreSQL transaction rolled back on teardown.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so no
+    ``create_all`` is needed; isolation comes from the outer transaction.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _seed_user(

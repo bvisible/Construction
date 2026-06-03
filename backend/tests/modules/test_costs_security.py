@@ -23,24 +23,17 @@ Pins the four trip-wires established by the audit:
    ``RequirePermission("costs.update")`` gate is enforced and returns
    401/403, never 200.
 
-Test isolation follows the pattern in
-``backend/tests/integration/test_costs_idor.py``: the per-module temp
-SQLite DB redirect MUST run before any ``from app...`` import.
+Tests run against the PostgreSQL cluster provisioned by
+``backend/tests/conftest.py``, which binds the SQLAlchemy engine before
+any test module is imported.
 """
 
 from __future__ import annotations
 
 import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-costs-r7-"))
-_TMP_DB = _TMP_DIR / "costs_r7.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 os.environ.setdefault("SEED_SHOWCASE", "false")
 
 import pytest  # noqa: E402
@@ -52,7 +45,7 @@ from httpx import ASGITransport, AsyncClient  # noqa: E402
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

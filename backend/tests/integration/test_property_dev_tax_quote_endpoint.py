@@ -3,9 +3,9 @@
 Exercises the full HTTP stack — auth → permission gate → IDOR check →
 service-layer dispatch → tax_engine pure functions → response shape.
 
-Scaffolding mirrors :mod:`test_property_dev_lead_to_spa` (per-module
-temp SQLite registered BEFORE any ``from app...`` import to keep the
-production DB un-touched).
+Scaffolding mirrors :mod:`test_property_dev_lead_to_spa` and runs against
+the PostgreSQL cluster provisioned by ``tests/conftest.py`` (the engine is
+bound before any test module imports).
 
 Coverage:
     * GB happy path — first-time-buyer SDLT 0 %, response shape OK.
@@ -22,20 +22,11 @@ Coverage:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-taxquote-"))
-_TMP_DB = _TMP_DIR / "propdev_taxquote.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")

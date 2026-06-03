@@ -17,25 +17,16 @@ IfcOpenShell). This test suite verifies that:
    re-import the .bcfzip → clash rows are patched (status / assignee /
    comments).
 
-No DB required for tests 1-5; test 6 uses an in-process SQLite db.
+No DB required for tests 1-5; test 6 uses the conftest PostgreSQL db.
 No IfcOpenShell; stdlib only (zipfile, xml.etree).
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-bcf-rt-"))
-_TMP_DB = _TMP_DIR / "bcf_roundtrip.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-
-from app.modules.bcf.bcf_xml import (  # noqa: E402
+from app.modules.bcf.bcf_xml import (
     ParsedComment,
     ParsedTopic,
     build_bcfzip,

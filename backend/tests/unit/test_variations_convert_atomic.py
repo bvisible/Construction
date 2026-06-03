@@ -21,55 +21,28 @@ import pytest
 import pytest_asyncio
 from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.audit_log import ActivityLog
-from app.database import Base
-from app.modules.changeorders.models import ChangeOrder, ChangeOrderApproval, ChangeOrderItem
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.users.models import APIKey, User
-from app.modules.variations.models import (
-    Notice,
-    VariationCostImpact,
-    VariationOrder,
-    VariationRequest,
-    VariationScheduleImpact,
-)
+from app.modules.changeorders.models import ChangeOrder
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from app.modules.variations.models import VariationOrder, VariationRequest
 from app.modules.variations.schemas import VariationOrderCreate, VariationRequestCreate
 from app.modules.variations.service import VariationsService
-
-_TABLES = [
-    User.__table__,
-    APIKey.__table__,
-    Project.__table__,
-    ProjectWBS.__table__,
-    ProjectMilestone.__table__,
-    Notice.__table__,
-    VariationRequest.__table__,
-    VariationOrder.__table__,
-    VariationCostImpact.__table__,
-    VariationScheduleImpact.__table__,
-    ChangeOrder.__table__,
-    ChangeOrderApproval.__table__,
-    ChangeOrderItem.__table__,
-    ActivityLog.__table__,
-]
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    """Yield a session inside a PostgreSQL transaction rolled back on teardown.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so no
+    ``create_all`` is needed. The session's own ``commit()`` calls become
+    SAVEPOINT releases (visible within the test); the outer transaction is
+    rolled back at teardown, leaving the database empty for the next test.
+    """
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -86,7 +59,7 @@ async def _setup_approved_vr(session: AsyncSession, svc: VariationsService) -> t
     # Capture IDs as plain Python values BEFORE any service calls that
     # call session.expire_all() internally (repo.update_fields() does this).
     # Accessing ORM attributes on expired objects outside an await context
-    # raises MissingGreenlet on async aiosqlite.
+    # raises MissingGreenlet on the async (asyncpg) driver.
     user_id: uuid.UUID = user.id
     project = Project(name="Atomic test", owner_id=user_id, currency="GBP")
     session.add(project)

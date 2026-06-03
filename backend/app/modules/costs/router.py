@@ -3236,25 +3236,17 @@ async def load_cwicr_region(db_id: str, session: AsyncSession) -> dict:
     logger.info("Raw data: %d rows", total_rows)
 
     from app.config import get_settings
-    from app.database import _is_sqlite
 
     settings = get_settings()
-    # Dialect-aware target resolution. On SQLite we keep the fast raw-sqlite3
-    # bulk-load path (single transaction + PRAGMAs). On PostgreSQL we must NOT
-    # open a stray local ``openestimate.db`` — the worker uses a short-lived
-    # sync SQLAlchemy engine built from ``database_sync_url`` instead.
+    # The worker loads into PostgreSQL via a short-lived sync SQLAlchemy engine
+    # built from ``database_sync_url`` — never a stray local SQLite file.
     # Prefer the live process env: embedded PG (v6 default) sets
     # DATABASE_URL/DATABASE_SYNC_URL there after the Settings cache is built, so
     # the cached pydantic values can be stale/empty (mirrors auto_migrate +
     # seed_demo_v2, which also read os.environ directly).
     import os as _os
 
-    db_url = _os.environ.get("DATABASE_URL") or settings.database_url
-    sync_url = _os.environ.get("DATABASE_SYNC_URL") or settings.database_sync_url
-    if _is_sqlite(db_url):
-        target = db_url.split("///")[-1] if "///" in db_url else "openestimate.db"
-    else:
-        target = sync_url
+    target = _os.environ.get("DATABASE_SYNC_URL") or settings.database_sync_url
 
     # Run in thread to avoid blocking the event loop during heavy pandas + DB work.
     try:
@@ -3418,23 +3410,20 @@ def _pg_bulk_insert_cost_rows(sync_url: str, rows: list[tuple]) -> int:
 
 
 def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> dict[str, Any]:
-    """Process CWICR parquet + insert into SQLite or PostgreSQL. Runs in a thread.
+    """Process CWICR parquet + insert into PostgreSQL. Runs in a thread.
 
-    Uses vectorized pandas (no iterrows!) + a single-transaction bulk load.
-    On SQLite this is a raw-sqlite3 ``INSERT OR IGNORE`` fast path; on
-    PostgreSQL it delegates to ``_pg_bulk_insert_cost_rows`` (ON CONFLICT DO
-    NOTHING). ``db_file`` carries a SQLite file path on a SQLite deployment and
-    a sync SQLAlchemy URL on a PostgreSQL deployment.
+    Uses vectorized pandas (no iterrows!) and delegates the load to
+    ``_pg_bulk_insert_cost_rows`` (PostgreSQL ``COPY`` into a staging table +
+    ``INSERT ... ON CONFLICT (code, region) DO NOTHING``). ``db_file`` carries
+    the sync SQLAlchemy URL (``postgresql+psycopg2://...``) of the target
+    cluster.
     """
     import json as _json
     import logging
     import math
-    import sqlite3
     import time
 
     import pandas as pd
-
-    from app.database import _is_sqlite
 
     _log = logging.getLogger("cwicr_import")
     start = time.monotonic()
@@ -3787,50 +3776,19 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
 
         _log.info("Built resources for %d rate_codes in %.1fs", len(resources_by_code), time.monotonic() - start)
 
-    # 5. Open the target DB. ``db_file`` carries a SQLite file path on a
-    # SQLite deployment and a sync SQLAlchemy URL (postgresql://...) on a
-    # PostgreSQL deployment — see the dialect branch in the caller. We keep
-    # the fast raw-sqlite3 single-transaction path for SQLite and fall back to
-    # a SQLAlchemy ON CONFLICT DO NOTHING bulk insert for PostgreSQL.
-    use_sqlite = _is_sqlite(db_file)
-
-    conn = None
-    if use_sqlite:
-        # Aggressive write tuning — single transaction, no per-batch commits.
-        # Empirically: micro-batch commits were the bottleneck (275 fsyncs ×
-        # ~250ms = ~70s). One big transaction + synchronous=NORMAL brings the
-        # insert phase from ~70s down to ~3-5s for 55K rows.
-        # isolation_level=None → we manage BEGIN/COMMIT manually (no auto-begin
-        # from the sqlite3 driver that could conflict with our transaction).
-        conn = sqlite3.connect(db_file, timeout=60, isolation_level=None)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA busy_timeout=30000")
-        conn.execute("PRAGMA temp_store=MEMORY")
-        conn.execute("PRAGMA cache_size=-20000")  # 20 MB cache
-
-    sql = """INSERT OR IGNORE INTO oe_costs_item
-        (id, code, description, unit, rate, currency, source,
-         classification, tags, components, descriptions,
-         is_active, region, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"""
+    # 5. Build the insert rows. ``db_file`` carries the sync SQLAlchemy URL
+    # (postgresql://...) of the target cluster — see the caller. Every row is
+    # accumulated and handed to ``_pg_bulk_insert_cost_rows`` (COPY into a
+    # staging table + ON CONFLICT DO NOTHING) below.
 
     # CWICR parquet carries no currency column — every rate is denominated in
     # the region's local currency. Resolve it ONCE from ``db_id`` (constant for
     # the whole import) so each row persists its true ISO currency instead of
-    # the empty string that read-side fallbacks then had to paper over. This
-    # ``batch`` is reused for BOTH the SQLite executemany and the PostgreSQL
-    # bulk helper below, so this single value fixes both dialects.
+    # the empty string that read-side fallbacks then had to paper over.
     resolved_currency = _resolve_currency(None, db_id)
 
-    imported = 0
     skipped_count = 0
-    # Bigger chunk and only ONE commit at the end (SQLite). On PostgreSQL we
-    # accumulate every row and hand the whole list to the PG bulk helper.
-    flush_every = 5000
     batch: list[tuple] = []
-    if conn is not None:
-        conn.execute("BEGIN IMMEDIATE")
 
     for rate_code, row in grouped.iterrows():
         desc = _safe_str(row.get("_desc", ""))
@@ -3949,23 +3907,9 @@ def _process_and_insert_cwicr(parquet_path: str, db_id: str, db_file: str) -> di
             )
         )
 
-        if conn is not None and len(batch) >= flush_every:
-            conn.executemany(sql, batch)
-            imported += len(batch)
-            batch.clear()
-
-    if conn is not None:
-        # Final chunk (still inside the BEGIN)
-        if batch:
-            conn.executemany(sql, batch)
-            imported += len(batch)
-        conn.execute("COMMIT")  # single commit — one fsync for the whole import
-        conn.close()
-    else:
-        # PostgreSQL: idempotent bulk insert via ON CONFLICT (code, region)
-        # DO NOTHING, batched inside a transaction. ``batch`` holds every row
-        # because the per-loop flush above is gated on the SQLite connection.
-        imported = _pg_bulk_insert_cost_rows(db_file, batch)
+    # PostgreSQL: idempotent bulk insert via ON CONFLICT (code, region)
+    # DO NOTHING. ``batch`` holds every accumulated row.
+    imported = _pg_bulk_insert_cost_rows(db_file, batch)
 
     elapsed = round(time.monotonic() - start, 1)
     _log.info("CWICR %s: %d imported, %d skipped in %.1fs", db_id, imported, skipped_count, elapsed)
@@ -4100,113 +4044,17 @@ def _build_cwicr_items(df: pd.DataFrame, db_id: str) -> list[dict[str, Any]]:  #
     pass  # unreachable — function returns above
 
 
-def _bulk_insert_costs_sync(db_path: str, items: list[dict]) -> int:
-    """Bulk insert cost items using a SEPARATE sync SQLite connection.
-
-    This runs in a thread pool and uses its own connection, so it does NOT
-    block the async session pool (login, search, etc. remain responsive).
-
-    Uses INSERT OR IGNORE to skip duplicate codes per region.
-    """
-    import json as _json
-    import sqlite3
-
-    if not items:
-        return 0
-
-    conn = sqlite3.connect(db_path, timeout=60)
-    conn.execute("PRAGMA journal_mode=WAL")  # WAL allows concurrent reads during write
-    conn.execute("PRAGMA busy_timeout=30000")  # Wait up to 30s if locked
-
-    sql = """
-        INSERT OR IGNORE INTO oe_costs_item
-            (id, code, description, unit, rate, currency, source,
-             classification, tags, components, descriptions,
-             is_active, region, metadata)
-        VALUES
-            (?, ?, ?, ?, ?, ?, ?,
-             ?, ?, ?, ?,
-             ?, ?, ?)
-    """
-
-    rows = []
-    for item in items:
-        region = item.get("region", "")
-        # Stamp the true region currency when the item didn't carry one, so
-        # rates never persist with an empty currency (mirrors the live CWICR
-        # ingest path). ``_resolve_currency`` returns "" only for genuinely
-        # unknown regions — honest, never a wrong "EUR".
-        currency = item.get("currency") or _resolve_currency(None, region)
-
-        rows.append(
-            (
-                str(uuid.uuid4()),
-                item["code"],
-                item["description"][:500],
-                item["unit"][:20],
-                item["rate"],
-                currency,
-                item.get("source", "cwicr"),
-                _json.dumps(item.get("classification", {})),
-                "[]",
-                "[]",
-                "{}",
-                1,
-                region,
-                _json.dumps(item.get("metadata", {})),
-            )
-        )
-
-    # Insert in micro-batches of 200 with commit after each.
-    # This releases the SQLite write lock between batches so other
-    # connections (login, search) are never blocked for more than ~1 second.
-    import time
-
-    micro_batch = 200
-    inserted = 0
-    for i in range(0, len(rows), micro_batch):
-        chunk = rows[i : i + micro_batch]
-        try:
-            conn.executemany(sql, chunk)
-            conn.commit()
-            inserted += len(chunk)
-        except Exception:
-            conn.rollback()
-            # Fallback: one-by-one for this chunk
-            for row in chunk:
-                try:
-                    conn.execute(sql, row)
-                    conn.commit()
-                    inserted += 1
-                except Exception:
-                    conn.rollback()
-        # Brief sleep to yield SQLite lock for other connections
-        if i % 2000 == 0 and i > 0:
-            time.sleep(0.1)
-
-    conn.close()
-    return inserted
-
-
 async def _bulk_insert_costs(session: AsyncSession, items: list[dict]) -> int:
-    """Async wrapper: runs the dialect-correct bulk insert in a worker thread.
+    """Async wrapper: runs the PostgreSQL bulk insert in a worker thread.
 
-    On SQLite this opens its own raw-sqlite3 connection (so it never blocks the
-    async session pool). On PostgreSQL it routes to the ON CONFLICT DO NOTHING
-    bulk helper on a short-lived sync engine — never a stray local SQLite file.
+    Routes to the ON CONFLICT DO NOTHING bulk helper on a short-lived sync
+    engine so the heavy load never blocks the async session pool.
     """
     import asyncio
 
     from app.config import get_settings
-    from app.database import _is_sqlite
 
     settings = get_settings()
-
-    if _is_sqlite(settings.database_url):
-        # Extract SQLite file path from URL like "sqlite+aiosqlite:///path/to/db".
-        db_url = settings.database_url
-        db_path = db_url.split("///")[-1] if "///" in db_url else "openestimate.db"
-        return await asyncio.to_thread(_bulk_insert_costs_sync, db_path, items)
 
     # PostgreSQL: build positional rows matching the CWICR column order and run
     # the idempotent ON CONFLICT (code, region) DO NOTHING bulk insert.

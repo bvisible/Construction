@@ -158,7 +158,9 @@ def upgrade() -> None:
             sa.Column("hazard_class", sa.String(50), nullable=True),
             sa.Column("shelf_life_days", sa.Integer(), nullable=True),
             sa.Column("reorder_point", sa.Numeric(18, 4), nullable=False, server_default="0"),
-            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+            # PostgreSQL rejects an integer default on a boolean column;
+            # "1" worked only under SQLite's loose typing.
+            sa.Column("active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         )
 
     # ── Price list ───────────────────────────────────────────────────────────
@@ -566,10 +568,10 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    # Drop in reverse dependency order
+    # Drop in reverse dependency order. CASCADE lets PostgreSQL also remove
+    # inbound FK constraints from sibling tables (e.g. the goods-receipt table
+    # references the warehouse table), which otherwise block a plain DROP TABLE
+    # with DependentObjectsStillExist.
     for tbl in reversed(_TABLES):
         if _has_table(inspector, tbl):
-            try:
-                op.drop_table(tbl)
-            except sa.exc.OperationalError:
-                pass
+            op.execute(f'DROP TABLE IF EXISTS "{tbl}" CASCADE')

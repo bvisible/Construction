@@ -1,28 +1,18 @@
 """Shared fixtures for the Geo Hub raster-overlay test suite.
 
-Per-module SQLite isolation must run BEFORE any ``from app...`` import.
-A fresh temp DB per test module keeps cross-test bleed at zero.
+The engine is bound to the shared PostgreSQL cluster by ``tests/conftest.py``
+before any ``from app...`` import runs, so these fixtures operate against that
+PostgreSQL database.
 """
 
 from __future__ import annotations
 
 import io
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# Allocate the temp DB path at import time but defer setting the env var
-# to the fixture so individual test modules can opt out via their own
-# fixture.
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-geo-overlay-"))
-_TMP_DB = _TMP_DIR / "geo_overlay.db"
-os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}")
-os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{_TMP_DB.as_posix()}")
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 def make_tiny_pdf_bytes(text: str = "Site plan") -> bytes:

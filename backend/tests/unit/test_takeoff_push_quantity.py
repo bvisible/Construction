@@ -22,14 +22,12 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
-# Per ``feedback_test_isolation.md`` — redirect DB URL before any
-# ``app`` import. We never actually hit the DB here, but the module
-# imports ``app.modules.takeoff.service`` which transitively loads
-# config.
+# The SQLAlchemy engine is already bound to the conftest-provisioned
+# PostgreSQL cluster before this module imports. We never actually hit
+# the DB here, but the module imports ``app.modules.takeoff.service``
+# which transitively loads config, so point ``DATA_DIR`` at a scratch
+# directory.
 _TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-takeoff-push-"))
-_TMP_DB = _TMP_DIR / "takeoff_push.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 os.environ["DATA_DIR"] = str(_TMP_DIR)
 
 from app.modules.takeoff.service import _pick_takeoff_value  # noqa: E402

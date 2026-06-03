@@ -13,7 +13,7 @@ Covers the v3124 buyer-portal magic-link surface end-to-end:
   the ``crm.lead.message_received`` event.
 * RBAC: EDITOR cannot issue, MANAGER can.
 
-The R7/R8 ``conftest.py`` does the per-module SQLite isolation so this
+The R7/R8 ``conftest.py`` does the per-module PostgreSQL isolation so this
 file runs in parallel with the rest of the property_dev tests.
 """
 
@@ -561,8 +561,8 @@ async def test_contact_agent_publishes_event(
 
     We monkey-patch ``event_bus.publish_detached`` so we capture the
     event arguments synchronously without running any async subscribers
-    (subscribers that hit the DB would race the request session under
-    aiosqlite — see ``feedback_lazy_locale_header_race`` for context).
+    (subscribers that hit the DB would race the request session —
+    see ``feedback_lazy_locale_header_race`` for context).
     """
     issued = await client.post(
         "/api/v1/property-dev/portal/issue/",

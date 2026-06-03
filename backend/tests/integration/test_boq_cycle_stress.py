@@ -9,13 +9,12 @@ projects actually hit. The guard logic lives in
 Three scenarios:
 
 1. **Long chain.** 1 000-node linear chain (each parent_id = previous).
-   Pointing the root at the leaf must reject quickly — the bound is
-   set to catch an O(n²) regression rather than chase microseconds:
+   Pointing the root at the leaf must reject quickly. The bound is
+   set to catch an O(n2) regression rather than chase microseconds:
    the current implementation walks descendants via N sequential
-   ``list_children`` queries, which on aiosqlite + SQLite costs ~2-3
-   ms per round-trip. We allow up to 5 s on a 1 000-node chain (≈ 5
-   ms/node); a true regression to quadratic walking would blow well
-   past that.
+   ``list_children`` queries, each a round-trip to PostgreSQL. We
+   allow up to 5 s on a 1 000-node chain; a true regression to
+   quadratic walking would blow well past that.
 
 2. **Wide tree.** 8 levels × 3 children = 9 841-position balanced
    tree. Re-parenting a leaf under the root is a legal move (the leaf
@@ -29,9 +28,10 @@ Three scenarios:
    interleaving even if every individual ``_validate_parent_id`` call
    sees a stale read.
 
-Isolation: each test gets a fresh tempfile-backed SQLite DB with only
-the tables we touch (User, Project, BOQ, Position, plus the BOQ
-satellites). The production ``backend/openestimate.db`` is never
+Isolation: each test gets a fresh throwaway PostgreSQL database with
+the full schema (User, Project, BOQ, Position, plus the BOQ
+satellites), cloned from the session template by
+``tests._pg.isolated_engine``. The production database is never
 touched. See ``feedback_test_isolation.md``.
 
 Run::
@@ -43,10 +43,8 @@ Run::
 from __future__ import annotations
 
 import asyncio
-import tempfile
 import time
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -54,49 +52,29 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
+from tests._pg import isolated_engine
+
 # ─────────────────────────────────────────────────────────────────────────
-# Per-test fixtures — fresh tempfile SQLite DB, never the prod one
+# Per-test fixtures — throwaway PostgreSQL database, never the prod one
 # ─────────────────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session_factory():
-    """Fresh per-test SQLite file with the BOQ-relevant tables created.
+    """Per-test throwaway PostgreSQL database with the full schema.
 
-    Yields a sessionmaker. Each test opens its own short-lived sessions
-    from it — concurrent tasks need independent sessions to actually
-    interleave at the DB layer.
+    Yields a sessionmaker bound to an isolated, schema-loaded database
+    (cloned from the session template by ``tests._pg.isolated_engine``).
+    Each test opens its own short-lived sessions from it — concurrent
+    tasks need independent sessions that must see each other's commits,
+    so a real throwaway database is used rather than a savepoint-rolled-
+    back shared session.
     """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="boq_cycle_stress_"))
-    tmp_db = tmp_dir / "stress.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    # Import the models we need so SQLAlchemy registers their tables on
-    # ``Base.metadata``. Order matters only for FK resolution at create
-    # time — Project.owner_id references oe_users_user, BOQ.project_id
-    # references oe_projects_project, etc.
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    try:
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
         yield factory
-    finally:
-        await engine.dispose()
-        try:
-            tmp_db.unlink(missing_ok=True)
-            tmp_dir.rmdir()
-        except OSError:
-            pass
 
 
 @pytest_asyncio.fixture
@@ -245,7 +223,7 @@ async def _bulk_insert_tree(
                     leaves.append(child_id)
         parents = next_parents
 
-    # Bulk-insert in chunks to keep SQLite happy (statement size limits).
+    # Bulk-insert in chunks to keep the driver happy (parameter limits).
     CHUNK = 500
     for i in range(0, len(rows), CHUNK):
         session.add_all(rows[i : i + CHUNK])
@@ -322,9 +300,9 @@ async def test_long_chain_root_to_leaf_cycle_rejected_fast(session_factory, seed
     to traverse the entire chain to find the leaf, so this is the
     worst-case shape for the current (one-query-per-level) walker.
 
-    Performance budget is set to catch an O(n²) regression rather than
-    pin a microsecond target — the walk does N sequential async DB
-    round-trips, which on Windows + SQLite costs a few ms each.
+    Performance budget is set to catch an O(n2) regression rather than
+    pin a microsecond target. The walk does N sequential async DB
+    round-trips to PostgreSQL, a few ms each.
     """
     boq_id = seeded_boq
 
@@ -340,14 +318,13 @@ async def test_long_chain_root_to_leaf_cycle_rejected_fast(session_factory, seed
 
     assert accepted is False, "Cycle attempt should reject"
     assert "cycle" in reason.lower() or "descendant" in reason.lower(), reason
-    # 5 s ceiling on a 1k chain ≈ 5 ms / node. The current walker is
-    # O(n) with one async round-trip per level; SQLite + aiosqlite on
-    # Windows clocks ~2-3 ms per call. An O(n²) regression on 1 000
-    # nodes would need to crunch a million ops and would blow past 30+
-    # seconds — well outside this budget.
+    # 5 s ceiling on a 1k chain. The current walker is O(n) with one
+    # async round-trip per level to PostgreSQL, a few ms each. An
+    # O(n2) regression on 1 000 nodes would need to crunch a million
+    # ops and would blow past 30+ seconds, well outside this budget.
     assert elapsed < 5.0, (
         f"Cycle detection on a 1k chain took {elapsed:.2f} s "
-        "— suggests the descendant walk regressed from O(n) to O(n²)."
+        "- suggests the descendant walk regressed from O(n) to O(n2)."
     )
 
 
@@ -434,7 +411,7 @@ async def test_balanced_tree_root_to_leaf_rejected(session_factory, seeded_boq) 
     # involves more child queries than the chain case.)
     assert elapsed < 5.0, (
         f"Cycle detection on a ~10k-node tree took {elapsed:.2f} s "
-        "— a regression to O(n²) would explain anything above this."
+        "- a regression to O(n2) would explain anything above this."
     )
 
 
@@ -597,11 +574,11 @@ async def test_concurrent_legal_reparents_all_succeed(session_factory, seeded_bo
         return_exceptions=True,
     )
 
-    # SQLite has limited write concurrency; some transactions may
-    # collide and need a retry. Treat "database is locked" the same as
-    # success for the *purpose of this test* — we only care that the
-    # cycle guard didn't false-reject, not that SQLite handled all 10
-    # writers gracefully.
+    # Concurrent writers may collide on row locks and surface a lock
+    # or deadlock error. Treat any lock-related failure the same as
+    # success for the *purpose of this test*: we only care that the
+    # cycle guard didn't false-reject, not that every one of the 10
+    # writers committed without contention.
     bad = [
         r
         for r in results

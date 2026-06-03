@@ -43,10 +43,20 @@ _CORE_MODULES: list[str] = [
     "i18n_foundation",
     "collaboration_locks",
     "architecture_map",
+    # Cost reference data is core to a cost-estimation platform: the cost
+    # database, the resource catalogue and the assembly library back every
+    # estimating workflow, so no company profile may hide them. (The sidebar
+    # mirrors this by leaving /costs, /catalog and /assemblies out of its
+    # profile-gated route map.)
+    "costs",
+    "catalog",
+    "assemblies",
 ]
 
 # ── Functional modules, grouped (mirror of modules.ts groups) ───────────────────
-_ESTIMATION = ["boq", "costs", "assemblies", "catalog", "validation", "cost_match", "match"]
+# costs / catalog / assemblies are intentionally NOT here: they are core
+# (see _CORE_MODULES) so every profile keeps them on.
+_ESTIMATION = ["boq", "validation", "cost_match", "match"]
 _TAKEOFF = ["takeoff", "dwg_takeoff", "cad"]
 _BIM = ["bim_hub", "bim_requirements", "match_elements", "opencde_api"]
 _AI = ["ai", "erp_chat", "compliance_ai"]

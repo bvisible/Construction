@@ -2,10 +2,9 @@
 
 Two audit findings are exercised here:
 
-1. The wildcard activity-log handler used to be permanently disabled
-   because it tripped ``MissingGreenlet`` on SQLite.  We now register
-   it conditionally — PostgreSQL gets the wildcard, SQLite skips with
-   an INFO log so the decision is visible at startup.
+1. The wildcard activity-log handler is registered at import time. (It
+   used to be skipped on SQLite to avoid ``MissingGreenlet``; the app is
+   PostgreSQL-only now, so the handler is always registered.)
 
 2. Vector-indexing failures used to log at DEBUG, meaning a broken
    embedding service silently stopped indexing in production.  They
@@ -56,51 +55,24 @@ def _reload_boq_events(database_url: str):
 
 
 # ---------------------------------------------------------------------------
-# SQLite dialect guard
+# Activity-log wildcard handler registration
 # ---------------------------------------------------------------------------
 
 
-class TestWildcardDialectGuard:
-    def test_sqlite_url_skips_wildcard_with_info_log(self, caplog):
-        with caplog.at_level(logging.INFO, logger="app.modules.boq.events"):
-            mod = _reload_boq_events("sqlite+aiosqlite:///./openestimate.db")
+class TestWildcardHandlerRegistration:
+    def test_wildcard_handler_is_registered(self):
+        """The activity-log wildcard handler is always registered.
 
-        # Wildcard activity-log handler MUST NOT be registered.
-        assert mod._log_boq_activity not in event_bus._wildcard_handlers
-
-        # But the per-event vector handlers still are.
-        assert mod._on_position_created in event_bus._handlers.get("boq.position.created", [])
-        assert mod._on_position_updated in event_bus._handlers.get("boq.position.updated", [])
-        assert mod._on_position_deleted in event_bus._handlers.get("boq.position.deleted", [])
-
-        # The decision is documented at INFO so operators see it on
-        # startup.  The exact wording may evolve — we pin on the
-        # essentials: the module name + the skip decision.
-        skip_records = [
-            rec for rec in caplog.records if "skipping activity-log wildcard handler on SQLite" in rec.getMessage()
-        ]
-        assert skip_records
-        assert skip_records[0].levelno == logging.INFO
-
-    def test_postgres_url_registers_wildcard(self):
+        The app is PostgreSQL-only, so the old SQLite skip path is gone and the
+        handler is registered unconditionally at import time, alongside the
+        per-event vector handlers.
+        """
         mod = _reload_boq_events("postgresql+asyncpg://oe:oe@localhost:5432/openestimate")
 
         assert mod._log_boq_activity in event_bus._wildcard_handlers
-
-    def test_is_sqlite_dialect_reads_settings_each_call(self):
-        """Ensure the helper actually consults the current settings and
-        isn't permanently frozen at import time."""
-        mod = _reload_boq_events("postgresql+asyncpg://oe:oe@localhost:5432/openestimate")
-
-        pg_settings = MagicMock()
-        pg_settings.database_url = "postgresql+asyncpg://oe:oe@localhost/db"
-        with patch("app.config.get_settings", return_value=pg_settings):
-            assert mod._is_sqlite_dialect() is False
-
-        sqlite_settings = MagicMock()
-        sqlite_settings.database_url = "sqlite+aiosqlite:///./foo.db"
-        with patch("app.config.get_settings", return_value=sqlite_settings):
-            assert mod._is_sqlite_dialect() is True
+        assert mod._on_position_created in event_bus._handlers.get("boq.position.created", [])
+        assert mod._on_position_updated in event_bus._handlers.get("boq.position.updated", [])
+        assert mod._on_position_deleted in event_bus._handlers.get("boq.position.deleted", [])
 
 
 # ---------------------------------------------------------------------------

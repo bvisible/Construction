@@ -2,27 +2,18 @@
 viewpoints, overlays, GeoJSON / KML I/O, tile-generation jobs, and
 the map-config bundle.
 
-Scaffolding mirrors ``test_property_dev_buyer_update.py``: per-module
-temp SQLite registered BEFORE any ``from app...`` import.
+Runs against the PostgreSQL cluster provisioned by ``conftest.py``; the
+SQLAlchemy engine is already bound before this module is imported.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-geo-hub-api-"))
-_TMP_DB = _TMP_DIR / "geo_hub_api.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")

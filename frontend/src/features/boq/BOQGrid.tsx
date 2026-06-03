@@ -43,6 +43,7 @@ import {
   Cuboid,
   Link2,
   Link2Off,
+  Banknote,
 } from 'lucide-react';
 
 import {
@@ -728,6 +729,44 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
     positionId: string;
     anchorEl: HTMLElement | null;
   } | null>(null);
+
+  /** Per-position currency dialog (multi-currency BOQ). Lets the user set
+   *  ``metadata.currency`` on a leaf position directly — the only entry
+   *  point for positions that carry no resources (resource-driven rows set
+   *  currency per resource via the inline combobox). Empty code ⇒ reset to
+   *  project base currency (drops ``metadata.currency``). */
+  const [positionCurrencyDialog, setPositionCurrencyDialog] = useState<{
+    positionId: string;
+    code: string;
+  } | null>(null);
+
+  const commitPositionCurrency = useCallback(() => {
+    const dlg = positionCurrencyDialog;
+    if (!dlg) return;
+    const pos = positions.find((p) => p.id === dlg.positionId);
+    if (!pos) {
+      setPositionCurrencyDialog(null);
+      return;
+    }
+    const oldMeta = (pos.metadata ?? {}) as Record<string, unknown>;
+    const newMeta: Record<string, unknown> = { ...oldMeta };
+    const code = dlg.code.trim().toUpperCase();
+    // Empty / base currency ⇒ remove the override so the position falls back
+    // to the project base currency (keeps metadata clean, matches the
+    // backend ``_position_currency`` fallback contract).
+    if (!code || code === currencyCode.trim().toUpperCase()) {
+      delete (newMeta as { currency?: unknown }).currency;
+    } else {
+      newMeta.currency = code;
+    }
+    onUpdatePosition?.(
+      pos.id,
+      { metadata: newMeta } as UpdatePositionData,
+      { metadata: oldMeta } as UpdatePositionData,
+    );
+    setPositionCurrencyDialog(null);
+    scheduleGridRefresh(['unit_rate', 'total']);
+  }, [positionCurrencyDialog, positions, onUpdatePosition, currencyCode, scheduleGridRefresh]);
 
   const openPositionVariantPicker = useCallback(
     (positionId: string, anchorEl: HTMLElement | null) => {
@@ -2673,6 +2712,29 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
                     />
                   );
                 })()}
+                {/* ── Currency (multi-currency BOQ) ──────────────────
+                     Sets ``metadata.currency`` on the position so it can
+                     be priced in a currency other than the project base.
+                     The only entry point for leaf positions (resource
+                     rows set currency per resource via the inline
+                     combobox). The chosen currency shows as a badge on
+                     the unit-rate cell and the total rebases to base. */}
+                <CtxSeparator />
+                {(() => {
+                  const cur = (meta?.currency as string | undefined) || currencyCode;
+                  return (
+                    <CtxItem icon={<Banknote size={14} className="text-amber-600"/>}
+                      label={t('boq.set_position_currency', {
+                        defaultValue: 'Currency: {{code}}',
+                        code: cur,
+                      } as Record<string, unknown>)}
+                      onClick={() => {
+                        setPositionCurrencyDialog({ positionId: d.id as string, code: cur });
+                        closeContextMenu();
+                      }}
+                    />
+                  );
+                })()}
                 {/* ── AI features ─────────────────────────────────── */}
                 <CtxSeparator />
                 <CtxGroupLabel label="AI" />
@@ -3058,6 +3120,91 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
           />
         );
       })()}
+
+      {/* ── Per-position currency dialog (multi-currency BOQ) ──────────
+       *   Sets ``metadata.currency`` on the position. Reached from the
+       *   row context menu. Choosing the base currency clears the
+       *   override. The unit-rate cell then shows the currency badge and
+       *   the position total rebases to base via the project FX rate so
+       *   currencies are never blended in the grand total. */}
+      {positionCurrencyDialog && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setPositionCurrencyDialog(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="boq-position-currency-title"
+            className="bg-surface-elevated rounded-xl border border-border-light shadow-lg w-[340px] p-5 animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3
+              id="boq-position-currency-title"
+              className="text-sm font-semibold text-content-primary mb-1 flex items-center gap-2"
+            >
+              <Banknote size={16} className="text-amber-600" />
+              {t('boq.position_currency_title', { defaultValue: 'Position currency' })}
+            </h3>
+            <p className="text-[11px] text-content-tertiary mb-4">
+              {t('boq.position_currency_desc', {
+                defaultValue:
+                  'Price this position in a currency other than the project base. The total is converted back to {{base}} for the grand total.',
+                base: currencyCode,
+              } as Record<string, unknown>)}
+            </p>
+            <label className="block text-[11px] font-medium text-content-secondary mb-1">
+              {t('boq.resource_currency', { defaultValue: 'Currency' })}
+            </label>
+            <select
+              value={positionCurrencyDialog.code || currencyCode}
+              onChange={(e) =>
+                setPositionCurrencyDialog({
+                  ...positionCurrencyDialog,
+                  code: e.target.value,
+                })
+              }
+              className="w-full h-8 rounded-md border border-border-medium bg-surface-primary px-2 text-xs text-content-primary outline-none focus:border-oe-blue"
+            >
+              {/* Base currency first (selecting it clears the override). */}
+              <option value={currencyCode}>
+                {currencyCode} {t('boq.currency_base_suffix', { defaultValue: '(base)' })}
+              </option>
+              {(fxRates ?? [])
+                .filter((fx) => fx.currency !== currencyCode)
+                .map((fx) => (
+                  <option key={`fx-${fx.currency}`} value={fx.currency}>
+                    {fx.currency}
+                  </option>
+                ))}
+              {ALL_CURRENCY_OPTIONS.filter(
+                (c) =>
+                  c.value !== currencyCode &&
+                  !(fxRates ?? []).some((fx) => fx.currency === c.value),
+              ).map((c) => (
+                <option key={`all-${c.value}`} value={c.value}>
+                  {c.value}
+                </option>
+              ))}
+            </select>
+            <div className="flex gap-2 justify-end mt-5">
+              <button
+                onClick={() => setPositionCurrencyDialog(null)}
+                className="h-8 px-3 rounded-md text-xs font-medium text-content-secondary bg-surface-secondary hover:bg-surface-tertiary transition-colors"
+              >
+                {t('common.cancel', { defaultValue: 'Cancel' })}
+              </button>
+              <button
+                onClick={commitPositionCurrency}
+                className="h-8 px-3 rounded-md text-xs font-semibold text-white bg-oe-blue hover:bg-oe-blue/90 transition-colors"
+              >
+                {t('common.save', { defaultValue: 'Save' })}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
     </div>
   );
 });

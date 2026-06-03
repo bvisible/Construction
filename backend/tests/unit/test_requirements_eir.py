@@ -17,20 +17,8 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Importing dependent models so Base.metadata.create_all() in the
-# fixture has every FK target available (Requirement → BOQ Position,
-# RequirementSet → Project, etc.). Conftest also imports these but
-# this file may be run in isolation.
-import app.modules.boq.models  # noqa: F401
-import app.modules.projects.models  # noqa: F401
-from app.database import Base
 from app.modules.requirements.evaluator import compute_deliverable_coverage
 from app.modules.requirements.models import (
     Requirement,
@@ -39,32 +27,24 @@ from app.modules.requirements.models import (
 )
 from app.modules.requirements.schemas import DeliverableCreate
 from app.modules.requirements.service import RequirementsService
+from tests._pg import transactional_session
 
 # ── Async DB fixture ─────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite session with the full schema bootstrapped.
+    """Per-test PostgreSQL session inside a transaction rolled back on teardown.
 
-    FK enforcement is turned OFF for this fixture so EIR rows can hang
-    off a synthesised requirement/set without first inserting a full
-    Project row tree — the matrix/coverage logic under test is
-    self-contained around ``oe_requirement_deliverable`` and doesn't
-    care about cross-module integrity.
+    FK enforcement is turned OFF for this fixture (via
+    ``session_replication_role = replica``) so EIR rows can hang off a
+    synthesised requirement/set without first inserting a full Project
+    row tree. The matrix/coverage logic under test is self-contained
+    around ``oe_requirement_deliverable`` and doesn't care about
+    cross-module integrity.
     """
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        future=True,
-    )
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA foreign_keys=OFF"))
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
-        await s.execute(text("PRAGMA foreign_keys=OFF"))
+    async with transactional_session(disable_fks=True) as s:
         yield s
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

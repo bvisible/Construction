@@ -17,63 +17,33 @@ attributes. A bad key now raises ``ValueError("invalid_group_by_keys",
 <bad_keys>)``; ``run_stage`` catches that, writes it to ``stage.error``
 and flips status to "error" — exactly the UX a user expects.
 
-Per ``feedback_test_isolation.md`` every test uses a per-test temp
-SQLite — never the production / shared test DB.
+Every test uses a transaction-isolated PostgreSQL session (rolled back
+on teardown by ``tests._pg.transactional_session``) — never the
+production / shared test DB.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.match_elements import pipeline
 from app.modules.match_elements.models import (
     MatchSession,
     MatchStageState,
 )
 from app.modules.match_elements.service import get_service
-
-
-def _register_models() -> None:
-    """Eagerly register every ORM module referenced by the test DB.
-
-    Without this, ``Base.metadata.create_all`` only creates the tables
-    of modules already imported elsewhere — and the test runner may
-    skip a few depending on collection order. We pull in every module
-    transitively referenced by the match_elements FK graph (costs for
-    the prompt-template FK, etc).
-    """
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.match_elements.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Spin up an isolated SQLite, register the schema, yield a session."""
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-match-grp-")) / "grp.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session seeded with a User + Project."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -95,12 +65,6 @@ async def session() -> AsyncSession:
         await s.commit()
         s.info["project_id"] = project.id
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 async def _seed_session(s: AsyncSession) -> MatchSession:

@@ -1,33 +1,24 @@
 """Shared fixtures for property_dev R7 security tests.
 
-Per ``feedback_test_isolation.md`` we redirect ``DATABASE_URL`` to a
-per-module temp SQLite file BEFORE the app is first imported. This file
-exists ONLY for the R7 test suite — the legacy integration tests in
+The test suite runs against the PostgreSQL cluster provisioned by the
+top-level ``tests/conftest.py``, which binds the SQLAlchemy engine before
+any test module is imported. This file does not build its own engine, so
+it runs on that PostgreSQL. The legacy integration tests in
 ``backend/tests/integration/test_property_dev_*`` keep their own
 per-file scaffolds.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-r7-"))
-_TMP_DB = _TMP_DIR / "propdev_r7.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

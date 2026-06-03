@@ -2,8 +2,9 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Tests for the Assembly Library templates feature (v4.0 / Slice 1).
 
-Per ``feedback_test_isolation.md`` every test uses a per-test temp
-SQLite — never the production / shared test DB.
+Every test runs against a transaction-isolated PostgreSQL session
+(``tests._pg.transactional_session``), rolled back on teardown, so it
+never touches the production / shared test DB.
 
 Coverage
 --------
@@ -18,51 +19,28 @@ Coverage
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.assemblies.repository import (
     AssemblyTemplateRepository,
     seed_assembly_templates,
 )
 from app.modules.assemblies.schemas import ApplyTemplateRequest
 from app.modules.assemblies.templates_seed import ASSEMBLY_TEMPLATES
+from tests._pg import transactional_session
 
 PROJECT_ID = uuid.uuid4()
 OWNER_ID = uuid.uuid4()
 
 
-def _register_models() -> None:
-    """Eagerly register every ORM module referenced by the test DB."""
-    import app.modules.assemblies.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.catalog.models  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Spin up an isolated SQLite, register the schema, yield a session."""
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-asm-tpl-")) / "asm_templates.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -84,12 +62,6 @@ async def session() -> AsyncSession:
         )
         await s.commit()
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 async def _seed_costs(session: AsyncSession) -> None:

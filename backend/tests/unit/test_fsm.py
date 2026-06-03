@@ -10,8 +10,9 @@ Scope
 * Side-effect handlers fire after validation.
 * Audit-log rows are appended via :func:`log_activity`.
 
-All tests use an in-memory SQLite + Base.metadata.create_all() session so
-they run in milliseconds and never touch the production database.
+All tests use an isolated, throwaway PostgreSQL database (cloned from a
+schema-loaded template by ``tests._pg.isolated_engine``) so they run fast and
+never touch the production database.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_log import get_activity_for_entity
 from app.core.fsm import (
@@ -38,21 +39,16 @@ from app.core.fsm import (
     TransitionNotPermitted,
     all_fsms,
 )
-from app.database import Base
+from tests._pg import transactional_session
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """In-memory SQLite session with ActivityLog table created."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sessionmaker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sessionmaker() as s:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 class StubEntity:

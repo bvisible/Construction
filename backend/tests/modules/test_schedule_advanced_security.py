@@ -51,7 +51,7 @@ This file pins the five R7 guarantees:
    by introspecting the FastAPI route table for the union of all
    sensitive write paths.
 
-Tests run with in-memory stubs (no SQLite, no FastAPI app boot) so they
+Tests run with in-memory stubs (no database, no FastAPI app boot) so they
 stay fast and reproducible, mirroring ``test_contracts_security.py``.
 """
 

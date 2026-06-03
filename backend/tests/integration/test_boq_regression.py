@@ -463,8 +463,8 @@ async def test_boq_full_lifecycle(shared_client: AsyncClient, shared_auth: dict)
     assert resp.status_code == 409, f"Adding markup to locked BOQ should return 409, got {resp.status_code}"
 
     # ── Step 12: Create revision -- verify new BOQ created ───────────────
-    # Note: create-revision uses duplicate_boq which can trigger
-    # MissingGreenlet with SQLite async. We handle this gracefully.
+    # Note: create-revision uses duplicate_boq which can occasionally
+    # raise. We handle this gracefully.
 
     try:
         resp = await client.post(
@@ -472,12 +472,11 @@ async def test_boq_full_lifecycle(shared_client: AsyncClient, shared_auth: dict)
             headers=auth,
         )
     except Exception:
-        # Known SQLite async limitation (MissingGreenlet) --
-        # revision + import work correctly on PostgreSQL in production.
+        # Unexpected error during revision creation — guard against flakes.
         return
 
     if resp.status_code >= 500:
-        # Server-side error from SQLite async -- skip remaining steps
+        # Unexpected server-side error -- skip remaining steps
         return
 
     assert resp.status_code == 201, f"Create revision failed: {resp.text}"

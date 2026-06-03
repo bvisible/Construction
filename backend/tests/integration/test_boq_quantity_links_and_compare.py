@@ -16,12 +16,12 @@ Feature 2 (estimate baseline / line-level compare):
 * multi-currency: foreign-currency totals rebase into the project base
   currency before the direct-cost delta is summed.
 
-Test isolation (``feedback_test_isolation.md``): the per-session temp
-SQLite redirect, eager model registration and the synchronous event-bus
+Test isolation (``feedback_test_isolation.md``): the per-session
+PostgreSQL database, eager model registration and the synchronous event-bus
 shim are all provided by ``backend/tests/conftest.py`` — the production
-``openestimate.db`` is never touched. The fresh temp DB gets the new
+database is never touched. The session DB gets the
 ``oe_boq_quantity_link`` table from ``create_all`` (the model is the
-source of truth on a clean SQLite DB), so no ``alembic upgrade`` is
+source of truth on the schema), so no ``alembic upgrade`` is
 needed for the test.
 
 Run:

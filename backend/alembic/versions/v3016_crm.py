@@ -511,18 +511,10 @@ def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
-    # Drop indexes first
-    for table, indexes in _INDEXES:
-        if not _has_table(inspector, table):
-            continue
-        for name, _cols, _unique in indexes:
-            if _has_index(inspector, table, name):
-                try:
-                    op.drop_index(name, table_name=table)
-                except sa.exc.OperationalError:
-                    pass
-
-    # Drop tables in reverse dependency order
+    # Drop tables in reverse dependency order. CASCADE removes each table's
+    # indexes and constraints plus inbound FKs from sibling tables (e.g.
+    # oe_crm_opportunity.lost_reason_code references oe_crm_win_loss_reason),
+    # which a plain DROP TABLE / DROP INDEX cannot do on PostgreSQL.
     for tbl in (
         "oe_crm_forecast",
         "oe_crm_activity",
@@ -535,4 +527,4 @@ def downgrade() -> None:
         "oe_crm_pipeline_stage",
     ):
         if _has_table(inspector, tbl):
-            op.drop_table(tbl)
+            op.execute(f'DROP TABLE IF EXISTS "{tbl}" CASCADE')

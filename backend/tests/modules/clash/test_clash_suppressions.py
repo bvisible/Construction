@@ -13,25 +13,19 @@ Pin the contract:
 * unsuppress on an unknown signature is a no-op (returns False)
 * missing reason / blank signature → HTTPException 422
 
-Same per-test SQLite isolation pattern as ``test_smart_issues.py``.
+Runs on a transaction-isolated PostgreSQL session (rolled back on teardown)
+via ``tests._pg.transactional_session``.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.clash.models import (
     ClashResult,
     ClashRun,
@@ -41,27 +35,12 @@ from app.modules.clash.service import (
     ClashService,
     _compute_signature_hash,
 )
-
-
-def _register_models() -> None:
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.clash.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-clash-suppr-")) / "test.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -91,7 +70,6 @@ async def session() -> AsyncSession:
         s.info["project_b"] = p_b.id
         s.info["owner_id"] = str(owner.id)
         yield s
-    await engine.dispose()
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────

@@ -14,7 +14,9 @@ Scope:
     6. Magic-byte uploads — OLE positive test for RFI attachments (mirrors
        submittals test_review_cycle.py pattern).
 
-All tests use in-memory stubs / SQLite (no live DB required).
+DB-backed tests use the shared PostgreSQL ``transactional_session`` helper:
+each test runs inside an outer transaction that is rolled back on teardown, so
+state never leaks between tests. The remaining tests use in-memory stubs only.
 """
 
 from __future__ import annotations
@@ -28,44 +30,28 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
     verify_project_access,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
+from app.modules.projects.models import Project
 from app.modules.rfi.models import RFI
 from app.modules.rfi.router import router as rfi_router
 from app.modules.rfi.schemas import RFICreate
 from app.modules.rfi.service import RFIService
-from app.modules.users.models import APIKey, User
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Project.__table__,
-                ProjectWBS.__table__,
-                ProjectMilestone.__table__,
-                RFI.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, email: str | None = None) -> uuid.UUID:
@@ -518,7 +504,7 @@ class TestDistributionList:
 
 
 class TestRFIStatsOverdueCount:
-    """get_stats returns the correct overdue count. Uses a real SQLite DB."""
+    """get_stats returns the correct overdue count. Uses a real PostgreSQL DB."""
 
     @pytest.mark.asyncio
     async def test_stats_overdue_count_matches_open_past_due(self, db_session) -> None:

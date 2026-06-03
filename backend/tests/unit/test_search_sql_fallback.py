@@ -7,87 +7,52 @@ backing table. Without this the global search is silently broken on
 every default deployment.
 
 These tests exercise :func:`_sql_search_collection` directly with a
-file-backed SQLite DB seeded with rows in the tables that back each
-collection (BOQ positions, tasks, risks, requirements, costs). The
-vector layer is intentionally not invoked — the goal is to pin the
-SQL contract independent of any embedding model.
+transaction-isolated PostgreSQL session (cloned from a schema-loaded
+template by ``tests._pg.transactional_session``) seeded with rows in the
+tables that back each collection (BOQ positions, tasks, risks,
+requirements, costs). The vector layer is intentionally not invoked -
+the goal is to pin the SQL contract independent of any embedding model.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# ── Per-module DB isolation BEFORE any app imports ─────────────────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-search-sql-fallback-"))
-_TMP_DB = _TMP_DIR / "search.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from app.core.vector_index import (  # noqa: E402
+from app.core.vector_index import (
     COLLECTION_BOQ,
     COLLECTION_COSTS,
     COLLECTION_REQUIREMENTS,
     COLLECTION_RISKS,
     COLLECTION_TASKS,
 )
-from app.database import Base  # noqa: E402
-from app.modules.boq.models import BOQ, BOQMarkup, Position  # noqa: E402
-from app.modules.costs.models import CostItem  # noqa: E402
-from app.modules.projects.models import Project  # noqa: E402
-from app.modules.requirements.models import (  # noqa: E402
-    GateResult,
-    Requirement,
-    RequirementSet,
-)
-from app.modules.risk.models import RiskItem  # noqa: E402
-from app.modules.search.service import _sql_search_collection  # noqa: E402
-from app.modules.tasks.models import Task  # noqa: E402
-from app.modules.users.models import User  # noqa: E402
-
-# Tables we need for these tests — keep the create_all narrow so the
-# fixture spins up in milliseconds. The full ORM metadata pulls in 100+
-# tables which slows every test pointlessly. Project carries an FK to
-# oe_users_user (owner_id) so the User table is included.
-_TABLES = [
-    User.__table__,
-    Project.__table__,
-    BOQ.__table__,
-    Position.__table__,
-    BOQMarkup.__table__,
-    Task.__table__,
-    RiskItem.__table__,
-    RequirementSet.__table__,
-    Requirement.__table__,
-    GateResult.__table__,
-    CostItem.__table__,
-]
+from app.modules.boq.models import BOQ, Position
+from app.modules.costs.models import CostItem
+from app.modules.projects.models import Project
+from app.modules.requirements.models import Requirement, RequirementSet
+from app.modules.risk.models import RiskItem
+from app.modules.search.service import _sql_search_collection
+from app.modules.tasks.models import Task
+from app.modules.users.models import User
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[tuple[AsyncSession, str]]:
-    """Spin up a per-test SQLite DB seeded with one row per collection.
+    """Transaction-isolated PostgreSQL session seeded with one row per collection.
 
     Yields ``(session, project_id)`` so individual tests can exercise the
     optional ``project_id`` scope filter without re-seeding.
     """
-    db_path = _TMP_DIR / f"test-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_TABLES)
+    from tests._pg import transactional_session
 
     project_id = uuid.uuid4()
     owner_id = uuid.uuid4()
 
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    async with transactional_session() as s:
         # Owner — Project.owner_id is NOT NULL with FK to oe_users_user.
         owner = User(
             id=owner_id,
@@ -219,8 +184,6 @@ async def session() -> AsyncIterator[tuple[AsyncSession, str]]:
 
         await s.commit()
         yield s, str(project_id)
-
-    await engine.dispose()
 
 
 # ── BOQ ────────────────────────────────────────────────────────────────

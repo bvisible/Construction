@@ -2,24 +2,22 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """Integration tests for ``app.core.match_service``.
 
-Uses a temp SQLite DB (per ``feedback_test_isolation.md`` — never the
-production ``openestimate.db``) and monkeypatches the LanceDB cost
-vector adapter to return fixed hits so the suite stays deterministic
-and fast (no real embedding model required).
+Uses an isolated, throwaway PostgreSQL database (cloned from a
+schema-loaded template by ``tests._pg.isolated_engine`` - never the
+production database) and monkeypatches the LanceDB cost vector adapter
+to return fixed hits so the suite stays deterministic and fast (no real
+embedding model required).
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from app.core.match_service import (
@@ -35,6 +33,7 @@ from app.core.match_service import (
 from app.core.match_service.boosts import classifier as classifier_boost
 from app.core.match_service.boosts import unit as unit_boost
 from app.core.match_service.config import BOOST_WEIGHTS
+from tests._pg import isolated_engine
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -60,46 +59,28 @@ def _bypass_catalog_gate(monkeypatch):
     )
 
 
-def _register_minimal_models() -> None:
-    """Pull projects + users + audit models into Base.metadata."""
-    import app.core.audit  # noqa: F401  — AuditEntry table
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "match_service.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The ``project_id`` fixture seeds rows through its own session while the
+    test bodies open a separate session from the same factory to run the
+    ranker, so the two connections must see each other's commits - hence a
+    real throwaway database rather than a savepoint-rolled-back shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
 async def project_id(temp_engine_and_factory) -> uuid.UUID:
     """Create a real Project row so MatchProjectSettings can FK to it."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.modules.projects.models import Project
     from app.modules.users.models import User
@@ -304,7 +285,7 @@ async def test_bim_to_envelope_to_ranked_candidates(
     # ordering surfaces unambiguously in this unit-style assertion.
     monkeypatch.setenv("OE_MATCH_USE_BGE_RERANKER", "0")
 
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     raw = {
         "category": "wall",
@@ -357,7 +338,7 @@ async def test_translation_skipped_when_languages_match(
     patch_vector_search,
 ) -> None:
     """No translation fires when source_lang == target_language."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     envelope = ElementEnvelope(
         source="bim",
@@ -381,7 +362,7 @@ async def test_auto_link_only_when_threshold_and_enabled(
     patch_vector_search,
 ) -> None:
     """Auto-link populates only when both gates pass."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     # Boost the best hit's vector score so the boosted final clears 0.85.
     patch_vector_search["hits"][0]["score"] = 0.95
@@ -437,7 +418,7 @@ async def test_reranker_off_by_default(
     monkeypatch,
 ) -> None:
     """The LLM reranker only runs when use_reranker=True."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     rerank_calls: list[int] = []
 
@@ -615,7 +596,7 @@ async def test_match_element_returns_dicts_with_code_and_unit_rate(
     patch_vector_search,
 ) -> None:
     """Eval contract: ``async match_element(element_info, top_k) -> list[dict]``."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     async with factory() as session:
         results = await match_element(
             {
@@ -645,7 +626,7 @@ async def test_record_feedback_writes_audit_entry(
     project_id,
 ) -> None:
     """Feedback persists an AuditEntry with kind=match_feedback."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     envelope = ElementEnvelope(
         source="bim",
@@ -688,7 +669,7 @@ async def test_match_envelope_direct_entrypoint(
     project_id,
     patch_vector_search,
 ) -> None:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     envelope = ElementEnvelope(
         source="bim",
         source_lang="en",

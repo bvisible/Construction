@@ -3,37 +3,25 @@
 Locks down: SPI/CPI computation, S-curve generation, by_wbs breakdown and
 the no-cost-data graceful path.
 
-Per ``feedback_test_isolation.md`` every test owns its own temp SQLite file.
+All tests use a transaction-isolated PostgreSQL session (rolled back on
+teardown) from ``tests._pg.transactional_session``.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from datetime import date
 from decimal import Decimal
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.schedule.models import Activity, Schedule
 from app.modules.schedule.service_4d import ScheduleDashboardService
+from tests._pg import transactional_session
 
 PROJECT_ID = uuid.uuid4()
-
-
-def _register_minimal_models() -> None:
-    """Pull FK-target modules into Base.metadata before create_all."""
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.schedule.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
 
 
 async def _seed_project(session: AsyncSession, project_id: uuid.UUID) -> None:
@@ -53,28 +41,11 @@ async def _seed_project(session: AsyncSession, project_id: uuid.UUID) -> None:
 
 @pytest_asyncio.fixture
 async def session():
-    """Per-test isolated SQLite DB."""
-    tmp_db = Path(tempfile.mkdtemp()) / "dashboard.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    _register_minimal_models()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session (rolled back on teardown)."""
+    async with transactional_session() as s:
         await _seed_project(s, PROJECT_ID)
-        await s.commit()
+        await s.flush()
         yield s
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 def _activity(

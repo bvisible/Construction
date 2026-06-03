@@ -13,13 +13,13 @@ class TestSettingsDefaults:
     @pytest.fixture
     def settings(self, monkeypatch):
         """Create Settings with env vars to avoid loading .env file issues."""
-        monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-        monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/oe_test")
+        monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql+psycopg2://oe:oe@localhost:5432/oe_test")
         monkeypatch.setenv("APP_ENV", "development")
         return Settings(
             _env_file=None,
-            database_url="sqlite+aiosqlite:///./test.db",
-            database_sync_url="sqlite:///./test.db",
+            database_url="postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+            database_sync_url="postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
         )
 
     def test_app_name_default(self, settings):
@@ -74,12 +74,12 @@ class TestSettingsRequired:
 
     @pytest.fixture
     def settings(self, monkeypatch):
-        monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-        monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/oe_test")
+        monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql+psycopg2://oe:oe@localhost:5432/oe_test")
         return Settings(
             _env_file=None,
-            database_url="sqlite+aiosqlite:///./test.db",
-            database_sync_url="sqlite:///./test.db",
+            database_url="postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+            database_sync_url="postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
         )
 
     def test_has_database_url(self, settings):
@@ -107,25 +107,25 @@ class TestSettingsRequired:
 class TestComputedFields:
     @pytest.fixture
     def dev_settings(self, monkeypatch):
-        monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-        monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/oe_test")
+        monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql+psycopg2://oe:oe@localhost:5432/oe_test")
         return Settings(
             _env_file=None,
             app_env="development",
-            database_url="sqlite+aiosqlite:///./test.db",
-            database_sync_url="sqlite:///./test.db",
+            database_url="postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+            database_sync_url="postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
         )
 
     @pytest.fixture
     def prod_settings(self, monkeypatch):
-        monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-        monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/oe_test")
+        monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql+psycopg2://oe:oe@localhost:5432/oe_test")
         return Settings(
             _env_file=None,
             app_env="production",
             app_debug=False,
-            database_url="sqlite+aiosqlite:///./test.db",
-            database_sync_url="sqlite:///./test.db",
+            database_url="postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+            database_sync_url="postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
             # The _refuse_default_jwt_in_non_dev model validator refuses
             # to instantiate Settings in non-dev environments when the
             # JWT secret is still the bundled dev default. Tests must
@@ -140,24 +140,24 @@ class TestComputedFields:
         assert prod_settings.is_production is True
 
     def test_cors_origins_single(self, monkeypatch):
-        monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-        monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/oe_test")
+        monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql+psycopg2://oe:oe@localhost:5432/oe_test")
         s = Settings(
             _env_file=None,
             allowed_origins="http://localhost:5173",
-            database_url="sqlite+aiosqlite:///./test.db",
-            database_sync_url="sqlite:///./test.db",
+            database_url="postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+            database_sync_url="postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
         )
         assert s.cors_origins == ["http://localhost:5173"]
 
     def test_cors_origins_multiple(self, monkeypatch):
-        monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-        monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/oe_test")
+        monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql+psycopg2://oe:oe@localhost:5432/oe_test")
         s = Settings(
             _env_file=None,
             allowed_origins="http://localhost:5173, https://app.openestimate.io",
-            database_url="sqlite+aiosqlite:///./test.db",
-            database_sync_url="sqlite:///./test.db",
+            database_url="postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+            database_sync_url="postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
         )
         assert s.cors_origins == [
             "http://localhost:5173",
@@ -165,12 +165,12 @@ class TestComputedFields:
         ]
 
     def test_cors_origins_strips_whitespace(self, monkeypatch):
-        monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-        monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+        monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/oe_test")
+        monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql+psycopg2://oe:oe@localhost:5432/oe_test")
         s = Settings(
             _env_file=None,
             allowed_origins="  http://a.com ,  http://b.com  ",
-            database_url="sqlite+aiosqlite:///./test.db",
-            database_sync_url="sqlite:///./test.db",
+            database_url="postgresql+asyncpg://oe:oe@localhost:5432/oe_test",
+            database_sync_url="postgresql+psycopg2://oe:oe@localhost:5432/oe_test",
         )
         assert s.cors_origins == ["http://a.com", "http://b.com"]

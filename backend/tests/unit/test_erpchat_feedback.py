@@ -10,10 +10,12 @@ Coverage:
 * Token + cache-hit aggregation reflects the new
   ``tokens_input`` / ``tokens_output`` / ``cache_hit`` columns.
 
-The fixtures spin up an in-memory SQLite engine and create only the
-tables this suite needs — no FastAPI app, no migrations — so the test
-runs in well under a second and isn't sensitive to the multi-head
-state of the live alembic graph.
+The fixtures bind a sessionmaker to a throwaway PostgreSQL database (cloned
+from the session-wide schema template, so no ``create_all`` is needed and no
+FastAPI app or migrations are involved). The suite opens several independent
+sessions per test and relies on data committed in one being visible from
+another, so it uses a real cross-connection engine rather than the
+transaction-rollback primitive; the whole database is dropped on teardown.
 """
 
 from __future__ import annotations
@@ -23,28 +25,17 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.database import Base
 from app.modules.erp_chat.models import ChatMessage, ChatSession, ChatTurnFeedback
 from app.modules.erp_chat.service import ERPChatService
+from tests._pg import isolated_engine
 
 
 @pytest.fixture
 async def session_factory():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                ChatSession.__table__,
-                ChatMessage.__table__,
-                ChatTurnFeedback.__table__,
-            ],
-        )
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    async with isolated_engine() as engine:
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def _seed_session_and_assistant(

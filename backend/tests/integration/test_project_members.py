@@ -15,68 +15,46 @@ Test matrix:
     * cannot add the same user twice (409)
     * cannot remove the project owner (400)
 
-Follows the temp-SQLite isolation pattern from ``feedback_test_isolation.md``.
+Uses the PostgreSQL isolation pattern from ``feedback_test_isolation.md``.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
 )
-
-
-def _register_models() -> None:
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.teams.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import isolated_engine
 
 
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    """Spin up a per-test SQLite file and return engine + session factory."""
-    tmp_db = Path(tempfile.mkdtemp()) / "project_members.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_models()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
 async def seeded_ids(temp_engine_and_factory) -> dict[str, str]:
     """Seed two users (owner + other) and one project owned by the first."""
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.projects.models import Project
     from app.modules.teams.models import Team, TeamMembership
     from app.modules.users.models import User
@@ -150,7 +128,7 @@ def _build_app(factory, current_user_id: str, role: str = "editor") -> FastAPI:
 
 @pytest_asyncio.fixture
 async def owner_client(temp_engine_and_factory, seeded_ids) -> AsyncGenerator[AsyncClient, None]:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     app = _build_app(factory, seeded_ids["owner_id"])
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -159,7 +137,7 @@ async def owner_client(temp_engine_and_factory, seeded_ids) -> AsyncGenerator[As
 
 @pytest_asyncio.fixture
 async def other_client(temp_engine_and_factory, seeded_ids) -> AsyncGenerator[AsyncClient, None]:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     app = _build_app(factory, seeded_ids["other_id"])
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:

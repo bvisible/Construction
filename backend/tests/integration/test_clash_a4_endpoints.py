@@ -7,37 +7,27 @@ Covers:
     * PATCH /runs/{rid}/rules            — size-cap of the persisted list
     * GET  /runs/{rid}/kpi               — dashboard projection shape
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported. The engine is
-monkey-patched at the geometry-loader seam (same pattern as
-``test_clash_triage_delta.py``) so we get real engine output without
-needing a GLB asset.
+The suite runs against the PostgreSQL cluster provisioned by
+``tests/conftest.py`` (the SQLAlchemy engine is bound to PostgreSQL
+before any test module imports). The engine is monkey-patched at the
+geometry-loader seam (same pattern as ``test_clash_triage_delta.py``)
+so we get real engine output without needing a GLB asset.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-a4-"))
-_TMP_DB = _TMP_DIR / "clash_a4.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── App / auth / project fixtures ─────────────────────────────────────────
 
 
 @pytest_asyncio.fixture(scope="module")
 async def app_instance():
-    """Boot the FastAPI app once per module against the temp SQLite."""
+    """Boot the FastAPI app once per module against the conftest PostgreSQL."""
     from app.config import get_settings
 
     get_settings.cache_clear()

@@ -14,8 +14,10 @@ Scope (one happy / one adversarial per behaviour):
     4. The same endpoint rejects the HTML-disguised-as-PNG body with
        HTTP 415 (Unsupported Media Type) and leaves the disk clean.
 
-The suite mirrors ``test_correspondence.py`` so the in-memory SQLite
-engine + TestClient combo doesn't need a live database.
+The suite mirrors ``test_correspondence.py``. Each test runs against a
+PostgreSQL session wrapped in an outer transaction that is rolled back on
+teardown, so committed data is visible to the TestClient within the test but
+undone afterwards (see ``tests._pg.transactional_session``).
 """
 
 from __future__ import annotations
@@ -27,45 +29,32 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
     verify_project_access,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.rfi.models import RFI
+from app.modules.projects.models import Project
 from app.modules.rfi.router import router as rfi_router
 from app.modules.rfi.schemas import RFICreate
 from app.modules.rfi.service import RFIService
-from app.modules.users.models import APIKey, User
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    """Fresh in-memory SQLite with only the tables this suite needs."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Project.__table__,
-                ProjectWBS.__table__,
-                ProjectMilestone.__table__,
-                RFI.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    """PostgreSQL session inside a transaction rolled back on teardown.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    no ``create_all`` is needed here.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, email: str | None = None) -> uuid.UUID:

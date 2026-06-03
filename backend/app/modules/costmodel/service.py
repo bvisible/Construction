@@ -83,6 +83,21 @@ def _str_to_float(value: str | None) -> float:
         return 0.0
 
 
+def _str_to_decimal(value: str | None) -> Decimal:
+    """Convert a Decimal-as-string aggregate to Decimal, defaulting to 0.
+
+    Keeps money exact (v3 §10): the repository emits FX-converted sums as
+    ``str(Decimal)``, so we parse them straight back to Decimal instead of
+    going through float and losing precision.
+    """
+    if value is None:
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except (ValueError, TypeError, ArithmeticError):
+        return Decimal("0")
+
+
 def _safe_divide(numerator: float, denominator: float) -> float:
     """‌⁠‍Safely divide two floats, returning 0.0 on zero denominator."""
     if denominator == 0.0:
@@ -321,11 +336,21 @@ class CostModelService:
         """
         aggregates = await self.budget_repo.aggregate_by_project(project_id)
 
-        total_budget = _str_to_float(aggregates["total_planned"])
-        total_committed = _str_to_float(aggregates["total_committed"])
-        total_actual = _str_to_float(aggregates["total_actual"])
-        total_forecast = _str_to_float(aggregates["total_forecast"])
+        # Money stays Decimal end-to-end (v3 §10). The repository returns the
+        # FX-converted sums as Decimal-as-string; parse straight back to
+        # Decimal rather than round-tripping through float, which would
+        # reintroduce binary-float imprecision into the dashboard totals.
+        total_budget = _str_to_decimal(aggregates["total_planned"])
+        total_committed = _str_to_decimal(aggregates["total_committed"])
+        total_actual = _str_to_decimal(aggregates["total_actual"])
+        total_forecast = _str_to_decimal(aggregates["total_forecast"])
         variance = total_budget - total_forecast
+
+        # Detect whether the budget lines span more than one currency. When
+        # they do, the repo's per-line FX conversion may have blended an
+        # unconverted foreign amount (missing fx_rate) into the totals, so
+        # surface a flag the UI can warn on instead of trusting the sum.
+        mixed_currency = len(await self.budget_repo.distinct_currencies(project_id)) > 1
 
         # Get SPI and CPI from latest snapshot
         spi = 0.0
@@ -337,19 +362,22 @@ class CostModelService:
 
         budget_status = "on_budget" if variance >= 0 else "over_budget"
 
-        variance_pct = _variance_pct(total_budget, total_forecast) if total_budget > 0 else 0.0
+        # Ratios stay float; compute variance % from the float view.
+        budget_f = float(total_budget)
+        variance_pct = _variance_pct(budget_f, float(total_forecast)) if budget_f > 0 else 0.0
 
         return DashboardResponse(
-            total_budget=round(total_budget, 2),
-            total_committed=round(total_committed, 2),
-            total_actual=round(total_actual, 2),
-            total_forecast=round(total_forecast, 2),
-            variance=round(variance, 2),
+            total_budget=total_budget.quantize(Decimal("0.01")),
+            total_committed=total_committed.quantize(Decimal("0.01")),
+            total_actual=total_actual.quantize(Decimal("0.01")),
+            total_forecast=round(float(total_forecast), 2),
+            variance=round(float(variance), 2),
             variance_pct=round(variance_pct, 2),
             spi=round(spi, 4),
             cpi=round(cpi, 4),
             status=budget_status,
             currency=await self._get_project_currency(project_id),
+            mixed_currency=mixed_currency,
         )
 
     # ── S-Curve ────────────────────────────────────────────────────────────

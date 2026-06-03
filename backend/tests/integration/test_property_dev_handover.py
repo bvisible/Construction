@@ -13,27 +13,18 @@ verifies that:
   * IDOR closure: a foreign tenant gets 404 on both list and create against
     the owner's plot.
 
-Test isolation follows the same pattern as
-``test_property_dev_lead_to_spa.py``: per-module temp SQLite registered
-BEFORE any ``from app...`` import so we never touch the dev DB.
+Test isolation relies on the shared ``tests/conftest.py`` PostgreSQL cluster,
+which binds the SQLAlchemy engine BEFORE any ``from app...`` import so we
+never touch the dev DB.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-handover-"))
-_TMP_DB = _TMP_DIR / "propdev_handover.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")

@@ -126,6 +126,13 @@ class BOQCreate(BaseModel):
         description="Base date / price level reference (e.g. 2026-Q2)",
         examples=["2026-Q2"],
     )
+    tax_rate: Decimal | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+        description="VAT / sales-tax rate as a fraction (0.19 = 19%). None = no tax line.",
+        examples=["0.19"],
+    )
 
     @field_validator("name", "description", mode="after")
     @classmethod
@@ -144,6 +151,7 @@ class BOQUpdate(BaseModel):
     metadata: dict[str, Any] | None = None
     estimate_type: str | None = Field(default=None, max_length=50)
     base_date: str | None = Field(default=None, max_length=20)
+    tax_rate: Decimal | None = Field(default=None, ge=0, le=1)
 
     @field_validator("name", "description", mode="after")
     @classmethod
@@ -206,11 +214,20 @@ class BOQListItem(BOQResponse):
 
     direct_cost_total: Decimal = Decimal("0")
     markups_total: Decimal = Decimal("0")
+    tax_rate: Decimal | None = None
+    tax_amount: Decimal = Decimal("0")
     grand_total: Decimal = Decimal("0")
     position_count: int = 0
 
-    @field_serializer("direct_cost_total", "markups_total", "grand_total", when_used="json")
-    def _ser_money(self, v: Decimal) -> str | None:
+    @field_serializer(
+        "direct_cost_total",
+        "markups_total",
+        "tax_rate",
+        "tax_amount",
+        "grand_total",
+        when_used="json",
+    )
+    def _ser_money(self, v: Decimal | None) -> str | None:
         return _serialise_money(v)
 
 
@@ -854,7 +871,9 @@ class BOQWithSections(BOQResponse):
     ``direct_cost`` — sum of all position totals (items only, not sections).
     ``markups`` — ordered list of markup lines with computed amounts.
     ``net_total`` — direct_cost + sum of markup amounts.
-    ``grand_total`` — alias for net_total (reserved for future tax logic).
+    ``tax_rate`` — VAT / sales-tax fraction applied to net_total (None = no tax).
+    ``tax_amount`` — net_total * tax_rate, ROUND_HALF_UP to 2 dp (0 when no tax).
+    ``grand_total`` — net_total + tax_amount.
 
     v3 §10 — money emitted as Decimal-as-string.
     """
@@ -864,10 +883,12 @@ class BOQWithSections(BOQResponse):
     direct_cost: Decimal = Decimal("0")
     markups: list[MarkupCalculated] = Field(default_factory=list)
     net_total: Decimal = Decimal("0")
+    tax_rate: Decimal | None = None
+    tax_amount: Decimal = Decimal("0")
     grand_total: Decimal = Decimal("0")
 
-    @field_serializer("direct_cost", "net_total", "grand_total", when_used="json")
-    def _ser_money(self, v: Decimal) -> str | None:
+    @field_serializer("direct_cost", "net_total", "tax_rate", "tax_amount", "grand_total", when_used="json")
+    def _ser_money(self, v: Decimal | None) -> str | None:
         return _serialise_money(v)
 
 

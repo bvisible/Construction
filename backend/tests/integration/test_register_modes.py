@@ -20,50 +20,29 @@ Login already returns the same generic 401 for inactive accounts as for
 bad credentials, so no enumeration leak is introduced — see
 ``UserService.login`` lines around the ``if not user.is_active`` guard.
 
-These tests drive the service layer directly against per-test fresh
-SQLite files. No demo seed runs, so the bootstrap admin path is exercised
-deterministically.
+These tests drive the service layer directly against a transaction-isolated
+PostgreSQL session (rolled back on teardown). No demo seed runs, so the
+database starts empty and the bootstrap admin path is exercised
+deterministically — no admin exists at t=0.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session():
-    """Per-test fresh SQLite DB — guarantees no admin exists at t=0."""
-    tmp_db = Path(tempfile.mkdtemp()) / "regmodes.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    import app.modules.users.models  # noqa: F401  — register the user table
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session — empty DB, no admin at t=0."""
+    async with transactional_session() as s:
         yield s
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 @pytest.fixture(autouse=True)

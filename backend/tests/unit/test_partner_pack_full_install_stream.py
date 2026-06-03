@@ -10,38 +10,36 @@ when the same pack is activated a second time.
 The real CWICR loader reads regional Parquet files and a third-party embedding
 model that are not present in CI, so the heavy steps are replaced with a fake
 loader that writes ``CostItem`` rows (each carrying a ``components`` resource
-breakdown) into a per-test SQLite DB using the *same* idempotency contract as
-the production loader: a region already holding rows imports nothing on the
+breakdown) into a per-test PostgreSQL DB using the *same* idempotency contract
+as the production loader: a region already holding rows imports nothing on the
 second pass. That isolates exactly the wiring this feature adds - the
 orchestrator calling the loader, summing resource components, and reporting
 catalog + resource counts step by step.
+
+The fixture hands out a sessionmaker bound to a throwaway PostgreSQL database
+(cloned from a schema-loaded template by ``tests._pg.isolated_engine``). The
+orchestrator opens its own sessions from that same factory and the fake loader
+commits rows that the test then verifies through separate sessions, so the
+fixture needs real cross-connection commit visibility rather than a
+savepoint-rolled-back shared session.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
 import pytest_asyncio
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-# ── Per-module DB isolation BEFORE any app imports ─────────────────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-pp-stream-"))
-_TMP_DB = _TMP_DIR / "session.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from app.core.partner_pack import full_install as fi  # noqa: E402
-from app.core.partner_pack.full_install import FullInstallRequest, full_install_stream  # noqa: E402
-from app.core.partner_pack.manifest import PartnerPackManifest  # noqa: E402
-from app.database import Base  # noqa: E402
-from app.modules.costs.models import CostItem  # noqa: E402
+from app.core.partner_pack import full_install as fi
+from app.core.partner_pack.full_install import FullInstallRequest, full_install_stream
+from app.core.partner_pack.manifest import PartnerPackManifest
+from app.modules.costs.models import CostItem
+from tests._pg import isolated_engine
 
 # A pack that bundles one resolvable region. ``cwicr-de-berlin`` resolves to the
 # live ``DE_BERLIN`` db_id via the §5.1 resolver, so this exercises the real
@@ -57,13 +55,14 @@ _EXPECTED_RESOURCES = _FAKE_ITEMS * _RESOURCES_PER_ITEM
 
 
 @pytest_asyncio.fixture
-async def session_factory() -> async_sessionmaker[AsyncSession]:
-    """A sessionmaker over a fresh per-test SQLite DB with the CostItem table."""
-    db_path = _TMP_DIR / f"test-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[CostItem.__table__])
-    return async_sessionmaker(engine, expire_on_commit=False)
+async def session_factory():
+    """A sessionmaker over a fresh per-test PostgreSQL DB with the full schema.
+
+    The throwaway database is cloned from the schema-loaded template (which
+    already carries the ``CostItem`` table), so no ``create_all`` is needed.
+    """
+    async with isolated_engine() as engine:
+        yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 def _make_manifest() -> PartnerPackManifest:

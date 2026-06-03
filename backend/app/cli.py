@@ -190,14 +190,13 @@ def _setup_env(data_dir: Path, host: str, port: int) -> None:
     (data_dir / "vectors").mkdir(exist_ok=True)
     (data_dir / "uploads").mkdir(exist_ok=True)
 
-    db_path = data_dir / "openestimate.db"
-
-    # Embedded PostgreSQL (no Docker) is the DEFAULT runtime as of v6.0.0: boot a
-    # real in-process PG16 and point DATABASE_URL/DATABASE_SYNC_URL at it BEFORE
-    # the SQLite setdefault below (which then no-ops because the keys are already
-    # set). Opt out with OE_USE_SQLITE=1 (legacy single-file SQLite) or by setting
-    # your own DATABASE_URL. Must run before any ``from app...`` import that builds
-    # the engine — _setup_env is that earliest point for every command.
+    # Embedded PostgreSQL (no Docker) is the DEFAULT runtime: boot a real
+    # in-process PG16 and point DATABASE_URL/DATABASE_SYNC_URL at it. There is no
+    # SQLite fallback — if the cluster cannot start we exit with an actionable
+    # message. The operator opts out by supplying an external DATABASE_URL (then
+    # is_requested() returns False and boot is skipped). Must run before any
+    # ``from app...`` import that builds the engine — _setup_env is that earliest
+    # point for every command.
     from app.core import embedded_pg
 
     if embedded_pg.is_requested():
@@ -210,17 +209,17 @@ def _setup_env(data_dir: Path, host: str, port: int) -> None:
                 print(_green(_u("✓ ", "OK ")) + status)
             print(_green(_u("✓ ", "OK ")) + "Database: embedded PostgreSQL 16 (no Docker)")
         else:
-            # pixeltable-pgserver missing or initdb failed: degrade to SQLite so
-            # the app still comes up. Surface it so the operator can install the
-            # server extra or set DATABASE_URL.
+            # pixeltable-pgserver missing or initdb failed. There is no SQLite
+            # fallback anymore: PostgreSQL is required, so fail loudly with an
+            # actionable message instead of limping along on a different engine.
             print(
-                _yellow(_u("⚠ ", "! "))
-                + "Embedded PostgreSQL unavailable; falling back to SQLite. "
-                + "Install with 'pip install openconstructionerp[server]' or set OE_USE_SQLITE=1 to silence."
+                _red(_u("✗ ", "X "))
+                + "Embedded PostgreSQL could not start. Install the server extra "
+                + "(pip install 'openconstructionerp[server]') or set DATABASE_URL "
+                + "to an external PostgreSQL."
             )
+            raise SystemExit(1)
 
-    os.environ.setdefault("DATABASE_URL", f"sqlite+aiosqlite:///{db_path}")
-    os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{db_path}")
     os.environ.setdefault("VECTOR_BACKEND", "lancedb")
     os.environ.setdefault("VECTOR_DATA_DIR", str(data_dir / "vectors"))
     os.environ.setdefault("APP_ENV", "development")
@@ -360,16 +359,17 @@ def check_frontend_bundled() -> Check:
 def check_env_overrides() -> Check:
     """Warn if DATABASE_URL / JWT_SECRET look wrong."""
     db = os.environ.get("DATABASE_URL", "")
-    if db and not (db.startswith("sqlite") or db.startswith("postgresql")):
+    if db and not db.startswith("postgresql"):
         return Check(
             "DATABASE_URL",
             "warn",
-            f"unrecognised scheme: {db.split(':', 1)[0]}",
-            "Use sqlite+aiosqlite:///... or postgresql+asyncpg://...",
+            f"unsupported scheme: {db.split(':', 1)[0]}",
+            "OpenConstructionERP runs only on PostgreSQL. Use postgresql+asyncpg://... "
+            "or leave DATABASE_URL unset to use the embedded PostgreSQL.",
         )
     if db.startswith("postgresql"):
-        return Check("DATABASE_URL", "ok", "PostgreSQL mode")
-    return Check("DATABASE_URL", "ok", "SQLite mode (default)")
+        return Check("DATABASE_URL", "ok", "external PostgreSQL")
+    return Check("DATABASE_URL", "ok", "embedded PostgreSQL (default)")
 
 
 def check_core_tabular_deps() -> list[Check]:
@@ -662,27 +662,33 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 
 def cmd_init_db(args: argparse.Namespace) -> None:
-    """Initialise data directory and create the SQLite database."""
+    """Initialise the data directory and create the database schema."""
     data_dir = Path(args.data_dir).expanduser().resolve()
-    db_path = data_dir / "openestimate.db"
     reset = bool(getattr(args, "reset", False))
 
-    # Honour --reset BEFORE _setup_env touches the directory so the user
-    # gets a guaranteed-fresh DB. We also wipe the SQLite WAL siblings,
-    # otherwise re-opening the same path can resurrect old pages.
-    if reset and db_path.exists():
+    from app.core import embedded_pg
+
+    # Honour --reset BEFORE _setup_env boots the cluster, so the embedded
+    # PostgreSQL comes up against a clean data directory. An external
+    # DATABASE_URL is left untouched: the operator manages remote resets.
+    if reset and embedded_pg.is_requested():
+        pgdata = data_dir / "pgdata"
+        if pgdata.exists():
+            import shutil
+
+            shutil.rmtree(pgdata, ignore_errors=True)
+            print(_amber(f"Reset: deleted previous database cluster at {pgdata}"))
+        # Sweep away a stray pre-6.0 SQLite file too, so a later boot does not
+        # auto-migrate it into the fresh cluster.
+        legacy = data_dir / "openestimate.db"
         for suffix in ("", "-shm", "-wal"):
-            sibling = db_path.with_name(db_path.name + suffix)
+            sibling = legacy.with_name(legacy.name + suffix)
             try:
                 sibling.unlink()
             except FileNotFoundError:
                 pass
             except OSError as exc:
                 logger.warning("init-db --reset: could not delete %s: %s", sibling, exc)
-        print(_amber(f"Reset: deleted previous DB at {db_path}"))
-    elif db_path.exists():
-        # Friendly warning, non-blocking — matches the spec.
-        print(_yellow(f"Existing database at {db_path} — re-using.") + _dim(" Use --reset to start fresh."))
 
     print(
         _u("Initialising data directory at ", "Initialising data directory at ")
@@ -691,9 +697,8 @@ def cmd_init_db(args: argparse.Namespace) -> None:
     )
     _setup_env(data_dir, DEFAULT_HOST, DEFAULT_PORT)
 
-    # Trigger the same SQLite auto-migration that main.py does on startup,
-    # so `init-db` actually creates the tables and the first `serve` starts
-    # instantly without table creation lag.
+    # Create every module's tables now so the first `serve` starts instantly
+    # without table-creation lag.
     import asyncio
 
     # Mirrors the list in main.py's startup hook — keep the two lists in
@@ -775,14 +780,17 @@ def cmd_init_db(args: argparse.Namespace) -> None:
                     exc,
                 )
 
-        try:
-            from app.core.sqlite_migrator import sqlite_auto_migrate
-
-            await sqlite_auto_migrate(engine, Base)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("init-db: sqlite_auto_migrate skipped: %s", exc)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+        # create_all only adds missing tables; patch any columns added to
+        # pre-existing tables across an upgrade (the PostgreSQL counterpart to
+        # what Alembic does for external deployments).
+        try:
+            from app.core.postgres_migrator import postgres_auto_migrate
+
+            await postgres_auto_migrate(engine, Base)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("init-db: postgres_auto_migrate skipped: %s", exc)
 
     try:
         asyncio.run(_create())
@@ -1016,18 +1024,16 @@ def cmd_seed(args: argparse.Namespace) -> None:
     import asyncio
 
     async def _run_seed() -> None:
-        from app.config import get_settings
+        # Ensure the schema exists before seeding: a fresh PostgreSQL database
+        # has no tables until create_all runs.
+        from app.database import Base, engine
+        from app.modules.boq import models as _  # noqa: F401
+        from app.modules.costs import models as _  # noqa: F401
+        from app.modules.projects import models as _  # noqa: F401
+        from app.modules.users import models as _  # noqa: F401
 
-        settings = get_settings()
-        if "sqlite" in settings.database_url:
-            from app.database import Base, engine
-            from app.modules.boq import models as _  # noqa: F401
-            from app.modules.costs import models as _  # noqa: F401
-            from app.modules.projects import models as _  # noqa: F401
-            from app.modules.users import models as _  # noqa: F401
-
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
 
         print("Database tables created.")
 
@@ -1543,11 +1549,6 @@ def _add_common_server_args(p: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Run an in-process PostgreSQL (no Docker); data in <data-dir>/pgdata (this is the default)",
     )
-    p.add_argument(
-        "--sqlite",
-        action="store_true",
-        help="Use the legacy single-file SQLite database instead of embedded PostgreSQL",
-    )
 
 
 def main() -> None:
@@ -1574,7 +1575,7 @@ def main() -> None:
     # init-db (canonical) + init (alias for backward compat)
     init_db_p = subparsers.add_parser(
         "init-db",
-        help="Create the local SQLite database and data directories",
+        help="Create the database schema and data directories",
     )
     init_db_p.add_argument(
         "--data-dir",
@@ -1707,12 +1708,9 @@ def main() -> None:
         args._pack_parser = pack_p
 
     # Embedded PostgreSQL is the default (see embedded_pg.is_requested). The
-    # flags are explicit overrides mapped to the same env vars _setup_env reads
+    # flag is an explicit override mapped to the same env var _setup_env reads
     # before any app module (and therefore the engine) is imported:
-    #   --sqlite      → OE_USE_SQLITE=1     (escape hatch to legacy SQLite)
-    #   --embedded-pg → OE_USE_EMBEDDED_PG=1 (explicit; already the default)
-    if getattr(args, "sqlite", False):
-        os.environ["OE_USE_SQLITE"] = "1"
+    #   --embedded-pg -> OE_USE_EMBEDDED_PG=1 (explicit; already the default)
     if getattr(args, "embedded_pg", False):
         os.environ["OE_USE_EMBEDDED_PG"] = "1"
 

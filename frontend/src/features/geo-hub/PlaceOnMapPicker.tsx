@@ -69,10 +69,41 @@ interface PlaceOnMapPickerProps {
   /** Whether the project already has a geo anchor. 3D model placement
    *  needs one; when false we surface a banner instead of failing. */
   hasAnchor: boolean;
-  /** Fired after a file is successfully placed, with the placed model id
-   *  for 3D models (so the parent can focus the camera) or ``null`` for
-   *  raster overlays. */
-  onPlaced?: (modelId: string | null) => void;
+  /** Fired after a file is successfully placed so the parent can focus
+   *  the camera on the result. ``kind: 'model'`` carries the placed BIM
+   *  model id (the parent resolves it to a tileset and flies to its
+   *  bounding sphere); ``kind: 'overlay'`` carries the new raster overlay
+   *  centroid (lon/lat) so the parent can fly straight to the drawing. */
+  onPlaced?: (
+    placed:
+      | { kind: 'model'; modelId: string }
+      | { kind: 'overlay'; lon: number; lat: number },
+  ) => void;
+}
+
+/** Mean of an overlay's four ``[lon, lat]`` corners — the point the
+ *  camera flies to so a freshly-placed PDF drawing is immediately framed
+ *  instead of dropped somewhere off-screen. Returns ``null`` when the
+ *  corner array is missing or malformed (the parent then skips the fly).
+ *  Exported for unit testing. */
+export function overlayCentroid(
+  corners: ReadonlyArray<readonly [number, number]> | null | undefined,
+): { lon: number; lat: number } | null {
+  if (!Array.isArray(corners) || corners.length === 0) return null;
+  let sumLon = 0;
+  let sumLat = 0;
+  let n = 0;
+  for (const c of corners) {
+    if (!Array.isArray(c) || c.length < 2) continue;
+    const lon = Number(c[0]);
+    const lat = Number(c[1]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    sumLon += lon;
+    sumLat += lat;
+    n += 1;
+  }
+  if (n === 0) return null;
+  return { lon: sumLon / n, lat: sumLat / n };
 }
 
 /** Classify a document as a PDF for the place-on-map flow. Reads the
@@ -190,7 +221,7 @@ export function PlaceOnMapPicker({
             queryKey: ['geo-hub', 'tilesets', projectId],
           }),
         ]);
-        onPlaced?.(model.id);
+        onPlaced?.({ kind: 'model', modelId: model.id });
       } catch (err) {
         const detail =
           err instanceof ApiError
@@ -242,7 +273,9 @@ export function PlaceOnMapPicker({
         const file = new File([blob], doc.name, {
           type: 'application/pdf',
         });
-        await uploadPdfRasterOverlay(projectId, file, { name: doc.name });
+        const res = await uploadPdfRasterOverlay(projectId, file, {
+          name: doc.name,
+        });
         addToast({
           type: 'success',
           title: t('geo_hub.place.placed_pdf_title', {
@@ -257,7 +290,16 @@ export function PlaceOnMapPicker({
         await queryClient.invalidateQueries({
           queryKey: ['geo-hub', 'raster-overlays', projectId],
         });
-        onPlaced?.(null);
+        // Fly the camera to the new overlay so it's immediately visible.
+        // The overlay is created centred on the project anchor, but the
+        // camera may have drifted; framing its centroid guarantees the
+        // user sees the drawing instead of an off-screen square they have
+        // to hunt for. When the centroid can't be derived we just skip the
+        // fly (the overlay still renders on the next refetch).
+        const centroid = overlayCentroid(res.overlay?.corners_geojson);
+        if (centroid) {
+          onPlaced?.({ kind: 'overlay', lon: centroid.lon, lat: centroid.lat });
+        }
       } catch (err) {
         const detail =
           err instanceof ApiError

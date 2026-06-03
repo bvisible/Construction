@@ -2,9 +2,12 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """CRUD round-trip tests for EAC v2 ORM models.
 
-Uses an in-memory SQLite engine seeded with ``Base.metadata.create_all``
-so we don't depend on Alembic infrastructure (which carries multiple
-heads in this repo and would fight with parallel test agents).
+Runs against PostgreSQL: each test gets a session wrapped in an outer
+transaction that is rolled back on teardown, so the database starts empty
+for every test. The shared ``oe_test_unit`` database is built once with the
+full schema, so no per-test ``create_all`` is needed. PostgreSQL enforces
+foreign keys natively, so the FK-cascade behaviours these tests assert are
+exercised for real.
 """
 
 from __future__ import annotations
@@ -13,12 +16,11 @@ import uuid
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Importing the ORM module registers the EAC tables with Base.metadata.
 import app.modules.eac.models  # noqa: F401
-from app.database import Base
 from app.modules.eac.models import (
     EacGlobalVariable,
     EacRule,
@@ -27,35 +29,20 @@ from app.modules.eac.models import (
     EacRun,
     EacRunResultItem,
 )
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Yield an isolated in-memory SQLite session per test.
+    """Yield an isolated PostgreSQL session per test.
 
-    Enables ``PRAGMA foreign_keys=ON`` on every connection so cascade
-    behaviours declared by FK clauses are actually enforced.
+    The session runs inside an outer transaction that is rolled back on
+    teardown, so committed data is visible within the test but undone
+    afterwards. PostgreSQL enforces FK clauses natively, so cascade
+    behaviours declared on the models are actually exercised.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-
-    @event.listens_for(engine.sync_engine, "connect")
-    def _enable_sqlite_fks(dbapi_conn, _conn_record) -> None:  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001 — non-SQLite drivers
-            pass
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as sess:
-        try:
-            yield sess
-        finally:
-            await sess.close()
-    await engine.dispose()
+    async with transactional_session() as sess:
+        yield sess
 
 
 # ── Ruleset ─────────────────────────────────────────────────────────────
@@ -105,8 +92,8 @@ async def test_ruleset_self_fk_cascades_set_null(session: AsyncSession) -> None:
     await session.flush()
 
     # Expire the identity map so the child's parent_ruleset_id reflects
-    # the DB-level cascade (SQLite mutates the column out-of-band of the
-    # ORM session, so the cached copy still points at the parent).
+    # the DB-level cascade (PostgreSQL mutates the column out-of-band of
+    # the ORM session, so the cached copy still points at the parent).
     await session.refresh(child)
     assert child.parent_ruleset_id is None
 

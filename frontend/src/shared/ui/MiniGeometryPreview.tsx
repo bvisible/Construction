@@ -268,9 +268,17 @@ export function MiniGeometryPreview({
         scene.add(group);
 
         if (!hasVisibleMesh) {
-          // No matching meshes found — show empty
+          // GLB loaded but none of its meshes matched the requested element
+          // IDs (wrong model selected, stale stable_ids, or a mesh-less
+          // data-only export). Previously this rendered a blank gray canvas
+          // with no signal, so callers could not tell it apart from a
+          // still-loading state. Surface it through `onError` so the host
+          // (e.g. the BOQ linked-geometry popover) can show a clear message
+          // instead of an empty panel.
           loadingRef.current = false;
+          errorRef.current = true;
           renderer.render(scene, camera);
+          onError?.();
           return;
         }
 

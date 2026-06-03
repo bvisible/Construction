@@ -1,8 +1,8 @@
 """T05 integration tests — Dashboard Presets & Collections API.
 
 Stands up a minimal FastAPI app with just the dashboards router mounted
-plus session/auth dependencies overridden to point at a per-test temp
-SQLite file (``feedback_test_isolation.md``).
+plus session/auth dependencies overridden to point at a per-test throwaway
+PostgreSQL database (``tests/_pg.py`` ``isolated_engine``).
 
 Coverage (8+ tests):
 
@@ -20,62 +20,33 @@ Coverage (8+ tests):
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database import Base
 from app.dependencies import get_current_user_payload, get_session
-
-# ── Helpers ────────────────────────────────────────────────────────────────
-
-
-def _register_minimal_models() -> None:
-    """Pull dashboards + FK-target modules into Base.metadata."""
-    import app.modules.dashboards.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
+from tests._pg import isolated_engine
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "presets_api.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 # Each test that wants to swap the acting user mutates this dict.
@@ -84,7 +55,7 @@ _current_user_payload: dict[str, str] = {}
 
 @pytest_asyncio.fixture
 async def app(temp_engine_and_factory) -> AsyncGenerator[FastAPI, None]:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.modules.dashboards.router import router as dashboards_router
 

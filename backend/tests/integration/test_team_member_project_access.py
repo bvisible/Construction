@@ -6,27 +6,18 @@ projects and BOQs they were invited to, while uninvited users must
 still receive 404 (not 403 — IDOR defence: keep "missing" and "denied"
 indistinguishable, matching the ``verify_project_access`` convention).
 
-Test scaffolding mirrors ``test_erp_chat_idor.py``: a per-module temp
-SQLite file is wired up before ``app.database`` is imported so the
-production ``backend/openestimate.db`` is never touched.
+Test scaffolding mirrors ``test_erp_chat_idor.py``: the SQLAlchemy engine
+is bound to the conftest-provisioned PostgreSQL cluster before any test
+module imports, so this suite runs against PostgreSQL.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-team-access-"))
-_TMP_DB = _TMP_DIR / "team_access.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── App fixture ────────────────────────────────────────────────────────────
 
@@ -75,7 +66,7 @@ async def _activate_user(email: str) -> None:
 
 async def _register_and_login(client: AsyncClient, suffix: str) -> tuple[str, dict[str, str]]:
     """Register a fresh user, activate, login. Returns (user_id, auth_headers)."""
-    email = f"user-{suffix}-{uuid.uuid4().hex[:6]}@team-access.test"
+    email = f"user-{suffix}-{uuid.uuid4().hex[:6]}@team-access.io"
     password = f"TeamAccess{uuid.uuid4().hex[:6]}9!"
 
     reg = await client.post(

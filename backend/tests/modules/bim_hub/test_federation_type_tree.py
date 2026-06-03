@@ -7,63 +7,32 @@ The type tree is **federation-flat by IfcClass** (not Federation › Model
 per-member breakdown ordering, empty-but-valid responses, total_elements
 identity, and the project-ownership guard.
 
-Per ``feedback_test_isolation.md`` every test runs against a per-test
-temp SQLite — never the shared / production DB.
+Every test runs against a transaction-isolated PostgreSQL session
+(rolled back on teardown) - never the shared / production DB.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.bim_hub.models import BIMElement, BIMModel
 from app.modules.bim_hub.schemas import (
     FederationCreate,
     FederationModelAdd,
 )
 from app.modules.bim_hub.service import BIMHubService
-
-
-def _register_models() -> None:
-    """Eagerly register every ORM module the test DB will reference."""
-    import app.modules.bim_hub.models  # noqa: F401
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """Spin up an isolated SQLite with two pre-seeded projects/owners."""
-    tmp_db = Path(tempfile.mkdtemp(prefix="oe-bim-fedtt-")) / "fedtt.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-
-    from sqlalchemy import event as sa_event
-    from sqlalchemy.engine import Engine
-
-    @sa_event.listens_for(Engine, "connect")
-    def _fk_on(dbapi_conn: object, _: object) -> None:  # noqa: ARG001
-        cursor = dbapi_conn.cursor()  # type: ignore[union-attr]
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
-    _register_models()
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    """Transaction-isolated PostgreSQL session with two pre-seeded projects/owners."""
+    async with transactional_session() as s:
         from app.modules.projects.models import Project
         from app.modules.users.models import User
 
@@ -100,12 +69,6 @@ async def session() -> AsyncSession:
         s.info["owner_a_id"] = str(owner_a.id)
         s.info["owner_b_id"] = str(owner_b.id)
         yield s
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
 
 
 async def _seed_model_with_elements(

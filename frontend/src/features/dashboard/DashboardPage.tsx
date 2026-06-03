@@ -1845,11 +1845,25 @@ function DashboardPageInner() {
     staleTime: 5 * 60_000,
   });
 
-  // First launch: redirect to onboarding wizard ONLY when the workspace
-  // is genuinely empty.  When the server already has projects (demo seed,
-  // or any tenant with real data), short-circuit by writing the completed
-  // flag so the wizard doesn't ambush returning users on a new browser.
-  // Skip is also honoured when the user pressed the `g d` chord.
+  // Per-user onboarding state from the server. This, and not the presence of
+  // demo projects, is what decides whether the first-run wizard should show.
+  const { data: onboardingState } = useQuery({
+    queryKey: ['me-onboarding'],
+    queryFn: () =>
+      apiGet<{ completed: boolean }>('/v1/users/me/onboarding/').catch(() => null),
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+
+  // First launch: send a user who has NOT completed onboarding to the wizard.
+  // The decision is the per-user SERVER flag, not whether the workspace has
+  // projects. A fresh install seeds demo/showcase projects, so the old
+  // projects.length check wrote the completed flag before the user ever saw
+  // the wizard - that is why onboarding never appeared after install.
+  // localStorage stays as a per-browser fast path; the server flag is
+  // authoritative for a brand-new account or a fresh browser. The wizard's
+  // finish handler sets the server flag, so completing it once stops the
+  // redirect everywhere. Skip is also honoured for the `g d` chord.
   useEffect(() => {
     try {
       const skip = sessionStorage.getItem('oe_skip_onboarding_redirect') === '1';
@@ -1858,14 +1872,15 @@ function DashboardPageInner() {
         return;
       }
       if (localStorage.getItem('oe_onboarding_completed') === 'true') return;
-      if (projects === undefined) return; // wait for fetch
-      if (projects.length > 0) {
+      if (onboardingState === undefined) return; // wait for fetch
+      if (onboardingState === null) return; // fetch failed - do not ambush the user
+      if (onboardingState.completed) {
         localStorage.setItem('oe_onboarding_completed', 'true');
         return;
       }
       navigate('/onboarding', { replace: true });
     } catch { /* storage unavailable */ }
-  }, [navigate, projects]);
+  }, [navigate, onboardingState]);
 
   // Fetch lightweight per-project summary metrics for dashboard cards (single endpoint)
   const { data: projectCards, isLoading: cardsLoading } = useQuery({

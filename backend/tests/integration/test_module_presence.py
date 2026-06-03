@@ -13,9 +13,9 @@ Coverage:
 2.  Empty project — every field returns False, no exceptions.
 3.  Populated modules — inserting a row into a single module's table
     flips that module's bool to True and leaves the rest False.
-4.  Missing tables — when the probe SQL references a table that does
-    not exist on the test schema (we deliberately probe a synthetic
-    name), the endpoint still returns 200 with that key False.
+4.  Empty tables — when a module's table exists but holds no rows for
+    the project, the endpoint still returns 200 with that key False
+    (and the defensive catch keeps it 200 even for a missing table).
 5.  Concurrency — probes run via ``asyncio.gather``; we patch
     ``asyncio.gather`` and assert the call shape so a future
     refactor that serialises probes will fail this test loudly.
@@ -25,63 +25,35 @@ Coverage:
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from collections.abc import AsyncGenerator
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-
-def _register_minimal_models() -> None:
-    """Pull projects + users into Base.metadata.
-
-    The presence-probe SQL targets dozens of module tables; we don't
-    register them here. Probes against missing tables return False
-    by design (the point of test #4 below), so this minimal set is
-    sufficient to exercise the endpoint.
-    """
-    import app.core.audit  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import isolated_engine
 
 
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "module_presence_api.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        yield engine, factory
 
 
 _current_user_payload: dict[str, str] = {}
@@ -89,7 +61,7 @@ _current_user_payload: dict[str, str] = {}
 
 @pytest_asyncio.fixture
 async def app(temp_engine_and_factory) -> AsyncGenerator[FastAPI, None]:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.dependencies import (
         get_current_user_id,
@@ -149,7 +121,7 @@ async def client(app: FastAPI) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest_asyncio.fixture
 async def project_owned_by(temp_engine_and_factory):
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.modules.projects.models import Project
     from app.modules.users.models import User
@@ -195,7 +167,7 @@ async def test_module_presence_returns_all_false_on_empty_project(
     client: AsyncClient,
     project_owned_by,
 ) -> None:
-    """Fresh project + minimal schema → every module reads False, no 500."""
+    """Fresh project, no module rows → every module reads False, no 500."""
     user_id, project_id = await project_owned_by()
     _set_acting_user(user_id)
 
@@ -223,12 +195,12 @@ async def test_module_presence_flips_true_when_module_table_has_row(
     Other modules stay False — proves the per-probe wiring is real,
     not a constant-True fall-through.
     """
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     user_id, project_id = await project_owned_by()
     _set_acting_user(user_id)
 
-    # The BOQ model is reachable via Project relationships so its
-    # table already lives in Base.metadata from create_all above.
+    # The BOQ model lives in the schema-loaded template the throwaway
+    # database is cloned from, so its table already exists.
     # Use the model directly so we don't have to mirror its schema.
     from app.modules.boq.models import BOQ
 
@@ -286,16 +258,18 @@ async def test_module_presence_403_for_non_owner(
 
 
 @pytest.mark.asyncio
-async def test_module_presence_missing_table_does_not_500(
+async def test_module_presence_empty_tables_do_not_500(
     client: AsyncClient,
     project_owned_by,
 ) -> None:
-    """All module tables absent → 200 with False everywhere.
+    """Every module table present but empty → 200 with False everywhere.
 
-    On the minimal test schema almost every probe runs against a
-    table that does not exist. The endpoint MUST still return 200
-    with False for those keys — that's the whole point of the
-    defensive ``OperationalError`` / ``ProgrammingError`` catch.
+    The schema is fully materialised, but a brand-new project has no
+    rows in any module table, so every probe's ``SELECT 1 ... LIMIT 1``
+    yields nothing. The endpoint MUST still return 200 with False for
+    those keys and never raise — the defensive
+    ``OperationalError`` / ``ProgrammingError`` catch also keeps it 200
+    if a probe ever targets a table that is missing on some schema.
     """
     user_id, project_id = await project_owned_by()
     _set_acting_user(user_id)
@@ -303,7 +277,7 @@ async def test_module_presence_missing_table_does_not_500(
     resp = await client.get(f"/api/v1/projects/{project_id}/module-presence")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    # ALL probes target missing tables → every flag is False, no 500.
+    # No project has any module rows → every flag is False, no 500.
     assert not any(body.values()), body
 
 

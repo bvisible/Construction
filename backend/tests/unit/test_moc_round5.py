@@ -22,48 +22,28 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit_log import ActivityLog
-from app.database import Base
 from app.dependencies import get_current_user_id, get_session
-from app.modules.moc.models import MoCEntry, MoCImpact
+from app.modules.moc.models import MoCEntry
 from app.modules.moc.router import router as moc_router
 from app.modules.moc.schemas import MoCEntryCreate, MoCEntryUpdate, MoCImpactCreate
 from app.modules.moc.service import MOC_TRANSITIONS, MoCService, allowed_moc_transitions
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.users.models import APIKey, User
-
-# ── Tables ────────────────────────────────────────────────────────────────────
-
-_TABLES = [
-    User.__table__,
-    APIKey.__table__,
-    Project.__table__,
-    ProjectWBS.__table__,
-    ProjectMilestone.__table__,
-    MoCEntry.__table__,
-    MoCImpact.__table__,
-    ActivityLog.__table__,
-]
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    # PostgreSQL isolation: each test runs inside an outer transaction that is
+    # rolled back on teardown. The session's own commit() calls become savepoint
+    # releases, so committed data is visible within the test but undone afterward.
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

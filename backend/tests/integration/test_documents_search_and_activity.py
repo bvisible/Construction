@@ -12,7 +12,7 @@ Two slices live here:
    event is present with ``{old, new}`` payload.
 
 Both tests reuse the smoke-test fixtures (``client``, ``auth_headers``)
-so the in-memory SQLite + lifespan plumbing is set up once at session
+so the PostgreSQL database + lifespan plumbing is set up once at session
 scope.
 """
 

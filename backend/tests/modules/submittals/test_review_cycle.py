@@ -13,8 +13,8 @@ Scope:
     4. Magic-byte uploads — OLE (.doc/.xls legacy) and DWG positive tests (both
        are in _ALLOWED_ATTACHMENT_TYPES but not yet exercised individually).
 
-Pattern: in-memory SQLite + TestClient dependency overrides, mirrors
-test_submittals_attachments.py conventions.
+Pattern: PostgreSQL transaction-isolated session + TestClient dependency
+overrides, mirrors test_submittals_attachments.py conventions.
 """
 
 from __future__ import annotations
@@ -27,47 +27,34 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.core.audit_log import ActivityLog
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
     verify_project_access,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.submittals.models import Submittal
+from app.modules.projects.models import Project
 from app.modules.submittals.router import router as submittals_router
 from app.modules.submittals.schemas import SubmittalCreate, SubmittalUpdate
 from app.modules.submittals.service import SubmittalService
-from app.modules.users.models import APIKey, User
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    """Per-test in-memory SQLite with only tables this suite needs."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Project.__table__,
-                ProjectWBS.__table__,
-                ProjectMilestone.__table__,
-                Submittal.__table__,
-                ActivityLog.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    """Per-test PostgreSQL session inside an outer transaction.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so no
+    ``create_all`` is needed. The session's ``commit()`` calls become savepoint
+    releases and the outer transaction is rolled back on teardown, so committed
+    data is visible within the test but undone afterward.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, email: str | None = None) -> uuid.UUID:

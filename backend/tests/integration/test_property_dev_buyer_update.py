@@ -18,27 +18,18 @@ for the edit flow. This suite locks down:
   uniqueness constraint on (development_id, email), so duplicates are
   allowed and the test asserts that explicit behaviour).
 
-Scaffolding mirrors ``test_schedule_idor.py``: per-module temp SQLite
-registered BEFORE any ``from app...`` import (see
-``feedback_test_isolation.md``).
+Scaffolding mirrors ``test_schedule_idor.py``: the SQLAlchemy engine is
+bound to the PostgreSQL cluster provisioned by ``tests/conftest.py`` before
+any ``from app...`` import runs (see ``feedback_test_isolation.md``).
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-propdev-buyer-update-"))
-_TMP_DB = _TMP_DIR / "propdev_buyer_update.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── Fixtures ───────────────────────────────────────────────────────────────
 
@@ -463,9 +454,8 @@ async def test_update_buyer_decimal_precision(http_client, tenant_a):
     # Either 2-dp string ("123456.79") or Decimal-coerced number.
     val = str(body["contract_value"])
     # Tolerate "123456.79" or "123456.78" depending on rounding mode
-    # (sqlite Numeric coerces via Python Decimal → banker's rounding by
-    # default in SQLAlchemy). Both are correct 2-dp answers for the
-    # purpose of this contract.
+    # (PostgreSQL Numeric(18, 2) rounds half-up at the column). Both are
+    # correct 2-dp answers for the purpose of this contract.
     assert val.startswith("123456.7"), f"unexpected rounding: {val!r}"
     assert len(val.split(".")[1]) <= 2, f"too many decimals: {val!r}"
 

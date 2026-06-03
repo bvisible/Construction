@@ -10,44 +10,23 @@ from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
+from tests._pg import transactional_session
 
 # ── Fixtures ───────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """In-memory SQLite session with just the bi_dashboards tables."""
-    from app.modules.bi_dashboards import models as _m
+    """PostgreSQL session inside an outer transaction rolled back on teardown.
 
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        echo=False,
-    )
-    tables = [
-        _m.KPIDefinition.__table__,
-        _m.Dashboard.__table__,
-        _m.DashboardWidget.__table__,
-        _m.DashboardWidgetSnapshot.__table__,
-        _m.ReportDefinition.__table__,
-        _m.ReportRun.__table__,
-        _m.ReportSchedule.__table__,
-        _m.AlertRule.__table__,
-        _m.SavedFilter.__table__,
-        _m.KPIValue.__table__,
-    ]
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=tables)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as s:
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    no per-test table creation is needed; the session's commits become
+    savepoints and everything is undone after the test.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -1560,45 +1539,16 @@ async def test_drill_down_forwards_period_and_filters(
 
 @pytest_asyncio.fixture
 async def finance_session() -> AsyncSession:
-    """Session with bi_dashboards + projects + finance + procurement + ncr
-    tables so the financial KPIs can read real source rows."""
-    from app.modules.bi_dashboards import models as _bi
-    from app.modules.finance import models as _fin
-    from app.modules.ncr import models as _ncr
-    from app.modules.procurement import models as _proc
-    from app.modules.projects import models as _proj
-    from app.modules.users import models as _users
+    """PostgreSQL session for the financial KPIs.
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    tables = [
-        _bi.KPIValue.__table__,
-        _users.User.__table__,
-        _proj.Project.__table__,
-        _fin.Invoice.__table__,
-        _fin.Payment.__table__,
-        _proc.PurchaseOrder.__table__,
-        _ncr.NCR.__table__,
-    ]
-    # ``PurchaseOrder`` and ``Invoice`` declare ``lazy="selectin"`` child
-    # relationships (PO items / goods receipts, invoice items), so a bare
-    # ``select(PurchaseOrder)`` / ``select(Invoice)`` eager-loads those child
-    # tables — they must exist or the query raises ``no such table``. Add the
-    # child tables (best-effort: tolerate models that don't expose them) so
-    # the financial KPIs can read their source rows under the in-memory DB.
-    for _mod, _attrs in (
-        (_proc, ("PurchaseOrderItem", "GoodsReceipt", "GoodsReceiptItem")),
-        (_fin, ("InvoiceItem", "InvoiceLine", "InvoiceLineItem")),
-    ):
-        for _attr in _attrs:
-            _cls = getattr(_mod, _attr, None)
-            if _cls is not None and hasattr(_cls, "__table__") and _cls.__table__ not in tables:
-                tables.append(_cls.__table__)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=tables)
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as s:
+    The shared ``oe_test_unit`` database already carries the full schema
+    (bi_dashboards + projects + finance + procurement + ncr and every child
+    table the ``lazy="selectin"`` relationships eager-load), so the KPIs can
+    read real source rows. Runs inside an outer transaction rolled back on
+    teardown.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_project(session: AsyncSession, *, currency: str, fx: list | None = None):

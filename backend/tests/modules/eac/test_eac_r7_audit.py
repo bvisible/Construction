@@ -16,10 +16,10 @@ missed (rules / rulesets / runs were already hardened; aliases were not):
    ``GET /rules/{id}`` and the safe-eval reject list remain in place
    (regression net).
 
-These tests drive the service layer directly against an in-memory
-SQLite engine wherever possible (fast, no auth plumbing) and only spin
-up the full FastAPI app for the upload-gate test where the multipart
-parser is what we're exercising.
+These tests drive the service layer directly against a PostgreSQL
+session wrapped in a rolled-back outer transaction (fast, no auth
+plumbing) and only spin up the full FastAPI app for the upload-gate
+test where the multipart parser is what we're exercising.
 """
 
 from __future__ import annotations
@@ -29,15 +29,9 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import event, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-import app.core.audit_log  # noqa: F401
-
-# Register all metadata before any in-memory create_all runs.
-import app.modules.eac.models  # noqa: F401
-import app.modules.users.models  # noqa: F401
-from app.database import Base
 from app.modules.eac.aliases.schemas import (
     EacAliasSynonymCreate,
     EacAliasSynonymRead,
@@ -52,32 +46,23 @@ from app.modules.eac.aliases.service import (
     update_alias,
 )
 from app.modules.eac.models import EacParameterAlias
+from tests._pg import transactional_session
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session():
-    """Per-test isolated in-memory SQLite session."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    """Per-test isolated PostgreSQL session.
 
-    @event.listens_for(engine.sync_engine, "connect")
-    def _enable_fk(dbapi_conn, _rec) -> None:  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    try:
-        async with factory() as sess:
-            yield sess
-    finally:
-        await engine.dispose()
+    Runs inside an outer transaction that is rolled back on teardown, so
+    each test starts against the empty (but fully schema-loaded) shared
+    unit database. The session's own ``commit()`` calls become savepoint
+    releases, visible within the test and undone afterwards. PostgreSQL
+    enforces foreign keys natively, so no extra setup is needed.
+    """
+    async with transactional_session() as s:
+        yield s
 
 
 def _payload(name: str = "_Wave3Length") -> EacParameterAliasCreate:

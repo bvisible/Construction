@@ -23,35 +23,13 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
-from app.database import Base
 from app.modules.supplier_catalogs.models import (
-    CatalogEntry,
     CatalogItem,
-    CommodityCode,
-    GoodsReceipt,
-    GRLine,
-    ItemCategory,
-    KYCDocument,
-    POLine,
-    PriceList,
-    PRLine,
     PurchaseOrder,
-    PurchaseRequisition,
-    StockBalance,
-    StockMovement,
-    ThreeWayMatchRecord,
-    TolerianceProfile,
     Vendor,
-    VendorInvoice,
-    VendorInvoiceLine,
-    VendorScorecard,
     Warehouse,
 )
 from app.modules.supplier_catalogs.schemas import (
@@ -73,45 +51,22 @@ from app.modules.supplier_catalogs.schemas import (
     WarehouseCreate,
 )
 from app.modules.supplier_catalogs.service import SupplierCatalogsService
+from tests._pg import transactional_session
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
-_SUPPLIER_TABLES = [
-    Vendor.__table__,
-    ItemCategory.__table__,
-    CatalogItem.__table__,
-    PriceList.__table__,
-    CatalogEntry.__table__,
-    PurchaseRequisition.__table__,
-    PRLine.__table__,
-    PurchaseOrder.__table__,
-    POLine.__table__,
-    Warehouse.__table__,
-    GoodsReceipt.__table__,
-    GRLine.__table__,
-    VendorInvoice.__table__,
-    VendorInvoiceLine.__table__,
-    ThreeWayMatchRecord.__table__,
-    StockBalance.__table__,
-    StockMovement.__table__,
-    CommodityCode.__table__,
-    TolerianceProfile.__table__,
-    KYCDocument.__table__,
-    VendorScorecard.__table__,
-]
-
-
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite — only supplier_catalogs tables."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_SUPPLIER_TABLES)
-    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
-    async with SessionLocal() as s:
+    """Per-test PostgreSQL session inside a rolled-back outer transaction.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so no
+    ``create_all`` is needed. Each test runs in its own transaction (the
+    session's ``commit()`` becomes a savepoint release) that is rolled back on
+    teardown, leaving the database pristine for the next test.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 @pytest.fixture

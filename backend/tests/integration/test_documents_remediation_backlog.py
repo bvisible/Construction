@@ -17,7 +17,7 @@ Pins the contracts fixed in the A-DOC-* triage pass:
 The deterministic logic checks (sort whitelist, CDE NULL guard,
 double-extension, summary normalisation) are unit-level and DB-free.
 The IDOR guard + photo cross-link cleanup use the shared smoke harness
-so they exercise the real router + SQLite DDL.
+so they exercise the real router + PostgreSQL schema.
 """
 
 from __future__ import annotations
@@ -201,7 +201,7 @@ def test_get_photo_handler_is_idor_guarded() -> None:
     e2e test would miss. Endpoint-level cross-user behaviour for the
     photo *file* route is already covered elsewhere; this pins the
     metadata route to the same contract without a fragile dual-login
-    integration flow against the session-scoped in-memory SQLite.
+    integration flow against the session-scoped PostgreSQL database.
     """
     import ast
     from pathlib import Path

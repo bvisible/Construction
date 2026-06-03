@@ -20,20 +20,11 @@ item:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-snag-punchlist-"))
-_TMP_DB = _TMP_DIR / "snag_punchlist.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -193,12 +184,11 @@ async def _create_snag(
     """Create a Snag directly via the ORM and fire the bridge event
     inline.
 
-    We deliberately avoid the HTTP POST route here because aiosqlite +
-    detached ``asyncio.create_task`` subscribers deadlock under the
-    httpx ASGITransport (the outer request still holds the SQLite
-    writer lock when the subscriber tries to open its own session).
-    The bridge ITSELF is exercised end-to-end — we just don't want the
-    test runner racing the request commit.
+    We deliberately avoid the HTTP POST route here because detached
+    ``asyncio.create_task`` subscribers race the outer request commit
+    under the httpx ASGITransport. The bridge ITSELF is exercised
+    end-to-end — we just don't want the test runner racing the request
+    commit.
 
     The event payload exactly matches what ``service.create_snag``
     publishes via ``event_bus.publish_detached`` in production.

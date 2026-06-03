@@ -7,19 +7,18 @@ Phase 4 of the v2.8.0 vector match feature wires the ``Accept`` button on
 updates a BOQ position with the matched CWICR cost item, optionally
 links the BIM element, and records feedback into the audit log.
 
-Tests are hermetic: temp SQLite per test (per ``feedback_test_isolation.md``),
+Tests are hermetic: an isolated, throwaway PostgreSQL database per test
+(cloned from a schema-loaded template by ``tests._pg.isolated_engine``),
 no real LanceDB / LLM / network. They drive
 ``app.modules.match.service.accept_match`` directly so we exercise the
-business logic without spinning up a full ASGI app — the router is a
+business logic without spinning up a full ASGI app - the router is a
 trivial pass-through that's covered separately by the existing match
 service tests.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -28,48 +27,28 @@ from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
+
+from tests._pg import isolated_engine
 
 # ── Shared fixtures ──────────────────────────────────────────────────────
 
 
-def _register_minimal_models() -> None:
-    """Pull every module that owns a Base.metadata table the tests touch."""
-    import app.core.audit  # noqa: F401  — AuditEntry
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "match_accept.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The tests seed rows through the factory and then read them back from a
+    separate session, so they need real cross-connection commit visibility -
+    hence a throwaway database rather than a savepoint-rolled-back session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(
+            engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
@@ -80,7 +59,7 @@ async def project_and_boq(temp_engine_and_factory):
     used as the acting caller in every happy-path test so
     ``_verify_project_access`` short-circuits.
     """
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.modules.boq.models import BOQ
     from app.modules.projects.models import Project
@@ -190,7 +169,7 @@ class TestAcceptMatchHappyPath:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         from app.modules.match.service import accept_match
@@ -242,7 +221,7 @@ class TestAcceptMatchHappyPath:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         from app.modules.match.service import accept_match
@@ -293,7 +272,7 @@ class TestAcceptMatchHappyPath:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         # Pre-create a manual position the accept call will overwrite.
@@ -356,7 +335,7 @@ class TestAcceptMatchHappyPath:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         from app.modules.match.service import accept_match
@@ -412,7 +391,7 @@ class TestQuantityInferenceOrder:
         quantities,
         expected,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         from app.modules.match.service import accept_match
@@ -452,17 +431,11 @@ class TestBIMLink:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
-        # Bring the bim_hub models into Base.metadata so the link table
-        # is created; create a minimal BIMModel + BIMElement.
-        import app.modules.bim_hub.models  # noqa: F401
-        from app.database import Base
-
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-
+        # The template database already carries the bim_hub tables, so we can
+        # create a minimal BIMModel + BIMElement directly.
         from app.modules.bim_hub.models import BIMElement, BIMModel
 
         model_id = uuid.uuid4()
@@ -542,7 +515,7 @@ class TestBIMLink:
         project_and_boq,
     ) -> None:
         """Position still created; BIM link best-effort returns False."""
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         from app.modules.match.service import accept_match
@@ -579,7 +552,7 @@ class TestErrorPaths:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, _user_id = project_and_boq
 
         # Use a different acting user (not the project owner, not admin).
@@ -611,7 +584,7 @@ class TestErrorPaths:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, _boq_id, user_id = project_and_boq
 
         # Create a second project + BOQ; the second BOQ doesn't belong
@@ -679,7 +652,7 @@ class TestErrorPaths:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         from app.modules.match.service import accept_match
@@ -715,7 +688,7 @@ class TestCatalogIndependence:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, user_id = project_and_boq
 
         from app.modules.match.service import accept_match
@@ -756,7 +729,7 @@ class TestAdminRoleBypass:
         temp_engine_and_factory,
         project_and_boq,
     ) -> None:
-        _engine, factory, _tmp = temp_engine_and_factory
+        _engine, factory = temp_engine_and_factory
         project_id, boq_id, _owner_id = project_and_boq
         admin_id = str(uuid.uuid4())
 

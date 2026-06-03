@@ -6,29 +6,16 @@ Two layers:
   clearance) and :func:`_signature` determinism / order-independence /
   stability across two independent engine runs, driven through the same
   hand-built ``ElementGeom`` fakes the narrow-phase suite uses.
-* **DB-backed** — a self-isolated SQLite (booted exactly like
-  ``test_bcf_api.py``) exercising :meth:`ClashService.create_run`
+* **DB-backed** — exercising :meth:`ClashService.create_run`
   carry-forward (status / assignee / due_date / comments persist across
   a re-run, matched by signature) and :meth:`ClashService.compare_runs`
-  (new / resolved / persistent partition).
-
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-fresh temp SQLite file BEFORE ``app`` is first imported.
+  (new / resolved / persistent partition) over the PostgreSQL engine
+  provisioned by ``conftest.py``.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
-
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-triage-"))
-_TMP_DB = _TMP_DIR / "clash_triage.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
@@ -117,7 +104,7 @@ def test_signature_stable_across_two_independent_runs():
 
 @pytest_asyncio.fixture(scope="module")
 async def db_session():
-    """A real AsyncSession over a freshly create_all'd temp SQLite."""
+    """A real AsyncSession over the freshly create_all'd PostgreSQL engine."""
     from app.config import get_settings
 
     get_settings.cache_clear()

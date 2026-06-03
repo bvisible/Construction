@@ -9,11 +9,15 @@ Scope (intentionally tight — one happy path per security concern):
     4. Project-scope IDOR: a caller hitting another tenant's
        correspondence ID gets 404, not the row.
 
-The suite uses an in-memory SQLite engine and the FastAPI ``TestClient``
-for the upload + IDOR assertions so the magic-byte gate, permission gate,
-and ``verify_project_access`` are exercised end-to-end. Heavy services
-(events, audit) are not registered in unit suites, so the router runs
-against the bare module.
+The suite uses a PostgreSQL session wrapped in an outer transaction that is
+rolled back on teardown (see ``tests._pg.transactional_session``) and the
+FastAPI ``TestClient`` for the upload + IDOR assertions so the magic-byte
+gate, permission gate, and ``verify_project_access`` are exercised
+end-to-end. The ``TestClient`` runs in the same event loop and the
+``get_session`` override hands the app this same transactional session, so
+service commits (savepoint releases) are visible to the router. Heavy
+services (events, audit) are not registered in unit suites, so the router
+runs against the bare module.
 """
 
 from __future__ import annotations
@@ -25,49 +29,35 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
     verify_project_access,
 )
-from app.modules.correspondence.models import Correspondence
 from app.modules.correspondence.router import router as correspondence_router
 from app.modules.correspondence.schemas import CorrespondenceCreate
 from app.modules.correspondence.service import CorrespondenceService
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.users.models import APIKey, User
+from app.modules.projects.models import Project
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    """Fresh in-memory SQLite with only the tables this suite needs.
+    """PostgreSQL session isolated by an outer transaction.
 
-    ``Project.owner_id`` FKs to ``oe_users_user`` so we have to register
-    that table too — but we don't need its real Pydantic / RBAC plumbing.
+    The shared ``oe_test_unit`` database already carries the full schema,
+    so no ``create_all`` is needed. The session runs inside a transaction
+    that is rolled back on teardown, so each test starts from an empty
+    database. ``Project.owner_id`` FKs to ``oe_users_user`` and PostgreSQL
+    enforces that natively.
     """
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                APIKey.__table__,
-                Project.__table__,
-                ProjectWBS.__table__,
-                ProjectMilestone.__table__,
-                Correspondence.__table__,
-            ],
-        )
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, email: str | None = None) -> uuid.UUID:

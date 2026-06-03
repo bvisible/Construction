@@ -1,8 +1,8 @@
 """Geo Hub cross-module pin layers — HSE incidents, Punchlist items,
 Daily Diary photos.
 
-Mirrors ``test_geo_hub_api.py`` scaffolding: per-module temp SQLite
-registered BEFORE any ``from app...`` import. Verifies:
+Runs on the conftest-provisioned PostgreSQL engine (bound before any
+``from app...`` import). Verifies:
 
 * Pins land on the layer endpoint when the source row has WGS84
   coordinates.
@@ -14,21 +14,12 @@ registered BEFORE any ``from app...`` import. Verifies:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-geo-hub-pins-"))
-_TMP_DB = _TMP_DIR / "geo_hub_pins.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest_asyncio.fixture(scope="module")

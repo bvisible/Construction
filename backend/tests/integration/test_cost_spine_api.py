@@ -1,7 +1,6 @@
 """Cost Spine API integration suite (v6.4 keystone).
 
-Boots the real FastAPI app against a per-module temp SQLite DB (wired up
-BEFORE any ``app...`` import, mirroring ``test_team_member_project_access.py``)
+Boots the real FastAPI app against the conftest-provisioned PostgreSQL cluster
 and drives the full /api/v1/costmodel/.../spine/... surface end to end.
 
 Flow under test:
@@ -22,21 +21,12 @@ Decimal-as-string JSON.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-cost-spine-"))
-_TMP_DB = _TMP_DIR / "cost_spine.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 API = "/api/v1"
 

@@ -738,16 +738,20 @@ export default function App() {
         <Route path="/buyer-portal/:token" element={<BuyerPortalPage />} />
 
         {/* Field-worker mobile shell — bottom-nav layout, no desktop sidebar.
-            Skeleton route; pilot will add `/field/{token}` PIN entry and the
-            four tab bodies. See docs/architecture/FIELD_WORKER_MOBILE_DESIGN.md */}
-        <Route
-          path="/field"
-          element={
-            <Suspense fallback={<LoadingScreen />}>
-              <FieldShellPage />
-            </Suspense>
-          }
-        />
+            Skeleton route gated behind VITE_FIELD_PILOT until the pilot adds
+            the `/field/{token}` PIN entry and the four tab bodies. Off by
+            default so the placeholder shell is never reachable in a normal
+            build. See docs/architecture/FIELD_WORKER_MOBILE_DESIGN.md */}
+        {import.meta.env.VITE_FIELD_PILOT === '1' && (
+          <Route
+            path="/field"
+            element={
+              <Suspense fallback={<LoadingScreen />}>
+                <FieldShellPage />
+              </Suspense>
+            }
+          />
+        )}
 
         {/* //// NEOFFICE PATCH — Frappe-embedded auth bypass (4 routes).
             In embedded mode the user is already authenticated by Frappe,

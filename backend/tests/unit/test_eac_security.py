@@ -24,9 +24,11 @@ Covers the v4.3 Round-3 Wave A audit findings:
 These are pure unit tests — the model-level checks use SQLAlchemy
 metadata directly; the HTTP-level checks drive the real FastAPI app
 through an in-process ``ASGITransport`` client, matching the pattern
-used by ``tests/integration/eac/test_runs_endpoint.py``. They live
-under ``tests/unit/`` so the harness's per-session SQLite isolation
-fixture in ``backend/tests/conftest.py`` applies cleanly.
+used by ``tests/integration/eac/test_runs_endpoint.py``. They run
+against the session PostgreSQL cluster provisioned by
+``backend/tests/conftest.py``; the engine-level isolation test uses the
+``transactional_session`` helper, which wraps each test in an outer
+transaction that is rolled back on teardown.
 """
 
 from __future__ import annotations
@@ -57,6 +59,7 @@ from app.modules.eac.engine.safe_eval import (
     parse_formula,
 )
 from app.modules.eac.models import EacRun, EacRunResultItem
+from tests._pg import transactional_session
 
 # ── Test 1: FK index on rule_id (Round-3 Wave A finding) ────────────────
 
@@ -195,8 +198,8 @@ def test_idempotency_key_stable_across_dict_ordering() -> None:
 async def client():
     """Real FastAPI app driven through ASGITransport.
 
-    ``conftest.py`` has already redirected DATABASE_URL to a per-session
-    temp SQLite file, so the app boots against an empty fresh DB.
+    ``conftest.py`` has already pointed DATABASE_URL at the session
+    PostgreSQL cluster, so the app boots against that fresh DB.
     """
     from app.main import create_app
 
@@ -351,118 +354,93 @@ async def test_cross_tenant_engine_access_is_blocked() -> None:
     pure tenant-isolation check on the seam that any future API
     surface (REST, GraphQL, Celery worker) must continue to honour.
     """
-    from sqlalchemy import event
-    from sqlalchemy.ext.asyncio import (
-        AsyncSession,
-        async_sessionmaker,
-        create_async_engine,
-    )
-
     from app.core.audit_log import ActivityLog  # noqa: F401 — register table
-    from app.database import Base
     from app.modules.eac.engine import api as engine_api
     from app.modules.eac.engine.executor import ExecutionError
     from app.modules.eac.models import EacRuleset, EacRun
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
+    # The whole check runs against a single session inside a transaction that
+    # is rolled back on teardown (PostgreSQL, full schema preloaded — no
+    # create_all needed). FKs are enforced natively by PostgreSQL.
+    async with transactional_session() as session:
+        tenant_a = uuid.uuid4()
+        tenant_b = uuid.uuid4()
 
-    @event.listens_for(engine.sync_engine, "connect")
-    def _enable_fk(dbapi_conn, _rec) -> None:  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
+        # Tenant B owns a ruleset + run.
+        ruleset_b = EacRuleset(
+            name="b_set",
+            kind="validation",
+            tenant_id=tenant_b,
+        )
+        session.add(ruleset_b)
+        await session.flush()
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        run_b = EacRun(
+            ruleset_id=ruleset_b.id,
+            tenant_id=tenant_b,
+            status="success",
+            triggered_by="manual",
+            elements_evaluated=10,
+            elements_matched=4,
+            error_count=0,
+        )
+        session.add(run_b)
+        await session.flush()
 
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    try:
-        async with factory() as session:
-            tenant_a = uuid.uuid4()
-            tenant_b = uuid.uuid4()
+        # Tenant A asks the engine for B's run status — None.
+        snapshot_for_a = await engine_api.status(
+            session,
+            run_b.id,
+            tenant_id=tenant_a,
+        )
+        assert snapshot_for_a is None, f"Cross-tenant status() must return None (router 404). Got: {snapshot_for_a!r}"
 
-            # Tenant B owns a ruleset + run.
-            ruleset_b = EacRuleset(
-                name="b_set",
-                kind="validation",
-                tenant_id=tenant_b,
-            )
-            session.add(ruleset_b)
-            await session.flush()
+        # Cancel as tenant A must refuse.
+        accepted = await engine_api.cancel(
+            session,
+            run_b.id,
+            tenant_id=tenant_a,
+        )
+        assert accepted is False, f"Cross-tenant cancel() must return False (router 404). Got: {accepted!r}"
 
-            run_b = EacRun(
-                ruleset_id=ruleset_b.id,
-                tenant_id=tenant_b,
-                status="success",
-                triggered_by="manual",
-                elements_evaluated=10,
-                elements_matched=4,
-                error_count=0,
-            )
-            session.add(run_b)
-            await session.flush()
+        # Diff between two B-owned runs must be refused under A.
+        run_b2 = EacRun(
+            ruleset_id=ruleset_b.id,
+            tenant_id=tenant_b,
+            status="success",
+            triggered_by="manual",
+            elements_evaluated=10,
+            elements_matched=5,
+            error_count=0,
+        )
+        session.add(run_b2)
+        await session.flush()
 
-            # Tenant A asks the engine for B's run status — None.
-            snapshot_for_a = await engine_api.status(
+        with pytest.raises(ExecutionError):
+            await engine_api.diff(
                 session,
                 run_b.id,
+                run_b2.id,
                 tenant_id=tenant_a,
             )
-            assert snapshot_for_a is None, (
-                f"Cross-tenant status() must return None (router 404). Got: {snapshot_for_a!r}"
-            )
 
-            # Cancel as tenant A must refuse.
-            accepted = await engine_api.cancel(
-                session,
-                run_b.id,
-                tenant_id=tenant_a,
-            )
-            assert accepted is False, f"Cross-tenant cancel() must return False (router 404). Got: {accepted!r}"
+        # And list_runs scoped to tenant A must NOT see B's runs.
+        visible_to_a = await engine_api.list_runs(
+            session,
+            tenant_id=tenant_a,
+        )
+        assert all(r.id not in {run_b.id, run_b2.id} for r in visible_to_a), (
+            "Cross-tenant list_runs leak: tenant A saw tenant B's runs"
+        )
 
-            # Diff between two B-owned runs must be refused under A.
-            run_b2 = EacRun(
-                ruleset_id=ruleset_b.id,
-                tenant_id=tenant_b,
-                status="success",
-                triggered_by="manual",
-                elements_evaluated=10,
-                elements_matched=5,
-                error_count=0,
-            )
-            session.add(run_b2)
-            await session.flush()
-
-            with pytest.raises(ExecutionError):
-                await engine_api.diff(
-                    session,
-                    run_b.id,
-                    run_b2.id,
-                    tenant_id=tenant_a,
-                )
-
-            # And list_runs scoped to tenant A must NOT see B's runs.
-            visible_to_a = await engine_api.list_runs(
-                session,
-                tenant_id=tenant_a,
-            )
-            assert all(r.id not in {run_b.id, run_b2.id} for r in visible_to_a), (
-                "Cross-tenant list_runs leak: tenant A saw tenant B's runs"
-            )
-
-            # Sanity — tenant B sees its own run.
-            own_snapshot = await engine_api.status(
-                session,
-                run_b.id,
-                tenant_id=tenant_b,
-            )
-            assert own_snapshot is not None
-            assert own_snapshot.run_id == run_b.id
-    finally:
-        await engine.dispose()
+        # Sanity — tenant B sees its own run.
+        own_snapshot = await engine_api.status(
+            session,
+            run_b.id,
+            tenant_id=tenant_b,
+        )
+        assert own_snapshot is not None
+        assert own_snapshot.run_id == run_b.id
 
 
 # ── Test 6: Audit log written on every accepted run trigger ─────────────

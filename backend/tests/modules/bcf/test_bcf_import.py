@@ -2,7 +2,7 @@
 """Integration tests for :class:`BCFImportService` + ``POST /import/clashes``.
 
 The fixtures mirror :file:`test_bcf_export.py` exactly so the test runs
-against a fresh per-module SQLite DB with the BCF + Clash tables
+against the conftest-provisioned PostgreSQL DB with the BCF + Clash tables
 auto-created. Each test sends a real multipart ``.bcfzip`` upload
 through the FastAPI test client.
 
@@ -20,22 +20,12 @@ Cases:
 from __future__ import annotations
 
 import io
-import os
-import tempfile
 import uuid
 import zipfile
-from pathlib import Path
 
-# ── Per-module SQLite isolation MUST run BEFORE app imports ────────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-bcf-import-"))
-_TMP_DB = _TMP_DIR / "bcf_import.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── helpers ───────────────────────────────────────────────────────────────
 

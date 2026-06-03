@@ -64,6 +64,10 @@ async def persist_auth(persist_client: AsyncClient) -> dict[str, str]:
     )
     assert reg.status_code == 201, f"Registration failed: {reg.text}"
 
+    from tests.integration._auth_helpers import promote_to_admin
+
+    await promote_to_admin(email)
+
     token = ""
     for attempt in range(3):
         resp = await persist_client.post(
@@ -328,8 +332,7 @@ class TestBimPersistence:
             _fake_conversion_result,
         )
 
-        # Upload two models so we can verify desc ordering. SQLite's
-        # CURRENT_TIMESTAMP is second-resolution, so we sleep a full
+        # Upload two models so we can verify desc ordering. Sleep a full
         # second between the two uploads to guarantee distinct
         # created_at values for the desc-ordering assertion.
         first = await _upload_ifc(persist_client, persist_auth, persist_project, "persist-list-1")

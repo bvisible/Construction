@@ -138,18 +138,8 @@ def downgrade() -> None:
     inspector = sa.inspect(bind)
     if not inspector.has_table(TABLE):
         return
-    # Drop only indexes that actually exist. On the create_all path the unique
-    # key is materialised from the model's ``UniqueConstraint`` as a table-level
-    # ``UNIQUE`` clause (SQLite emits an internal ``sqlite_autoindex_*``), NOT a
-    # named index, so an unconditional
-    # ``drop_index("uq_oe_geo_hub_geocode_cache_query_hash")`` raised
-    # "no such index" when an unrelated downgrade walked back through this
-    # revision. Guarding mirrors the defensive style used by later migrations.
-    existing = {ix["name"] for ix in inspector.get_indexes(TABLE)}
-    for index_name in (
-        "ix_oe_geo_hub_geocode_cache_cached_at",
-        "uq_oe_geo_hub_geocode_cache_query_hash",
-    ):
-        if index_name in existing:
-            op.drop_index(index_name, table_name=TABLE)
-    op.drop_table(TABLE)
+    # DROP TABLE ... CASCADE removes the table together with its indexes and
+    # the UNIQUE constraint behind uq_oe_geo_hub_geocode_cache_query_hash. On
+    # the create_all path that unique key is a constraint, so an explicit
+    # drop_index on it raises DependentObjectsStillExist on PostgreSQL.
+    op.execute(f'DROP TABLE IF EXISTS "{TABLE}" CASCADE')

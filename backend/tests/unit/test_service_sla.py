@@ -8,9 +8,10 @@ Covers:
     * materialize_recurring() creates a ticket and advances next_run_at.
     * materialize_recurring() refuses to run a disabled schedule unless forced.
 
-Uses an in-memory SQLite engine to exercise the real SQLAlchemy paths the
-service relies on (``select(...).where(sla_breached_at.is_(None))``,
-``recurring_repo.update_fields(...)``) — stubbing those out would test the
+Runs against a real PostgreSQL database wrapped in an outer transaction that
+is rolled back per test, exercising the real SQLAlchemy paths the service
+relies on (``select(...).where(sla_breached_at.is_(None))``,
+``recurring_repo.update_fields(...)``) - stubbing those out would test the
 test, not the production code.
 """
 
@@ -23,9 +24,8 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.service.models import (
     ServiceContract,
     ServiceRecurringSchedule,
@@ -39,28 +39,21 @@ from app.modules.service.service import (
     compute_sla_due,
     priority_sla_minutes,
 )
+from tests._pg import transactional_session
 
 # ── Async DB fixture ─────────────────────────────────────────────────────
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite session.
+    """Per-test PostgreSQL session inside a rolled-back outer transaction.
 
-    Uses ``StaticPool`` semantics implicitly via ``:memory:`` + a single
-    connection lifecycle — each test gets a fresh DB so order can't leak.
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    each test gets isolation via a savepoint-backed transaction that is rolled
+    back on teardown - order can't leak between tests.
     """
-    # ``shared cache`` keeps the schema across coroutines on the same engine.
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        future=True,
-    )
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture

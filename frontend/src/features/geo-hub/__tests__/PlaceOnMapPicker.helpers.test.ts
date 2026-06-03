@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
-import { isPdfDocument } from '../PlaceOnMapPicker';
+import { isPdfDocument, overlayCentroid } from '../PlaceOnMapPicker';
 import type { DocumentItem } from '@/features/documents/api';
 
 // Regression guard for the "Place on map" picker crash:
@@ -45,5 +45,49 @@ describe('isPdfDocument', () => {
   it('does not throw on a bare document object', () => {
     expect(() => isPdfDocument({} as DocumentItem)).not.toThrow();
     expect(isPdfDocument({} as DocumentItem)).toBe(false);
+  });
+});
+
+// The picker flies the camera to a freshly-placed PDF overlay's centroid so
+// the user sees the drawing immediately instead of an off-screen square. The
+// centroid must be the mean of the four corners and must degrade to null on
+// bad input (the parent then skips the fly rather than flying to NaN).
+describe('overlayCentroid', () => {
+  it('averages four [lon, lat] corners', () => {
+    const corners: [number, number][] = [
+      [10, 50],
+      [12, 50],
+      [12, 48],
+      [10, 48],
+    ];
+    expect(overlayCentroid(corners)).toEqual({ lon: 11, lat: 49 });
+  });
+
+  it('ignores malformed corner entries', () => {
+    const corners = [
+      [10, 50],
+      [12, 50],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [Number.NaN, 48] as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ['bad'] as any,
+    ];
+    expect(overlayCentroid(corners)).toEqual({ lon: 11, lat: 50 });
+  });
+
+  it('returns null for empty / missing corners', () => {
+    expect(overlayCentroid([])).toBeNull();
+    expect(overlayCentroid(null)).toBeNull();
+    expect(overlayCentroid(undefined)).toBeNull();
+  });
+
+  it('returns null when every corner is non-finite', () => {
+    const corners = [
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [Number.NaN, Number.NaN] as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      [Number.POSITIVE_INFINITY, 1] as any,
+    ];
+    expect(overlayCentroid(corners)).toBeNull();
   });
 });

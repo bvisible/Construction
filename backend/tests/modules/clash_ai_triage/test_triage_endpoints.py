@@ -2,30 +2,19 @@
 # Copyright (c) 2026 Artem Boiko / DataDrivenConstruction
 """HTTP integration tests for the clash AI triage endpoints.
 
-Per ``feedback_test_isolation.md`` ``DATABASE_URL`` is redirected to a
-per-module temp SQLite file BEFORE ``app`` is first imported, mirroring
-the convention used by ``test_clash_cost_endpoints``.
+These tests run against the PostgreSQL engine provisioned by
+``tests/conftest.py`` before any test module is imported.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import uuid
-from pathlib import Path
 from unittest.mock import patch
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
-
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-triage-ep-"))
-_TMP_DB = _TMP_DIR / "triage_ep.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 _VALID_VERDICT_JSON = json.dumps(
     {

@@ -216,5 +216,13 @@ class WebhookService:
                     hook.failure_count,
                 )
 
-        await self.session.flush()
+        # Commit, not just flush. A delivery is a self-contained side effect:
+        # the delivery log row plus the hook's failure_count / last_status_code
+        # / auto-disable state must durably persist on their own. Relying on
+        # the caller to commit was fragile - a flush is visible only inside the
+        # current transaction and is rolled back if no one commits, so the
+        # auto-disable (after 10 failures) and the delivery audit trail could
+        # silently vanish. Committing here guarantees persistence regardless of
+        # how _deliver was reached (event-bus subscriber or HTTP request).
+        await self.session.commit()
         return delivery

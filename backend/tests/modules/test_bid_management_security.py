@@ -29,7 +29,7 @@ Pins down the eight guarantees the R7 audit swept across the module:
 8. **RBAC** — viewer cannot mutate, editor cannot award/record
    scorecards, MANAGER required for award / scorecard / delete.
 
-The tests run against in-memory stub repositories (no SQLite engine,
+The tests run against in-memory stub repositories (no database engine,
 no FastAPI app boot) so they stay sub-second and reproducible.
 """
 

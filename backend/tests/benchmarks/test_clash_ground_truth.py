@@ -31,8 +31,8 @@ Coverage of the labelled set:
 * determinism: identical input twice → byte-identical result list
 
 Per ``feedback_test_isolation.md`` the import-time guard in
-``backend/tests/conftest.py`` already redirects ``DATABASE_URL`` to a
-per-session temp SQLite file before any ``app.*`` import; nothing here
+``backend/tests/conftest.py`` already redirects ``DATABASE_URL`` to the
+per-session embedded PostgreSQL cluster before any ``app.*`` import; nothing here
 opens a session anyway.
 """
 

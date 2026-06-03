@@ -714,18 +714,21 @@ async def backfill_all_models(session: AsyncSession) -> dict[str, int]:
 
 
 def _cli() -> None:
-    """Run the backfill against ``backend/openestimate.db`` and prove it.
+    """Run the backfill against the configured PostgreSQL database and prove it.
 
-    Prints a JSON summary: models processed, total real instance
-    elements, the % with a non-degenerate real AABB, and the distinct
-    storey count per model.
+    Honours ``DATABASE_URL`` when set; otherwise boots the default embedded
+    PostgreSQL (``~/.openestimate/pgdata``) the way the app does. Prints a JSON
+    summary: models processed, total real instance elements, the % with a
+    non-degenerate real AABB, and the distinct storey count per model.
     """
     import os
 
-    backend_dir = pathlib.Path(__file__).resolve().parents[3]
-    db_path = backend_dir / "openestimate.db"
-    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path.as_posix()}"
-    os.environ.setdefault("DATABASE_SYNC_URL", f"sqlite:///{db_path.as_posix()}")
+    if not os.environ.get("DATABASE_URL", "").strip():
+        from app.core import embedded_pg
+
+        pgdata = pathlib.Path.home() / ".openestimate" / "pgdata"
+        if not embedded_pg.boot(pgdata):
+            raise SystemExit("could not boot embedded PostgreSQL; set DATABASE_URL to point at one")
 
     async def _run() -> dict[str, Any]:
         from sqlalchemy import select
@@ -768,7 +771,7 @@ def _cli() -> None:
                 }
         await engine.dispose()
         return {
-            "db": str(db_path),
+            "db": "postgresql",
             "models": len(per_model),
             "instance_elements_total": total,
             "instance_elements_nondegenerate": total_nondeg,

@@ -1,7 +1,7 @@
 """Unit tests for the Nominatim geocoder + cache layer.
 
 These tests poke ``app.modules.geo_hub.geocoder`` directly without
-the FastAPI app — they only need the per-module SQLite from
+the FastAPI app — they only need the per-module PostgreSQL fixture from
 ``conftest.py`` (loaded via ``app_instance``) to materialise the
 ``oe_geo_hub_geocode_cache`` table.
 """

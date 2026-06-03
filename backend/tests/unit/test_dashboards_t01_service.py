@@ -19,11 +19,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
 from app.core.storage import LocalStorageBackend
-from app.database import Base
 from app.modules.dashboards import cad2data_bridge as bridge
 from app.modules.dashboards import events as event_taxonomy
 from app.modules.dashboards.models import Snapshot, SnapshotSourceFile  # noqa: F401
@@ -43,39 +43,23 @@ from app.modules.dashboards.snapshot_storage import (
     parquet_key,
     snapshot_prefix,
 )
+from tests._pg import transactional_session
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    """In-memory async SQLite scoped to just the tables we need.
+    """Async session bound to the shared PostgreSQL ``oe_test_unit`` database.
 
-    ``create_all(tables=[...])`` keeps the schema surface small and
-    avoids pulling in unrelated modules' FKs (matches the pattern used
-    by ``test_contact_tenancy``). We include ``User`` because
-    ``Project.owner_id`` FKs to it.
+    Runs inside an outer transaction that is rolled back on teardown, so the
+    test sees its own committed data (commits become SAVEPOINT releases) while
+    leaving no residue behind. The full schema already exists, so no
+    ``create_all`` is needed. PostgreSQL enforces the ``Project.owner_id`` ->
+    ``User`` FK natively.
     """
-    from app.modules.dashboards.models import Snapshot as _Snap
-    from app.modules.dashboards.models import SnapshotSourceFile as _Src
-    from app.modules.projects.models import Project as _Proj
-    from app.modules.users.models import User as _User
-
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                _User.__table__,
-                _Proj.__table__,
-                _Snap.__table__,
-                _Src.__table__,
-            ],
-        )
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    async with maker() as s:
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -88,13 +72,12 @@ def tmp_storage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LocalStorage
     return backend
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def project_row(session: AsyncSession):
     """Minimal project row so the snapshot FK resolves.
 
     Creates the referenced :class:`User` first because
-    ``Project.owner_id`` FKs to it and SQLite enforces the constraint
-    (pragma ``foreign_keys=ON`` is active for every connection).
+    ``Project.owner_id`` FKs to it and PostgreSQL enforces the constraint.
     """
     from app.modules.projects.models import Project
     from app.modules.users.models import User

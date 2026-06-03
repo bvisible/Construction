@@ -7,20 +7,11 @@ paths emit ``geo_hub.subscriber.failed`` rather than raising.
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 
-# ── Per-module SQLite isolation (must run BEFORE app imports) ──────────────
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-geo-hub-subscribers-"))
-_TMP_DB = _TMP_DIR / "geo_hub_subscribers.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-import pytest_asyncio  # noqa: E402
+import pytest
+import pytest_asyncio
 
 
 @pytest_asyncio.fixture(scope="module")

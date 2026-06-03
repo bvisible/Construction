@@ -20,25 +20,24 @@ from datetime import UTC, datetime, timedelta
 import pytest
 import pytest_asyncio
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.documents.models import Document  # noqa: F401 — register model
 from app.modules.file_trash.models import FileTrash
 from app.modules.file_trash.service import FileTrashService, purge_expired_trash
 from app.modules.projects.models import Project  # noqa: F401 — register model
 from app.modules.users.models import User  # noqa: F401 — register model
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    sm = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with sm() as s:
+    # PostgreSQL session inside an outer transaction that is rolled back on
+    # teardown; the shared unit database already holds the full schema, so no
+    # create_all is needed. The service's own commit() becomes a SAVEPOINT
+    # release, visible within the test but undone afterwards.
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _seed_project(session: AsyncSession) -> tuple[uuid.UUID, uuid.UUID]:

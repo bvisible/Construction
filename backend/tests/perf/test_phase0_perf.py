@@ -15,7 +15,6 @@ block a release pipeline.
 
 from __future__ import annotations
 
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -23,11 +22,9 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from tests._pg import isolated_engine
 
 # ── Shared fixtures ──────────────────────────────────────────────────────────
 
@@ -47,40 +44,24 @@ def _bypass_catalog_gate(monkeypatch):
     )
 
 
-def _register_minimal_models() -> None:
-    import app.core.audit  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def engine_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "perf.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
-    _register_minimal_models()
-    from app.database import Base
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-    yield engine, factory, tmp_db
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The tests open their own sessions from the factory (some seed data in one
+    session and read it back in another), so they need cross-connection commit
+    visibility - hence a real throwaway database rather than a savepoint-rolled
+    back shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
 async def project_uuid(engine_factory) -> uuid.UUID:
     """Real Project row so MatchProjectSettings can FK."""
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
 
     from app.modules.projects.models import Project
     from app.modules.users.models import User
@@ -156,7 +137,7 @@ async def test_match_element_typical_under_500ms(
         return fixed_hits[:limit]
 
     monkeypatch.setattr(vector_adapter, "search", _stub_search)
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
 
     raw = {
         "category": "wall",
@@ -232,11 +213,11 @@ async def test_match_settings_get_under_100ms(
     """MatchProjectSettings lazy-init GET completes in < 100 ms.
 
     Lazy init = SELECT (miss) → INSERT → SELECT round-trip. Should be
-    fast on local SQLite.
+    fast on the local PostgreSQL cluster.
     """
     from app.modules.projects.service import get_or_create_match_settings
 
-    _engine, factory, _tmp = engine_factory
+    _engine, factory = engine_factory
 
     # Warm up the schema cache.
     async with factory() as session:

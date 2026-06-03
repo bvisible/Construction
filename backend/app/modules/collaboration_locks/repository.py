@@ -181,6 +181,18 @@ class CollabLockRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
+    async def list_expired(self, now: datetime) -> Sequence[CollabLock]:
+        """Return every lock whose ``expires_at`` has passed.
+
+        The sweeper reads these rows *before* :meth:`delete_expired` so it
+        can publish a ``collab.lock.expired`` event per removed lock.  This
+        is the inverse predicate of :meth:`list_by_user` (which keeps only
+        live locks), so the two never collapse to an empty intersection.
+        """
+        stmt = select(CollabLock).where(CollabLock.expires_at <= now)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     # ── Mutate ──────────────────────────────────────────────────────────
 
     async def extend(

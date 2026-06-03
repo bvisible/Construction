@@ -18,38 +18,27 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.job_run import JobRun
 from app.core.job_runner import submit_job
-from app.database import Base
+from tests._pg import isolated_engine
 
 
-@pytest.fixture
-async def session_factory(tmp_path):
-    """File-backed async SQLite session factory scoped to oe_job_run only.
+@pytest_asyncio.fixture
+async def session_factory():
+    """Async session factory bound to a per-test throwaway PostgreSQL database.
 
-    A file-backed DB is required (rather than ``:memory:``) because the
-    cross-thread test below opens a fresh aiosqlite connection per
-    thread; with ``:memory:`` each connection would see a different
-    empty database. The file is in a pytest tmp_path that is cleaned
-    automatically.
+    ``submit_job`` opens its own sessions from the factory, commits, and
+    re-reads the committed rows from separate sessions — and the cross-thread
+    test below spins up a fresh event loop per thread that must see those
+    commits. A real throwaway database (cloned from the schema-loaded template)
+    provides the required cross-connection commit visibility, which a
+    savepoint-rolled-back shared session cannot.
     """
-    db_path = tmp_path / "jobs_idem.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
-    async with engine.begin() as conn:
-        # WAL mode for concurrent reads while a writer holds the table.
-        from sqlalchemy import text
-
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
-        await conn.run_sync(Base.metadata.create_all, tables=[JobRun.__table__])
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    async with isolated_engine() as engine:
+        yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 @pytest.mark.asyncio

@@ -58,13 +58,13 @@ async def test_local_backend_round_trip(tmp_path) -> None:
 def test_storage_backend_factory(tmp_path, monkeypatch) -> None:
     """``build_storage_backend`` honours ``settings.storage_backend=local``."""
     # Isolate from the developer's real .env file.
-    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
-    monkeypatch.setenv("DATABASE_SYNC_URL", "sqlite:///./test.db")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://oe:oe@localhost:5432/test")
+    monkeypatch.setenv("DATABASE_SYNC_URL", "postgresql://oe:oe@localhost:5432/test")
 
     settings = Settings(
         _env_file=None,
-        database_url="sqlite+aiosqlite:///./test.db",
-        database_sync_url="sqlite:///./test.db",
+        database_url="postgresql+asyncpg://oe:oe@localhost:5432/test",
+        database_sync_url="postgresql://oe:oe@localhost:5432/test",
         storage_backend="local",
     )
 
@@ -74,8 +74,8 @@ def test_storage_backend_factory(tmp_path, monkeypatch) -> None:
     # The factory should also reject unknown backend names.
     bad = Settings(
         _env_file=None,
-        database_url="sqlite+aiosqlite:///./test.db",
-        database_sync_url="sqlite:///./test.db",
+        database_url="postgresql+asyncpg://oe:oe@localhost:5432/test",
+        database_sync_url="postgresql://oe:oe@localhost:5432/test",
     )
     # mypy/pyright would flag this — we bypass the Literal check on purpose.
     object.__setattr__(bad, "storage_backend", "nope")

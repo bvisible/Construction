@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.core.job_run import JobRun
 from app.core.job_runner import (
@@ -23,17 +23,19 @@ from app.core.job_runner import (
     submit_job,
     unregister_handler,
 )
-from app.database import Base
+from tests._pg import isolated_engine
 
 
 @pytest.fixture
 async def session_factory():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[JobRun.__table__])
-    maker = async_sessionmaker(engine, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+    # The job runner opens its OWN, independent sessions from this factory on
+    # separate connections (submit_job commits a row, then _dispatch_job_sync
+    # reads it back and commits status changes from a fresh session), so the
+    # tests rely on cross-connection committed visibility. That needs a real
+    # engine bound to its own PostgreSQL database (schema already loaded from
+    # the session template), not the savepoint-rolled-back transactional_session.
+    async with isolated_engine() as engine:
+        yield async_sessionmaker(engine, expire_on_commit=False)
 
 
 @pytest.fixture(autouse=True)

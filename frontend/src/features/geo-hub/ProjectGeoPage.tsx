@@ -197,6 +197,15 @@ export function ProjectGeoPage() {
   // drops the chosen one onto the map. Opened from the header button and
   // from the ``no_tilesets`` empty state.
   const [pickerOpen, setPickerOpen] = useState<boolean>(false);
+  // After a PDF drawing is placed we fly the camera straight to its
+  // centroid. ``key`` is a nonce so re-placing the same drawing re-flies
+  // (the viewer's flyToTarget effect keys on it). 3D models use the
+  // ``?model=`` deep-link + focusedTilesetId path instead.
+  const [overlayFlyTarget, setOverlayFlyTarget] = useState<{
+    key: string;
+    lat: number;
+    lon: number;
+  } | null>(null);
   // Cesium runtime ref, populated by ``CesiumViewer.onViewerReady`` so
   // the overlay layer can attach its imagery + interaction handlers.
   const [cesiumRuntime, setCesiumRuntime] = useState<
@@ -511,6 +520,7 @@ export function ProjectGeoPage() {
               mapConfig={viewerMapConfig}
               pins={pins}
               focusedTilesetId={focusedTilesetId}
+              flyToTarget={overlayFlyTarget}
               tilesetOverlayState={tilesetOverlay.state}
               anchorDragMode={anchorDragMode}
               onMapClick={handleAnchorMapClick}
@@ -586,13 +596,25 @@ export function ProjectGeoPage() {
         onClose={() => setPickerOpen(false)}
         projectId={projectId}
         hasAnchor={Boolean(data?.anchor)}
-        onPlaced={(modelId) => {
-          // For a 3D model, focus the camera on it once the map config
-          // refetches and the new tileset appears (?model resolves to the
-          // tileset via source_id). PDF overlays (null) just appear.
-          if (modelId) {
-            navigate(`/projects/${projectId}/geo?model=${modelId}`, {
+        onPlaced={(placed) => {
+          // Close the picker so the map (and the thing we just placed) is
+          // actually visible — leaving the modal open over the canvas was
+          // the "placed but I see nothing" report.
+          setPickerOpen(false);
+          if (placed.kind === 'model') {
+            // Focus the camera on the model once the map config refetches
+            // and the new tileset appears (?model resolves to the tileset
+            // via source_id, then the viewer flies to its bounding sphere).
+            navigate(`/projects/${projectId}/geo?model=${placed.modelId}`, {
               replace: true,
+            });
+          } else {
+            // PDF overlay — fly straight to its centroid. A fresh nonce each
+            // time so re-placing the same drawing always re-flies.
+            setOverlayFlyTarget({
+              key: `overlay-${Date.now()}`,
+              lat: placed.lat,
+              lon: placed.lon,
             });
           }
         }}

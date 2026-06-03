@@ -32,7 +32,7 @@ from httpx import ASGITransport, AsyncClient
 
 @pytest_asyncio.fixture
 async def client():
-    """Boot the real FastAPI app against the per-session SQLite DB."""
+    """Boot the real FastAPI app against the per-session PostgreSQL database."""
     from app.main import create_app
 
     app = create_app()

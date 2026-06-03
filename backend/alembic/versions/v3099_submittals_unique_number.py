@@ -60,5 +60,15 @@ def upgrade() -> None:
 def downgrade() -> None:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
-    if _has_index(inspector, _TABLE, _INDEX):
+    if _TABLE not in inspector.get_table_names():
+        return
+    # On the create_all path the uniqueness comes from the model's
+    # ``UniqueConstraint`` (a real UNIQUE constraint), so the index that
+    # backs it cannot be dropped directly on PostgreSQL
+    # (DependentObjectsStillExist). Drop the constraint when present;
+    # otherwise drop the plain unique index that upgrade() created.
+    constraints = {c["name"] for c in inspector.get_unique_constraints(_TABLE)}
+    if _INDEX in constraints:
+        op.drop_constraint(_INDEX, _TABLE, type_="unique")
+    elif _has_index(inspector, _TABLE, _INDEX):
         op.drop_index(_INDEX, table_name=_TABLE)

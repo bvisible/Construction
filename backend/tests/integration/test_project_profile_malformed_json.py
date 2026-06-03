@@ -12,62 +12,37 @@ showcase "gap-fill" seed persisted profiles with ``activity =
 unhandled 500. ``list(row.activity or [])`` separately exploded the
 string into single characters.
 
-This drives the real ``projects`` router over HTTP against a temp
-SQLite DB, plants the exact malformed state, and asserts the endpoint
-returns 200 with a contract-correct payload (activity is a clean
+This drives the real ``projects`` router over HTTP against a throwaway
+PostgreSQL database, plants the exact malformed state, and asserts the
+endpoint returns 200 with a contract-correct payload (activity is a clean
 ``["construction"]``, setup_completion is a dict).
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-
-def _register_minimal_models() -> None:
-    import app.core.audit  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
+from tests._pg import isolated_engine
 
 
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "profile_malformed_json.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(
-        engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-    )
-
-    yield engine, factory, tmp_db
-
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 _current_user_payload: dict[str, str] = {}
@@ -75,7 +50,7 @@ _current_user_payload: dict[str, str] = {}
 
 @pytest_asyncio.fixture
 async def app(temp_engine_and_factory) -> AsyncGenerator[FastAPI, None]:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     from app.dependencies import (
         get_current_user_id,
@@ -207,7 +182,7 @@ async def test_get_profile_with_scalar_json_columns_returns_200(
     client: AsyncClient,
     temp_engine_and_factory,
 ) -> None:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     owner_id, project_id = await _seed_malformed_profile(factory)
     _set_acting_user(owner_id)
 
@@ -242,7 +217,7 @@ async def test_get_profile_with_none_json_columns_returns_200(
     from app.modules.projects.models import Project, ProjectProfile
     from app.modules.users.models import User
 
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     async with factory() as s:
         owner = User(
             id=uuid.uuid4(),

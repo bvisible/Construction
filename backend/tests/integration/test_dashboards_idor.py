@@ -20,38 +20,17 @@ Coverage:
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.database import Base
 from app.dependencies import get_current_user_id, get_session
-
-# ── Minimal model registration ─────────────────────────────────────────────
-
-
-def _register_models() -> None:
-    import app.modules.boq.models  # noqa: F401
-    import app.modules.changeorders.models  # noqa: F401
-    import app.modules.daily_diary.models  # noqa: F401
-    import app.modules.finance.models  # noqa: F401
-    import app.modules.procurement.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.safety.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-    import app.modules.validation.models  # noqa: F401
-
+from tests._pg import isolated_engine
 
 # ── FastAPI app factory ────────────────────────────────────────────────────
 
@@ -82,23 +61,16 @@ def _build_app(session_factory: async_sessionmaker, caller_id: uuid.UUID) -> Fas
 
 @pytest_asyncio.fixture
 async def db_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "idor_dash.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_models()
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield factory
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    The app under test opens its own sessions via the ``get_session`` override, so
+    the test and the app run on separate connections that must see each other's
+    commits - hence a real throwaway database rather than a savepoint-rolled-back
+    shared session.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 async def _seed_user(
@@ -176,10 +148,11 @@ class TestDashboardIDOR:
     @pytest.mark.asyncio
     async def test_alice_rollup_excludes_bobs_boq_value(
         self,
-        db_factory: async_sessionmaker,
+        db_factory,
     ) -> None:
         """Alice's rollup total must not include Bob's BOQ value."""
-        async with db_factory() as session:
+        _engine, factory = db_factory
+        async with factory() as session:
             alice_id = await _seed_user(session)
             bob_id = await _seed_user(session)
             alice_project = await _seed_project(session, alice_id, name="Alice-P")
@@ -189,7 +162,7 @@ class TestDashboardIDOR:
             await session.commit()
 
         # Authenticate as Alice.
-        app = _build_app(db_factory, alice_id)
+        app = _build_app(factory, alice_id)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get(
@@ -208,17 +181,18 @@ class TestDashboardIDOR:
     @pytest.mark.asyncio
     async def test_scoping_to_bobs_project_returns_zero(
         self,
-        db_factory: async_sessionmaker,
+        db_factory,
     ) -> None:
         """Alice scopes rollup to Bob's project_id → project_count=0, empty data."""
-        async with db_factory() as session:
+        _engine, factory = db_factory
+        async with factory() as session:
             alice_id = await _seed_user(session)
             bob_id = await _seed_user(session)
             _alice_proj = await _seed_project(session, alice_id, name="Alice-P")
             bob_proj = await _seed_project(session, bob_id, name="Bob-P")
             await session.commit()
 
-        app = _build_app(db_factory, alice_id)
+        app = _build_app(factory, alice_id)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get(
@@ -235,15 +209,16 @@ class TestDashboardIDOR:
     @pytest.mark.asyncio
     async def test_garbage_project_ids_ignored(
         self,
-        db_factory: async_sessionmaker,
+        db_factory,
     ) -> None:
         """Malformed UUIDs in project_ids → 200 with zero results, not 422/500."""
-        async with db_factory() as session:
+        _engine, factory = db_factory
+        async with factory() as session:
             alice_id = await _seed_user(session)
             await _seed_project(session, alice_id)
             await session.commit()
 
-        app = _build_app(db_factory, alice_id)
+        app = _build_app(factory, alice_id)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get(
@@ -258,10 +233,11 @@ class TestDashboardIDOR:
     @pytest.mark.asyncio
     async def test_admin_sees_both_tenants(
         self,
-        db_factory: async_sessionmaker,
+        db_factory,
     ) -> None:
         """Admin rollup aggregates across all tenants."""
-        async with db_factory() as session:
+        _engine, factory = db_factory
+        async with factory() as session:
             admin_id = await _seed_user(session, role="admin")
             alice_id = await _seed_user(session)
             bob_id = await _seed_user(session)
@@ -269,7 +245,7 @@ class TestDashboardIDOR:
             _pb = await _seed_project(session, bob_id, name="Bob-P")
             await session.commit()
 
-        app = _build_app(db_factory, admin_id)
+        app = _build_app(factory, admin_id)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.get(
@@ -283,14 +259,15 @@ class TestDashboardIDOR:
     @pytest.mark.asyncio
     async def test_post_rollup_bad_widget_config_returns_422(
         self,
-        db_factory: async_sessionmaker,
+        db_factory,
     ) -> None:
         """POST /rollup/ with unknown config key returns 422 before any DB query."""
-        async with db_factory() as session:
+        _engine, factory = db_factory
+        async with factory() as session:
             alice_id = await _seed_user(session)
             await session.commit()
 
-        app = _build_app(db_factory, alice_id)
+        app = _build_app(factory, alice_id)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
@@ -310,14 +287,15 @@ class TestDashboardIDOR:
     @pytest.mark.asyncio
     async def test_post_rollup_unknown_widget_id_returns_422(
         self,
-        db_factory: async_sessionmaker,
+        db_factory,
     ) -> None:
         """POST /rollup/ with unknown widget_id returns 422."""
-        async with db_factory() as session:
+        _engine, factory = db_factory
+        async with factory() as session:
             alice_id = await _seed_user(session)
             await session.commit()
 
-        app = _build_app(db_factory, alice_id)
+        app = _build_app(factory, alice_id)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
@@ -333,15 +311,16 @@ class TestDashboardIDOR:
     @pytest.mark.asyncio
     async def test_post_rollup_valid_config_returns_200(
         self,
-        db_factory: async_sessionmaker,
+        db_factory,
     ) -> None:
         """POST /rollup/ with valid config returns 200."""
-        async with db_factory() as session:
+        _engine, factory = db_factory
+        async with factory() as session:
             alice_id = await _seed_user(session)
             await _seed_project(session, alice_id)
             await session.commit()
 
-        app = _build_app(db_factory, alice_id)
+        app = _build_app(factory, alice_id)
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(

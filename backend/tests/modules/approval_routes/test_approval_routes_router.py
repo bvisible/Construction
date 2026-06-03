@@ -22,10 +22,8 @@ import pytest_asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi import status as st
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.core.audit_log  # noqa: F401 — registers ActivityLog with Base
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
@@ -41,18 +39,20 @@ from app.modules.approval_routes.models import (  # noqa: F401 — registers ORM
 from app.modules.approval_routes.router import router as ar_router
 from app.modules.projects.models import Project
 from app.modules.users.models import User
+from tests._pg import transactional_session
 
 
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator:
-    """Per-test in-memory SQLite session — all DDL applied."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    """Per-test PostgreSQL session inside a rolled-back outer transaction.
+
+    The shared ``oe_test_unit`` database already carries the full schema, so
+    no DDL is applied here. The session's own ``commit()`` calls become
+    savepoint releases, visible within the test, and the outer transaction is
+    rolled back on teardown so each test starts from an empty database.
+    """
+    async with transactional_session() as s:
         yield s
-    await engine.dispose()
 
 
 async def _make_user(session, *, role: str = "editor") -> uuid.UUID:

@@ -7,7 +7,7 @@ Coverage:
     * alternative-material picker (sorting)
     * target met / progress
     * report generation
-    * repository CRUD basics with an in-memory SQLite engine
+    * repository CRUD basics against a transaction-isolated PostgreSQL session
     * permission registry
 """
 
@@ -22,13 +22,8 @@ from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.modules.carbon import permissions as carbon_perms
 from app.modules.carbon.models import (
     CarbonInventory,
@@ -58,6 +53,7 @@ from app.modules.carbon.service import (
     match_cost_item_to_epd,
     normalise_quantity_to_factor_unit,
 )
+from tests._pg import transactional_session
 
 # ── Tests: unit normalisation ────────────────────────────────────────────
 
@@ -375,7 +371,7 @@ def test_register_carbon_permissions() -> None:
     assert permission_registry.role_has_permission(Role.MANAGER, "carbon.delete")
 
 
-# ── Tests: repository CRUD against in-memory SQLite ──────────────────────
+# ── Tests: repository CRUD against transaction-isolated PostgreSQL ───────
 
 
 async def _make_owner(session: AsyncSession) -> uuid.UUID:
@@ -396,26 +392,15 @@ async def _make_owner(session: AsyncSession) -> uuid.UUID:
 
 @pytest_asyncio.fixture
 async def in_memory_session() -> AsyncSession:
-    """Spin up a fresh in-memory SQLite engine with the carbon tables.
+    """Yield a PostgreSQL session wrapped in a transaction rolled back on teardown.
 
-    Imports projects + users models so Project FKs and any user FKs
-    resolve. ``Base.metadata.create_all`` then bootstraps every registered
-    table — fine for in-process unit testing.
+    The shared ``oe_test_unit`` database already carries the full schema (every
+    module table, including projects + users so Project/owner FKs resolve), so
+    no ``create_all`` is needed. Commits inside the test become savepoints; the
+    outer rollback at teardown undoes everything, isolating each test.
     """
-    import app.modules.carbon.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    Session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
-    session = Session()
-    try:
+    async with transactional_session() as session:
         yield session
-    finally:
-        await session.close()
-        await engine.dispose()
 
 
 @pytest.mark.asyncio

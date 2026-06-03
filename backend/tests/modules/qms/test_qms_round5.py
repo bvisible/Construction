@@ -21,12 +21,13 @@ Scope (closes Round 5 audit findings):
       ``status=`` value is rejected by the Pydantic ``pattern=`` guard
       with 422 instead of silently returning an empty page.
 
-The tests reuse the same in-memory-SQLite fixture style as
-``backend/tests/unit/test_qms.py`` so the QMS-only models can be
-created without dragging the full module graph in. Router-layer tests
-mount a focused FastAPI app with dependency overrides for
-``verify_project_access`` / ``RequirePermission`` — the same pattern
-``test_correspondence.py`` uses for the magic-byte gate.
+The tests run against PostgreSQL via the shared ``transactional_session``
+helper: each test executes inside an outer transaction that is rolled back
+on teardown, so the schema-loaded ``oe_test_unit`` database stays empty
+between tests (no per-test ``create_all``). Router-layer tests mount a
+focused FastAPI app with dependency overrides for ``verify_project_access``
+/ ``RequirePermission`` - the same pattern ``test_correspondence.py`` uses
+for the magic-byte gate.
 """
 
 from __future__ import annotations
@@ -41,33 +42,14 @@ import pytest
 import pytest_asyncio
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import Base
 from app.dependencies import (
     get_current_user_id,
     get_current_user_payload,
     get_session,
 )
-from app.modules.projects.models import Project, ProjectMilestone, ProjectWBS
-from app.modules.qms.models import (
-    QMSNCR,
-    ITPItem,
-    ITPPlan,
-    ITPTemplate,
-    QMSAudit,
-    QMSAuditFinding,
-    QMSAuditLog,
-    QMSCalibration,
-    QMSInspection,
-    QMSInspectionSignature,
-    QMSNCRAction,
-    QMSPunchItem,
-)
+from app.modules.projects.models import Project
 from app.modules.qms.router import router as qms_router
 from app.modules.qms.schemas import (
     CalibrationCreate,
@@ -76,36 +58,10 @@ from app.modules.qms.schemas import (
     NCRCreate,
 )
 from app.modules.qms.service import QMSService
-from app.modules.users.models import APIKey, User
+from app.modules.users.models import User
+from tests._pg import transactional_session
 
 # ── Shared fixtures (mirror test_qms.py) ──────────────────────────────────
-
-
-_QMS_TABLES = [
-    # Project + User tables are needed so the real
-    # ``verify_project_access`` (used by the calibration IDOR tests) can
-    # resolve ownership against a live row instead of returning a stub
-    # 404 from a dependency override (the calibration handlers call the
-    # function directly inside the route body, so ``dependency_overrides``
-    # would not intercept it).
-    User.__table__,
-    APIKey.__table__,
-    Project.__table__,
-    ProjectWBS.__table__,
-    ProjectMilestone.__table__,
-    ITPPlan.__table__,
-    ITPItem.__table__,
-    ITPTemplate.__table__,
-    QMSInspection.__table__,
-    QMSInspectionSignature.__table__,
-    QMSNCR.__table__,
-    QMSNCRAction.__table__,
-    QMSPunchItem.__table__,
-    QMSAudit.__table__,
-    QMSAuditFinding.__table__,
-    QMSAuditLog.__table__,
-    QMSCalibration.__table__,
-]
 
 
 async def _make_user(session: AsyncSession) -> uuid.UUID:
@@ -134,15 +90,16 @@ async def _make_project(
 
 @pytest_asyncio.fixture
 async def session() -> AsyncIterator[AsyncSession]:
-    """Per-test in-memory SQLite session with QMS tables created."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=_QMS_TABLES)
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with maker() as sess:
+    """Per-test PostgreSQL session inside an outer transaction.
+
+    Runs against the shared, schema-loaded ``oe_test_unit`` database. The
+    session's own ``commit()`` calls become savepoint releases (visible to
+    the same session, and to the app when this session is injected via the
+    ``get_session`` override) and the outer transaction is rolled back on
+    teardown, so each test starts from an empty database.
+    """
+    async with transactional_session() as sess:
         yield sess
-        await sess.rollback()
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture
@@ -322,7 +279,7 @@ def _build_qms_app(
     *,
     caller_id: str,
 ) -> FastAPI:
-    """Mount the QMS router against a live in-memory DB.
+    """Mount the QMS router against the live transactional DB session.
 
     Ownership is resolved by the real ``verify_project_access`` against
     the seeded ``Project.owner_id`` so the IDOR gate is exercised end

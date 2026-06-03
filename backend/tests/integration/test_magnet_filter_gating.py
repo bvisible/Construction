@@ -10,23 +10,20 @@ real BGE encoder + Qdrant don't need to be running) and verifies:
 * With ``OE_MATCH_MAGNET_FILTER=1``, the magnet candidate is removed
   before the candidates list is returned.
 
-The fixtures use the same pattern as ``test_match_service.py`` — temp
-SQLite + monkeypatched vector adapter — so we never touch production
-data and the test stays fast.
+The fixtures use the same pattern as ``test_match_service.py`` - a
+throwaway PostgreSQL database + monkeypatched vector adapter - so we
+never touch production data and the test stays fast.
 """
 
 from __future__ import annotations
 
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
-    create_async_engine,
 )
 
 from app.core.match_service import (
@@ -34,6 +31,7 @@ from app.core.match_service import (
     MatchRequest,
     rank,
 )
+from tests._pg import isolated_engine
 
 
 @pytest.fixture(autouse=True)
@@ -48,48 +46,23 @@ def _bypass_catalog_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _register_minimal_models() -> None:
-    """Pull every model the ranker imports transitively into Base.metadata.
-
-    ``rank()`` writes a row to ``oe_match_elements_search_log`` after
-    returning the response — that import path also pulls in
-    ``match_elements.models`` which has a FK to ``oe_costs_item.id``.
-    Without ``costs.models`` registered, the FK fails to resolve at
-    ``create_all`` time and only the FIRST test in the file passes
-    (the second one runs once the first poisoned the metadata).
-    """
-    import app.core.audit  # noqa: F401
-    import app.modules.costs.models  # noqa: F401
-    import app.modules.match_elements.models  # noqa: F401
-    import app.modules.projects.models  # noqa: F401
-    import app.modules.users.models  # noqa: F401
-
-
 @pytest_asyncio.fixture
 async def temp_engine_and_factory():
-    tmp_db = Path(tempfile.mkdtemp()) / "magnet_filter.db"
-    url = f"sqlite+aiosqlite:///{tmp_db.as_posix()}"
-    engine = create_async_engine(url, future=True)
+    """Per-test throwaway PostgreSQL database, cloned from the schema-loaded template.
 
-    _register_minimal_models()
-    from app.database import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield engine, factory, tmp_db
-    await engine.dispose()
-    try:
-        tmp_db.unlink(missing_ok=True)
-        tmp_db.parent.rmdir()
-    except OSError:
-        pass
+    ``rank()`` opens its own work via the handed-in session and writes a row to
+    ``oe_match_elements_search_log`` after returning the response, and the test
+    seeds the project through a separate session, so the two must see each
+    other's commits - hence a real throwaway database.
+    """
+    async with isolated_engine() as engine:
+        factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        yield engine, factory
 
 
 @pytest_asyncio.fixture
 async def project_id(temp_engine_and_factory) -> uuid.UUID:
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
     from app.modules.projects.models import Project
     from app.modules.users.models import User
 
@@ -221,7 +194,7 @@ async def test_magnet_filter_disabled_keeps_magnet(
 ) -> None:
     """Without OE_MATCH_MAGNET_FILTER=1, the magnet survives the pipeline."""
     monkeypatch.delenv("OE_MATCH_MAGNET_FILTER", raising=False)
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     envelope = _concrete_wall_envelope()
     async with factory() as session:
@@ -243,7 +216,7 @@ async def test_magnet_filter_enabled_drops_magnet(
 ) -> None:
     """With OE_MATCH_MAGNET_FILTER=1, the magnet is suppressed end-to-end."""
     monkeypatch.setenv("OE_MATCH_MAGNET_FILTER", "1")
-    _engine, factory, _tmp = temp_engine_and_factory
+    _engine, factory = temp_engine_and_factory
 
     envelope = _concrete_wall_envelope()
     async with factory() as session:

@@ -13,7 +13,7 @@ Covers the seven scenarios from the spec:
        :func:`verify_project_access` to avoid leaking project ids)
 
 All tests reuse the smoke-test fixtures (``client``, ``auth_headers``)
-so the in-memory SQLite + lifespan plumbing is set up once at session
+so the PostgreSQL database + lifespan plumbing is set up once at session
 scope.
 """
 

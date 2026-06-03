@@ -31,43 +31,23 @@ from contextlib import asynccontextmanager
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import event as sa_event
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# ── DB fixture (pure in-memory SQLite) ──────────────────────────────────────
+from tests._pg import transactional_session
+
+# ── DB fixture (PostgreSQL, transaction-isolated) ───────────────────────────
 
 
 @pytest_asyncio.fixture
 async def mem_session():
-    """Isolated in-memory SQLite session with EAC + audit tables."""
-    import app.core.audit  # noqa: F401
-    import app.core.audit_log  # noqa: F401
-    import app.modules.eac.models  # noqa: F401 — register ORM models
-    from app.database import Base
+    """Transaction-isolated PostgreSQL session with the full schema.
 
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)
-
-    @sa_event.listens_for(engine.sync_engine, "connect")
-    def _fk(dbapi_conn, _rec):  # type: ignore[no-untyped-def]
-        try:
-            cur = dbapi_conn.cursor()
-            cur.execute("PRAGMA foreign_keys=ON")
-            cur.close()
-        except Exception:  # noqa: BLE001
-            pass
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    async with factory() as session:
+    Runs inside an outer transaction that is rolled back on teardown; the
+    schema-loaded ``oe_test_unit`` database is shared and stays empty between
+    tests. PostgreSQL enforces foreign keys natively.
+    """
+    async with transactional_session() as session:
         yield session
-
-    await engine.dispose()
 
 
 # ── HTTP fixture ─────────────────────────────────────────────────────────────

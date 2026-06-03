@@ -1,7 +1,7 @@
 # DDC-CWICR-OE: DataDrivenConstruction · OpenConstructionERP
 """Baseline unit tests for the clash_cost_impact money pipeline.
 
-Three layers, all in-process — no real DB engine, no network:
+Three layers, all in-process — no engine touch, no network:
 
 * **Pure arithmetic** — exercise the rework + labour math through the
   service's :meth:`_compute_impact` kernel with hand-built fakes for
@@ -19,33 +19,23 @@ Three layers, all in-process — no real DB engine, no network:
   must return 401 (the ``RequirePermission("clash.read")`` dependency
   trips the JWT gate first).
 
-Per ``feedback_test_isolation.md`` DATABASE_URL is redirected to a fresh
-temp SQLite file BEFORE ``app`` is imported, so an accidental engine
-touch can never bleed into the dev / prod DB.
+These tests never build their own engine; the SQLAlchemy engine is bound
+to the conftest-provisioned PostgreSQL cluster before any test module is
+imported, and none of these layers touch it.
 """
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from decimal import Decimal
-from pathlib import Path
 from types import SimpleNamespace
 
-# ── Per-module SQLite isolation (MUST run BEFORE app imports) ─────────────
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-cost-impact-"))
-_TMP_DB = _TMP_DIR / "clash_cost_impact.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.modules.clash_cost_impact.router import router  # noqa: E402
-from app.modules.clash_cost_impact.service import (  # noqa: E402
+from app.modules.clash_cost_impact.router import router
+from app.modules.clash_cost_impact.service import (
     ClashCostImpactService,
     _money_round,
 )
@@ -56,9 +46,9 @@ from app.modules.clash_cost_impact.service import (  # noqa: E402
 def _fake_position(total: str, *, cad_ids: list[str] | None = None) -> SimpleNamespace:
     """Mimic the BOQ ``Position`` columns the service reads.
 
-    Real ``Position`` stores money as ``String`` to dodge SQLite's REAL
-    precision loss (see ``backend/app/modules/boq/models.py``) — we mirror
-    that here so ``_to_decimal(p.total)`` exercises its real string path.
+    Real ``Position`` stores money as ``String`` (see ``backend/app/modules/boq/models.py``)
+    to preserve Decimal precision — we mirror that here so ``_to_decimal(p.total)``
+    exercises its real string path.
     """
     return SimpleNamespace(
         id=uuid.uuid4(),

@@ -11,8 +11,10 @@ Covers the three core contracts the design pins:
 * **graph rule** — a side-effecting node with no gate on the path from a
   trigger fails the structural ``pipeline`` validation rule (ERROR).
 
-All DB work uses a file-backed temp SQLite (never the prod DB) — the
-hard test-isolation rule.
+All DB work uses an isolated, throwaway PostgreSQL database (cloned from a
+schema-loaded template by ``tests._pg.isolated_engine``), never the prod DB.
+The tests commit in one session and read back from a separate session, so a
+real engine with cross-connection commit visibility is required.
 """
 
 from __future__ import annotations
@@ -20,16 +22,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import (
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
+import pytest_asyncio
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 # Importing pipeline_nodes registers the 6 Phase-1 node types.
 import app.modules.pipelines.pipeline_nodes  # noqa: F401,E402
-from app.core.job_run import JobRun
 from app.core.pipeline.executor import (
     GraphValidationError,
     descendants,
@@ -38,14 +36,12 @@ from app.core.pipeline.executor import (
     validate_graph,
 )
 from app.core.pipeline.registry import NodeContext, node_registry, register_node
-from app.database import Base
 from app.modules.pipelines.models import (
     Pipeline,
     PipelineNodeState,
     PipelineRun,
 )
-from app.modules.projects.models import Project
-from app.modules.users.models import User
+from tests._pg import isolated_engine
 
 
 @pytest.fixture(autouse=True)
@@ -56,31 +52,17 @@ def _register_builtin_rules():
     register_builtin_rules()
 
 
-@pytest.fixture
-async def session_factory(tmp_path):
-    """File-backed async SQLite scoped to the pipeline + job tables."""
-    db_path = tmp_path / "pipeline_test.db"
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{db_path}",
-        echo=False,
-        connect_args={"check_same_thread": False},
-    )
-    async with engine.begin() as conn:
-        await conn.execute(text("PRAGMA journal_mode=WAL"))
-        await conn.run_sync(
-            Base.metadata.create_all,
-            tables=[
-                User.__table__,
-                Project.__table__,
-                JobRun.__table__,
-                Pipeline.__table__,
-                PipelineRun.__table__,
-                PipelineNodeState.__table__,
-            ],
-        )
-    maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    yield maker
-    await engine.dispose()
+@pytest_asyncio.fixture
+async def session_factory():
+    """Session factory bound to a throwaway PostgreSQL database.
+
+    The schema is cloned from the session template, so every model table is
+    present. The tests commit through one session and read from another, which
+    needs cross-connection commit visibility - hence a real isolated engine
+    rather than a savepoint-rolled-back shared session.
+    """
+    async with isolated_engine() as engine:
+        yield async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -256,7 +238,7 @@ async def test_run_is_a_jobrun(session_factory):
             created_by=None,
         )
         # submit_job uses the platform default session factory; point it at
-        # the test DB so the JobRun row lands in the same SQLite file.
+        # the test DB so the JobRun row lands in the same throwaway database.
         with (
             patch(
                 "app.core.job_runner._dispatch_to_celery",

@@ -1,10 +1,9 @@
-"""‌⁠‍Filesystem layout for downloaded dictionaries and translation cache.
+"""‌⁠‍Filesystem layout for downloaded dictionaries.
 
-All translation-related state lives under ``~/.openestimate/translations/``
+All dictionary state lives under ``~/.openestimate/translations/``
 unless overridden:
 
     translations/
-    ├── cache.db                # SQLite cache of past translations
     ├── muse/                   # MUSE bilingual dictionaries
     │   ├── en-bg.tsv
     │   ├── en-de.tsv
@@ -12,6 +11,9 @@ unless overridden:
     └── iate/                   # IATE EU termbase pairs (extracted)
         ├── en-bg.tsv
         └── ...
+
+The translation-memory cache itself lives in the main PostgreSQL database
+(see ``app/core/translation/cache.py``), not on the filesystem.
 
 Splitting this into its own tiny module avoids import-time circles between
 ``cache``, ``lookup``, and ``downloader``.
@@ -35,10 +37,3 @@ def translations_root(root: str | None = None) -> Path:
 def dictionary_dir(root: str | None = None) -> Path:
     """‌⁠‍Root for ``{muse,iate}/`` subdirectories."""
     return translations_root(root)
-
-
-def cache_db_path(override: str | None = None) -> Path:
-    """Return the path to the SQLite cache file."""
-    if override:
-        return Path(override).expanduser()
-    return translations_root() / "cache.db"

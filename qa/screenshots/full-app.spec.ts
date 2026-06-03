@@ -268,12 +268,40 @@ async function hydrateAuth(page: Page, accessToken: string): Promise<void> {
     localStorage.setItem('oe_refresh_token', p.token);
     localStorage.setItem('oe_remember', '1');
     localStorage.setItem('oe_user_email', 'demo@openconstructionerp.com');
-    // Suppress onboarding/tour overlays — they paint above page content
-    // and would pollute every screenshot.
+    // Suppress onboarding/tour overlays — they paint a dimming spotlight
+    // backdrop above page content and would pollute every screenshot.
+    // These are the real flags the app checks:
+    //   - oe_onboarding_completed  → OnboardingWizard (markOnboardingCompleted
+    //     in frontend/src/features/onboarding/OnboardingWizard.tsx)
+    //   - oe.tour_completed (dot)  → ProductTour, the canonical global tour
+    //     (TOUR_COMPLETED_KEY in frontend/src/shared/ui/ProductTour.tsx). The
+    //     auto-start fires 600ms after the dashboard mounts unless this is
+    //     'true', which is exactly the dark spotlight that leaked into the
+    //     committed docs/screenshots/02-dashboard.png and 03-projects.png.
+    //   - oe.tour_completed.<id>   → per-module tours (boq/bim/geo/…). They
+    //     never auto-pop, but seed the common ids defensively.
+    //   - oe_tour_completed (no dot) → legacy OnboardingTour key; kept so an
+    //     older build / the App.tsx migration path stays quiet too.
+    //   - oe.last_seen_version     → WhatsNewCard (LAST_SEEN_KEY in
+    //     frontend/src/shared/ui/WhatsNewCard.tsx). Setting it to the current
+    //     APP_VERSION (or any high version) hides the "What's new" card that
+    //     otherwise sits at the top of the dashboard screenshot.
     localStorage.setItem('oe_onboarding_completed', 'true');
     localStorage.setItem('oe_welcome_dismissed', 'true');
     localStorage.setItem('oe_tour_completed', 'true');
     localStorage.setItem('oe.tour_completed', 'true');
+    for (const id of ['global', 'boq', 'accommodation', 'bim', 'geo', 'propdev', 'dashboard']) {
+      localStorage.setItem(`oe.tour_completed.${id}`, 'true');
+    }
+    // shouldShow() compares major.minor only; a deliberately huge version
+    // suppresses the card for any current/future release without needing to
+    // import APP_VERSION here.
+    localStorage.setItem('oe.last_seen_version', '9999.0.0');
+    // oe.v6_pg_notice_dismissed → PostgresMigrationNotice.tsx, the amber
+    // "v6 moved SQLite→PostgreSQL" strip that pins to the very top of every
+    // page on a v6/PostgreSQL install. A real notice for users, but it would
+    // otherwise crown every screenshot with a warning bar.
+    localStorage.setItem('oe.v6_pg_notice_dismissed', '1');
     sessionStorage.setItem('oe_access_token', p.token);
     sessionStorage.setItem('oe_refresh_token', p.token);
     // Dismiss the public-demo modal on the hosted demo VPS
@@ -320,6 +348,46 @@ async function injectDemoModalHiderCSS(page: Page): Promise<void> {
       if (document.getElementById('__qa_demo_modal_hider')) return;
       const style = document.createElement('style');
       style.id = '__qa_demo_modal_hider';
+      style.textContent = css;
+      (document.head || document.documentElement).appendChild(style);
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', inject, { once: true });
+    } else {
+      inject();
+    }
+  });
+}
+
+/**
+ * Defence-in-depth hider for the ProductTour spotlight overlay (see
+ * frontend/src/shared/ui/ProductTour.tsx). The `oe.tour_completed`
+ * localStorage seed in hydrateAuth() suppresses the auto-start, but if a
+ * flag key ever drifts (the tour uses a *dotted* key and there is also a
+ * legacy non-dotted key) or the tour is launched some other way, this
+ * keeps the dark dimming backdrop out of the screenshot regardless.
+ *
+ * The overlay, spotlight, accent ring and tooltip all carry stable
+ * `data-testid` / `data-product-tour` attributes, so we match those rather
+ * than fragile Tailwind class hashes. Injected via addInitScript so the
+ * style is present before the React tree paints.
+ */
+async function injectTourOverlayHiderCSS(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const css = `
+      /* Hide the ProductTour spotlight dimming backdrop + coachmark. */
+      [data-testid="product-tour-overlay"],
+      [data-testid="product-tour-spotlight"],
+      [data-testid="product-tour-spotlight-ring"],
+      [data-testid="product-tour-tooltip"],
+      [data-product-tour] {
+        display: none !important;
+      }
+    `;
+    const inject = () => {
+      if (document.getElementById('__qa_tour_overlay_hider')) return;
+      const style = document.createElement('style');
+      style.id = '__qa_tour_overlay_hider';
       style.textContent = css;
       (document.head || document.documentElement).appendChild(style);
     };
@@ -410,6 +478,7 @@ test.describe('Full-app screenshot grid', () => {
     }
     await hydrateAuth(page, fixtures.accessToken);
     await injectDemoModalHiderCSS(page);
+    await injectTourOverlayHiderCSS(page);
 
     // Ensure output dir exists up-front; per-section subdirs created
     // lazily inside the loop.

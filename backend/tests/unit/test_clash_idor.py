@@ -19,19 +19,11 @@ Coverage:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
 from collections.abc import AsyncIterator
-from pathlib import Path
 
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-clash-idor-"))
-_TMP_DB = _TMP_DIR / "clash_idor.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-import pytest_asyncio  # noqa: E402
-from httpx import ASGITransport, AsyncClient  # noqa: E402
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
 # ── App fixture ───────────────────────────────────────────────────────────
 

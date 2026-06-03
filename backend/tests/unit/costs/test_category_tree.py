@@ -10,26 +10,17 @@ Covers:
 
 from __future__ import annotations
 
-import os
-import tempfile
 import uuid
-from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Per-module DB isolation.
-_TMP_DIR = Path(tempfile.mkdtemp(prefix="oe-costs-tree-"))
-_TMP_DB = _TMP_DIR / "tree.db"
-os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_TMP_DB.as_posix()}"
-os.environ["DATABASE_SYNC_URL"] = f"sqlite:///{_TMP_DB.as_posix()}"
-
-from app.database import Base  # noqa: E402
-from app.modules.costs.models import CostItem  # noqa: E402
-from app.modules.costs.repository import CostItemRepository  # noqa: E402
-from app.modules.costs.schemas import UNSPECIFIED_CATEGORY  # noqa: E402
-from app.modules.costs.service import decode_cursor, encode_cursor  # noqa: E402
+from app.modules.costs.models import CostItem
+from app.modules.costs.repository import CostItemRepository
+from app.modules.costs.schemas import UNSPECIFIED_CATEGORY
+from app.modules.costs.service import decode_cursor, encode_cursor
+from tests._pg import transactional_session
 
 
 def _mk(
@@ -69,13 +60,8 @@ def _mk(
 
 @pytest_asyncio.fixture
 async def session() -> AsyncSession:
-    db_path = _TMP_DIR / f"test-{uuid.uuid4().hex[:8]}.db"
-    engine = create_async_engine(f"sqlite+aiosqlite:///{db_path.as_posix()}", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all, tables=[CostItem.__table__])
-
-    Session = async_sessionmaker(engine, expire_on_commit=False)
-    async with Session() as s:
+    """Transaction-isolated PostgreSQL session seeded with the tree fixtures."""
+    async with transactional_session() as s:
         # 5 fully-qualified rows + 3 sentinel rows.
         s.add_all(
             [
@@ -101,8 +87,6 @@ async def session() -> AsyncSession:
         )
         await s.commit()
         yield s
-
-    await engine.dispose()
 
 
 # ── Tree shape ────────────────────────────────────────────────────────────
