@@ -199,10 +199,13 @@ export function AssemblyEditorPage() {
     let grand = 0;
     for (const c of comps) {
       const t = c.resource_type ?? inferResourceType(c);
-      totals[t] = (totals[t] ?? 0) + (c.total || 0);
-      grand += c.total || 0;
+      // Backend serialises Decimal columns as strings (Decimal-as-string pattern).
+      // Cast explicitly so arithmetic does not silently produce NaN.
+      const lineTotal = Number(c.total ?? 0) || 0;
+      totals[t] = (totals[t] ?? 0) + lineTotal;
+      grand += lineTotal;
     }
-    const bid = assembly?.bid_factor ?? 1;
+    const bid = Number(assembly?.bid_factor ?? 1) || 1;
     return { totals, grand, withBid: grand * bid };
   }, [assembly?.components, assembly?.bid_factor]);
 
@@ -272,8 +275,13 @@ export function AssemblyEditorPage() {
   }
 
   const components = assembly.components ?? [];
-  const computedTotal = components.reduce((sum, c) => sum + c.total, 0);
-  const adjustedTotal = computedTotal * assembly.bid_factor;
+  // Backend serialises Decimal columns as strings (Decimal-as-string pattern).
+  // Cast explicitly so the footer totals do not display NaN.
+  const computedTotal = components.reduce(
+    (sum, c) => sum + (Number(c.total ?? 0) || 0),
+    0,
+  );
+  const adjustedTotal = computedTotal * (Number(assembly.bid_factor ?? 1) || 1);
 
   return (
     <div className="w-full animate-fade-in">
