@@ -35,32 +35,27 @@ export function uuid(): string {
   if (c && typeof c.getRandomValues === 'function') {
     const bytes = new Uint8Array(16);
     c.getRandomValues(bytes);
-    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-    bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
+    // //// NEOFFICE PATCH — strict-TS-safe rewrite. Under our
+    // `noUncheckedIndexedAccess` config every indexed access (bytes[i],
+    // hex[i], b[i]) is `T | undefined`, which trips TS2532/TS2538 on the
+    // upstream plain-http UUID fallback (authored without that flag).
+    // Coalesce the byte reads and build the string with slice()/join() so
+    // there is no possibly-undefined indexed access anywhere.
+    bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x40; // version 4
+    bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80; // variant 10xx
     const hex: string[] = [];
     for (let i = 0; i < 256; i += 1) hex.push((i + 0x100).toString(16).slice(1));
-    const b = bytes;
+    const b = Array.from(bytes, (byte) => hex[byte] ?? '');
     return (
-      hex[b[0]] +
-      hex[b[1]] +
-      hex[b[2]] +
-      hex[b[3]] +
+      b.slice(0, 4).join('') +
       '-' +
-      hex[b[4]] +
-      hex[b[5]] +
+      b.slice(4, 6).join('') +
       '-' +
-      hex[b[6]] +
-      hex[b[7]] +
+      b.slice(6, 8).join('') +
       '-' +
-      hex[b[8]] +
-      hex[b[9]] +
+      b.slice(8, 10).join('') +
       '-' +
-      hex[b[10]] +
-      hex[b[11]] +
-      hex[b[12]] +
-      hex[b[13]] +
-      hex[b[14]] +
-      hex[b[15]]
+      b.slice(10, 16).join('')
     );
   }
 
