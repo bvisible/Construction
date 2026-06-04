@@ -73,6 +73,37 @@ def test_mapped_demo_ids_resolve_to_templates() -> None:
         assert demo_id in DEMO_TEMPLATES, f"{slug} -> {demo_id} not in DEMO_TEMPLATES"
 
 
+def test_every_pack_resolves_to_exactly_two_demos() -> None:
+    """Every discovered pack installs exactly two distinct, real demo projects.
+
+    Some packs (the cross-region modular / renewables packs, and the small
+    single-country ones) have no second demo that shares the flagship's country,
+    so they pin an explicit ``demo_template_ids`` pair on the manifest. Whether a
+    pack relies on the flagship + country-fill default or on an explicit list,
+    the one-click installer must always land two in-market projects. This guards
+    against the regression where ``aus`` / ``modular-prefab`` / ``renewables-epc``
+    seeded only a single demo.
+    """
+    from app.core.partner_pack.discovery import discover_packs
+    from app.core.partner_pack.full_install import _demo_install_list
+
+    for pack in discover_packs():
+        install_ids = _demo_install_list(pack.slug, 2)
+        assert len(install_ids) == 2, f"{pack.slug} resolved {len(install_ids)} demo(s): {install_ids}"
+        assert len(set(install_ids)) == 2, f"{pack.slug} resolved duplicate demos: {install_ids}"
+        for demo_id in install_ids:
+            assert demo_id in DEMO_TEMPLATES, f"{pack.slug} -> {demo_id} not in DEMO_TEMPLATES"
+
+
+def test_explicit_demo_template_ids_resolve_to_templates() -> None:
+    """Any pack that pins ``demo_template_ids`` references real templates."""
+    from app.core.partner_pack.discovery import discover_packs
+
+    for pack in discover_packs():
+        for demo_id in pack.demo_template_ids:
+            assert demo_id in DEMO_TEMPLATES, f"{pack.slug} demo_template_ids -> {demo_id} not in DEMO_TEMPLATES"
+
+
 def test_pack_demos_present_in_catalog() -> None:
     """Each pack demo project has a marketplace catalog row with ISO-2 country."""
     required = {"demo_id", "name", "description", "country", "currency", "type", "sections", "positions"}

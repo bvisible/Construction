@@ -1,7 +1,7 @@
 [project]
 name = "openconstructionerp"
-version = "6.6.0"
-description = "Open-source construction cost estimation, multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 24 languages. AGPL-3.0. After install, run: openconstructionerp"
+version = "6.7.0"
+description = "Open-source construction cost estimation, multi-currency BOQ, AI vector matching, CAD/BIM takeoff without IfcOpenShell, resource-based cost DB import with example templates, 48 regional catalogues, 27 languages. AGPL-3.0. After install, run: openconstructionerp"
 license = "AGPL-3.0-or-later"
 requires-python = ">=3.12"
 authors = [
@@ -200,6 +200,14 @@ packages = ["app", "openconstructionerp"]
 # Build frontend first: cd frontend && npm run build
 [tool.hatch.build.targets.wheel.force-include]
 "../frontend/dist" = "app/_frontend_dist"
+# NOTE: the baked flagship/demo assets live at app/scripts/flagship_assets,
+# which is already inside the ``app`` package above, so the package walk
+# ships those tracked bytes (flagship.json, the .dae.gz geometry, the
+# plan-set PDF) into the wheel on its own. They must NOT also appear in this
+# force-include map: a path that is both inside a packaged directory and
+# force-included is added to the archive twice, and hatchling aborts the
+# build with "a second file is being added to the wheel archive at the same
+# path". seed_demo_assets.py reads them from the installed package location.
 
 # Editable installs (uv pip install -e ./backend, pip install -e .) do NOT
 # need the bundled frontend — Vite's dev server serves the UI on :5173

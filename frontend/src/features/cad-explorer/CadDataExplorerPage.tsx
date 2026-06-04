@@ -21,6 +21,7 @@ import { Button, Card, Badge, Breadcrumb, EmptyState } from '@/shared/ui';
 import { useToastStore } from '@/stores/useToastStore';
 import { useUploadQueueStore } from '@/stores/useUploadQueueStore';
 import { apiGet, apiPost, ApiError, getErrorMessage, extractErrorMessageFromBody } from '@/shared/lib/api';
+import { uuid } from '@/shared/lib/browser';
 import {
   describeSession,
   valueCounts,
@@ -3087,7 +3088,7 @@ function UploadConvertZone({
       addToast({ type: 'warning', title: t('explorer.invalid_format', { defaultValue: 'Unsupported file format. Use RVT, IFC, DWG, or DGN.' }) });
       return;
     }
-    const taskId = crypto.randomUUID();
+    const taskId = uuid();
     const sizeMB = file.size / (1024 * 1024);
     const estimatedSec = Math.max(30, (sizeMB / 50) * 60);
 

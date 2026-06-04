@@ -68,7 +68,9 @@ if [[ "$TARGET" == *"windows"* ]]; then
     EXT=".exe"
 fi
 
-SRC="$SCRIPT_DIR/dist/openestimate-server/openestimate-server${EXT}"
+# onefile build: PyInstaller writes a single executable directly into distpath,
+# not a onedir subfolder.
+SRC="$SCRIPT_DIR/dist/openestimate-server${EXT}"
 DST="$BINARIES_DIR/openestimate-server-${TARGET}${EXT}"
 
 if [ -f "$SRC" ]; then
@@ -79,7 +81,7 @@ if [ -f "$SRC" ]; then
     echo "Size: $(du -sh "$DST" | cut -f1)"
 else
     echo "ERROR: Binary not found at $SRC"
-    ls -la "$SCRIPT_DIR/dist/openestimate-server/" 2>/dev/null || true
+    ls -la "$SCRIPT_DIR/dist/" 2>/dev/null || true
     exit 1
 fi
 

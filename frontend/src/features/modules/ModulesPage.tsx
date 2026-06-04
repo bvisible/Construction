@@ -43,9 +43,9 @@ import {
 } from 'lucide-react';
 import { Card, Badge, Button, Input, InfoHint, Breadcrumb, ConfirmDialog } from '@/shared/ui';
 import { PartnerPackApplyDialog } from './PartnerPackApplyDialog';
+import { PartnerPackDeactivateDialog } from './PartnerPackDeactivateDialog';
 import {
   useAppliedPack,
-  useUnapplyPack,
   useInstallPack,
   useRescanPacks,
   MAX_PACK_UPLOAD_BYTES,
@@ -1017,44 +1017,8 @@ function PartnerPackLogo({ pack }: { pack: PartnerPackManifestAPI }) {
 
 function PartnerPackCard({ pack, index, isActive, activeSource }: PartnerPackCardProps) {
   const { t } = useTranslation();
-  const addToast = useToastStore((s) => s.addToast);
   const [applyOpen, setApplyOpen] = useState(false);
-  const unapply = useUnapplyPack();
-  const { confirm, setLoading, ...confirmProps } = useConfirm();
-
-  const handleDeactivate = async () => {
-    const ok = await confirm({
-      title: t('modules.pack_deactivate_confirm_title', {
-        defaultValue: 'Deactivate this pack?',
-      }),
-      message: t('modules.pack_deactivate_confirm_msg', {
-        defaultValue:
-          'This restores any modules the pack switched off and removes its co-branding. Your projects and data are not affected.',
-      }),
-      confirmLabel: t('modules.pack_deactivate', { defaultValue: 'Deactivate' }),
-      variant: 'warning',
-    });
-    if (!ok) return;
-    setLoading(true);
-    unapply.mutate(undefined, {
-      onSuccess: () => {
-        setLoading(false);
-        addToast({
-          type: 'success',
-          title: t('modules.pack_deactivated', { defaultValue: 'Pack deactivated' }),
-        });
-      },
-      onError: () => {
-        setLoading(false);
-        addToast({
-          type: 'error',
-          title: t('modules.pack_deactivate_failed', {
-            defaultValue: 'Could not deactivate the pack',
-          }),
-        });
-      },
-    });
-  };
+  const [deactivateOpen, setDeactivateOpen] = useState(false);
 
   const countryName =
     typeof pack.metadata.country_name_en === 'string'
@@ -1197,15 +1161,8 @@ function PartnerPackCard({ pack, index, isActive, activeSource }: PartnerPackCar
               <Button
                 variant="secondary"
                 size="sm"
-                disabled={unapply.isPending}
-                icon={
-                  unapply.isPending ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <Power size={14} />
-                  )
-                }
-                onClick={handleDeactivate}
+                icon={<Power size={14} />}
+                onClick={() => setDeactivateOpen(true)}
               >
                 {t('modules.pack_deactivate', { defaultValue: 'Deactivate' })}
               </Button>
@@ -1229,7 +1186,11 @@ function PartnerPackCard({ pack, index, isActive, activeSource }: PartnerPackCar
         slug={pack.slug}
         partnerName={pack.partner_name}
       />
-      <ConfirmDialog {...confirmProps} />
+      <PartnerPackDeactivateDialog
+        open={deactivateOpen}
+        onClose={() => setDeactivateOpen(false)}
+        partnerName={pack.partner_name}
+      />
     </Card>
   );
 }

@@ -482,8 +482,8 @@ def _download_converter_files_linux(converter_id: str) -> Path:
     ``~/.openestimator/converters/_ddc_linux_<arch>`` — preserving the
     ``usr/bin`` + ``usr/lib/datadrivenconstruction`` layout so the binary's
     ``$ORIGIN`` RUNPATH resolves (``LD_LIBRARY_PATH`` is also set at launch by
-    :func:`app.modules.boq.cad_import._converter_subprocess_env` to cover
-    dlopen'd runtime plugins such as ``AecScheduleData.tx``).
+    :func:`app.modules.boq.cad_import._converter_subprocess_env` to cover the
+    further DDC cad2data SDK libraries loaded at conversion time).
 
     Returns the extracted ``usr/bin/{Format}Exporter`` path. Raises
     ``RuntimeError`` with an actionable message on any failure.
@@ -689,7 +689,7 @@ _ALLOWED_DOWNLOAD_HOSTS = frozenset(
 
 # Hard size cap per file. The largest single file in the DDC converter
 # repo today is the ~140 MB IfcExporter.exe; we add ~3x headroom for
-# future versions and Teigha format readers. Anything above this
+# future versions and the bundled cad2data format readers. Anything above this
 # threshold is almost certainly a substitution attack or a pathological
 # upstream change — refuse rather than waste disk and download time.
 _MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024  # 512 MB
@@ -935,7 +935,7 @@ def _download_converter_files_windows(converter_id: str) -> Path:
     or format readers.
 
     The RVT converter alone is ~600 MB across ~175 files (most of
-    which are the bundled Teigha format readers for every Revit
+    which are the bundled cad2data format readers for every Revit
     version 2011-2026), so we use a small ThreadPoolExecutor to
     download files in parallel — sequential `urlretrieve` calls
     against `raw.githubusercontent.com` would take 5+ minutes from
@@ -965,7 +965,7 @@ def _download_converter_files_windows(converter_id: str) -> Path:
             f"GitHub directory {src_dir!r} contains no files — the DDC converter repo layout may have changed."
         )
 
-    # Per-format install root keeps Qt DLLs and Teigha readers from
+    # Per-format install root keeps Qt DLLs and cad2data format readers from
     # clobbering each other when multiple formats are installed.
     dest_root = (_CONVERTER_INSTALL_DIR / f"{converter_id}_windows").resolve()
     dest_root.mkdir(parents=True, exist_ok=True)
@@ -1252,12 +1252,19 @@ async def install_converter(
             try:
                 import subprocess
 
+                from app.modules.boq.cad_import import _converter_subprocess_env
+
                 def _smoke() -> tuple[int, bytes, bytes]:
                     proc = subprocess.run(
                         [str(exe_path)],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         cwd=str(exe_path.parent),
+                        # Probe in the SAME environment the real conversion uses
+                        # so the check is meaningful on Linux (the no-root
+                        # converter resolves its bundled DDC SDK libs via
+                        # LD_LIBRARY_PATH); None (inherit) on Windows/macOS.
+                        env=_converter_subprocess_env(exe_path),
                         input=b"\n",
                         timeout=15,
                     )
@@ -1369,7 +1376,7 @@ async def install_converter(
                 }
 
             # Auto-download succeeded — smoke-test it (verifies the ELF loads its
-            # ODA shared libs; LD_LIBRARY_PATH is set by _converter_subprocess_env).
+            # DDC cad2data SDK shared libs; LD_LIBRARY_PATH is set by _converter_subprocess_env).
             from app.modules.boq.cad_import import (
                 invalidate_converter_health,
                 smoke_test_converter,

@@ -1,5 +1,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Package,
@@ -753,6 +754,7 @@ function PackageDetail({
   currency: string;
 }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const addToast = useToastStore((s) => s.addToast);
   const { confirm, ...confirmProps } = useConfirm();
@@ -795,7 +797,24 @@ function PackageDetail({
       queryClient.invalidateQueries({ queryKey: ['tendering-package', packageId] });
       queryClient.invalidateQueries({ queryKey: ['tendering-comparison', packageId] });
       queryClient.invalidateQueries({ queryKey: ['tendering-packages'] });
-      addToast({ type: 'success', title: t('toasts.bid_awarded', { defaultValue: 'Bid awarded' }) });
+      // The award also writes rates back to the BOQ and the procurement
+      // module auto-creates a draft PO from the winning bid. Tell the user
+      // about the PO and offer a one-click jump to Procurement so the
+      // hand-off is visible instead of silent.
+      addToast(
+        {
+          type: 'success',
+          title: t('toasts.bid_awarded', { defaultValue: 'Bid awarded' }),
+          message: t('tendering.po_created_msg', {
+            defaultValue: 'A draft purchase order is being prepared in Procurement from the winning bid.',
+          }),
+          action: {
+            label: t('tendering.view_po', { defaultValue: 'View purchase orders' }),
+            onClick: () => navigate('/procurement'),
+          },
+        },
+        { duration: 8000 },
+      );
     },
     onError: (error: Error) => {
       addToast({ type: 'error', title: t('toasts.error', { defaultValue: 'Error' }), message: error.message });

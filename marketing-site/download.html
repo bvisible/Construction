@@ -1,0 +1,809 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Download OpenConstructionERP - Windows, macOS, Linux</title>
+<meta name="description" content="Download the free, open-source OpenConstructionERP desktop app for Windows, macOS, and Linux. No Python, no pip, no Docker, and no database to set up. One file, run it, done.">
+<meta name="robots" content="index, follow">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://openconstructionerp.com/download">
+<meta property="og:title" content="Download OpenConstructionERP">
+<meta property="og:description" content="Get the native desktop app for Windows, macOS, and Linux. No Python, no Docker, no setup. Open source under AGPL-3.0.">
+<meta property="og:image" content="https://openconstructionerp.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Download OpenConstructionERP">
+<meta name="twitter:description" content="The native desktop app for Windows, macOS, and Linux. No Python, no Docker, no setup.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="canonical" href="https://openconstructionerp.com/download">
+
+<script>
+/* Set the theme before first paint so there is no flash. Mirrors the rest of
+   the site, which persists the choice in localStorage under 'oce-theme'. */
+(function(){try{var t=localStorage.getItem('oce-theme');if(!t){t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Inter+Tight:wght@500;600;700&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "OpenConstructionERP",
+  "applicationCategory": "BusinessApplication",
+  "operatingSystem": "Windows, macOS, Linux",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+  "downloadUrl": "https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest",
+  "softwareVersion": "6.7.0",
+  "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+  "url": "https://openconstructionerp.com/download",
+  "publisher": { "@type": "Organization", "name": "DataDrivenConstruction" }
+}
+</script>
+
+<style>
+/* ---------- theme tokens ---------- */
+:root{
+  --bg-0:#f7fbff; --bg-1:#edf5ff; --bg-2:#e7f2fd;
+  --ink-0:#0b1220; --ink-1:#1e293b; --ink-2:#475569; --ink-3:#94a3b8;
+  --line-0:rgba(15,23,42,.05); --line-1:rgba(15,23,42,.09); --line-2:rgba(15,23,42,.14);
+  --accent:#0284c7; --accent-2:#0ea5e9; --accent-3:#2563eb; --accent-5:#06b6d4;
+  --card-bg:rgba(255,255,255,.78);
+  --shadow-card:0 1px 2px rgba(15,23,42,.04), 0 12px 32px -16px rgba(15,23,42,.16);
+  color-scheme:light;
+}
+[data-theme="dark"]{
+  --bg-0:#0b1220; --bg-1:#0f1828; --bg-2:#111a2c;
+  --ink-0:#eff6ff; --ink-1:#cfe0f5; --ink-2:#94a3b8; --ink-3:#64748b;
+  --line-0:rgba(255,255,255,.06); --line-1:rgba(255,255,255,.10); --line-2:rgba(255,255,255,.16);
+  --accent:#38bdf8; --accent-2:#7dd3fc; --accent-3:#60a5fa; --accent-5:#22d3ee;
+  --card-bg:rgba(17,26,44,.72);
+  --shadow-card:0 1px 2px rgba(0,0,0,.3), 0 14px 36px -18px rgba(0,0,0,.6);
+  color-scheme:dark;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:var(--bg-0);
+  color:var(--ink-0);
+  font-family:'Inter',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility;
+  min-height:100svh;
+  display:flex;
+  flex-direction:column;
+  overflow-x:hidden;
+}
+a{color:inherit;text-decoration:none}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+::selection{background:color-mix(in oklab,var(--accent) 28%,transparent);color:var(--ink-0)}
+
+/* ---------- background ---------- */
+.bg-wrap{position:fixed;inset:0;pointer-events:none;z-index:0;overflow:hidden}
+.bg-gradient{position:absolute;inset:0;background:linear-gradient(160deg,#f7fbff 0%,#f1f7ff 40%,#edf5ff 72%,#e7f2fd 100%);}
+[data-theme="dark"] .bg-gradient{background:linear-gradient(160deg,#0b1220 0%,#0d1626 45%,#0b1220 100%);}
+.blob{position:absolute;border-radius:999px;filter:blur(120px);animation:drift 50s ease-in-out infinite alternate}
+.blob-a{top:-10%;left:-5%;width:820px;height:820px;background:radial-gradient(circle at 50% 50%,rgba(14,165,233,.16),transparent 70%);animation-delay:0s}
+.blob-b{bottom:-15%;right:-10%;width:900px;height:900px;background:radial-gradient(circle at 50% 50%,rgba(37,99,235,.12),transparent 70%);animation-delay:-18s}
+[data-theme="dark"] .blob-a{background:radial-gradient(circle at 50% 50%,rgba(56,189,248,.14),transparent 70%)}
+[data-theme="dark"] .blob-b{background:radial-gradient(circle at 50% 50%,rgba(96,165,250,.12),transparent 70%)}
+@keyframes drift{0%{transform:translate3d(-3%,-2%,0) scale(1)}50%{transform:translate3d(4%,3%,0) scale(1.08)}100%{transform:translate3d(-2%,4%,0) scale(.96)}}
+@media(prefers-reduced-motion:reduce){.blob{animation:none}}
+
+/* ---------- nav ---------- */
+.nav{position:fixed;top:0;left:0;right:0;height:64px;z-index:60;display:flex;align-items:center;padding:0 clamp(16px,3vw,32px);background:color-mix(in oklab,var(--bg-0) 80%,transparent);backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);border-bottom:1px solid var(--line-0);}
+.nav-inner{width:100%;max-width:1180px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.brand{display:inline-flex;align-items:center;gap:10px;font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:15px;letter-spacing:-.01em;color:var(--ink-0)}
+.brand-mark{width:30px;height:30px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%);box-shadow:0 6px 16px -8px color-mix(in oklab,var(--accent) 70%,transparent)}
+.brand-mark svg{color:#fff}
+.brand-seg-2{color:var(--ink-2)}
+.brand-seg-3{color:var(--accent);font-weight:800}
+[data-theme="dark"] .brand-seg-3{color:var(--accent)}
+.nav-right{display:inline-flex;align-items:center;gap:10px}
+.theme-toggle{width:36px;height:36px;border-radius:999px;border:1px solid var(--line-1);display:inline-flex;align-items:center;justify-content:center;color:var(--ink-1);background:color-mix(in oklab,var(--card-bg) 60%,transparent);transition:border-color .2s,color .2s,transform .2s}
+.theme-toggle:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.theme-toggle svg{width:17px;height:17px}
+.theme-toggle .icon-sun{display:none}
+.theme-toggle .icon-moon{display:block}
+[data-theme="dark"] .theme-toggle .icon-sun{display:block}
+[data-theme="dark"] .theme-toggle .icon-moon{display:none}
+.github-pill{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 13px;border-radius:999px;border:1px solid var(--line-1);font-family:'Inter Tight','Inter',sans-serif;font-weight:600;font-size:13px;color:var(--ink-1);background:color-mix(in oklab,var(--card-bg) 60%,transparent);transition:border-color .2s,color .2s,transform .2s}
+.github-pill:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.github-pill svg{width:15px;height:15px;fill:currentColor}
+.nav-back{display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px;border-radius:999px;border:1px solid var(--line-1);font-family:'Inter Tight','Inter',sans-serif;font-weight:500;font-size:13px;color:var(--ink-1);background:color-mix(in oklab,var(--card-bg) 60%,transparent);transition:transform .2s,border-color .2s,color .2s}
+.nav-back:hover{transform:translateY(-1px);border-color:var(--accent);color:var(--accent)}
+@media(max-width:620px){.github-pill span,.nav-back span{display:none}.github-pill,.nav-back{padding:0 11px}}
+
+/* ---------- base button ---------- */
+.btn-primary{display:inline-flex;align-items:center;gap:8px;padding:12px 22px;border-radius:12px;font-weight:600;font-size:14px;color:#fff;background:linear-gradient(135deg,var(--accent) 0%,var(--accent-3) 100%);box-shadow:0 8px 20px -10px color-mix(in oklab,var(--accent) 60%,transparent);transition:transform .2s,box-shadow .2s}
+
+/* ---------- footer ---------- */
+.pagefoot{position:relative;z-index:1;padding:30px clamp(16px,3vw,32px);border-top:1px solid var(--line-0);font-size:12.5px;color:var(--ink-2);background:color-mix(in oklab,var(--bg-0) 60%,transparent)}
+.pagefoot .wrap{max-width:1180px;margin:0 auto;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.pagefoot a{color:var(--ink-2)}
+.pagefoot a:hover{color:var(--accent)}
+
+/* ---------- download experience (designed + judged) ---------- */
+.dl-main{max-width:1120px;margin:0 auto;padding:104px 24px 80px;color:var(--ink-1);min-width:0;width:100%;}
+.dl-mono{font-family:"JetBrains Mono",ui-monospace,monospace;}
+.dl-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0;}
+
+/* ---------- shared eyebrow / headings ---------- */
+.dl-eyebrow{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;letter-spacing:.22em;text-transform:uppercase;color:var(--accent);margin:0 0 14px;font-weight:600;}
+.dl-eyebrow-sm{margin-bottom:10px;}
+.dl-h1{font-family:"Inter Tight",Inter,sans-serif;font-weight:680;font-size:clamp(34px,5.4vw,58px);line-height:1.04;letter-spacing:-.02em;color:var(--ink-0);margin:0 0 18px;}
+.dl-serif{font-family:"Instrument Serif",Georgia,serif;font-style:italic;font-weight:400;color:var(--accent);letter-spacing:0;}
+.dl-h2{font-family:"Inter Tight",Inter,sans-serif;font-weight:660;font-size:clamp(24px,3vw,32px);letter-spacing:-.015em;color:var(--ink-0);margin:0 0 8px;}
+.dl-lede{font-size:clamp(15px,1.7vw,18px);line-height:1.6;color:var(--ink-2);max-width:60ch;margin:0 0 26px;}
+.dl-section-head{margin:0 0 26px;}
+.dl-sub{color:var(--ink-2);font-size:15px;line-height:1.55;margin:0;max-width:62ch;}
+
+/* ---------- hero ---------- */
+.dl-hero{margin-bottom:46px;}
+.dl-rec{display:inline-flex;align-items:center;gap:9px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px;letter-spacing:.02em;color:var(--ink-1);background:var(--card-bg);border:1px solid var(--line-1);border-radius:999px;padding:8px 15px;backdrop-filter:blur(8px);margin-bottom:26px;}
+.dl-rec-dot{width:8px;height:8px;border-radius:50%;background:var(--ink-3);box-shadow:0 0 0 0 transparent;}
+.dl-rec.is-ready .dl-rec-dot{background:var(--accent-2);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent-2) 22%,transparent);}
+.dl-rec b{color:var(--accent);font-weight:700;}
+
+.dl-chips{list-style:none;display:flex;flex-wrap:wrap;gap:10px;margin:0;padding:0;}
+.dl-chip{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);background:var(--card-bg);border:1px solid var(--line-0);border-radius:8px;padding:7px 12px;backdrop-filter:blur(6px);}
+.dl-chip-i{width:15px;height:15px;flex:none;fill:var(--accent-2);}
+
+/* ---------- platform grid ---------- */
+.dl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;}
+.dl-card{position:relative;display:flex;flex-direction:column;background:var(--card-bg);border:1px solid var(--line-1);border-radius:16px;padding:22px 20px 20px;box-shadow:var(--shadow-card);backdrop-filter:blur(10px);transition:transform .25s ease,box-shadow .25s ease,border-color .25s ease;overflow:hidden;}
+.dl-card::before{content:"";position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,var(--accent),var(--accent-3));opacity:0;transition:opacity .25s ease;}
+.dl-card:hover{transform:translateY(-3px);box-shadow:0 2px 4px rgba(15,23,42,.05),0 22px 48px -22px rgba(15,23,42,.32);border-color:var(--line-2);}
+.dl-card.is-rec{border-color:color-mix(in srgb,var(--accent) 42%,var(--line-2));box-shadow:0 2px 4px rgba(15,23,42,.05),0 22px 50px -22px color-mix(in srgb,var(--accent) 40%,transparent);}
+.dl-card.is-rec::before{opacity:1;}
+
+.dl-card-head{display:flex;align-items:flex-start;gap:13px;margin-bottom:16px;}
+.dl-glyph{flex:none;width:44px;height:44px;display:grid;place-items:center;border-radius:11px;background:color-mix(in srgb,var(--accent) 9%,transparent);border:1px solid var(--line-1);}
+.dl-glyph svg{width:24px;height:24px;fill:var(--ink-0);}
+.dl-card-id{flex:1;min-width:0;}
+.dl-card-name{font-family:"Inter Tight",Inter,sans-serif;font-size:19px;font-weight:640;color:var(--ink-0);margin:1px 0 4px;letter-spacing:-.01em;}
+.dl-card-note{font-size:12.5px;line-height:1.45;color:var(--ink-2);margin:0;}
+.dl-rec-flag{display:none;position:absolute;top:14px;right:14px;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent-3));padding:4px 9px;border-radius:999px;}
+.dl-card.is-rec .dl-rec-flag{display:inline-block;}
+.dl-card.is-rec .dl-card-head{padding-right:96px;}
+
+.dl-badges{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 18px;}
+.dl-badge{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:10.5px;letter-spacing:.04em;color:var(--ink-2);background:var(--bg-2);border:1px solid var(--line-0);border-radius:6px;padding:3px 7px;}
+
+.dl-dl{display:inline-flex;align-items:center;justify-content:center;gap:9px;width:100%;font-family:Inter,sans-serif;font-size:14.5px;font-weight:600;padding:12px 16px;border-radius:12px;text-decoration:none;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease;}
+.dl-dl-i{width:16px;height:16px;flex:none;fill:currentColor;}
+a.dl-dl.btn-primary{color:#fff;}
+.dl-dl.btn-primary{background:linear-gradient(135deg,var(--accent),var(--accent-3));color:#fff;box-shadow:0 8px 20px -10px color-mix(in srgb,var(--accent-3) 70%,transparent);}
+.dl-dl.btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 26px -10px color-mix(in srgb,var(--accent-3) 75%,transparent);}
+.dl-dl-ghost{background:transparent;color:var(--accent);border:1px solid var(--line-2);}
+.dl-dl-ghost:hover{background:color-mix(in srgb,var(--accent) 8%,transparent);border-color:var(--accent);transform:translateY(-2px);}
+
+.dl-split{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+.dl-meta{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11.5px;color:var(--ink-2);margin:11px 0 0;min-height:16px;text-align:center;}
+.dl-meta b{color:var(--ink-1);font-weight:600;}
+.dl-meta-skel{opacity:.7;}
+.dl-card-foot{font-size:11.5px;color:var(--ink-2);margin:9px 0 0;text-align:center;}
+
+.dl-allnote{margin:22px 0 0;font-size:13px;color:var(--ink-2);display:flex;flex-wrap:wrap;align-items:center;gap:10px;justify-content:center;}
+.dl-allnote a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent);}
+.dl-allnote a:hover{border-bottom-color:var(--accent);}
+.dl-sep{color:var(--line-2);}
+#dl-version-tag{font-size:11.5px;color:var(--ink-2);}
+
+/* ---------- first run ---------- */
+.dl-firstrun{display:flex;gap:16px;align-items:flex-start;margin:40px 0;padding:20px 22px;background:color-mix(in srgb,var(--accent) 5%,var(--card-bg));border:1px solid var(--line-1);border-left:3px solid var(--accent-2);border-radius:14px;}
+.dl-firstrun-i{flex:none;width:34px;height:34px;display:grid;place-items:center;}
+.dl-firstrun-i svg{width:30px;height:30px;fill:var(--accent-2);}
+.dl-firstrun-h{font-family:"Inter Tight",Inter,sans-serif;font-size:16px;font-weight:640;color:var(--ink-0);margin:2px 0 5px;}
+.dl-firstrun-p{font-size:13.5px;line-height:1.6;color:var(--ink-2);margin:0;max-width:74ch;}
+
+/* ---------- compare ---------- */
+.dl-compare{margin:54px 0;}
+.dl-cmp-wrap{border:1px solid var(--line-1);border-radius:14px;overflow:hidden;background:var(--card-bg);box-shadow:var(--shadow-card);backdrop-filter:blur(10px);}
+.dl-cmp-row{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 1fr;align-items:center;border-top:1px solid var(--line-0);}
+.dl-cmp-row:first-child{border-top:0;}
+.dl-cmp-row>span{padding:13px 16px;font-size:13.5px;color:var(--ink-1);}
+.dl-cmp-row [role="rowheader"]{color:var(--ink-2);font-weight:500;}
+.dl-cmp-headrow{background:var(--bg-2);}
+.dl-cmp-headrow>span{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12px;letter-spacing:.04em;color:var(--ink-2);font-weight:600;text-transform:uppercase;}
+.dl-cmp-best{background:color-mix(in srgb,var(--accent) 6%,transparent);}
+.dl-cmp-headrow .dl-cmp-best{color:var(--accent);}
+.dl-yes{color:var(--accent) !important;font-weight:600;}
+
+/* ---------- developers ---------- */
+.dl-dev{margin:54px 0;}
+.dl-tabs{display:inline-flex;gap:4px;padding:4px;background:var(--bg-2);border:1px solid var(--line-1);border-radius:10px;margin-bottom:16px;}
+.dl-tab{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:13px;font-weight:600;color:var(--ink-2);background:transparent;border:0;border-radius:7px;padding:7px 16px;cursor:pointer;transition:color .18s ease,background .18s ease;}
+.dl-tab:hover{color:var(--ink-0);}
+.dl-tab-on{background:linear-gradient(135deg,var(--accent),var(--accent-3));color:#fff;}
+.dl-tab-on:hover{color:#fff;}
+
+.dl-panel-hide{display:none;}
+.dl-cmd{display:flex;align-items:center;gap:12px;background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:11px;padding:12px 12px 12px 16px;margin-bottom:10px;}
+.dl-cmd-pfx{font-family:"JetBrains Mono",ui-monospace,monospace;color:var(--accent-2);font-size:14px;flex:none;opacity:.85;}
+.dl-cmd-text{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:13px;line-height:1.5;color:#e2e8f0;flex:1;min-width:0;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;}
+.dl-cmd-text::-webkit-scrollbar{height:5px;}
+.dl-cmd-text::-webkit-scrollbar-thumb{background:rgba(148,163,184,.4);border-radius:3px;}
+.dl-copy{display:inline-flex;align-items:center;gap:6px;flex:none;font-family:Inter,sans-serif;font-size:12.5px;font-weight:600;color:#cbd5e1;background:rgba(148,163,184,.12);border:1px solid rgba(148,163,184,.22);border-radius:8px;padding:7px 11px;cursor:pointer;transition:background .18s ease,color .18s ease,border-color .18s ease;}
+.dl-copy:hover{background:rgba(148,163,184,.22);color:#fff;}
+.dl-copy.is-done{background:color-mix(in srgb,var(--accent-2) 28%,#0f172a);border-color:var(--accent-2);color:#fff;}
+.dl-copy-i{width:14px;height:14px;fill:currentColor;}
+.dl-panel-note{font-size:13px;color:var(--ink-2);margin:12px 0 0;}
+.dl-panel-note a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent);}
+.dl-panel-note a:hover{border-bottom-color:var(--accent);}
+
+/* ---------- helpers ---------- */
+.dl-helpers{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin:46px 0 26px;}
+.dl-helper{display:flex;flex-direction:column;gap:4px;padding:16px 18px;background:var(--card-bg);border:1px solid var(--line-1);border-radius:12px;text-decoration:none;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;backdrop-filter:blur(8px);}
+.dl-helper:hover{transform:translateY(-2px);border-color:var(--line-2);box-shadow:var(--shadow-card);}
+.dl-helper-k{font-family:"Inter Tight",Inter,sans-serif;font-size:15px;font-weight:640;color:var(--ink-0);}
+.dl-helper-v{font-size:12.5px;color:var(--ink-2);}
+.dl-footline{text-align:center;font-size:12.5px;color:var(--ink-2);margin:18px 0 0;}
+
+/* ---------- focus ---------- */
+.dl-dl:focus-visible,.dl-copy:focus-visible,.dl-tab:focus-visible,.dl-helper:focus-visible,.dl-allnote a:focus-visible,.dl-panel-note a:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px;}
+
+/* ---------- responsive ---------- */
+@media(max-width:980px){
+  .dl-grid{grid-template-columns:1fr 1fr;}
+  #card-linux{grid-column:1 / -1;}
+  .dl-cmp-row{grid-template-columns:1fr 1fr 1fr 1fr;}
+  .dl-cmp-row>span{font-size:12.5px;padding:11px 12px;}
+  .dl-helpers{grid-template-columns:1fr;}
+}
+@media(max-width:720px){
+  .dl-grid{grid-template-columns:1fr;}
+  #card-linux{grid-column:auto;}
+  .dl-cmp-wrap{overflow-x:auto;}
+  .dl-cmp-row{grid-template-columns:120px repeat(3,minmax(120px,1fr));min-width:540px;}
+}
+@media(max-width:540px){
+  .dl-main{padding-top:96px;}
+  .dl-firstrun{flex-direction:column;gap:10px;}
+  .dl-cmd{flex-wrap:wrap;}
+  .dl-copy-label{display:none;}
+  .dl-tabs{display:flex;width:100%;}
+  .dl-tab{flex:1;text-align:center;}
+}
+
+@media(prefers-reduced-motion:reduce){
+  .dl-card,.dl-dl,.dl-copy,.dl-tab,.dl-helper{transition:none !important;}
+  .dl-card:hover,.dl-dl:hover,.dl-helper:hover{transform:none !important;}
+}
+
+/* AA contrast in light theme: the bright --accent on the near-white background
+   lands around 3.9:1, just under WCAG AA for small text. Use the deeper brand
+   blue for small accent text in light mode only; dark mode already clears AA. */
+[data-theme="light"] .dl-eyebrow,
+[data-theme="light"] .dl-allnote a,
+[data-theme="light"] .dl-panel-note a,
+[data-theme="light"] .dl-cmp-headrow .dl-cmp-best{color:var(--accent-3);}
+[data-theme="light"] .dl-yes{color:var(--accent-3) !important;}
+</style>
+</head>
+<body>
+
+<div class="bg-wrap" aria-hidden="true">
+  <div class="bg-gradient"></div>
+  <div class="blob blob-a"></div>
+  <div class="blob blob-b"></div>
+</div>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <a class="brand" href="/" aria-label="OpenConstructionERP home">
+      <span class="brand-mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"/><polyline points="2 8.5 12 15 22 8.5"/><line x1="12" y1="22" x2="12" y2="15"/></svg></span>
+      <span><span>Open</span><span class="brand-seg-2">Construction</span><span class="brand-seg-3">ERP</span></span>
+    </a>
+    <div class="nav-right">
+      <button type="button" class="theme-toggle" id="theme-toggle" aria-label="Toggle light and dark theme">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3a7 7 0 0 0 9.79 9.79Z"/></svg>
+      </button>
+      <a class="github-pill" href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener" aria-label="OpenConstructionERP on GitHub">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0.5C5.65 0.5 0.5 5.65 0.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.7 0-1.26.45-2.29 1.18-3.1-.12-.29-.51-1.47.11-3.05 0 0 .97-.31 3.18 1.18A11 11 0 0 1 12 6.8a11 11 0 0 1 2.9.39c2.2-1.5 3.17-1.18 3.17-1.18.63 1.58.24 2.76.12 3.05.74.81 1.18 1.84 1.18 3.1 0 4.43-2.7 5.4-5.27 5.69.42.36.78 1.07.78 2.15v3.19c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/></svg>
+        <span>GitHub</span>
+      </a>
+      <a class="nav-back" href="/">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg>
+        <span>Home</span>
+      </a>
+    </div>
+  </div>
+</nav>
+
+<main class="dl-main" id="dl-top">
+  <!-- ===================== HERO ===================== -->
+  <section class="dl-hero" aria-labelledby="dl-h1">
+    <p class="dl-eyebrow">Download</p>
+    <h1 class="dl-h1" id="dl-h1">Get the <span class="dl-serif">real</span> desktop app.</h1>
+    <p class="dl-lede">
+      A native build of OpenConstructionERP. No Python, no pip, no Docker, no database to set up.
+      One file, run it, done. Your data stays on your machine.
+    </p>
+
+    <div class="dl-rec" id="dl-rec" role="status" aria-live="polite">
+      <span class="dl-rec-dot" aria-hidden="true"></span>
+      <span id="dl-rec-text">Detecting your platform&hellip;</span>
+    </div>
+
+    <ul class="dl-chips" aria-label="What you get">
+      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M6.5 11.2 3.3 8l-1 1 4.2 4.2 8.2-8.2-1-1z"/></svg>No Python, pip, Docker or DB</li>
+      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1 2 3.4v4.1c0 3.7 2.5 6.7 6 7.5 3.5-.8 6-3.8 6-7.5V3.4zm0 1.6 4.5 1.8v3.1c0 2.8-1.9 5.2-4.5 5.9-2.6-.7-4.5-3.1-4.5-5.9V4.4z"/></svg>Data stays local</li>
+      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1.5A6.5 6.5 0 1 0 14.5 8 6.5 6.5 0 0 0 8 1.5zm0 1.3A5.2 5.2 0 1 1 2.8 8 5.2 5.2 0 0 1 8 2.8zM7.4 4.6v3.8l3 1.8.6-1-2.4-1.4V4.6z"/></svg>First launch ~60s, then fast</li>
+      <li class="dl-chip"><svg viewBox="0 0 16 16" aria-hidden="true" class="dl-chip-i"><path d="M8 1.5 2 4v3.5c0 3.6 2.4 6.4 6 7.5 3.6-1.1 6-3.9 6-7.5V4zm-.7 9.3L4.8 8.3l.9-.9 1.6 1.6 3.1-3.4.9.8z"/></svg>Open source, AGPL-3.0</li>
+    </ul>
+  </section>
+
+  <!-- ===================== PLATFORM MATRIX ===================== -->
+  <section class="dl-platforms" aria-label="Native downloads by platform">
+    <div class="dl-grid">
+
+      <!-- Windows -->
+      <article class="dl-card" id="card-windows" data-os="windows">
+        <header class="dl-card-head">
+          <span class="dl-glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M3 5.4 10.4 4.3v6.6H3zM10.4 11.6v6.6L3 17.1V11.6zM11.5 4.1 21 2.7v8.2h-9.5zM21 11.9v8.2l-9.5-1.4v-6.8z"/></svg>
+          </span>
+          <div class="dl-card-id">
+            <h2 class="dl-card-name">Windows</h2>
+            <p class="dl-card-note">Windows 10/11, 64-bit. WebView2 auto-installs.</p>
+          </div>
+          <span class="dl-rec-flag" data-flag="windows">Recommended</span>
+        </header>
+
+        <div class="dl-badges" aria-hidden="true">
+          <span class="dl-badge">x64</span>
+          <span class="dl-badge">.exe</span>
+          <span class="dl-badge">Win 10+</span>
+        </div>
+
+        <a class="dl-dl btn-primary" id="btn-win" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-dl-i"><path d="M7.3 1v7.1L5.1 5.9l-.9.9L8 10.6l3.8-3.8-.9-.9-2.2 2.2V1zM2.5 12.2v1.3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.3h-1.3v1h-8.4v-1z"/></svg>
+          <span>Download for Windows</span>
+        </a>
+        <p class="dl-meta" id="meta-win"><span class="dl-meta-skel">Reading latest release&hellip;</span></p>
+      </article>
+
+      <!-- macOS -->
+      <article class="dl-card" id="card-macos" data-os="macos">
+        <header class="dl-card-head">
+          <span class="dl-glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M16.4 12.6c0-2.1 1.7-3.1 1.8-3.2-1-1.4-2.5-1.6-3-1.6-1.3-.1-2.5.7-3.1.7-.6 0-1.6-.7-2.7-.7-1.4 0-2.6.8-3.3 2-1.4 2.4-.4 6 1 8 .7 1 1.4 2 2.5 2 1 0 1.4-.6 2.6-.6 1.2 0 1.5.6 2.6.6 1.1 0 1.8-1 2.4-2 .8-1.1 1.1-2.2 1.1-2.3 0-.1-2.1-.8-2.1-3.1zM14.5 6.3c.6-.7 1-1.6.9-2.6-.8 0-1.8.5-2.4 1.2-.5.6-1 1.6-.9 2.5.9.1 1.8-.4 2.4-1.1z"/></svg>
+          </span>
+          <div class="dl-card-id">
+            <h2 class="dl-card-name">macOS</h2>
+            <p class="dl-card-note">Apple Silicon (aarch64), macOS 10.15+.</p>
+          </div>
+          <span class="dl-rec-flag" data-flag="macos">Recommended</span>
+        </header>
+
+        <div class="dl-badges" aria-hidden="true">
+          <span class="dl-badge">aarch64</span>
+          <span class="dl-badge">.dmg</span>
+          <span class="dl-badge">10.15+</span>
+        </div>
+
+        <a class="dl-dl btn-primary" id="btn-mac" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-dl-i"><path d="M7.3 1v7.1L5.1 5.9l-.9.9L8 10.6l3.8-3.8-.9-.9-2.2 2.2V1zM2.5 12.2v1.3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.3h-1.3v1h-8.4v-1z"/></svg>
+          <span>Download for macOS</span>
+        </a>
+        <p class="dl-meta" id="meta-mac"><span class="dl-meta-skel">Reading latest release&hellip;</span></p>
+        <p class="dl-card-foot">Drag the app into your Applications folder.</p>
+      </article>
+
+      <!-- Linux -->
+      <article class="dl-card" id="card-linux" data-os="linux">
+        <header class="dl-card-head">
+          <span class="dl-glyph" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M12 2c-2 0-3.3 1.7-3.3 3.9 0 1.4.5 2.2.5 3.2 0 1-1.1 1.9-2 3.6-.8 1.6-1.8 3.3-1.8 4.8 0 .9.5 1.4 1.2 1.6.2.6.1 1.3.9 1.6 1 .4 2.6.5 3.6-.2.3-.2.6-.3.9-.3.3 0 .6.1.9.3 1 .7 2.6.6 3.6.2.8-.3.7-1 .9-1.6.7-.2 1.2-.7 1.2-1.6 0-1.5-1-3.2-1.8-4.8-.9-1.7-2-2.6-2-3.6 0-1 .5-1.8.5-3.2C15.3 3.7 14 2 12 2zm-1.3 4c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9zm2.6 0c.4 0 .7.4.7.9s-.3.9-.7.9-.7-.4-.7-.9.3-.9.7-.9zM12 9.3c.8 0 1.7.5 1.7.9 0 .3-.9.7-1.7.7s-1.7-.4-1.7-.7c0-.4.9-.9 1.7-.9z"/></svg>
+          </span>
+          <div class="dl-card-id">
+            <h2 class="dl-card-name">Linux</h2>
+            <p class="dl-card-note">.deb and .AppImage, 64-bit.</p>
+          </div>
+          <span class="dl-rec-flag" data-flag="linux">Recommended</span>
+        </header>
+
+        <div class="dl-badges" aria-hidden="true">
+          <span class="dl-badge">amd64</span>
+          <span class="dl-badge">.deb</span>
+          <span class="dl-badge">.AppImage</span>
+        </div>
+
+        <div class="dl-split">
+          <a class="dl-dl btn-primary" id="btn-deb" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-dl-i"><path d="M7.3 1v7.1L5.1 5.9l-.9.9L8 10.6l3.8-3.8-.9-.9-2.2 2.2V1zM2.5 12.2v1.3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.3h-1.3v1h-8.4v-1z"/></svg>
+            <span>.deb</span>
+          </a>
+          <a class="dl-dl dl-dl-ghost" id="btn-app" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-dl-i"><path d="M7.3 1v7.1L5.1 5.9l-.9.9L8 10.6l3.8-3.8-.9-.9-2.2 2.2V1zM2.5 12.2v1.3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.3h-1.3v1h-8.4v-1z"/></svg>
+            <span>.AppImage</span>
+          </a>
+        </div>
+        <p class="dl-meta" id="meta-linux"><span class="dl-meta-skel">Reading latest release&hellip;</span></p>
+      </article>
+
+    </div>
+
+    <p class="dl-allnote" id="dl-allnote">
+      <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">View all builds and checksums on GitHub</a>
+      <span class="dl-sep" aria-hidden="true">/</span>
+      <span id="dl-version-tag" class="dl-mono"></span>
+    </p>
+  </section>
+
+  <!-- ===================== FIRST-RUN NOTE ===================== -->
+  <section class="dl-firstrun" aria-label="First run note">
+    <span class="dl-firstrun-i" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 9 9 0 0 0-9-9zm0 2a7 7 0 1 1-7 7 7 7 0 0 1 7-7zm-1 3v5l4 2.4.8-1.3-3.3-2V8z"/></svg>
+    </span>
+    <div>
+      <h2 class="dl-firstrun-h">An honest note about the first launch</h2>
+      <p class="dl-firstrun-p">
+        The first time you open the app it spends about 40 to 90 seconds setting up a local
+        database. It is not frozen. Every launch after that opens fast. Nothing is sent anywhere,
+        the database lives on your own machine.
+      </p>
+    </div>
+  </section>
+
+  <!-- ===================== COMPARE ===================== -->
+  <section class="dl-compare" aria-labelledby="dl-cmp-h">
+    <header class="dl-section-head">
+      <p class="dl-eyebrow dl-eyebrow-sm">Which one</p>
+      <h2 class="dl-h2" id="dl-cmp-h">Native app, pip, or Docker</h2>
+      <p class="dl-sub">Most people want the native app. The other two are for developers and servers.</p>
+    </header>
+
+    <div class="dl-cmp-wrap" role="table" aria-label="Install method comparison">
+      <div class="dl-cmp-row dl-cmp-headrow" role="row">
+        <span role="columnheader"></span>
+        <span role="columnheader" class="dl-cmp-best">Native app</span>
+        <span role="columnheader">pip</span>
+        <span role="columnheader">Docker</span>
+      </div>
+      <div class="dl-cmp-row" role="row">
+        <span role="rowheader">Best for</span>
+        <span role="cell" class="dl-cmp-best">Anyone on a desktop</span>
+        <span role="cell">Python developers</span>
+        <span role="cell">Servers, teams</span>
+      </div>
+      <div class="dl-cmp-row" role="row">
+        <span role="rowheader">Prerequisites</span>
+        <span role="cell" class="dl-cmp-best dl-yes">None</span>
+        <span role="cell">Python 3.12+</span>
+        <span role="cell">Docker</span>
+      </div>
+      <div class="dl-cmp-row" role="row">
+        <span role="rowheader">Database setup</span>
+        <span role="cell" class="dl-cmp-best dl-yes">Automatic, local</span>
+        <span role="cell">Embedded, automatic</span>
+        <span role="cell">Volume mount</span>
+      </div>
+      <div class="dl-cmp-row" role="row">
+        <span role="rowheader">Opens at</span>
+        <span role="cell" class="dl-cmp-best">A real window</span>
+        <span role="cell" class="dl-mono">localhost:8080</span>
+        <span role="cell" class="dl-mono">localhost:8080</span>
+      </div>
+      <div class="dl-cmp-row" role="row">
+        <span role="rowheader">Updates</span>
+        <span role="cell" class="dl-cmp-best">Re-download</span>
+        <span role="cell" class="dl-mono">pip -U</span>
+        <span role="cell">Pull image</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== FOR DEVELOPERS ===================== -->
+  <section class="dl-dev" aria-labelledby="dl-dev-h">
+    <header class="dl-section-head">
+      <p class="dl-eyebrow dl-eyebrow-sm">For developers</p>
+      <h2 class="dl-h2" id="dl-dev-h">Run it from the terminal</h2>
+      <p class="dl-sub">Secondary paths. Each opens the same app in your browser at <span class="dl-mono">localhost:8080</span>.</p>
+    </header>
+
+    <div class="dl-tabs" role="tablist" aria-label="Developer install method">
+      <button class="dl-tab dl-tab-on" role="tab" id="tab-pip" aria-selected="true" aria-controls="panel-pip" data-tab="pip">pip</button>
+      <button class="dl-tab" role="tab" id="tab-docker" aria-selected="false" aria-controls="panel-docker" data-tab="docker" tabindex="-1">docker</button>
+      <button class="dl-tab" role="tab" id="tab-source" aria-selected="false" aria-controls="panel-source" data-tab="source" tabindex="-1">source</button>
+    </div>
+
+    <div class="dl-panels">
+      <div class="dl-panel" id="panel-pip" role="tabpanel" aria-labelledby="tab-pip">
+        <div class="dl-cmd">
+          <span class="dl-cmd-pfx" aria-hidden="true">$</span>
+          <code class="dl-cmd-text" id="cmd-pip-1">pip install --upgrade openconstructionerp</code>
+          <button class="dl-copy" data-copy="cmd-pip-1" aria-label="Copy install command">
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
+            <span class="dl-copy-label">Copy</span>
+          </button>
+        </div>
+        <div class="dl-cmd">
+          <span class="dl-cmd-pfx" aria-hidden="true">$</span>
+          <code class="dl-cmd-text" id="cmd-pip-2">openconstructionerp</code>
+          <button class="dl-copy" data-copy="cmd-pip-2" aria-label="Copy run command">
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
+            <span class="dl-copy-label">Copy</span>
+          </button>
+        </div>
+        <p class="dl-panel-note">Then open <a class="dl-mono" href="http://localhost:8080" rel="noopener">localhost:8080</a>. On <a href="https://pypi.org/project/openconstructionerp/" rel="noopener">PyPI</a>.</p>
+      </div>
+
+      <div class="dl-panel dl-panel-hide" id="panel-docker" role="tabpanel" aria-labelledby="tab-docker" hidden>
+        <div class="dl-cmd">
+          <span class="dl-cmd-pfx" aria-hidden="true">$</span>
+          <code class="dl-cmd-text" id="cmd-docker-1">docker run -d -p 8080:8080 -v oe_data:/data ghcr.io/datadrivenconstruction/openconstructionerp:latest</code>
+          <button class="dl-copy" data-copy="cmd-docker-1" aria-label="Copy docker run command">
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
+            <span class="dl-copy-label">Copy</span>
+          </button>
+        </div>
+        <p class="dl-panel-note">Then open <a class="dl-mono" href="http://localhost:8080" rel="noopener">localhost:8080</a>. The named volume keeps your data between runs.</p>
+      </div>
+
+      <div class="dl-panel dl-panel-hide" id="panel-source" role="tabpanel" aria-labelledby="tab-source" hidden>
+        <div class="dl-cmd">
+          <span class="dl-cmd-pfx" aria-hidden="true">$</span>
+          <code class="dl-cmd-text" id="cmd-src-1">git clone https://github.com/datadrivenconstruction/OpenConstructionERP</code>
+          <button class="dl-copy" data-copy="cmd-src-1" aria-label="Copy clone command">
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
+            <span class="dl-copy-label">Copy</span>
+          </button>
+        </div>
+        <div class="dl-cmd">
+          <span class="dl-cmd-pfx" aria-hidden="true">$</span>
+          <code class="dl-cmd-text" id="cmd-src-2">pip install -e ./backend[server]</code>
+          <button class="dl-copy" data-copy="cmd-src-2" aria-label="Copy editable install command">
+            <svg viewBox="0 0 16 16" aria-hidden="true" class="dl-copy-i"><path d="M5.5 1.5h6a1 1 0 0 1 1 1v8h-1.3V2.8H5.5zM3.5 4h6a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-6a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zm.3 1.3v7.4h5.4V5.3z"/></svg>
+            <span class="dl-copy-label">Copy</span>
+          </button>
+        </div>
+        <p class="dl-panel-note">Editable dev install with the server extras. Read the <a href="https://openconstructionerp.com/docs" rel="noopener">docs</a> first.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== HELPERS ===================== -->
+  <nav class="dl-helpers" aria-label="More resources">
+    <a class="dl-helper" href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" rel="noopener">
+      <span class="dl-helper-k">Release notes</span>
+      <span class="dl-helper-v">What changed, every version</span>
+    </a>
+    <a class="dl-helper" href="https://openconstructionerp.com/docs" rel="noopener">
+      <span class="dl-helper-k">Documentation</span>
+      <span class="dl-helper-v">Install, modules, API</span>
+    </a>
+    <a class="dl-helper" href="https://github.com/datadrivenconstruction/OpenConstructionERP/issues" rel="noopener">
+      <span class="dl-helper-k">Report an issue</span>
+      <span class="dl-helper-v">Found a bug? Tell us</span>
+    </a>
+  </nav>
+
+  <p class="dl-footline">117 modules. Estimating and BOQ, takeoff, CAD and BIM, cost databases, tendering, reporting, and more.</p>
+
+  <!-- live region for copy confirmation -->
+  <div class="dl-sr-only" id="dl-live" role="status" aria-live="polite"></div>
+</main>
+
+<footer class="pagefoot">
+  <div class="wrap">
+    <div>(c) 2026 DataDrivenConstruction. Open source under AGPL-3.0.</div>
+    <div>
+      <a href="/">Home</a> &middot;
+      <a href="/docs.html">Docs</a> &middot;
+      <a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest" target="_blank" rel="noopener">Releases</a> &middot;
+      <a href="https://github.com/datadrivenconstruction/OpenConstructionERP" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* Theme toggle: flips data-theme and persists to localStorage 'oce-theme',
+   the same key the rest of the site uses. */
+(function(){
+  var btn = document.getElementById('theme-toggle');
+  if(!btn) return;
+  function current(){ return document.documentElement.getAttribute('data-theme') || 'light'; }
+  btn.setAttribute('aria-pressed', current() === 'dark' ? 'true' : 'false');
+  btn.addEventListener('click', function(){
+    var next = current() === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try{ localStorage.setItem('oce-theme', next); }catch(e){}
+    btn.setAttribute('aria-pressed', next === 'dark' ? 'true' : 'false');
+  });
+})();
+</script>
+
+<script>
+(function(){
+  var REPO = "datadrivenconstruction/OpenConstructionERP";
+  var RELEASES_PAGE = "https://github.com/" + REPO + "/releases/latest";
+
+  /* ---------- OS detection ---------- */
+  function detectOS(){
+    var p = "";
+    try{
+      if(navigator.userAgentData && navigator.userAgentData.platform){ p = navigator.userAgentData.platform; }
+      else if(navigator.platform){ p = navigator.platform; }
+      else { p = navigator.userAgent || ""; }
+    }catch(e){ p = navigator.userAgent || ""; }
+    var ua = (navigator.userAgent || "").toLowerCase();
+    if(/android|iphone|ipad|ipod|mobile/.test(ua)) return null; /* mobile: show all */
+    p = (p || "").toLowerCase();
+    if(/win/.test(p)) return "windows";
+    if(/mac|darwin/.test(p)) return "macos";
+    if(/linux|x11|cros/.test(p)) return "linux";
+    return null;
+  }
+
+  var os = detectOS();
+  var labels = { windows:"Windows", macos:"your Mac", linux:"Linux" };
+  var recText = document.getElementById("dl-rec-text");
+  var recBox = document.getElementById("dl-rec");
+
+  function promote(which){
+    ["windows","macos","linux"].forEach(function(k){
+      var c = document.getElementById("card-" + k);
+      if(c) c.classList.toggle("is-rec", k === which);
+    });
+  }
+
+  if(os){
+    recBox.classList.add("is-ready");
+    var nice = os === "macos" ? "your Mac" : (os === "windows" ? "Windows" : "Linux");
+    recText.innerHTML = "Recommended for <b>" + nice + "</b>";
+    promote(os);
+    var promoted = document.getElementById("card-" + os);
+    if(promoted && promoted.parentNode && os !== "windows"){
+      promoted.parentNode.insertBefore(promoted, promoted.parentNode.firstChild);
+    }
+  } else {
+    recBox.classList.add("is-ready");
+    recText.textContent = "Pick your platform below";
+    /* leave all three equal */
+  }
+
+  /* ---------- GitHub API wiring ---------- */
+  function humanizeBytes(b){ return (b/1048576).toFixed(0) + " MB"; }
+
+  var map = {
+    win:   { btn:"btn-win",  meta:"meta-win"   },
+    mac:   { btn:"btn-mac",  meta:"meta-mac"   },
+    deb:   { btn:"btn-deb",  meta:"meta-linux" },
+    app:   { btn:"btn-app",  meta:"meta-linux" }
+  };
+
+  function fallback(){
+    ["btn-win","btn-mac","btn-deb","btn-app"].forEach(function(id){
+      var el = document.getElementById(id);
+      if(el) el.setAttribute("href", RELEASES_PAGE);
+    });
+    ["meta-win","meta-mac","meta-linux"].forEach(function(id){
+      var el = document.getElementById(id);
+      if(el) el.innerHTML = '<a class="dl-mono" style="color:var(--accent-3);text-decoration:none" href="' + RELEASES_PAGE + '" rel="noopener">View all downloads &rarr;</a>';
+    });
+    var tag = document.getElementById("dl-version-tag");
+    if(tag) tag.textContent = "";
+  }
+
+  fetch("https://api.github.com/repos/" + REPO + "/releases/latest", { headers: { "Accept": "application/vnd.github+json" } })
+    .then(function(r){ if(!r.ok) throw r.status; return r.json(); })
+    .then(function(rel){
+      var v = rel.tag_name || "";
+      var assets = rel.assets || [];
+      function pick(re){ for(var i=0;i<assets.length;i++){ if(re.test(assets[i].name)) return assets[i]; } return null; }
+
+      var win = pick(/\.exe$/i), mac = pick(/\.dmg$/i), deb = pick(/\.deb$/i), app = pick(/\.AppImage$/i);
+
+      var versionTag = document.getElementById("dl-version-tag");
+      if(versionTag && v) versionTag.textContent = v;
+
+      function wire(asset, def, splitLabel){
+        var btn = document.getElementById(def.btn);
+        var meta = document.getElementById(def.meta);
+        if(asset && asset.browser_download_url){
+          if(btn) btn.setAttribute("href", asset.browser_download_url);
+          if(meta){
+            var size = humanizeBytes(asset.size);
+            if(splitLabel){
+              /* linux shares one meta line, append non-destructively */
+              var prev = meta.getAttribute("data-built") || "";
+              prev += (prev ? " &middot; " : "") + splitLabel + " <b>" + size + "</b>";
+              meta.setAttribute("data-built", prev);
+              meta.innerHTML = (v ? v + " &middot; " : "") + prev;
+            } else {
+              meta.innerHTML = (v ? v + " &middot; " : "") + "<b>" + size + "</b>";
+            }
+          }
+        } else if(meta && !splitLabel){
+          if(btn) btn.setAttribute("href", RELEASES_PAGE);
+          meta.innerHTML = '<a class="dl-mono" style="color:var(--accent-3);text-decoration:none" href="' + RELEASES_PAGE + '" rel="noopener">View on GitHub &rarr;</a>';
+        } else if(!asset){
+          if(btn) btn.setAttribute("href", RELEASES_PAGE);
+        }
+      }
+
+      wire(win, map.win, null);
+      wire(mac, map.mac, null);
+      /* linux: two assets feed one meta line */
+      var linuxMeta = document.getElementById("meta-linux");
+      if(linuxMeta) linuxMeta.removeAttribute("data-built");
+      wire(deb, map.deb, ".deb");
+      wire(app, map.app, ".AppImage");
+      if(!deb && !app){
+        var lxDocs = "https://github.com/" + REPO + "#quick-start";
+        var dEl = document.getElementById("btn-deb"); if(dEl) dEl.setAttribute("href", lxDocs);
+        var aEl = document.getElementById("btn-app"); if(aEl) aEl.setAttribute("href", lxDocs);
+        if(linuxMeta){
+          linuxMeta.innerHTML = 'Native .deb / .AppImage are still building. On Linux right now: <code class="dl-mono">pip install openconstructionerp</code> or Docker &middot; <a style="color:var(--accent-3);text-decoration:none" href="' + lxDocs + '" rel="noopener">Quick Start &rarr;</a>';
+        }
+      }
+    })
+    .catch(function(){ fallback(); });
+
+  /* ---------- developer tabs ---------- */
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".dl-tab"));
+  function selectTab(tab){
+    tabs.forEach(function(t){
+      var on = t === tab;
+      t.classList.toggle("dl-tab-on", on);
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      t.tabIndex = on ? 0 : -1;
+      var panel = document.getElementById("panel-" + t.getAttribute("data-tab"));
+      if(panel){
+        panel.classList.toggle("dl-panel-hide", !on);
+        if(on){ panel.removeAttribute("hidden"); } else { panel.setAttribute("hidden",""); }
+      }
+    });
+  }
+  tabs.forEach(function(t, i){
+    t.addEventListener("click", function(){ selectTab(t); });
+    t.addEventListener("keydown", function(e){
+      var idx = i;
+      if(e.key === "ArrowRight" || e.key === "ArrowDown"){ e.preventDefault(); idx = (i+1) % tabs.length; tabs[idx].focus(); selectTab(tabs[idx]); }
+      else if(e.key === "ArrowLeft" || e.key === "ArrowUp"){ e.preventDefault(); idx = (i-1+tabs.length) % tabs.length; tabs[idx].focus(); selectTab(tabs[idx]); }
+    });
+  });
+
+  /* ---------- copy to clipboard ---------- */
+  var live = document.getElementById("dl-live");
+  function flash(btn, label){
+    var lbl = btn.querySelector(".dl-copy-label");
+    var original = lbl ? lbl.textContent : "";
+    btn.classList.add("is-done");
+    if(lbl) lbl.textContent = "Copied";
+    if(live) live.textContent = "Copied to clipboard: " + label;
+    setTimeout(function(){
+      btn.classList.remove("is-done");
+      if(lbl) lbl.textContent = original || "Copy";
+    }, 1600);
+  }
+  function legacyCopy(text){
+    var ta = document.createElement("textarea");
+    ta.value = text; ta.setAttribute("readonly",""); ta.style.position="absolute"; ta.style.left="-9999px";
+    document.body.appendChild(ta); ta.select();
+    try{ document.execCommand("copy"); }catch(e){}
+    document.body.removeChild(ta);
+  }
+  document.querySelectorAll(".dl-copy").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var target = document.getElementById(btn.getAttribute("data-copy"));
+      if(!target) return;
+      var text = target.textContent.trim();
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(function(){ flash(btn, text); }).catch(function(){ legacyCopy(text); flash(btn, text); });
+      } else {
+        legacyCopy(text); flash(btn, text);
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

@@ -23,6 +23,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from app.core.rate_limiter import approval_limiter
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep, verify_project_access
 from app.modules.changeorders.schemas import (
+    AIDraftRequest,
+    AIDraftResponse,
     ApprovalAdvanceRequest,
     ApprovalRow,
     ApprovalStartRequest,
@@ -34,6 +36,8 @@ from app.modules.changeorders.schemas import (
     ChangeOrderSummary,
     ChangeOrderUpdate,
     ChangeOrderWithItems,
+    SimulateImpactRequest,
+    SimulateImpactResponse,
 )
 from app.modules.changeorders.service import ChangeOrderService
 
@@ -516,3 +520,95 @@ async def get_approvals(
     await verify_project_access(existing.project_id, str(user_id), session)
     rows = await service.list_approvals(order_id)
     return [_approval_to_response(r) for r in rows]
+
+
+# ── What-If impact simulator + AI draft (TOP-30 #11) ─────────────────────────
+
+
+@router.post(
+    "/{order_id}/simulate-impact/",
+    response_model=SimulateImpactResponse,
+)
+async def simulate_impact(
+    order_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    payload: SimulateImpactRequest | None = None,
+    _perm: None = Depends(RequirePermission("changeorders.read")),
+    service: ChangeOrderService = Depends(_get_service),
+) -> SimulateImpactResponse:
+    """Project a change order's cost, schedule, EVM and BOQ effect (read-only).
+
+    Nothing is persisted. With an empty body it forecasts the CO as it stands;
+    supplying ``cost_impact`` / ``schedule_impact_days`` runs a what-if with
+    those overrides so a reviewer can model an alternative before approving.
+    """
+    existing = await service.get_order(order_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
+    body = payload or SimulateImpactRequest()
+    result = await service.simulate_impact(
+        order_id,
+        cost_override=body.cost_impact,
+        schedule_override=body.schedule_impact_days,
+    )
+    return SimulateImpactResponse(**result)
+
+
+@router.post(
+    "/{order_id}/publish-scenario/",
+    response_model=ChangeOrderResponse,
+)
+async def publish_scenario(
+    order_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    payload: SimulateImpactRequest | None = None,
+    _perm: None = Depends(RequirePermission("changeorders.update")),
+    service: ChangeOrderService = Depends(_get_service),
+) -> ChangeOrderResponse:
+    """Snapshot the current what-if projection into the CO audit trail.
+
+    Re-runs the projection server-side (so the stored snapshot can never be
+    spoofed by the client) and appends it to the change order's metadata,
+    keeping the last 10 scenarios.
+    """
+    existing = await service.get_order(order_id)
+    await verify_project_access(existing.project_id, str(user_id), session)
+    body = payload or SimulateImpactRequest()
+    snapshot = await service.simulate_impact(
+        order_id,
+        cost_override=body.cost_impact,
+        schedule_override=body.schedule_impact_days,
+    )
+    order = await service.publish_scenario(order_id, snapshot)
+    return _order_to_response(order)
+
+
+@router.post(
+    "/ai-draft/",
+    response_model=AIDraftResponse,
+)
+async def ai_draft_change_order(
+    payload: AIDraftRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("changeorders.create")),
+    service: ChangeOrderService = Depends(_get_service),
+) -> AIDraftResponse:
+    """Draft a change order from source text (AI when a key is set, else heuristic).
+
+    The response is a review-ready proposal - it is never saved. The caller
+    reviews or edits it, then creates the change order through the normal
+    create endpoint. Requires ``changeorders.create`` since it is the first
+    step of authoring one.
+    """
+    await verify_project_access(payload.project_id, str(user_id), session)
+    result = await service.ai_draft(
+        project_id=payload.project_id,
+        source_kind=payload.source_kind,
+        source_text=payload.source_text,
+        source_id=payload.source_id,
+        currency=payload.currency,
+        user_id=user_id,
+    )
+    return AIDraftResponse(**result)

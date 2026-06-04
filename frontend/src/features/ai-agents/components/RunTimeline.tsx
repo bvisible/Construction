@@ -23,6 +23,7 @@ import {
   renderMarkdown,
   SANITIZE_CONFIG,
 } from '@/features/erp-chat/full-page/left/MessageBubble';
+import { copyToClipboard } from '@/shared/lib/browser';
 
 // ── Step role styling ────────────────────────────────────────────────────────
 
@@ -128,15 +129,14 @@ function CopyButton({ text, label }: { text: string; label: string }): JSX.Eleme
   const [copied, setCopied] = useState(false);
 
   const onCopy = () => {
-    void navigator.clipboard?.writeText(text).then(
-      () => {
+    void copyToClipboard(text).then((ok) => {
+      if (ok) {
         setCopied(true);
         window.setTimeout(() => setCopied(false), 1800);
-      },
-      () => {
+      } else {
         /* clipboard blocked — fail silently */
-      },
-    );
+      }
+    });
   };
 
   return (

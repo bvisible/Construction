@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any, Iterable
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
@@ -120,6 +121,32 @@ def _intervals_overlap(
 ) -> bool:
     """True if [a_start, a_end) and [b_start, b_end) overlap. Edge-touch ⇒ False."""
     return a_start < b_end and b_start < a_end
+
+
+def _build_capacity_buckets(
+    start: datetime,
+    end: datetime,
+    bucket: str,
+    *,
+    max_buckets: int = 60,
+) -> list[tuple[int, datetime, datetime, str]]:
+    """Slice [start, end) into fixed-width buckets for the capacity heatmap.
+
+    ``week`` ⇒ 7-day columns, ``month`` ⇒ 30-day columns. The count is capped
+    at ``max_buckets`` so a wide window never produces an unbounded payload;
+    the last bucket is clamped to ``end``. Returns (index, start, end, label).
+    """
+    step = timedelta(days=30 if bucket == "month" else 7)
+    out: list[tuple[int, datetime, datetime, str]] = []
+    cursor = start
+    idx = 0
+    while cursor < end and idx < max_buckets:
+        b_end = min(cursor + step, end)
+        label = cursor.strftime("%b %d")
+        out.append((idx, cursor, b_end, label))
+        cursor = b_end
+        idx += 1
+    return out
 
 
 def detect_conflicts(
@@ -1218,6 +1245,152 @@ class ResourcesService:
                     }
                 )
         return out
+
+    async def portfolio_capacity(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        bucket: str = "week",
+        max_resources: int = 200,
+    ) -> dict[str, Any]:
+        """Org-wide resource utilization heatmap across every project.
+
+        Buckets the window into week/month columns. Per resource per bucket it
+        sums the ``allocation_percent`` of active assignments overlapping that
+        bucket, grouped by project. A bucket is *over-allocated* when the total
+        exceeds 100% and *cross-project* when more than one distinct project
+        competes for the resource in that bucket — the exact signal portfolio
+        leveling exists to resolve. Only resources with at least one assignment
+        in the window are returned, conflicts first.
+        """
+        start = _as_aware(start)
+        end = _as_aware(end)
+        bucket = bucket if bucket in ("week", "month") else "week"
+        buckets = _build_capacity_buckets(start, end, bucket)
+        bucket_dicts = [
+            {"index": i, "start": bs, "end": be, "label": label} for (i, bs, be, label) in buckets
+        ]
+        empty = {
+            "start": start,
+            "end": end,
+            "bucket": bucket,
+            "buckets": bucket_dicts,
+            "resources": [],
+            "total_resources": 0,
+            "floating_resources": 0,
+            "conflict_resources": 0,
+        }
+        if end <= start or not buckets:
+            return empty
+
+        assignments = await self.assignment_repo.list_in_window(start, end)
+        active = [a for a in assignments if a.status not in ("cancelled", "completed")]
+        if not active:
+            return empty
+
+        # Resolve project names once for the whole payload.
+        project_ids = {a.project_id for a in active if a.project_id is not None}
+        name_by_project: dict[uuid.UUID, str] = {}
+        if project_ids:
+            from app.modules.projects.models import Project
+
+            rows = (
+                await self.session.execute(
+                    select(Project.id, Project.name).where(Project.id.in_(project_ids))
+                )
+            ).all()
+            name_by_project = {pid: pname for (pid, pname) in rows}
+
+        by_resource: dict[uuid.UUID, list[Assignment]] = {}
+        for a in active:
+            by_resource.setdefault(a.resource_id, []).append(a)
+
+        rows_out: list[dict[str, Any]] = []
+        floating_count = 0
+        conflict_count = 0
+        for rid, asgns in by_resource.items():
+            resource = await self.resource_repo.get_by_id(rid)
+            if resource is None:
+                continue
+            is_floating = resource.home_project_id is None
+            if is_floating:
+                floating_count += 1
+
+            cells: list[dict[str, Any]] = []
+            peak = 0
+            has_conflict = False
+            for (bi, b_start, b_end, _label) in buckets:
+                # Per-project tally inside this bucket.
+                per_project: dict[uuid.UUID | None, int] = {}
+                for a in asgns:
+                    if _intervals_overlap(_as_aware(a.start_at), _as_aware(a.end_at), b_start, b_end):
+                        per_project[a.project_id] = per_project.get(a.project_id, 0) + int(
+                            a.allocation_percent or 0
+                        )
+                if not per_project:
+                    continue
+                total = sum(per_project.values())
+                distinct_projects = {pid for pid in per_project if pid is not None}
+                over = total > 100
+                cross = len(distinct_projects) > 1
+                if over:
+                    has_conflict = True
+                peak = max(peak, total)
+                cells.append(
+                    {
+                        "bucket_index": bi,
+                        "allocation_percent": total,
+                        "over_allocated": over,
+                        "cross_project": cross,
+                        "projects": [
+                            {
+                                "project_id": pid,
+                                "project_name": (
+                                    name_by_project.get(pid, "Unknown project")
+                                    if pid is not None
+                                    else "Unassigned"
+                                ),
+                                "allocation_percent": pct,
+                            }
+                            for pid, pct in sorted(
+                                per_project.items(), key=lambda kv: kv[1], reverse=True
+                            )
+                        ],
+                    }
+                )
+            if not cells:
+                continue
+            if has_conflict:
+                conflict_count += 1
+            rows_out.append(
+                {
+                    "resource_id": rid,
+                    "code": resource.code,
+                    "name": resource.name,
+                    "resource_type": resource.resource_type,
+                    "is_floating": is_floating,
+                    "peak_allocation_percent": peak,
+                    "has_conflict": has_conflict,
+                    "cells": cells,
+                }
+            )
+
+        # Conflicts first, then highest peak, then name — the order a planner reads.
+        rows_out.sort(key=lambda r: (not r["has_conflict"], -r["peak_allocation_percent"], r["name"]))
+        total_resources = len(rows_out)
+        rows_out = rows_out[:max_resources]
+
+        return {
+            "start": start,
+            "end": end,
+            "bucket": bucket,
+            "buckets": bucket_dicts,
+            "resources": rows_out,
+            "total_resources": total_resources,
+            "floating_resources": floating_count,
+            "conflict_resources": conflict_count,
+        }
 
     async def find_candidates(
         self,

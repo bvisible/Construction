@@ -35,6 +35,7 @@ import { Button, Card, Badge, EmptyState, InfoHint, SkeletonTable, CountryFlag, 
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { apiGet, apiPost, apiDelete, triggerDownload, extractErrorMessageFromBody } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import { copyToClipboard } from '@/shared/lib/browser';
 import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useCostDatabaseStore, REGION_MAP } from '@/stores/useCostDatabaseStore';
@@ -759,7 +760,7 @@ export function CostsPage() {
 
   const handleCopyRate = useCallback(async (item: CostItem) => {
     try {
-      await navigator.clipboard.writeText(String(item.rate));
+      await copyToClipboard(String(item.rate));
       setCopiedId(item.id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
@@ -1370,10 +1371,12 @@ export function CostsPage() {
               icon={<Copy size={14} />}
               onClick={() => {
                 const text = selectedItems.map((i) => `${i.code}\t${i.description}\t${i.unit}\t${i.rate}`).join('\n');
-                navigator.clipboard.writeText(text).then(() => {
-                  addToast({ type: 'success', title: t('common.copied', { defaultValue: 'Copied' }), message: t('costs.items_copied', { defaultValue: '{{count}} items copied to clipboard', count: selectedIds.size }) });
-                }).catch((err) => {
-                  addToast({ type: 'error', title: t('common.copy_failed', { defaultValue: 'Copy failed' }), message: err?.message || 'Clipboard access denied' });
+                copyToClipboard(text).then((ok) => {
+                  if (ok) {
+                    addToast({ type: 'success', title: t('common.copied', { defaultValue: 'Copied' }), message: t('costs.items_copied', { defaultValue: '{{count}} items copied to clipboard', count: selectedIds.size }) });
+                  } else {
+                    addToast({ type: 'error', title: t('common.copy_failed', { defaultValue: 'Copy failed' }), message: 'Clipboard access denied' });
+                  }
                 });
               }}
             >

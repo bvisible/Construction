@@ -1,6 +1,6 @@
 // AI Agents — typed client for the /api/v1/ai-agents/* surface.
 
-import { apiGet, apiPost } from '@/shared/lib/api';
+import { apiDelete, apiGet, apiPost, apiPut } from '@/shared/lib/api';
 
 export interface AgentDescriptor {
   name: string;
@@ -14,6 +14,45 @@ export interface AgentDescriptor {
   icon?: string;
   tagline?: string;
   example_prompts?: string[];
+  // True for the caller's own user-authored agents (editable/deletable).
+  is_custom?: boolean;
+  custom_id?: string | null;
+}
+
+// The friendly guided-builder spec a non-technical user fills in. The backend
+// compiles these plain-language fields into a well-formed system prompt.
+export interface GuidedAgentSpec {
+  role?: string;
+  goal: string;
+  audience?: string;
+  output_format?: string;
+  extra_guidance?: string;
+}
+
+export interface CustomAgent {
+  id: string;
+  user_id: string;
+  display_name: string;
+  tagline: string;
+  description: string;
+  category: string;
+  icon: string;
+  example_prompts: string[];
+  system_prompt: string;
+  guided: GuidedAgentSpec | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CustomAgentInput {
+  display_name: string;
+  tagline?: string;
+  description?: string;
+  category: string;
+  icon: string;
+  example_prompts?: string[];
+  guided?: GuidedAgentSpec | null;
+  system_prompt?: string;
 }
 
 export type AgentStepRole =
@@ -86,4 +125,12 @@ export const aiAgentsApi = {
   startRun: (body: CreateAgentRunRequest) =>
     apiPost<AgentRun, CreateAgentRunRequest>('/v1/ai-agents/runs/', body),
   health: () => apiGet<AgentHealth>('/v1/ai-agents/health/'),
+
+  // Custom (user-authored) agents.
+  listCustomAgents: () => apiGet<CustomAgent[]>('/v1/ai-agents/custom/'),
+  createCustomAgent: (body: CustomAgentInput) =>
+    apiPost<CustomAgent, CustomAgentInput>('/v1/ai-agents/custom/', body),
+  updateCustomAgent: (id: string, body: CustomAgentInput) =>
+    apiPut<CustomAgent, CustomAgentInput>(`/v1/ai-agents/custom/${id}`, body),
+  deleteCustomAgent: (id: string) => apiDelete(`/v1/ai-agents/custom/${id}`),
 };

@@ -17,6 +17,7 @@ import {
   Send,
 } from 'lucide-react';
 import clsx from 'clsx';
+import { copyToClipboard } from '@/shared/lib/browser';
 
 const REPO_URL = 'https://github.com/datadrivenconstruction/OpenConstructionERP';
 const CASE_STUDY_EMAIL = 'info@datadrivenconstruction.io';
@@ -263,7 +264,7 @@ function SupportUsModal({ onClose, copied, setCopied }: ModalProps) {
 
   const copyShareText = async () => {
     try {
-      await navigator.clipboard.writeText(`${SHARE_TEXT} ${REPO_URL}`);
+      await copyToClipboard(`${SHARE_TEXT} ${REPO_URL}`);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {

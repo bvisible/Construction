@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Copy, Check, X, Link2 } from 'lucide-react';
+import { copyToClipboard } from '@/shared/lib/browser';
 
 interface ShareDialogProps {
   roomName: string;
@@ -16,7 +17,7 @@ export function ShareDialog({ roomName, isOpen, onClose }: ShareDialogProps) {
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await copyToClipboard(shareUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {

@@ -23,6 +23,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.partner_pack.scope import scope_project_query
 from app.modules.projects.models import Project
 from app.modules.users.models import User
 
@@ -90,6 +91,11 @@ async def accessible_projects(
     """
     admin = await is_admin(session, user_id)
     stmt = select(Project).where(Project.status != "archived")
+    # When a partner pack is active the whole workspace is scoped to that
+    # pack's projects. This intentionally overrides admin-sees-all so the
+    # rollup widgets match the (already scoped) projects page and dashboard
+    # cards; a no-op when no pack is active.
+    stmt = scope_project_query(stmt, Project)
     if not admin:
         try:
             uid = uuid.UUID(str(user_id))

@@ -35,6 +35,9 @@ export interface NCR {
   created_at: string;
   updated_at: string;
   closed_at: string | null;
+  /** Free-form metadata. Auto-raised NCRs carry `source` ("clash" | "qms")
+   *  and the originating record id (`result_id`, `source_finding_id`). */
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface NCRFilters {

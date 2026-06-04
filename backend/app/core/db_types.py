@@ -1,22 +1,21 @@
-"""‌⁠‍Cross-database custom column types.
+"""‌⁠‍Custom column types (PostgreSQL-only).
+
+The app runs on PostgreSQL exclusively, so money and dates are stored in
+their native SQL types (``NUMERIC`` / ``DATE``) and aggregation, range
+queries and indexes work at the SQL layer.
 
 Goals:
 
-* **Dialect-aware storage** — emit PostgreSQL-native ``NUMERIC`` / ``DATE``
-  when connected to Postgres so aggregation, range queries and indexes
-  work at the SQL layer. Fall back to string storage on SQLite so the
-  same models keep round-tripping against the existing ``.db`` dev files
-  without a breaking migration.
+* **Native storage** — money is ``NUMERIC(precision, scale)`` and a
+  calendar date is ``DATE``.
 * **Python-side strictness** — callers always see :class:`decimal.Decimal`
-  or :class:`datetime.date`, never strings, regardless of the backend.
-  This removes a whole class of ``float("abc")`` / ``ValueError`` bugs
-  that used to surface deep inside services.
-
-Why not just ``Numeric`` everywhere? Because the existing SQLite dev
-databases store money and dates as strings (``String(50)`` / ``String(20)``)
-— swapping column types in place would require a destructive migration
-for every contributor. The dialect split lets Postgres get the proper
-types going forward while SQLite keeps the existing on-disk format.
+  or :class:`datetime.date`, never strings. This removes a whole class of
+  ``float("abc")`` / ``ValueError`` bugs that used to surface deep inside
+  services.
+* **Read tolerance for migrated rows** — the result-readers still accept a
+  stored string and coerce it back to the strict Python type. Older rows
+  migrated in from the previous string-storage SQLite era (``String(50)``
+  / ``String(20)``) keep round-tripping without a data fixup.
 
 Usage:
 
@@ -43,12 +42,12 @@ from sqlalchemy import Date, DateTime, Numeric, String, TypeDecorator
 class MoneyType(TypeDecorator):
     """‌⁠‍Money / signed-decimal column.
 
-    * PostgreSQL → ``NUMERIC(precision, scale)`` (default 18, 2).
-    * SQLite     → ``VARCHAR(50)`` holding the canonical string form.
+    Stored as ``NUMERIC(precision, scale)`` (default 18, 2) on PostgreSQL.
 
     Always binds and returns :class:`decimal.Decimal`. Unparseable
     values raise :class:`ValueError` at bind time so bad writes never
-    reach the DB.
+    reach the DB. The result-reader also tolerates a stored string for
+    rows migrated in from the old string-storage era.
     """
 
     impl = String(50)
@@ -66,22 +65,15 @@ class MoneyType(TypeDecorator):
         super().__init__(*args, **kwargs)
 
     def load_dialect_impl(self, dialect: Any) -> Any:
-        if dialect.name == "postgresql":
-            return dialect.type_descriptor(Numeric(self.precision, self.scale))
-        return dialect.type_descriptor(String(50))
+        return dialect.type_descriptor(Numeric(self.precision, self.scale))
 
-    def process_bind_param(self, value: Decimal | str | int | float | None, dialect: Any) -> Decimal | str | None:
+    def process_bind_param(self, value: Decimal | str | int | float | None, dialect: Any) -> Decimal | None:
         if value is None:
             return None
         try:
-            normalised = value if isinstance(value, Decimal) else Decimal(str(value))
+            return value if isinstance(value, Decimal) else Decimal(str(value))
         except (InvalidOperation, ValueError, TypeError) as exc:
             raise ValueError(f"MoneyType: cannot coerce {value!r} to Decimal") from exc
-
-        if dialect.name == "postgresql":
-            return normalised
-        # SQLite: canonical string form (no scientific notation, no trailing junk).
-        return format(normalised, "f")
 
     def process_result_value(self, value: Decimal | str | None, dialect: Any) -> Decimal | None:
         if value is None:
@@ -97,20 +89,19 @@ class MoneyType(TypeDecorator):
 class SafeDate(TypeDecorator):
     """‌⁠‍Calendar-date column (no time component, no timezone).
 
-    * PostgreSQL → ``DATE``.
-    * SQLite     → ``VARCHAR(20)`` holding an ISO-8601 date string.
+    Stored as ``DATE`` on PostgreSQL.
 
     Always returns :class:`datetime.date`. Accepts ``date``, ``datetime``,
-    or ISO-8601 strings (``"2026-04-19"`` / ``"2026-04-19T10:00:00"``).
+    or ISO-8601 strings (``"2026-04-19"`` / ``"2026-04-19T10:00:00"``). The
+    result-reader also tolerates a stored ISO string for rows migrated in
+    from the old string-storage era.
     """
 
     impl = String(20)
     cache_ok = True
 
     def load_dialect_impl(self, dialect: Any) -> Any:
-        if dialect.name == "postgresql":
-            return dialect.type_descriptor(Date())
-        return dialect.type_descriptor(String(20))
+        return dialect.type_descriptor(Date())
 
     @staticmethod
     def _to_date(value: date | datetime | str) -> date:
@@ -126,13 +117,10 @@ class SafeDate(TypeDecorator):
             return date.fromisoformat(head)
         raise ValueError(f"SafeDate: cannot coerce {value!r} to date")
 
-    def process_bind_param(self, value: date | datetime | str | None, dialect: Any) -> date | str | None:
+    def process_bind_param(self, value: date | datetime | str | None, dialect: Any) -> date | None:
         if value is None:
             return None
-        normalised = self._to_date(value)
-        if dialect.name == "postgresql":
-            return normalised
-        return normalised.isoformat()
+        return self._to_date(value)
 
     def process_result_value(self, value: date | str | None, dialect: Any) -> date | None:
         if value is None:

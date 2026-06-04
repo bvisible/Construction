@@ -10,8 +10,8 @@ from app.core.partner_pack.manifest import PartnerBranding, PartnerPackManifest
 
 MANIFEST = PartnerPackManifest(
     slug="batimatech-ca",
-    partner_name="batimatech",
-    partner_url="https://batimatech.ca",
+    partner_name="Batimatech",
+    partner_url="https://www.batimatech.com",
     pack_version="0.2.0",
     description=(
         "Pré-configuré pour les entreprises canadiennes de construction: "
@@ -46,11 +46,11 @@ MANIFEST = PartnerPackManifest(
     default_modules=[],   # empty = show all (Shape A, no module hiding)
     hidden_modules=[],
     branding=PartnerBranding(
-        primary_color="#BE1B2F",   # batimatech red
-        accent_color="#0F2C5F",    # Canadian navy
-        logo_path="logo.svg",
+        primary_color="#1C9BD7",  # batimatech cyan
+        accent_color="#1B3A5B",  # batimatech navy
+        logo_path="logo.png",
         favicon_path="favicon.ico",
-        powered_by_text=None,      # use default co-branding string
+        powered_by_text="Powered by OpenConstructionERP, in partnership with Batimatech",
     ),
     onboarding_script_path="onboarding.yaml",
     metadata={

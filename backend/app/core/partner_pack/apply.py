@@ -221,7 +221,7 @@ async def apply_pack(
             demo_id = PACK_DEMO_PROJECT.get(m.slug)
             if demo_id:
                 async with async_session_factory() as demo_session:
-                    demo_res = await install_demo_project(demo_session, demo_id)
+                    demo_res = await install_demo_project(demo_session, demo_id, partner_pack=m.slug)
                     await demo_session.commit()
                 effects["demo_project"] = {
                     "demo_id": demo_id,
@@ -262,11 +262,49 @@ async def apply_pack(
     }
 
 
+async def _untag_pack_projects(slug: str) -> int:
+    """Release every project scoped to ``slug`` back into the general pool.
+
+    Activation tags the pack's demo projects (and any project created while the
+    pack is active) with ``metadata_["partner_pack"] = slug`` so the workspace
+    shows only that pack's projects. Deactivation removes the tag so the
+    projects become visible again under the normal (un-scoped) listing. The
+    projects themselves are never deleted - only un-associated from the pack.
+
+    Runs in its own session and is fail-soft: a failure is logged and reported
+    as ``0`` untagged so it never aborts the rest of the un-apply.
+    """
+    try:
+        from sqlalchemy import select
+
+        from app.database import async_session_factory
+        from app.modules.projects.models import Project
+
+        untagged = 0
+        async with async_session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(Project).where(Project.metadata_["partner_pack"].as_string() == slug)
+                )
+            ).scalars().all()
+            for proj in rows:
+                md = dict(proj.metadata_ or {})
+                if md.pop("partner_pack", None) is not None:
+                    proj.metadata_ = md
+                    untagged += 1
+            if untagged:
+                await session.commit()
+        return untagged
+    except Exception as exc:  # noqa: BLE001 - un-tagging must never abort un-apply
+        logger.warning("Un-apply: could not untag projects for pack '%s': %s", slug, exc)
+        return 0
+
+
 async def unapply(*, app: FastAPI | None = None) -> dict[str, Any]:
-    """Reverse an apply: restore modules the apply disabled, drop co-branding."""
+    """Reverse an apply: restore modules, release scoped projects, drop co-branding."""
     state = load_applied_state()
     if not state:
-        return {"applied": False, "restored_modules": []}
+        return {"applied": False, "restored_modules": [], "untagged_projects": 0}
 
     restored: list[str] = []
     # Re-enable anything the apply disabled. We do NOT disable modules the apply
@@ -279,10 +317,18 @@ async def unapply(*, app: FastAPI | None = None) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Un-apply could not restore module '%s': %s", name, exc)
 
+    # Release the pack's scoped projects back to the general workspace.
+    untagged = await _untag_pack_projects(state.slug)
+
     clear_applied_state()
     reset_cache()
-    logger.info("Partner pack un-applied (was %s); restored %d module(s)", state.slug, len(restored))
-    return {"applied": False, "restored_modules": restored}
+    logger.info(
+        "Partner pack un-applied (was %s); restored %d module(s), untagged %d project(s)",
+        state.slug,
+        len(restored),
+        untagged,
+    )
+    return {"applied": False, "restored_modules": restored, "untagged_projects": untagged}
 
 
 def get_applied_info() -> dict[str, Any]:

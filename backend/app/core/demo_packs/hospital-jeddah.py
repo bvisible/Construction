@@ -344,6 +344,37 @@ TEMPLATE = DemoTemplate(
         ("Almabani General Contractors", "tenders@almabani.com.sa", 1.01),
         ("Drake & Scull International (KSA)", "bids@drakescull.com", 1.06),
     ],
+    tender_packages=[
+        (
+            "حزمة الأعمال الإنشائية والأساسات (Structure & Foundations Package)",
+            "Piled raft foundation, two-level basement, reinforced concrete superstructure frame.",
+            "evaluating",
+            [
+                ("El Seif Engineering Contracting", "tenders@elseif.com.sa", 0.98),
+                ("Saudi Binladin Group", "bids@sbg.com.sa", 1.05),
+                ("Almabani General Contractors", "tenders@almabani.com.sa", 1.01),
+            ],
+        ),
+        (
+            "حزمة الأعمال الميكانيكية والكهربائية والصحية (MEP & Medical Services Package)",
+            "HVAC, medical gases, electrical, plumbing, BMS and healthcare-specific services.",
+            "issued",
+            [
+                ("Drake & Scull International (KSA)", "bids@drakescull.com", 1.06),
+                ("Nesma & Partners Contracting", "estimation@nesma.com.sa", 1.02),
+                ("AMS Baeshen Contracting", "tenders@amscontracting.com.sa", 1.04),
+            ],
+        ),
+        (
+            "حزمة التشطيبات والواجهات (Finishes & Facade Package)",
+            "Internal finishes, specialist clinical finishes, curtain walling and external envelope.",
+            "draft",
+            [
+                ("Saudi Binladin Group", "bids@sbg.com.sa", 1.03),
+                ("Nesma & Partners Contracting", "estimation@nesma.com.sa", 1.00),
+            ],
+        ),
+    ],
     project_metadata={
         "address": "Haramain Expressway, Ash Shati District, Jeddah 23612, Saudi Arabia",
         "client": "Ministry of Health (MOH) - Jeddah Health Cluster",

@@ -17,6 +17,7 @@
     "sub": "ERP open-source per team edili — stime, programmi, gare d'appalto, contratti, attività di cantiere e reportistica in un'unica installazione. Costi e tempi restano allineati ai disegni e al BOQ che c'è dietro.",
     "cta_install": "Installa ora",
     "cta_star": "Metti una stella su GitHub",
+    "download_label": "Oppure scarica semplicemente l'app desktop gratuita - niente Python, niente Docker, niente da configurare:",
     "meta_selfhost": "Self-hosted",
     "mod_projects_title": "Progetti",
     "mod_projects_sub": "portfolio",

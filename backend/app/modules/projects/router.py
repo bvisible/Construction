@@ -1587,14 +1587,18 @@ async def dashboard_cards(
 
     from sqlalchemy import func, select
 
+    from app.core.partner_pack.scope import scope_project_query
     from app.modules.projects.models import Project
 
-    # Fetch all projects (admin sees all, regular user sees owned + member projects)
+    # Fetch all projects (admin sees all, regular user sees owned + member
+    # projects). When a partner pack is active, the workspace is scoped to that
+    # pack's projects only — applied to both branches so the dashboard counts
+    # match the (scoped) projects page.
     is_admin = payload.get("role") == "admin"
     if is_admin:
-        proj_result = await session.execute(
-            select(Project).where(Project.status != "archived").order_by(Project.updated_at.desc())
-        )
+        stmt = select(Project).where(Project.status != "archived")
+        stmt = scope_project_query(stmt, Project).order_by(Project.updated_at.desc())
+        proj_result = await session.execute(stmt)
     else:
         from app.modules.teams.access import member_project_ids_subquery
 
@@ -1602,14 +1606,12 @@ async def dashboard_cards(
             uid = uuid.UUID(user_id)
         except (ValueError, TypeError):
             return []
-        proj_result = await session.execute(
-            select(Project)
-            .where(
-                (Project.owner_id == uid) | (Project.id.in_(member_project_ids_subquery(uid))),
-                Project.status != "archived",
-            )
-            .order_by(Project.updated_at.desc())
+        stmt = select(Project).where(
+            (Project.owner_id == uid) | (Project.id.in_(member_project_ids_subquery(uid))),
+            Project.status != "archived",
         )
+        stmt = scope_project_query(stmt, Project).order_by(Project.updated_at.desc())
+        proj_result = await session.execute(stmt)
     all_projects = proj_result.scalars().all()
 
     if not all_projects:
@@ -1837,6 +1839,7 @@ async def analytics_overview(
     """
     from sqlalchemy import func, select
 
+    from app.core.partner_pack.scope import scope_project_query
     from app.core.sql_numeric import numeric_value
     from app.modules.boq.models import BOQ
     from app.modules.costmodel.models import BudgetLine
@@ -1844,8 +1847,9 @@ async def analytics_overview(
 
     is_admin = bool(payload and payload.get("role") == "admin")
 
-    # Per-project summary — owner + team-member projects for non-admins
-    proj_stmt = select(Project).order_by(Project.name)
+    # Per-project summary — owner + team-member projects for non-admins, scoped
+    # to the active partner pack's projects when one is active.
+    proj_stmt = scope_project_query(select(Project), Project).order_by(Project.name)
     if not is_admin:
         from app.modules.teams.access import member_project_ids_subquery
 

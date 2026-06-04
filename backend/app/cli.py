@@ -174,6 +174,9 @@ def print_startup_banner(
     print(f"  {bar}")
     print(f"  {bar}  {_dim('Stop'.ljust(11))} Ctrl+C")
     print(f"  {bar}  {_dim('Start again'.ljust(11))} {_amber('openconstructionerp')}")
+    print(
+        f"  {bar}  {_dim('or, anywhere'.ljust(11))} {_amber('python -m openconstructionerp')}  {_dim('(works without PATH)')}"
+    )
     print(f"  {bar}  {_dim('Data folder'.ljust(11))} {data_dir}")
     print(f"  {bar}  {_dim('Need help'.ljust(11))} {DOCS_URL}")
     print()
@@ -964,6 +967,9 @@ def print_welcome(*, next_command_hint: bool = True) -> None:
         print(f"  {bar}  {_bold('To start, run one command')}")
         print(f"  {bar}     {_amber('openconstructionerp')}")
         print(f"  {bar}  {_dim('It sets up the database, loads the demo and opens your browser.')}")
+        print(f"  {bar}")
+        print(f"  {bar}  {_dim('Command not found? This always works, no PATH needed:')}")
+        print(f"  {bar}     {_amber('python -m openconstructionerp')}")
     else:
         print(f"  {bar}  {_bold('Setting things up for you')}")
         print(f"  {bar}  {_dim('Creating the database and loading the demo. The server starts in a moment.')}")
@@ -980,7 +986,9 @@ def print_welcome(*, next_command_hint: bool = True) -> None:
     print(f"    {_dim('Community'.ljust(10))} {COMMUNITY_URL} {_dim('(Telegram)')}")
     print()
     if next_command_hint:
-        print(f"  {_dim('Tip: run')} {_amber('openconstructionerp')} {_dim('again any time to start the server.')}")
+        print(
+            f"  {_dim('Tip: run')} {_amber('openconstructionerp')} {_dim('(or')} {_amber('python -m openconstructionerp')}{_dim(') any time to start the server.')}"
+        )
         print()
 
 

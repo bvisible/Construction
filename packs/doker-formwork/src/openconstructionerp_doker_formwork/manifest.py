@@ -3,7 +3,7 @@
 Pre-configures OpenConstructionERP for formwork (Schalung) and
 concrete contractors operating in the DACH region. Activates DIN-, EN-,
 VOB/C- and DGUV-compliant validation rule packs, ships a curated
-catalogue of common Doka/Doker formwork systems with their DIN 18218
+catalogue of common Doka formwork systems with their DIN 18218
 classes and typical reuse counts, and replaces the default onboarding
 wizard with a 6-step Schalung flow that asks the questions a formwork
 contractor actually needs to answer (company size, project type,
@@ -12,8 +12,8 @@ BGB default).
 
 Cost regions:
     Berlin is the national index and is included by default. The pack
-    additionally enables München (Doker GmbH is HQ'd in Bavaria; most
-    DACH formwork inventories are dispatched from southern Germany) and
+    additionally enables München (most DACH formwork inventories are
+    dispatched from southern Germany / the Austrian border region) and
     Düsseldorf (NRW is the largest concrete-construction market by
     volume). Contractors can drop unused regions in the cost-DB UI.
 """
@@ -37,15 +37,15 @@ except (OSError, json.JSONDecodeError):
 
 MANIFEST = PartnerPackManifest(
     slug="doker-formwork",
-    partner_name="Doker",
-    partner_url="https://doker.com",
+    partner_name="Doka Formwork",
+    partner_url="https://www.doka.com",
     pack_version="0.2.0",
     description=(
         "Vorkonfiguriert für Schalungs- und Betonbau-Unternehmen in der DACH-Region: "
         "DIN 18218 Frischbetondruck, DIN EN 12812 Traggerüste, DIN EN 13670 Ausführung, "
         "DIN EN 206 Beton, VOB/C DIN 18331, DGUV 101-008 Arbeitssicherheit, "
         "Schalungszyklus-Qualität und -Ökonomie. Inklusive Katalog der gängigen "
-        "Doker-/Doka-Schalungssysteme (Frami Xlife, Framax Xlife plus, Alu-Star, "
+        "Doka-Schalungssysteme (Frami Xlife, Framax Xlife plus, Alu-Star, "
         "Dokaflex, RS Xlife, Xclimb 60, Staxo 100) mit Lastklassen und "
         "Nutzungshäufigkeiten."
     ),
@@ -71,11 +71,11 @@ MANIFEST = PartnerPackManifest(
     default_modules=[],
     hidden_modules=[],
     branding=PartnerBranding(
-        primary_color="#003D7A",
-        accent_color="#F58220",
-        logo_path="logo.svg",
+        primary_color="#004899",  # Doka blue
+        accent_color="#FEDC00",  # Doka yellow
+        logo_path="logo.png",
         favicon_path=None,
-        powered_by_text=None,
+        powered_by_text="Powered by OpenConstructionERP, in partnership with Doka Formwork",
     ),
     onboarding_script_path="onboarding.yaml",
     metadata={

@@ -296,6 +296,36 @@ TEMPLATE = DemoTemplate(
         ("Nesma & Partners Contracting", "bids@nesma.com.sa", 1.04),
         ("Almabani General Contractors", "estimation@almabani.com.sa", 1.01),
     ],
+    tender_packages=[
+        (
+            "حزمة الأعمال الإنشائية والأساسات (Structure & Substructure Package)",
+            "Foundations, basement parking, reinforced concrete frame and cores.",
+            "evaluating",
+            [
+                ("El Seif Engineering Contracting", "tenders@elseif.com.sa", 0.98),
+                ("Almabani General Contractors", "estimation@almabani.com.sa", 1.01),
+                ("Nesma & Partners Contracting", "bids@nesma.com.sa", 1.04),
+            ],
+        ),
+        (
+            "حزمة الواجهات والأظرفة (Facade & Envelope Package)",
+            "Curtain walling, unitised facade, cladding and roofing to the mixed-use envelope.",
+            "issued",
+            [
+                ("Folcra Beach Industrial (KSA)", "tenders@folcra.com", 1.05),
+                ("Permasteelisa Gulf", "bids@permasteelisagroup.com", 1.08),
+            ],
+        ),
+        (
+            "حزمة الميكانيكا والكهرباء والتشطيبات (MEP & Fit-out Package)",
+            "HVAC, electrical, plumbing, vertical transportation and tenant fit-out works.",
+            "draft",
+            [
+                ("Drake & Scull International (KSA)", "bids@drakescull.com", 1.03),
+                ("Nesma & Partners Contracting", "bids@nesma.com.sa", 1.00),
+            ],
+        ),
+    ],
     project_metadata={
         "address": "King Fahd Road, Al Olaya District, Riyadh 12214, Saudi Arabia",
         "client": "Al Waha Real Estate Development Co.",

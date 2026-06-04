@@ -36,6 +36,22 @@ export function getLanguageByCode(code: string): (typeof SUPPORTED_LANGUAGES)[nu
   return SUPPORTED_LANGUAGES.find((l) => l.code === code) ?? SUPPORTED_LANGUAGES[0]!;
 }
 
+/**
+ * Normalize a partner-pack ``default_locale`` to a supported UI language code.
+ *
+ * Pack manifests carry BCP-47 locales that often include a region subtag
+ * (batimatech-ca ships ``fr-CA`` for French Canada, uk-jct ships ``en-GB``).
+ * The UI ships base languages only, so we strip the region and lower-case
+ * (``fr-CA`` -> ``fr``), then validate against ``SUPPORTED_LANGUAGES``.
+ * Returns ``'en'`` for any locale we do not ship, so a pack can never force the
+ * app into an unsupported language.
+ */
+export function normalizePackLocale(locale: string | null | undefined): string {
+  if (!locale) return 'en';
+  const base = locale.split('-')[0]!.trim().toLowerCase();
+  return SUPPORTED_LANGUAGES.some((l) => l.code === base) ? base : 'en';
+}
+
 // Re-export useTranslation for convenience
 export const useTranslation = useI18nTranslation;
 

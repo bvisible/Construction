@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, memo } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -32,6 +32,7 @@ import { Card, CardHeader, CardContent, Button, Badge, EmptyState, Skeleton, Bre
 import { PlanningCrossLinks } from '@/features/schedule/PlanningCrossLinks';
 import { apiGet, apiPost, apiPatch } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
+import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import {
   costModelApi,
   type SCurvePoint,
@@ -734,14 +735,29 @@ const EVMDashboard = memo(function EVMDashboard({
   evm,
   currency,
   isLoading,
+  live = false,
 }: {
   evm: EVMData | undefined;
   currency: string;
   isLoading: boolean;
+  live?: boolean;
 }) {
   const { t } = useTranslation();
 
   const evmTooltip = t('costmodel.evm_tooltip', { defaultValue: 'Earned Value Management compares planned vs actual cost and schedule performance' });
+  const liveTooltip = t('costmodel.evm_live_tooltip', { defaultValue: 'Live - these figures refresh automatically when cost, schedule progress or finance data changes' });
+  const livePill = live ? (
+    <span
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-semantic-success/10 px-2 py-0.5 text-[11px] font-medium text-semantic-success"
+      title={liveTooltip}
+    >
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-semantic-success opacity-75" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-semantic-success" />
+      </span>
+      {t('costmodel.evm_live', { defaultValue: 'Live' })}
+    </span>
+  ) : null;
 
   if (isLoading) {
     return (
@@ -781,6 +797,7 @@ const EVMDashboard = memo(function EVMDashboard({
             <Activity size={14} className="text-content-tertiary" />
           </span>
         </h3>
+        {livePill}
       </div>
       <CardContent>
         <div className="space-y-5">
@@ -1902,6 +1919,29 @@ function FiveDDashboard({ project }: { project: Project }) {
     retry: false,
   });
 
+  // Live KPI freshness: poll a cheap watermark; when an upstream change (cost,
+  // schedule progress, finance, contracts) advances it, refetch the live EVM /
+  // dashboard figures so the numbers stay current without a manual reload.
+  const { data: kpiFreshness } = useQuery({
+    queryKey: ['kpi-freshness', project.id],
+    queryFn: () =>
+      apiGet<{ invalidated_at: string | null; server_started_at: string }>(
+        `/v1/bi-dashboards/kpi-freshness?project_id=${project.id}`,
+      ),
+    refetchInterval: 20000,
+    retry: false,
+  });
+  const lastFreshnessRef = useRef<string | null>(null);
+  useEffect(() => {
+    const inv = kpiFreshness?.invalidated_at ?? null;
+    if (inv && lastFreshnessRef.current !== null && inv !== lastFreshnessRef.current) {
+      queryClient.invalidateQueries({ queryKey: ['costmodel', 'evm', project.id] });
+      queryClient.invalidateQueries({ queryKey: ['costmodel', 'dashboard', project.id] });
+      queryClient.invalidateQueries({ queryKey: ['costmodel', 's-curve', project.id] });
+    }
+    if (inv) lastFreshnessRef.current = inv;
+  }, [kpiFreshness?.invalidated_at, project.id, queryClient]);
+
   const { data: boqs } = useQuery({
     queryKey: ['boqs', project.id],
     queryFn: () => apiGet<BOQ[]>(`/v1/boq/boqs/?project_id=${project.id}`),
@@ -2173,7 +2213,7 @@ function FiveDDashboard({ project }: { project: Project }) {
 
       {/* Earned Value Analysis */}
       {evmData && evmData.bac > 0 && evmData.spi > 0 ? (
-        <EVMDashboard evm={evmData} currency={currency} isLoading={evmLoading} />
+        <EVMDashboard evm={evmData} currency={currency} isLoading={evmLoading} live={!!kpiFreshness} />
       ) : hasBudget ? (
         <Card>
           <div className="flex items-start justify-between gap-4">
@@ -2430,6 +2470,10 @@ const ProjectCard = memo(function ProjectCard({
 export function CostModelPage() {
   const { t } = useTranslation();
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  // The user can explicitly return to the picker; once they do we stop
+  // auto-jumping to the active project for the rest of the visit.
+  const [showPicker, setShowPicker] = useState(false);
+  const activeProjectId = useProjectContextStore((s) => s.activeProjectId);
 
   const { data: projects, isLoading } = useQuery({
     queryKey: ['projects'],
@@ -2437,18 +2481,27 @@ export function CostModelPage() {
     staleTime: 5 * 60_000,
   });
 
-  // Auto-select if there's only one project
-  const effectiveProjectId = useMemo(
-    () => selectedProjectId ?? (projects?.length === 1 ? projects[0]!.id : null),
-    [selectedProjectId, projects],
-  );
+  // Open straight into a project rather than forcing a second pick: an explicit
+  // selection wins, otherwise default to the globally active project when it is
+  // in the list, otherwise to the only project if there is just one.
+  const effectiveProjectId = useMemo(() => {
+    if (selectedProjectId) return selectedProjectId;
+    if (showPicker) return null;
+    if (activeProjectId && projects?.some((p) => p.id === activeProjectId)) {
+      return activeProjectId;
+    }
+    return projects?.length === 1 ? projects[0]!.id : null;
+  }, [selectedProjectId, showPicker, activeProjectId, projects]);
 
   const selectedProject = useMemo(
     () => (effectiveProjectId ? projects?.find((p) => p.id === effectiveProjectId) : null),
     [effectiveProjectId, projects],
   );
 
-  const handleBack = useCallback(() => setSelectedProjectId(null), []);
+  const handleBack = useCallback(() => {
+    setSelectedProjectId(null);
+    setShowPicker(true);
+  }, []);
 
   // Feature cards for the empty/intro state
   const featureCards = useMemo(

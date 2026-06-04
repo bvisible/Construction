@@ -20,6 +20,7 @@
  */
 
 import * as THREE from 'three';
+import { uuid } from '@/shared/lib/browser';
 
 const SNAP_PX = 8;
 
@@ -53,10 +54,7 @@ interface DrawnMeasurement {
 }
 
 function uid(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return `meas_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return uuid();
 }
 
 function formatDistance(metres: number): string {

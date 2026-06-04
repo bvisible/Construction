@@ -160,9 +160,11 @@ class PurchaseOrderRepository:
         Uses the NUMERIC MAX of the existing PO suffixes (not a lexicographic
         string MAX) to avoid race conditions where COUNT-based generation would
         produce duplicates under concurrency, and to keep ordering correct past
-        PO-999 (a string MAX ranks 'PO-999' above 'PO-1000'). The suffix after
-        the ``PO-`` prefix (4th char onward) is cast to an integer before MAX,
-        which is dialect-safe on both embedded PostgreSQL and SQLite.
+        PO-999 (a string MAX ranks 'PO-999' above 'PO-1000'). Only canonical
+        ``PO-<digits>`` rows are cast: a plain ``LIKE 'PO-%'`` filter still
+        admits ``PO-`` or ``PO-DRAFT`` rows whose suffix PostgreSQL refuses to
+        cast (``invalid input syntax for type integer``), so the numeric regex
+        filter is required for correctness, not cosmetic.
         """
         from sqlalchemy import Integer as SAInteger
         from sqlalchemy import cast
@@ -180,7 +182,7 @@ class PurchaseOrderRepository:
             )
         ).where(
             PurchaseOrder.project_id == project_id,
-            PurchaseOrder.po_number.like("PO-%"),
+            PurchaseOrder.po_number.regexp_match("^PO-[0-9]+$"),
         )
         max_suffix = (await self.session.execute(stmt)).scalar_one()
         return f"PO-{max_suffix + 1:03d}"

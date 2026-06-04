@@ -73,22 +73,27 @@ class MeetingRepository:
         return items, total
 
     async def next_meeting_number(self, project_id: uuid.UUID) -> str:
-        """Generate the next meeting number using MAX to avoid duplicates."""
+        """Generate the next ``MTG-NNN`` number using MAX to avoid duplicates.
+
+        Only canonical ``MTG-<digits>`` rows are cast: PostgreSQL rejects an
+        empty or non-numeric integer cast (unlike SQLite, which yielded 0), so
+        one legacy or externally-numbered row would otherwise raise on every
+        new meeting for the project.
+        """
         from sqlalchemy import Integer as SAInteger
         from sqlalchemy import cast
         from sqlalchemy.sql import func as sqlfunc
 
-        stmt = select(
-            sqlfunc.coalesce(
-                sqlfunc.max(
-                    cast(
-                        func.substr(Meeting.meeting_number, 5),
-                        SAInteger,
-                    )
-                ),
-                0,
+        stmt = (
+            select(
+                sqlfunc.coalesce(
+                    sqlfunc.max(cast(func.substr(Meeting.meeting_number, 5), SAInteger)),
+                    0,
+                )
             )
-        ).where(Meeting.project_id == project_id)
+            .where(Meeting.project_id == project_id)
+            .where(Meeting.meeting_number.regexp_match("^MTG-[0-9]+$"))
+        )
         max_num = (await self.session.execute(stmt)).scalar_one()
         return f"MTG-{max_num + 1:03d}"
 

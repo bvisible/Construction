@@ -228,6 +228,20 @@ class ProjectService:
             default_vat_rate=data.default_vat_rate,
             custom_units=list(data.custom_units or []),
         )
+
+        # When a partner pack is active, tag the new project with its slug so it
+        # stays visible in the pack's scoped project list (a pack hides every
+        # untagged project). Deactivating the pack untags it again. Fail-soft:
+        # a pack-lookup error never blocks project creation.
+        try:
+            from app.core.partner_pack.discovery import get_active_pack
+
+            _pack = get_active_pack()
+            if _pack is not None:
+                project.metadata_ = {**(project.metadata_ or {}), "partner_pack": _pack.slug}
+        except Exception:  # noqa: BLE001 - creation must never break on pack lookup
+            pass
+
         try:
             project = await self.repo.create(project)
         except Exception:

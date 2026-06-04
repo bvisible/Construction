@@ -56,9 +56,7 @@ def test_pool_kwargs_assigned_at_function_scope() -> None:
         "create_engine_from_settings, never inside a dialect branch, so the "
         "pool never falls back to the SQLAlchemy default of size=5+10."
     )
-    assert max_overflow_assigned_at_top_level, (
-        "kwargs['max_overflow'] must be assigned at the top level too."
-    )
+    assert max_overflow_assigned_at_top_level, "kwargs['max_overflow'] must be assigned at the top level too."
 
 
 def test_database_settings_have_pool_fields() -> None:

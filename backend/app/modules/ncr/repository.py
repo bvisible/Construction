@@ -43,22 +43,30 @@ class NCRRepository:
         return list(result.scalars().all()), total
 
     async def next_ncr_number(self, project_id: uuid.UUID) -> str:
-        """‌⁠‍Generate the next NCR number using MAX to avoid duplicates."""
+        """‌⁠‍Generate the next ``NCR-NNN`` number using MAX to avoid duplicates.
+
+        Only rows whose number matches the canonical ``NCR-<digits>`` shape are
+        considered. PostgreSQL casts an empty or non-numeric string to integer
+        strictly (``invalid input syntax for type integer``), unlike SQLite
+        which silently yielded 0, so the regex filter is required for
+        correctness, not cosmetic: one legacy or externally-numbered row (e.g.
+        ``"901"`` from a cross-module bridge) would otherwise raise on every new
+        NCR for that project.
+        """
         from sqlalchemy import Integer as SAInteger
         from sqlalchemy import cast
         from sqlalchemy.sql import func as sqlfunc
 
-        stmt = select(
-            sqlfunc.coalesce(
-                sqlfunc.max(
-                    cast(
-                        func.substr(NCR.ncr_number, 5),
-                        SAInteger,
-                    )
-                ),
-                0,
+        stmt = (
+            select(
+                sqlfunc.coalesce(
+                    sqlfunc.max(cast(func.substr(NCR.ncr_number, 5), SAInteger)),
+                    0,
+                )
             )
-        ).where(NCR.project_id == project_id)
+            .where(NCR.project_id == project_id)
+            .where(NCR.ncr_number.regexp_match("^NCR-[0-9]+$"))
+        )
         max_num = (await self.session.execute(stmt)).scalar_one()
         return f"NCR-{max_num + 1:03d}"
 

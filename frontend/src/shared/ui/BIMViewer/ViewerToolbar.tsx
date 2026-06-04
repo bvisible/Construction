@@ -20,6 +20,7 @@ import { Crop, Move3d, Ruler, RotateCcw, Copy, X } from 'lucide-react';
 import type { SectionBox } from './SectionBox';
 import type { WalkMode } from './WalkMode';
 import type { MeasureTool, Measurement } from './MeasureTool';
+import { copyToClipboard } from '@/shared/lib/browser';
 
 export type ActiveViewerTool = 'section' | 'walk' | 'measure' | null;
 
@@ -184,14 +185,7 @@ export function ViewerToolbar({
       lastMeasurement.distance >= 1
         ? `${lastMeasurement.distance.toFixed(3)} m`
         : `${(lastMeasurement.distance * 1000).toFixed(0)} mm`;
-    try {
-      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value);
-      }
-    } catch {
-      // Clipboard may be denied (insecure context / permission). Silently
-      // fall through — the value stays visible in the panel.
-    }
+    await copyToClipboard(value);
     setCopiedFlash(true);
     window.setTimeout(() => setCopiedFlash(false), 1200);
   }, [lastMeasurement]);

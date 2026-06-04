@@ -5,6 +5,31 @@ All notable changes to OpenConstructionERP are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.7.0] - 2026-06-03
+
+### Added
+
+- A simple builder on the AI Agents page. Alongside more ready-made agents, you can now create your own from the screen: give it a name and a short description, pick the tools it may use and write its instructions, with no code involved. Your agents are saved to your account and run next to the built-in ones.
+- Activating a partner pack now narrows the whole workspace to that client. Only the pack's projects appear across the projects page, the dashboard and the rollup widgets, and the interface switches to the pack's language, so an operator running a single-client install sees a clean, localised workspace. The Batimatech pack, for example, comes up in French. Deactivating the pack reverses all of it, shown step by step with a progress bar: the projects are released back into the full list and the language returns to English.
+
+### Changed
+
+- All 27 interface languages are now fully translated. The pass focused on the dashboard and the project screens, where some English words were still showing through, and went over every module so the app reads naturally in each language.
+- The example projects are filled out across every module. Each demo now arrives with a real Revit, IFC and DWG model and a PDF plan set attached, so the BIM viewer, the quantity takeoff and the reports all have real content to work with, and validation runs at install time and stores a report against the bill of quantities.
+- Partner packs ship the real company logos for Doka Formwork, Batimatech and BIM-Cluster Hessen, and each pack installs cleanly together with its catalogue and demo data. The Batimatech pack now defaults to French and loads the Canadian CWICR cost database for Toronto through the DDC parser.
+- Every partner pack now installs two demo projects instead of one. The cross-region packs that had no in-country second demo (Australia, modular and prefab, renewables EPC) now ship a sensible second project in the same currency and standards.
+
+### Fixed
+
+- Generated PDF documents now render correctly in Cyrillic and other non-Latin alphabets. The contracts, receipts, certificates, invoices and reports used a font limited to Western European characters, so Russian, Bulgarian and Ukrainian text came out as empty boxes. The documents now use a bundled Unicode font that covers those scripts.
+- The desktop installers for Windows, macOS and Linux now bundle the embedded PostgreSQL engine, so the app starts on a fresh machine with no separate database setup. The earlier builds shipped without the database binaries and could not start.
+- Hardened several areas after a code audit. A backup restore that fails part way through now rolls back instead of leaving the database half cleared, change-order totals no longer double count on a retried request, the cost-import path no longer runs one query per row, and a handful of endpoints that were missing a permission check now enforce one.
+- Validation no longer fails when it runs straight after a demo is installed. It was reaching for a related collection that the async database session had not loaded yet, so the run could error before producing a report. It now reads the positions with an explicit query and produces the report every time.
+- Reinstalling a demo project no longer stops on a duplicate resource code. The seeding step clears the demo's own resource rows by code before inserting them again, so a forced reinstall completes cleanly.
+- The cost database import and the catalogue picker no longer fail with a server error. Importing the Germany and DACH cost database and adding items from the catalogue both work again.
+- CAD conversion works on a headless Linux server. The DWG, Revit and IFC importers and the drawing-to-PDF export now point the bundled DDC cad2data converter at its own libraries when they run, which a no-root install keeps outside the system path. Before this an upload could report that the converter was installed and then fail on the server with nothing useful in the log. Windows and macOS were not affected.
+- The assemblies editor shows every Cost Drivers category again when you enter prices, rather than only the first group that matched.
+
 ## [6.6.0] - 2026-06-02
 
 ### Changed

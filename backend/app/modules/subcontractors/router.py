@@ -37,6 +37,7 @@ from app.modules.subcontractors.schemas import (
     AgreementCreate,
     AgreementResponse,
     AgreementUpdate,
+    AwardEligibility,
     BlockRequest,
     CertificateCreate,
     CertificateResponse,
@@ -48,6 +49,7 @@ from app.modules.subcontractors.schemas import (
     PaymentApplicationCreate,
     PaymentApplicationResponse,
     PaymentApplicationUpdate,
+    PaymentReleaseCheck,
     PrequalificationCreate,
     PrequalificationResponse,
     PrequalificationUpdate,
@@ -219,6 +221,30 @@ async def subcontractor_dashboard(
     """Return aggregated stats for a single subcontractor."""
     svc = SubcontractorService(session)
     return await svc.dashboard(sub_id)
+
+
+@router.get(
+    "/subcontractors/{sub_id}/award-eligibility",
+    response_model=AwardEligibility,
+)
+async def subcontractor_award_eligibility(
+    sub_id: uuid.UUID,
+    session: SessionDep,
+    _user: CurrentUserId,
+    _perm: None = Depends(RequirePermission("subcontractors.read")),
+) -> AwardEligibility:
+    """Report whether a subcontractor may be awarded live work (TOP-30 #20).
+
+    Lets the UI show a prequalification banner before anyone tries to activate
+    an agreement, instead of only learning about the block on a 409.
+    """
+    svc = SubcontractorService(session)
+    result = await svc.subcontractor_award_eligibility(sub_id)
+    return AwardEligibility(
+        subcontractor_id=sub_id,
+        awardable=not result.blocked,
+        reasons=result.reasons,
+    )
 
 
 # ── Contacts ───────────────────────────────────────────────────────────
@@ -685,6 +711,32 @@ async def mark_payment_paid(
     await _verify_payment_application_project(payment_id, user_id, session, svc)
     entity = await svc.mark_paid(payment_id)
     return PaymentApplicationResponse.model_validate(entity)
+
+
+@router.get(
+    "/payment-applications/{payment_id}/release-check",
+    response_model=PaymentReleaseCheck,
+)
+async def payment_release_check(
+    payment_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    _perm: None = Depends(RequirePermission("subcontractors.read")),
+) -> PaymentReleaseCheck:
+    """Report the lien-waiver release gate for a payment application.
+
+    Lets the approval UI show a waiver badge and disable approve/pay before the
+    user clicks, instead of only learning about the block on a 409.
+    """
+    svc = SubcontractorService(session)
+    await _verify_payment_application_project(payment_id, user_id, session, svc)
+    required, result = await svc.lien_waiver_status(payment_id)
+    return PaymentReleaseCheck(
+        payment_application_id=payment_id,
+        waiver_required=required,
+        blocked=result.blocked,
+        reasons=result.reasons,
+    )
 
 
 @router.post(

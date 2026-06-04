@@ -43,6 +43,10 @@ MANIFEST = PartnerPackManifest(
     ],
     default_modules=[],   # empty = show all (Shape A, no module hiding)
     hidden_modules=[],
+    # Two Australian (AUD, NCC 2022 / AS-standards) demos so the pack always
+    # lands two in-market projects: the Sydney mixed-use flagship plus the
+    # Melbourne hyperscale data centre (major AU industrial / infrastructure).
+    demo_template_ids=["mixed-use-sydney", "data-center-melbourne"],
     branding=PartnerBranding(
         primary_color="#00843D",   # Australian green (Wattle/Gold pair)
         accent_color="#FFCD00",    # Australian gold

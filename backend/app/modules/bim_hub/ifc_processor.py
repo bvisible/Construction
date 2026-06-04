@@ -329,6 +329,7 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
     try:
         from app.modules.boq.cad_import import (
             ConverterUnavailableError,
+            _converter_subprocess_env,
             detect_converter_capabilities,
             ensure_converter,
             parse_cad_excel,
@@ -505,6 +506,10 @@ def _try_cad2data(ifc_path: Path, output_dir: Path, *, conversion_depth: str = "
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     cwd=str(converter.parent),
+                    # On Linux the no-root .deb-extracted converter needs
+                    # LD_LIBRARY_PATH pointing at its bundled DDC cad2data SDK
+                    # .so files; returns None (inherit) on Windows/macOS.
+                    env=_converter_subprocess_env(converter),
                     input=b"\n",
                     timeout=600,
                 )

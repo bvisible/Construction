@@ -81,6 +81,11 @@ export interface CategoryMeta {
 }
 
 const CATEGORY_META: Record<string, CategoryMeta> = {
+  my_agents: {
+    icon: Sparkles,
+    label: 'Your agents',
+    chip: 'bg-oe-blue text-content-inverse',
+  },
   estimating: {
     icon: Calculator,
     label: 'Estimating',
@@ -106,6 +111,11 @@ const CATEGORY_META: Record<string, CategoryMeta> = {
     label: 'Classification',
     chip: 'bg-oe-blue-subtle text-oe-blue-text',
   },
+  planning: {
+    icon: TrendingUp,
+    label: 'Planning',
+    chip: 'bg-semantic-info-bg text-semantic-info',
+  },
   general: {
     icon: Sparkles,
     label: 'General',
@@ -129,11 +139,13 @@ export function resolveCategoryMeta(category?: string | null): CategoryMeta {
 
 /** Stable display order for category sections; unknowns sort to the end. */
 const CATEGORY_ORDER = [
+  'my_agents',
   'estimating',
   'classification',
   'quality',
   'documents',
   'analytics',
+  'planning',
   'general',
 ];
 

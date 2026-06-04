@@ -31,6 +31,7 @@ import {
 } from 'lucide-react';
 import { APP_VERSION } from '@/shared/lib/version';
 import { apiPost, ApiError } from '@/shared/lib/api';
+import { copyToClipboard } from '@/shared/lib/browser';
 
 /* ── One-click upgrade — runs `pip install --upgrade` server-side ──── */
 
@@ -530,7 +531,7 @@ function UpdateFullModal({
 
   const copy = useCallback(async (key: string, text: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await copyToClipboard(text);
       setCopiedKey(key);
       setTimeout(() => setCopiedKey(null), 1500);
     } catch {

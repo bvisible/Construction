@@ -1673,7 +1673,7 @@ async def _generate_pdf_in_background(
 
     converter_ext = ext.lstrip(".").lower()
     try:
-        from app.modules.boq.cad_import import find_converter
+        from app.modules.boq.cad_import import _converter_subprocess_env, find_converter
     except ImportError:
         logger.warning("PDF generation skipped — cad_import not available")
         return
@@ -1702,6 +1702,9 @@ async def _generate_pdf_in_background(
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     cwd=str(converter.parent),
+                    # Linux no-root converter needs its bundled DDC SDK libs on
+                    # LD_LIBRARY_PATH; None (inherit) on Windows/macOS.
+                    env=_converter_subprocess_env(converter),
                     input=b"\n",
                     timeout=900,
                 )

@@ -364,6 +364,62 @@ class ConflictDetail(BaseModel):
     total_allocation_percent: int | None = None
 
 
+# ── Portfolio capacity planning ─────────────────────────────────────────
+
+
+class PortfolioBucket(BaseModel):
+    """A time bucket on the portfolio capacity heatmap."""
+
+    index: int
+    start: datetime
+    end: datetime
+    label: str
+
+
+class PortfolioCellProject(BaseModel):
+    """Per-project share of a resource's allocation inside one bucket."""
+
+    project_id: UUID | None = None
+    project_name: str
+    allocation_percent: int
+
+
+class PortfolioCell(BaseModel):
+    """One resource × one bucket: total allocation + per-project breakdown."""
+
+    bucket_index: int
+    allocation_percent: int
+    over_allocated: bool = False
+    cross_project: bool = False
+    projects: list[PortfolioCellProject] = Field(default_factory=list)
+
+
+class PortfolioResourceRow(BaseModel):
+    """A resource row across all buckets in the heatmap."""
+
+    resource_id: UUID
+    code: str
+    name: str
+    resource_type: str
+    is_floating: bool
+    peak_allocation_percent: int
+    has_conflict: bool
+    cells: list[PortfolioCell] = Field(default_factory=list)
+
+
+class PortfolioCapacityResponse(BaseModel):
+    """Org-wide resource utilization heatmap for capacity planning."""
+
+    start: datetime
+    end: datetime
+    bucket: str
+    buckets: list[PortfolioBucket]
+    resources: list[PortfolioResourceRow]
+    total_resources: int
+    floating_resources: int
+    conflict_resources: int
+
+
 # ── ResourceRequest ─────────────────────────────────────────────────────
 
 

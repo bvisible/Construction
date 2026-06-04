@@ -8,8 +8,9 @@ Stateless service layer. Handles:
 """
 
 import logging
+import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from fastapi import HTTPException, status
@@ -115,6 +116,328 @@ VALID_TRANSITIONS: dict[str, list[str]] = {
     "rejected": ["draft"],
     "executed": [],
 }
+
+
+# ── What-If impact simulator (TOP-30 #11) ────────────────────────────────────
+
+
+def _index(value: Decimal) -> str:
+    """Format an EVM performance index to 4 dp, trailing zeros trimmed."""
+    q = value.quantize(Decimal("0.0001")).normalize()
+    # ``normalize()`` can yield scientific notation for whole numbers
+    # (e.g. Decimal('1E+0')); render plainly so the wire value is "1".
+    return format(q, "f")
+
+
+def _parse_iso_date(raw: str | None) -> datetime | None:
+    """Best-effort parse of an ISO date / datetime string. Never raises."""
+    if not raw:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    # Accept a trailing Z and date-only forms.
+    candidate = text.replace("Z", "+00:00")
+    for attempt in (candidate, candidate[:10]):
+        try:
+            return datetime.fromisoformat(attempt)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _compute_impact_projection(
+    *,
+    bac: Decimal,
+    ev: Decimal,
+    ac: Decimal,
+    pv: Decimal,
+    co_cost_base: Decimal,
+    schedule_days: int,
+    planned_end: str | None,
+    item_count: int,
+    target_boq_name: str | None,
+) -> dict:
+    """Deterministically project the cost / schedule / EVM / BOQ effect of a CO.
+
+    Pure function (no DB, no I/O) so it is unit-testable in isolation. Every
+    money figure is in the project base currency; the caller FX-converts the
+    CO's native cost before passing ``co_cost_base``. The EVM formulas mirror
+    ``finance.create_evm_snapshot`` exactly so a simulated forecast lines up
+    with the snapshot the project would actually record once the CO lands.
+    """
+    zero = Decimal("0")
+    spi = (ev / pv) if pv != 0 else zero
+    cpi = (ev / ac) if ac != 0 else zero
+
+    def _eac(bac_v: Decimal) -> Decimal:
+        # CPI-based forecast; falls back to AC + remaining BAC when CPI == 0.
+        if cpi != 0:
+            return ac + (bac_v - ev) / cpi
+        return ac + (bac_v - ev)
+
+    bac_after = bac + co_cost_base
+    eac_before = _eac(bac).quantize(_CENTS)
+    eac_after = _eac(bac_after).quantize(_CENTS)
+    vac_before = (bac - eac_before).quantize(_CENTS)
+    vac_after = (bac_after - eac_after).quantize(_CENTS)
+
+    pct = float((co_cost_base / bac * 100).quantize(_CENTS)) if bac > 0 else 0.0
+
+    current_end: str | None = None
+    projected_end: str | None = None
+    parsed_end = _parse_iso_date(planned_end)
+    if parsed_end is not None:
+        current_end = parsed_end.date().isoformat()
+        projected_end = (parsed_end + timedelta(days=schedule_days)).date().isoformat()
+
+    return {
+        "cost": {
+            "budget_before": str(_round2(bac)),
+            "budget_after": str(_round2(bac_after)),
+            "delta": str(_round2(co_cost_base)),
+            "pct_of_budget": pct,
+        },
+        "schedule": {
+            "current_end_date": current_end,
+            "projected_end_date": projected_end,
+            "days_added": schedule_days,
+            "finish_moves": schedule_days > 0,
+        },
+        "evm": {
+            "bac_before": str(_round2(bac)),
+            "bac_after": str(_round2(bac_after)),
+            "eac_before": str(eac_before),
+            "eac_after": str(eac_after),
+            "vac_before": str(vac_before),
+            "vac_after": str(vac_after),
+            "spi": _index(spi),
+            "cpi": _index(cpi),
+        },
+        "boq": {
+            "item_count": item_count,
+            "sections_added": 1 if item_count > 0 else 0,
+            "positions_added": item_count,
+            "target_boq_name": target_boq_name,
+        },
+    }
+
+
+# ── AI / heuristic change-order draft (TOP-30 #11) ───────────────────────────
+
+# Currency tokens we recognise next to a number when guessing a cost offline.
+_CCY_HINT = r"(?:[$€£]|USD|EUR|GBP|CAD|AUD|CHF|SEK|NOK|DKK|PLN|BRL|INR|AED|SAR|TRY)"
+# A money-looking number, optional thousands separators, optional k/m suffix.
+_NUM = r"\d[\d.,\s]*"
+_MONEY_RE = re.compile(
+    rf"(?:{_CCY_HINT}\s*({_NUM})\s*([kKmM])?)"  # $15,000 / USD 15k
+    rf"|(?:({_NUM})\s*([kKmM])\b)"  # 15k
+    rf"|(?:({_NUM})\s*([kKmM])?\s*{_CCY_HINT})",  # 15,000 CAD / 15k EUR
+    re.IGNORECASE,
+)
+_DAYS_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*[-\s]?\s*(?:calendar|working|business|extra)?\s*days?\b",
+    re.IGNORECASE,
+)
+_DRAFT_SYSTEM = (
+    "You are a senior quantity surveyor drafting a construction change order "
+    "(variation) from raw site notes. Reply ONLY with a JSON object. Be "
+    "conservative: never invent figures the text does not support."
+)
+
+
+def _parse_amount_token(token: str, suffix: str | None) -> Decimal:
+    """Turn a matched numeric token (+ optional k/m) into a Decimal.
+
+    Handles the common ``15,000`` / ``15.000`` / ``15 000`` / ``15k`` forms.
+    Thousands separators are stripped; a trailing 1-2 digit group after the
+    final separator is treated as a decimal fraction. Degrades to 0 on garbage.
+    """
+    raw = (token or "").strip()
+    if not raw:
+        return Decimal("0")
+    raw = raw.replace(" ", "")
+    # Decide whether the last '.'/',' is a decimal point (<=2 trailing digits
+    # and only one such separator) or a thousands separator.
+    last_sep = max(raw.rfind(","), raw.rfind("."))
+    decimal_part = ""
+    if last_sep != -1:
+        tail = raw[last_sep + 1 :]
+        if 1 <= len(tail) <= 2 and tail.isdigit() and raw.count(raw[last_sep]) == 1:
+            decimal_part = "." + tail
+            raw = raw[:last_sep]
+    digits = re.sub(r"[^\d]", "", raw)
+    if not digits:
+        return Decimal("0")
+    try:
+        value = Decimal(digits + decimal_part)
+    except InvalidOperation:
+        return Decimal("0")
+    mult = {"k": Decimal("1000"), "m": Decimal("1000000")}.get((suffix or "").lower())
+    if mult is not None:
+        value *= mult
+    return value
+
+
+def _heuristic_money(text: str) -> Decimal:
+    """Largest money-looking amount in the text, or 0 if none is found."""
+    best = Decimal("0")
+    for m in _MONEY_RE.finditer(text or ""):
+        token = m.group(1) or m.group(3) or m.group(5)
+        suffix = m.group(2) or m.group(4) or m.group(6)
+        value = _parse_amount_token(token, suffix)
+        if value > best:
+            best = value
+    return best
+
+
+def _heuristic_days(text: str) -> int:
+    """First plausible day-count in the text (0-3650), else 0."""
+    for m in _DAYS_RE.finditer(text or ""):
+        try:
+            days = int(round(float(m.group(1))))
+        except (ValueError, TypeError):
+            continue
+        if 0 <= days <= 3650:
+            return days
+    return 0
+
+
+def _draft_title(text: str) -> str:
+    """Derive a short title from the first meaningful line / sentence."""
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return "Change order"
+    first_line = cleaned.splitlines()[0].strip()
+    snippet = re.split(r"(?<=[.!?])\s", first_line)[0].strip() or first_line
+    return snippet[:120] or "Change order"
+
+
+def _heuristic_draft(
+    text: str,
+    currency: str,
+    source_kind: str,
+    source_id: uuid.UUID | None,
+) -> dict:
+    """Deterministic offline draft when no AI provider key is configured.
+
+    Reads the obvious cost / schedule signals out of the source text so the
+    feature still produces a usable, clearly-labelled draft with low confidence
+    rather than failing when the platform has no LLM key.
+    """
+    amount = _heuristic_money(text)
+    days = _heuristic_days(text)
+    title = _draft_title(text)
+    has_signal = amount > 0 or days > 0
+    confidence = 45 if has_signal else 20
+    lines: list[dict] = []
+    if amount > 0:
+        lines.append(
+            {
+                "description": title,
+                "unit": "lsum",
+                "quantity": "1",
+                "rate": str(_round2(amount)),
+                "cost_delta": str(_round2(amount)),
+                "confidence": confidence,
+            }
+        )
+    return {
+        "title": title,
+        "description": (text or "").strip()[:5000],
+        "reason_category": "unforeseen" if source_kind == "daily_log" else "client_request",
+        "cost_impact": str(_round2(amount)),
+        "schedule_impact_days": days,
+        "currency": currency,
+        "lines": lines,
+        "confidence": confidence,
+        "ai_used": False,
+        "provider": "heuristic",
+        "source_kind": source_kind,
+        "source_id": source_id,
+        "note": (
+            "Offline draft - no AI provider key is configured, so cost and "
+            "schedule were read from the obvious figures in the text. Please "
+            "verify every value before creating the change order."
+        ),
+    }
+
+
+def _draft_prompt(source_kind: str, source_text: str, currency: str) -> str:
+    """Build the user prompt for the AI change-order drafter."""
+    ccy = currency or "the project currency"
+    label = {
+        "rfi": "an RFI (request for information) thread",
+        "daily_log": "a daily site-diary entry",
+        "free_text": "site notes",
+    }.get(source_kind, "site notes")
+    return (
+        f"Draft a construction change order from {label}. Express money in "
+        f"{ccy}. Return ONLY a JSON object with keys: title (short string), "
+        "description (string), reason_category (one of client_request, "
+        "design_change, unforeseen, regulatory, error), cost_impact (decimal "
+        "string, signed), schedule_impact_days (integer), confidence (0-100), "
+        "lines (array of objects with description, unit, quantity, rate, "
+        "cost_delta, confidence 0-100). Do not invent figures the text does "
+        f"not support.\n\nSOURCE:\n{source_text[:8000]}"
+    )
+
+
+def _normalise_ai_draft(
+    data: dict,
+    currency: str,
+    source_kind: str,
+    source_id: uuid.UUID | None,
+    provider: str,
+) -> dict:
+    """Coerce a model's JSON into the AIDraftResponse shape, defensively."""
+    reason = str(data.get("reason_category") or "client_request")
+    if reason not in {"client_request", "design_change", "unforeseen", "regulatory", "error"}:
+        reason = "client_request"
+
+    def _conf(v: object, default: int = 70) -> int:
+        try:
+            return max(0, min(100, int(round(float(v)))))
+        except (ValueError, TypeError):
+            return default
+
+    raw_lines = data.get("lines") if isinstance(data.get("lines"), list) else []
+    lines: list[dict] = []
+    for entry in raw_lines[:50]:
+        if not isinstance(entry, dict):
+            continue
+        lines.append(
+            {
+                "description": str(entry.get("description") or "")[:5000],
+                "unit": str(entry.get("unit") or "")[:20],
+                "quantity": str(entry.get("quantity") or "0")[:50],
+                "rate": str(entry.get("rate") or "0")[:50],
+                "cost_delta": str(entry.get("cost_delta") or "0")[:50],
+                "confidence": _conf(entry.get("confidence"), 70),
+            }
+        )
+    try:
+        days = int(round(float(data.get("schedule_impact_days") or 0)))
+    except (ValueError, TypeError):
+        days = 0
+    return {
+        "title": str(data.get("title") or "Change order")[:255],
+        "description": str(data.get("description") or "")[:5000],
+        "reason_category": reason,
+        "cost_impact": str(data.get("cost_impact") or "0")[:50],
+        "schedule_impact_days": max(0, days),
+        "currency": currency,
+        "lines": lines,
+        "confidence": _conf(data.get("confidence"), 70),
+        "ai_used": True,
+        "provider": provider,
+        "source_kind": source_kind,
+        "source_id": source_id,
+        "note": (
+            "AI-generated draft. Treat every figure as a suggestion and verify "
+            "with a quantity surveyor before creating the change order."
+        ),
+    }
 
 
 class ChangeOrderService:
@@ -279,6 +602,241 @@ class ChangeOrderService:
     async def get_summary(self, project_id: uuid.UUID) -> dict:
         """Get aggregated stats for a project's change orders."""
         return await self.repo.get_summary(project_id)
+
+    # ── What-If impact simulator (TOP-30 #11) ─────────────────────────────
+
+    async def _count_items(self, order_id: uuid.UUID) -> int:
+        """Number of line items on a change order (0 on lookup failure)."""
+        from sqlalchemy import func, select
+
+        try:
+            return int(
+                (
+                    await self.session.execute(
+                        select(func.count())
+                        .select_from(ChangeOrderItem)
+                        .where(ChangeOrderItem.change_order_id == order_id)
+                    )
+                ).scalar_one()
+            )
+        except Exception:
+            return 0
+
+    async def _first_unlocked_boq_name(self, project_id: uuid.UUID) -> str | None:
+        """Name of the BOQ a CO would write into (oldest unlocked), or None."""
+        from sqlalchemy import select
+
+        try:
+            from app.modules.boq.models import BOQ
+
+            boq = (
+                await self.session.execute(
+                    select(BOQ)
+                    .where(BOQ.project_id == project_id)
+                    .where(BOQ.is_locked.is_(False))
+                    .order_by(BOQ.created_at)
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            return boq.name if boq is not None else None
+        except Exception:
+            return None
+
+    async def simulate_impact(
+        self,
+        order_id: uuid.UUID,
+        *,
+        cost_override: str | None = None,
+        schedule_override: int | None = None,
+    ) -> dict:
+        """Read-only what-if projection of a change order's cost/schedule effect.
+
+        Nothing is persisted. The baseline budget/EVM figures come from the
+        same finance aggregation that powers the dashboard, converted into the
+        project's base currency (never blending currencies); the CO's own cost
+        is FX-converted the same way before being layered on top. The result
+        lets a reviewer see the budget, finish-date, EVM and BOQ consequences
+        of approving the CO *before* deciding.
+        """
+        from app.modules.finance.repository import BudgetRepository
+        from app.modules.finance.service import _convert_to_base, _project_fx_map
+
+        order = await self.get_order(order_id)
+
+        co_cost_native = _dec(cost_override) if cost_override is not None else _dec(order.cost_impact)
+        schedule_days = int(schedule_override) if schedule_override is not None else int(order.schedule_impact_days or 0)
+        co_currency = (order.currency or "").strip().upper()
+        notes: list[str] = []
+
+        project = await self._load_project(order.project_id)
+        base_ccy = (getattr(project, "currency", "") or "").strip().upper() if project else ""
+        planned_end = getattr(project, "planned_end_date", None) if project else None
+        fx_map = _project_fx_map(project)
+
+        agg = await BudgetRepository(self.session).aggregate_for_dashboard(project_id=order.project_id)
+
+        def _base(amounts: dict) -> Decimal:
+            converted, _missing = _convert_to_base(amounts, base_currency=base_ccy, fx_rates_map=fx_map)
+            return Decimal(str(converted))
+
+        revised = _base(agg["revised_by_currency"])
+        original = _base(agg["original_by_currency"])
+        bac = revised or original
+        ac = _base(agg["actual_by_currency"])
+        committed = _base(agg["committed_by_currency"])
+        pv = bac
+        ev = committed if committed > 0 else ac
+
+        if co_currency and base_ccy and co_currency != base_ccy:
+            converted, missing = _convert_to_base(
+                {co_currency: float(co_cost_native)},
+                base_currency=base_ccy,
+                fx_rates_map=fx_map,
+            )
+            co_cost_base = Decimal(str(converted))
+            fx_converted = co_currency not in missing
+            if not fx_converted:
+                notes.append(
+                    f"No FX rate is configured for {co_currency}, so its cost is shown unconverted "
+                    "in the budget projection. Add an FX rate in project settings for an accurate figure."
+                )
+        else:
+            co_cost_base = co_cost_native
+            fx_converted = True
+
+        item_count = await self._count_items(order.id)
+        target_boq_name = await self._first_unlocked_boq_name(order.project_id)
+
+        if not _parse_iso_date(planned_end):
+            notes.append("The project has no planned end date, so only the number of days added is shown.")
+        if bac <= 0:
+            notes.append("No project budget is recorded yet, so cost-percentage and EVM figures are limited.")
+        if item_count == 0:
+            notes.append("This change order has no line items yet, so the BOQ preview is empty.")
+
+        projection = _compute_impact_projection(
+            bac=bac,
+            ev=ev,
+            ac=ac,
+            pv=pv,
+            co_cost_base=co_cost_base,
+            schedule_days=schedule_days,
+            planned_end=planned_end,
+            item_count=item_count,
+            target_boq_name=target_boq_name,
+        )
+
+        await _safe_publish(
+            "changeorder.impact_simulated",
+            {
+                "change_order_id": str(order.id),
+                "project_id": str(order.project_id),
+                "code": order.code,
+                "cost_delta_base": str(_round2(co_cost_base)),
+                "schedule_days": schedule_days,
+            },
+            source_module="changeorders",
+        )
+
+        return {
+            "order_id": order.id,
+            "code": order.code,
+            "base_currency": base_ccy,
+            "as_of": datetime.now(UTC).isoformat(),
+            "co_cost_native": str(_round2(co_cost_native)),
+            "co_currency": co_currency or base_ccy,
+            "co_cost_base": str(_round2(co_cost_base)),
+            "fx_converted": fx_converted,
+            "notes": notes,
+            **projection,
+        }
+
+    async def publish_scenario(self, order_id: uuid.UUID, snapshot: dict) -> ChangeOrder:
+        """Persist a what-if snapshot into the CO metadata for the audit trail.
+
+        Keeps at most the last 10 scenarios so the JSON column never grows
+        without bound. Storing in ``metadata_`` (rather than a dedicated
+        column) keeps this LIGHTWEIGHT and avoids a migration - the data is
+        display/audit-only and read-rarely.
+        """
+        order = await self.get_order(order_id)
+        md = dict(order.metadata_) if isinstance(order.metadata_, dict) else {}
+        scenarios = list(md.get("simulations") or [])
+        scenarios.append(
+            {
+                "at": datetime.now(UTC).isoformat(),
+                "snapshot": snapshot,
+            }
+        )
+        md["simulations"] = scenarios[-10:]
+        order.metadata_ = md
+        await self.session.flush()
+        logger.info("Published what-if scenario for change order %s", order.code)
+        return order
+
+    async def ai_draft(
+        self,
+        *,
+        project_id: uuid.UUID,
+        source_kind: str,
+        source_text: str,
+        source_id: uuid.UUID | None,
+        currency: str,
+        user_id: str | uuid.UUID | None,
+    ) -> dict:
+        """Draft a change order from source text via AI, with a heuristic fallback.
+
+        When an AI provider key is resolvable the text is sent to the model for
+        structured extraction; on any failure (no key, provider error, bad
+        JSON) the deterministic :func:`_heuristic_draft` takes over so the
+        endpoint always returns a usable, clearly-labelled proposal. The draft
+        is never saved - the caller reviews it and creates the CO separately.
+        """
+        resolved_currency = await self._resolve_currency(project_id, currency)
+
+        provider = api_key = model = None
+        try:
+            from app.modules.ai.ai_client import resolve_provider_key_model
+            from app.modules.ai.repository import AISettingsRepository
+
+            settings = await AISettingsRepository(self.session).get_by_user_id(str(user_id)) if user_id else None
+            provider, api_key, model = resolve_provider_key_model(settings)
+        except Exception as exc:  # noqa: BLE001 - any resolution failure -> heuristic
+            logger.debug("CO AI draft: no usable provider key (%s); using heuristic", exc)
+
+        if provider and api_key:
+            try:
+                from app.modules.ai.ai_client import call_ai, extract_json
+
+                text, _tokens = await call_ai(
+                    provider,
+                    api_key,
+                    _DRAFT_SYSTEM,
+                    _draft_prompt(source_kind, source_text, resolved_currency),
+                    model=model,
+                    max_tokens=1500,
+                )
+                data = extract_json(text)
+                if isinstance(data, dict):
+                    return _normalise_ai_draft(data, resolved_currency, source_kind, source_id, provider)
+                logger.info("CO AI draft: model returned no JSON object; using heuristic")
+            except Exception as exc:  # noqa: BLE001 - degrade gracefully
+                logger.info("CO AI draft fell back to heuristic: %s", exc)
+
+        return _heuristic_draft(source_text, resolved_currency, source_kind, source_id)
+
+    async def _load_project(self, project_id: uuid.UUID):  # noqa: ANN202 - ORM/stub
+        """Load the owning Project, tolerating unit-test stub sessions."""
+        from sqlalchemy import select
+
+        from app.modules.projects.models import Project
+
+        try:
+            return (
+                await self.session.execute(select(Project).where(Project.id == project_id))
+            ).scalar_one_or_none()
+        except Exception:
+            return None
 
     # ── Update ────────────────────────────────────────────────────────────
 
@@ -1064,10 +1622,37 @@ class ChangeOrderService:
         logger.info("Item deleted from change order %s: %s", order_code, item_id)
 
     async def _recalculate_cost_impact(self, order_id: uuid.UUID) -> None:
-        """Recalculate the total cost impact from all items."""
+        """Recalculate the total cost impact from all items.
+
+        Re-entrancy safe: the expected ``cost_impact`` is computed in a
+        single pass over ``sum(items.cost_delta)`` and only persisted when it
+        differs from the value already stored, so a concurrent retry that
+        sees the items already settled becomes a no-op rather than
+        re-running the writeback. On a flush failure the in-flight item
+        change is rolled back so a retry cannot double-count.
+        """
         items = await self.repo.list_items_for_order(order_id)
-        total = sum((_dec(item.cost_delta) for item in items), Decimal("0"))
-        await self.repo.update_fields(order_id, cost_impact=str(_round2(total)))
+        total = _round2(sum((_dec(item.cost_delta) for item in items), Decimal("0")))
+        expected = str(total)
+
+        order = await self.repo.get_by_id(order_id)
+        current = (order.cost_impact if order is not None else None) or "0"
+        # Compare on rounded Decimal so a "12.30" vs "12.3" representation
+        # difference does not trigger a spurious write. When the stored value
+        # already equals the recomputed total this is a no-op, which keeps a
+        # concurrent retry from re-running the budget writeback downstream.
+        if _round2(_dec(current)) == total:
+            return
+
+        try:
+            await self.repo.update_fields(order_id, cost_impact=expected)
+        except Exception:
+            # The caller has already added/deleted the line item that drove
+            # this recalculation; rolling back here unwinds that change too
+            # so a retried request re-derives the total from a clean slate
+            # rather than double-counting a partially applied delta.
+            await self.session.rollback()
+            raise
 
     # ── T3: Procore-style multi-step approval chain ──────────────────────
 

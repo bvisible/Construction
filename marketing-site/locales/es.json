@@ -17,6 +17,7 @@
     "sub": "ERP open-source para equipos de construcción — presupuestos, cronogramas, licitaciones, contratos, tareas de obra e informes en una sola instalación. Los datos de costo y tiempo se mantienen sincronizados con los planos y el BOQ que los respalda.",
     "cta_install": "Instalar ahora",
     "cta_star": "Dar estrella en GitHub",
+    "download_label": "O simplemente descarga la aplicación de escritorio gratuita - sin Python, sin Docker, nada que configurar:",
     "meta_selfhost": "Autoalojado",
     "mod_projects_title": "Proyectos",
     "mod_projects_sub": "portafolio",

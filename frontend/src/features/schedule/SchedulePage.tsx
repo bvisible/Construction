@@ -1158,6 +1158,18 @@ function ScheduleDetail({
       queryClient.invalidateQueries({ queryKey: ['gantt', schedule.id] });
     },
     onError: (error: Error) => {
+      // The backend returns HTTP 409 when an activity cannot be completed
+      // because a predecessor is still open. Surface that as a clear,
+      // non-alarming hint (the message already names the blockers) rather
+      // than a generic "update failed" error.
+      if ((error as { status?: number }).status === 409) {
+        addToast({
+          type: 'warning',
+          title: t('schedule.complete_blocked', { defaultValue: 'Blocked by predecessor' }),
+          message: error.message,
+        });
+        return;
+      }
       addToast({ type: 'error', title: t('toasts.update_failed', { defaultValue: 'Update failed' }), message: error.message });
     },
   });

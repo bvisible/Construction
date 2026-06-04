@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>OpenConstructionERP</title>
+  <style>
+    :root {
+      --brand-blue: #0066ff;
+      --brand-violet: #5856d6;
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --error: #d70015;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body {
+      height: 100%;
+      width: 100%;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--text);
+      background: radial-gradient(140% 120% at 50% 0%, #ffffff 0%, #f4f7fc 45%, #eaf1fb 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .stage {
+      width: 100%;
+      max-width: 520px;
+      padding: 32px 28px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+
+    .logo {
+      width: 96px;
+      height: 96px;
+      display: block;
+      filter: drop-shadow(0 10px 28px rgba(0, 102, 255, 0.22));
+      animation: float 4.5s ease-in-out infinite;
+    }
+
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-6px); }
+    }
+
+    .product {
+      margin-top: 26px;
+      font-size: 30px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      font-size: 15px;
+      color: var(--muted);
+      font-weight: 400;
+    }
+
+    .spinner {
+      margin-top: 34px;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      border: 3px solid rgba(0, 102, 255, 0.15);
+      border-top-color: var(--brand-blue);
+      border-right-color: var(--brand-violet);
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .status {
+      margin-top: 26px;
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--text);
+      min-height: 22px;
+      transition: color 0.2s ease;
+    }
+
+    .status.error {
+      color: var(--error);
+    }
+
+    .hint {
+      margin-top: 10px;
+      font-size: 13.5px;
+      line-height: 1.5;
+      color: var(--muted);
+      max-width: 420px;
+    }
+
+    @media (max-width: 360px) {
+      .product { font-size: 25px; }
+      .logo { width: 80px; height: 80px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none" role="img" aria-label="OpenConstructionERP logo">
+      <defs>
+        <linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#0066ff"/>
+          <stop offset="100%" stop-color="#5856d6"/>
+        </linearGradient>
+      </defs>
+      <rect x="32" y="32" width="448" height="448" rx="96" fill="url(#lg)"/>
+      <rect x="102" y="296" width="42" height="114" rx="6" fill="#fff" opacity=".85"/>
+      <rect x="162" y="233" width="42" height="177" rx="6" fill="#fff" opacity=".95"/>
+      <rect x="222" y="176" width="42" height="234" rx="6" fill="#fff" opacity=".85"/>
+      <rect x="282" y="150" width="128" height="260" rx="8" fill="#fff" opacity=".9"/>
+      <rect x="304" y="182" width="26" height="28" rx="4" fill="url(#lg)" opacity=".5"/>
+      <rect x="362" y="182" width="26" height="28" rx="4" fill="url(#lg)" opacity=".5"/>
+      <rect x="304" y="226" width="26" height="28" rx="4" fill="url(#lg)" opacity=".5"/>
+      <rect x="362" y="226" width="26" height="28" rx="4" fill="url(#lg)" opacity=".5"/>
+      <rect x="304" y="272" width="26" height="28" rx="4" fill="url(#lg)" opacity=".45"/>
+      <rect x="362" y="272" width="26" height="28" rx="4" fill="url(#lg)" opacity=".45"/>
+      <rect x="329" y="328" width="34" height="82" rx="4" fill="url(#lg)" opacity=".55"/>
+    </svg>
+
+    <h1 class="product">OpenConstructionERP</h1>
+    <p class="subtitle">by DataDrivenConstruction</p>
+
+    <div class="spinner" id="spinner" aria-hidden="true"></div>
+
+    <p class="status" id="status">Starting the application</p>
+    <p class="hint" id="hint">First run sets up your local database. This can take up to a minute, please wait.</p>
+  </main>
+
+  <script>
+    function setStatus(t) {
+      var el = document.getElementById('status');
+      if (el) { el.textContent = t; }
+    }
+
+    function setError(t) {
+      var status = document.getElementById('status');
+      var hint = document.getElementById('hint');
+      var spinner = document.getElementById('spinner');
+      if (status) {
+        status.classList.add('error');
+        status.textContent = 'Something went wrong';
+      }
+      if (hint) { hint.textContent = t; }
+      if (spinner) { spinner.style.display = 'none'; }
+    }
+  </script>
+</body>
+</html>

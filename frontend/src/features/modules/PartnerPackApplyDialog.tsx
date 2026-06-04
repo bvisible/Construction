@@ -266,6 +266,10 @@ export function PartnerPackApplyDialog({
       void qc.invalidateQueries({ queryKey: ['partner-packs'] });
       void qc.invalidateQueries({ queryKey: ['partner-pack-applied'] });
       void qc.invalidateQueries({ queryKey: ['partner-pack', 'current'] });
+      // The backend scopes the project listing to the active pack the instant
+      // it is applied, so drop the cached (un-scoped) project list to make the
+      // clean single-client view appear immediately (mirrors deactivation).
+      void qc.invalidateQueries({ queryKey: ['projects'] });
       if (ok) {
         addToast({
           type: 'success',

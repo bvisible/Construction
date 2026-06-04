@@ -105,7 +105,29 @@ openestimate doctor    # per-check OK / WARN / ERROR report
 openestimate           # starts the server on port 8080
 ```
 
-Then open http://localhost:8080. The first boot creates a SQLite database and seeds the three demo accounts (see the main README).
+Then open http://localhost:8080. The first boot creates the embedded PostgreSQL database and seeds the three demo accounts (see the main README).
+
+---
+
+## 4b. `openestimate: command not found`
+
+If the `openestimate` / `openconstructionerp` command is not found, the package installed fine. pip just put the launcher in a per-user scripts folder that is not on your PATH (typically `~/.local/bin`). You do not need to fix PATH at all. Run it through Python instead, which always works from any folder:
+
+```bash
+python -m openconstructionerp
+```
+
+Every subcommand works the same way: `python -m openconstructionerp serve`, `python -m openconstructionerp doctor`, etc.
+
+If you would rather have the short command, add the scripts folder to your PATH. Append one line to your shell profile (`~/.bashrc` for bash, `~/.zshrc` for zsh):
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+openconstructionerp
+```
+
+Inside a virtualenv the launcher lives in `<venv>/bin`, which is already on PATH while the venv is active, so this only applies to a `pip install --user` setup.
 
 ---
 

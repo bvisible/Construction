@@ -1,13 +1,15 @@
 """AI Agents ORM models.
 
 Tables:
-    oe_ai_agents_run  — one row per agent invocation (status, totals, output).
-    oe_ai_agents_step — chronological steps within a run
-                        (thought / tool_call / observation / answer / error).
+    oe_ai_agents_run    — one row per agent invocation (status, totals, output).
+    oe_ai_agents_step   — chronological steps within a run
+                          (thought / tool_call / observation / answer / error).
+    oe_ai_agents_custom — user-authored agents (name, prompt, icon, category).
 
-Both tables are append-only from a user's perspective (the runner writes
-incrementally as the loop progresses; the API only ever lets you create
-a new run or fetch existing ones — no in-place edits).
+The run/step tables are append-only from a user's perspective (the runner
+writes incrementally as the loop progresses; the API only ever lets you
+create a new run or fetch existing ones — no in-place edits). Custom agents
+ARE editable/deletable by their creator through the dedicated endpoints.
 """
 
 import uuid
@@ -71,3 +73,60 @@ class AgentStep(Base):
 
     def __repr__(self) -> str:
         return f"<AgentStep run={self.run_id} idx={self.step_idx} role={self.role}>"
+
+
+# Custom-agent run names are prefixed with this slug so the run path can tell
+# a user-authored agent (``custom:<uuid>``) apart from a built-in one and
+# resolve it from the DB instead of the in-memory registry. The colon is safe
+# inside ``agent_name`` (VARCHAR(100)) and never collides with a built-in slug.
+CUSTOM_AGENT_PREFIX = "custom:"
+
+
+class CustomAgent(Base):
+    """A user-authored agent definition.
+
+    Custom agents live in the DB (built-ins live in the in-memory registry).
+    They carry the same presentation + behaviour fields a built-in
+    :class:`app.modules.ai_agents.base.Agent` exposes, but they have NO tools:
+    a non-technical estimator builds a focused prompt-only helper. The run
+    path resolves them by ``agent_name == "custom:<id>"`` and runs them through
+    the exact same :class:`AgentRunner` loop as the built-ins.
+
+    Ownership: ``user_id`` is the creator. Only the creator may edit/delete,
+    and only the creator sees their custom agents listed alongside the
+    built-ins (mirrors the per-user privacy model of agent runs).
+    """
+
+    __tablename__ = "oe_ai_agents_custom"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    # Human-facing label shown on the card (e.g. "Tender Letter Helper").
+    display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # One-line "what you get" promise shown under the title.
+    tagline: Mapped[str] = mapped_column(String(280), nullable=False, default="")
+    # Longer description (optional). Falls back to tagline in the UI.
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # The compiled system prompt the runner sends to the LLM. Built from the
+    # friendly guided builder fields (role + goal + audience + format) so a
+    # non-technical user never writes a raw prompt by hand.
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    # Coarse catalogue grouping (estimating | quality | documents | analytics
+    # | planning | general). The UI buckets cards by this.
+    category: Mapped[str] = mapped_column(String(40), nullable=False, default="general")
+    # Lucide icon name the frontend maps to a glyph (e.g. "calculator").
+    icon: Mapped[str] = mapped_column(String(40), nullable=False, default="sparkles")
+    # Ready-to-run example prompts (list[str]); clicking one fills the run box.
+    example_prompts: Mapped[list] = mapped_column(JSON, nullable=False, default=list)  # type: ignore[type-arg]
+    # The guided-builder spec (role/goal/audience/output_format/extra_guidance)
+    # the system_prompt was compiled from, or NULL when the user pasted a raw
+    # prompt. Stored so the edit form can re-hydrate the friendly fields instead
+    # of showing the compiled prompt.
+    guided: Mapped[dict | None] = mapped_column(JSON, nullable=True, default=None)  # type: ignore[type-arg]
+
+    def __repr__(self) -> str:
+        return f"<CustomAgent {self.id} user={self.user_id} name={self.display_name!r}>"
+
+    @property
+    def agent_name(self) -> str:
+        """The runner-facing slug for this custom agent (``custom:<uuid>``)."""
+        return f"{CUSTOM_AGENT_PREFIX}{self.id}"

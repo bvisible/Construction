@@ -12,6 +12,7 @@ import {
 import { Button, Card, Badge, EmptyState, InfoHint, SkeletonGrid } from '@/shared/ui';
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
 import { getIntlLocale } from '@/shared/lib/formatters';
+import { copyToClipboard } from '@/shared/lib/browser';
 import { useToastStore } from '@/stores/useToastStore';
 import {
   assembliesApi,
@@ -1792,7 +1793,7 @@ function AssemblyCard({
               onClick={() => {
                 setMenuOpen(false);
                 const text = `${assembly.code}\t${assembly.name}\t${assembly.unit}\t${assembly.total_rate}\t${assembly.category}`;
-                navigator.clipboard.writeText(text).catch(() => {});
+                copyToClipboard(text).catch(() => {});
               }}
               className="flex w-full items-center gap-2 px-3 py-2 text-sm text-content-primary hover:bg-surface-secondary transition-colors"
             >

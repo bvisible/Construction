@@ -285,7 +285,10 @@ export function CatalogPickerModal({ open, onClose, onSelect }: CatalogPickerMod
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-sm font-medium text-content-primary truncate">
+                          <span
+                            className="text-sm font-medium text-content-primary truncate"
+                            title={res.name}
+                          >
                             {res.name}
                           </span>
                           <span className="text-2xs font-mono text-content-quaternary shrink-0">

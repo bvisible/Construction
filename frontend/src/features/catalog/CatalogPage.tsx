@@ -43,6 +43,7 @@ import {
   type ResourceType,
 } from '@/features/assemblies/api';
 import { getResourceTypeLabel } from '@/features/boq/boqResourceTypes';
+import { copyToClipboard } from '@/shared/lib/browser';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -1535,7 +1536,7 @@ export function CatalogPage() {
 
   const handleCopyRate = useCallback(async (resource: CatalogResource) => {
     try {
-      await navigator.clipboard.writeText(String(resource.base_price));
+      await copyToClipboard(String(resource.base_price));
       setCopiedId(resource.id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
@@ -2190,7 +2191,7 @@ export function CatalogPage() {
                       `${r.resource_code}\t${r.name}\t${r.unit}\t${r.base_price}\t${r.currency}`,
                   )
                   .join('\n');
-                navigator.clipboard.writeText(text).catch(() => {});
+                copyToClipboard(text).catch(() => {});
                 addToast({
                   type: 'success',
                   title: t('catalog.copied', { defaultValue: 'Copied' }),

@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "AGPL-3.0-or-later" }
 requires-python = ">=3.11"
 authors = [
-    { name = "BIMHessen", email = "contact@bimhessen.de" },
+    { name = "BIM-Cluster Hessen", email = "info@datadrivenconstruction.io" },
 ]
 keywords = [
     "openconstructionerp",
@@ -43,7 +43,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://bimhessen.de"
+Homepage = "https://bim-cluster-hessen.com"
 Source = "https://github.com/DataDrivenConstruction/openconstructionerp"
 
 [project.entry-points."openconstructionerp.partner_packs"]
@@ -57,7 +57,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 openconstructionerp_bimhessen_de = [
-    "logo.svg",
+    "logo.png",
     "onboarding.yaml",
     "locales/*.json",
     "rule_packs/*.json",

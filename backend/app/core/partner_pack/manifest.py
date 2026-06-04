@@ -130,6 +130,18 @@ class PartnerPackManifest(BaseModel):
     # Branding (logo, colours, favicon)
     branding: PartnerBranding = Field(default_factory=PartnerBranding)
 
+    # Demo project presets
+    demo_template_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional explicit list of demo project ids (keys of "
+            "``DEMO_TEMPLATES``) this pack installs. When set, the one-click "
+            "installer seeds exactly these (in order, de-duplicated) instead of "
+            "deriving the list from the flagship demo's country. Empty list "
+            "keeps the default flagship + country-fill behaviour."
+        ),
+    )
+
     # Onboarding script — declarative YAML/JSON applied at first login
     onboarding_script_path: str | None = Field(
         default=None,
@@ -171,6 +183,7 @@ class PartnerPackManifest(BaseModel):
             "default_currency": self.default_currency,
             "default_tax_template": self.default_tax_template,
             "validation_rule_packs": self.validation_rule_packs,
+            "demo_template_ids": self.demo_template_ids,
             "default_modules": self.default_modules,
             "hidden_modules": self.hidden_modules,
             "branding": {

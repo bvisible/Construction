@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session_factory
 from app.dependencies import CurrentUserId, RequirePermission, SessionDep
 from app.modules.ai_agents.schemas import (
+    CUSTOM_AGENT_CATEGORIES,
     AgentDescriptor,
     AgentHealthResponse,
     AgentInsightResponse,
@@ -32,6 +33,10 @@ from app.modules.ai_agents.schemas import (
     AgentRunResponse,
     AgentStepResponse,
     CreateAgentRunRequest,
+    CustomAgentCreateRequest,
+    CustomAgentResponse,
+    CustomAgentUpdateRequest,
+    GuidedAgentSpec,
     ToolDescriptor,
 )
 from app.modules.ai_agents.service import AgentService
@@ -139,9 +144,16 @@ async def _assert_project_access(
     dependencies=[Depends(RequirePermission("ai_agents.read"))],
 )
 async def list_agents_endpoint(
+    user_id: CurrentUserId,
     service: AgentService = Depends(_get_service),
 ) -> list[AgentDescriptor]:
-    """List every registered agent — name, prompt, allowed tools."""
+    """List every agent the caller can run — built-ins plus their own custom agents.
+
+    Custom agents are flagged ``is_custom`` (with their ``custom_id``) so the UI
+    can show edit/delete affordances only on the caller's own creations.
+    """
+    uid = uuid.UUID(user_id)
+    pairs = await service.list_catalogue_agents(uid)
     return [
         AgentDescriptor(
             name=a.name,
@@ -154,8 +166,10 @@ async def list_agents_endpoint(
             icon=a.icon,
             tagline=a.tagline,
             example_prompts=a.example_prompts,
+            is_custom=row is not None,
+            custom_id=row.id if row is not None else None,
         )
-        for a in service.list_registered_agents()
+        for (a, row) in pairs
     ]
 
 
@@ -169,6 +183,170 @@ async def list_tools_endpoint(
 ) -> list[ToolDescriptor]:
     """List every tool the runner can dispatch to."""
     return [ToolDescriptor(**t) for t in service.list_registered_tools()]
+
+
+# ── Custom agents (user-authored) ─────────────────────────────────────────
+
+
+def _validate_category(category: str) -> str:
+    """Clamp a custom agent's category to a known catalogue group.
+
+    An unknown category would render as a lone "General"-style section; folding
+    it to ``general`` keeps the catalogue tidy without rejecting the request.
+    """
+    cat = (category or "general").strip().lower()
+    return cat if cat in CUSTOM_AGENT_CATEGORIES else "general"
+
+
+def _serialise_custom_agent(row: Any) -> CustomAgentResponse:
+    """Convert a CustomAgent ORM row to its response schema."""
+    guided = GuidedAgentSpec(**row.guided) if isinstance(row.guided, dict) and row.guided else None
+    return CustomAgentResponse(
+        id=row.id,
+        user_id=row.user_id,
+        display_name=row.display_name,
+        tagline=row.tagline or "",
+        description=row.description or "",
+        category=row.category or "general",
+        icon=row.icon or "sparkles",
+        example_prompts=list(row.example_prompts or []),
+        system_prompt=row.system_prompt or "",
+        guided=guided,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get(
+    "/custom/",
+    response_model=list[CustomAgentResponse],
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def list_custom_agents(
+    user_id: CurrentUserId,
+    service: AgentService = Depends(_get_service),
+) -> list[CustomAgentResponse]:
+    """List the caller's own custom agents (for the manage/edit surface)."""
+    uid = uuid.UUID(user_id)
+    rows = await service.list_custom_agents(uid)
+    return [_serialise_custom_agent(r) for r in rows]
+
+
+@router.post(
+    "/custom/",
+    response_model=CustomAgentResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def create_custom_agent(
+    request: CustomAgentCreateRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> CustomAgentResponse:
+    """Create a user-authored agent.
+
+    The agent appears in the caller's catalogue alongside the built-ins and is
+    runnable through the same ``POST /runs/`` path (its run name is
+    ``custom:<id>``). Creating an agent needs the same ``ai_agents.run``
+    permission as running one (an editor right), so a viewer cannot author
+    agents.
+    """
+    uid = uuid.UUID(user_id)
+    try:
+        row = await service.create_custom_agent(
+            user_id=uid,
+            display_name=request.display_name,
+            tagline=request.tagline,
+            description=request.description,
+            category=_validate_category(request.category),
+            icon=request.icon or "sparkles",
+            example_prompts=request.example_prompts,
+            guided=request.guided.model_dump() if request.guided else None,
+            system_prompt=request.system_prompt,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    await session.commit()
+    return _serialise_custom_agent(row)
+
+
+@router.get(
+    "/custom/{agent_id}",
+    response_model=CustomAgentResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.read"))],
+)
+async def get_custom_agent(
+    agent_id: uuid.UUID,
+    user_id: CurrentUserId,
+    service: AgentService = Depends(_get_service),
+) -> CustomAgentResponse:
+    """Fetch one of the caller's custom agents (to populate the edit form)."""
+    uid = uuid.UUID(user_id)
+    row = await service.get_custom_agent(agent_id, uid)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    return _serialise_custom_agent(row)
+
+
+@router.put(
+    "/custom/{agent_id}",
+    response_model=CustomAgentResponse,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def update_custom_agent(
+    agent_id: uuid.UUID,
+    request: CustomAgentUpdateRequest,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> CustomAgentResponse:
+    """Replace one of the caller's custom agents. 404 unless owned by caller."""
+    uid = uuid.UUID(user_id)
+    try:
+        row = await service.update_custom_agent(
+            agent_id=agent_id,
+            user_id=uid,
+            display_name=request.display_name,
+            tagline=request.tagline,
+            description=request.description,
+            category=_validate_category(request.category),
+            icon=request.icon or "sparkles",
+            example_prompts=request.example_prompts,
+            guided=request.guided.model_dump() if request.guided else None,
+            system_prompt=request.system_prompt,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+    if row is None:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    await session.commit()
+    return _serialise_custom_agent(row)
+
+
+@router.delete(
+    "/custom/{agent_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(RequirePermission("ai_agents.run"))],
+)
+async def delete_custom_agent(
+    agent_id: uuid.UUID,
+    user_id: CurrentUserId,
+    session: SessionDep,
+    service: AgentService = Depends(_get_service),
+) -> None:
+    """Delete one of the caller's custom agents. 404 unless owned by caller."""
+    uid = uuid.UUID(user_id)
+    deleted = await service.delete_custom_agent(agent_id, uid)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Custom agent not found")
+    await session.commit()
 
 
 @router.get(
@@ -234,8 +412,9 @@ async def _run_in_background(
             from app.modules.ai_agents.models import AgentStep
             from app.modules.ai_agents.service import _iso_now, _resolve_production_llm
 
-            agent = service.list_registered_agents()
-            target = next((a for a in agent if a.name == agent_name), None)
+            # Resolve built-in OR the caller's own custom agent. Ownership for
+            # custom:<id> slugs is enforced in resolve_agent.
+            target = await service.resolve_agent(agent_name, user_id)
             if target is None:
                 await service.run_repo.update_fields(
                     run_id,
@@ -348,10 +527,11 @@ async def create_run(
                 steps = await service.get_run_steps(existing_run_id)
                 return _serialise_run(existing, steps=steps)
 
-    # Validate that the agent exists before creating the row.
-    from app.modules.ai_agents.base import get_agent
-
-    if get_agent(request.agent_name) is None:
+    # Validate that the agent exists (built-in OR the caller's own custom
+    # agent) before creating the row. resolve_agent enforces ownership for
+    # custom:<id> slugs, so a user can never start a run for another user's
+    # custom agent.
+    if (await service.resolve_agent(request.agent_name, uid)) is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Unknown agent: {request.agent_name}",

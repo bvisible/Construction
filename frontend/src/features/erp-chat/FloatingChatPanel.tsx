@@ -41,6 +41,7 @@ import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useThemeStore } from '@/stores/useThemeStore';
 import { aiApi, type AISettings } from '@/features/ai/api';
 import { useFocusTrap } from '@/shared/hooks/useFocusTrap';
+import { uuid } from '@/shared/lib/browser';
 import { useFloatingChatStore, useIsMobileViewport } from './useFloatingChat';
 import { fetchChatSessions } from './api';
 import type { ChatMessage, ChatSession, ToolCallInfo } from './types';
@@ -109,7 +110,7 @@ const SOFT_LIMIT = 3000;
 const HARD_LIMIT = 4000;
 
 function uid(): string {
-  return crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return uuid();
 }
 
 // ── Role helpers ───────────────────────────────────────────────────────────

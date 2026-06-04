@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.boq.models import BOQ, BOQMarkup, Position
@@ -3887,39 +3887,101 @@ def _generate_module_data(
         slug = "".join(ch.lower() for ch in company if ch.isalnum())[:18] or f"firm{idx}"
         return f"contact@{slug}.example"
 
-    # ── Contacts (client + architect + structural eng + 2-3 subs) ────────
+    def _email_for(real_name: str | None, role_local: str) -> str:
+        """Email for a consultant slot.
+
+        When the template names a real firm, derive a plausible address from
+        the firm slug; otherwise fall back to the role placeholder so demos
+        without metadata still read cleanly.
+        """
+        if real_name:
+            slug = "".join(ch.lower() for ch in real_name if ch.isalnum())[:24]
+            if slug:
+                return f"{role_local}@{slug}.example"
+        return f"{role_local}@design.example"
+
+    md = template.project_metadata or {}
+    client_name = md.get("client")
+    architect_name = md.get("architect")
+    structural_name = md.get("structural_engineer") or md.get("structural_consultant")
+    mep_name = md.get("mep_engineer")
+    qs_name = md.get("quantity_surveyor")
+    main_contractor_name = md.get("main_contractor") or md.get("general_contractor")
+
+    # ── Contacts (client + design team + 2-3 subs) ───────────────────────
     contacts: list[dict] = [
         {
             "contact_type": "client",
-            "company_name": template.project_metadata.get("client") or f"{proj} Client",
+            "company_name": client_name or f"{proj} Client",
             "first_name": "Project",
             "last_name": "Owner",
-            "primary_email": "owner@client.example",
+            "primary_email": _email_for(client_name, "contact") if client_name else "owner@client.example",
             "primary_phone": "",
             "country_code": cc,
             "notes": "Client / employer representative",
         },
         {
             "contact_type": "consultant",
-            "company_name": template.project_metadata.get("architect") or "Lead Architects",
+            "company_name": architect_name or "Lead Architects",
             "first_name": "Lead",
             "last_name": "Architect",
-            "primary_email": "architect@design.example",
+            "primary_email": _email_for(architect_name, "architect"),
             "primary_phone": "",
             "country_code": cc,
             "notes": "Architect of record",
         },
         {
             "contact_type": "consultant",
-            "company_name": "Structural Engineering Partners",
+            "company_name": structural_name or "Structural Engineering Partners",
             "first_name": "Structural",
             "last_name": "Engineer",
-            "primary_email": "structures@engineer.example",
+            "primary_email": _email_for(structural_name, "structures"),
             "primary_phone": "",
             "country_code": cc,
             "notes": "Structural engineer",
         },
     ]
+    # Add MEP + QS consultants only when the template names them, so demos
+    # without metadata keep the original 3-consultant shape.
+    if mep_name:
+        contacts.append(
+            {
+                "contact_type": "consultant",
+                "company_name": mep_name,
+                "first_name": "MEP",
+                "last_name": "Engineer",
+                "primary_email": _email_for(mep_name, "mep"),
+                "primary_phone": "",
+                "country_code": cc,
+                "notes": "MEP / building services engineer",
+            }
+        )
+    if qs_name:
+        contacts.append(
+            {
+                "contact_type": "consultant",
+                "company_name": qs_name,
+                "first_name": "Quantity",
+                "last_name": "Surveyor",
+                "primary_email": _email_for(qs_name, "qs"),
+                "primary_phone": "",
+                "country_code": cc,
+                "notes": "Cost consultant / quantity surveyor",
+            }
+        )
+    if main_contractor_name:
+        contacts.append(
+            {
+                "contact_type": "contractor",
+                "company_name": main_contractor_name,
+                "first_name": "Project",
+                "last_name": "Director",
+                "primary_email": _email_for(main_contractor_name, "contact"),
+                "primary_phone": "",
+                "country_code": cc,
+                "notes": "Main contractor",
+            }
+        )
     for i, (company, email) in enumerate(firms[:3]):
         contacts.append(
             {
@@ -4341,19 +4403,45 @@ def _generate_module_data(
         )
 
     # daily_diary — one diary header per spread day across the timeline.
+    # Notes vary across entries: weather, manpower, the key activity tied to
+    # the day's real trade, plus the occasional delay, instead of one repeated
+    # boilerplate line.
     daily_diary: list[dict] = []
     dd_n = min(max(months, 6), 10)
+    diary_weather_note = {
+        "clear": "Dry and clear, full working day.",
+        "partly_cloudy": "Partly cloudy, no impact on production.",
+        "overcast": "Overcast but workable conditions.",
+        "rain": "Intermittent rain, external works paused in the afternoon.",
+    }
+    diary_activities = [
+        "set out and survey checks completed",
+        "main lift / pour completed to programme",
+        "inspection and sign-off of the previous section",
+        "material deliveries received and checked in",
+        "follow-on trade started behind the leading gang",
+    ]
     for i in range(dd_n):
         trade = trades[i % len(trades)][1] if trades else "General works"
         day = round(i * (months * 30) / dd_n) + 2
+        cond = conditions[i % len(conditions)]
+        labour = 12 + (i % 10)
+        equip = 3 + (i % 4)
+        activity = diary_activities[i % len(diary_activities)]
+        delayed = cond == "rain" and i % 3 == 0
+        notes = (
+            f"{diary_weather_note[cond]} {labour} operatives and {equip} items of plant on site. {trade}: {activity}."
+        )
+        if delayed:
+            notes += " Approx. 2 hours lost to weather; recovered against float."
         daily_diary.append(
             {
                 "diary_date": (base + timedelta(days=day)).strftime("%Y-%m-%d"),
-                "labour_count": 12 + (i % 10),
-                "equipment_count": 3 + (i % 4),
+                "labour_count": labour,
+                "equipment_count": equip,
                 "status": "closed" if i % 2 == 0 else "open",
-                "notes": f"{trade} works ongoing. Site operating normally.",
-                "weather_summary": {"condition": conditions[i % len(conditions)], "temp_c": 12 + (i % 12)},
+                "notes": notes,
+                "weather_summary": {"condition": cond, "temp_c": 12 + (i % 12)},
             }
         )
 
@@ -4537,6 +4625,297 @@ def _generate_module_data(
             )
     progress: list[dict] = progress_entries  # primary key the block consumes
 
+    # ── Takeoff measurements (2-4 derived from real priced BOQ items) ────
+    # Map the section item's unit onto a takeoff measurement type so /takeoff
+    # is never blank: m2 -> area, m -> distance, pcs/Stk -> count, m3 -> volume.
+    def _measure_type(unit: str) -> tuple[str, str] | None:
+        u = (unit or "").strip().lower()
+        if u in {"m2", "m²", "sqm"}:
+            return "area", "m2"
+        if u in {"m3", "m³", "cum"}:
+            return "volume", "m3"
+        if u in {"m", "lm", "rm", "lfm"}:
+            return "distance", "m"
+        if u in {"pcs", "pc", "stk", "st", "nr", "no", "ea", "each", "unit"}:
+            return "count", "pcs"
+        return None
+
+    takeoff: list[dict] = []
+    take_colors = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444"]
+    for code, trade, _item in trades:
+        if len(takeoff) >= 4:
+            break
+        section = next((s for s in template.sections if str(s[0]) == code), None)
+        if not section:
+            continue
+        sec_items = section[3] if len(section) > 3 else []
+        for it in sec_items:
+            try:
+                desc = str(it[1]).split("(")[0].strip()
+                unit = str(it[2])
+                qty = float(it[3])
+            except (IndexError, TypeError, ValueError):
+                continue
+            mapped = _measure_type(unit)
+            if not mapped or qty <= 0:
+                continue
+            mtype, munit = mapped
+            idx = len(takeoff)
+            row: dict = {
+                "type": mtype,
+                "group_name": trade[:100] or "General",
+                "group_color": take_colors[idx % len(take_colors)],
+                "annotation": f"{desc} ({trade})",
+                "measurement_unit": munit,
+                "page": 1,
+            }
+            if mtype == "count":
+                row["count_value"] = int(round(qty))
+                row["measurement_value"] = float(round(qty))
+            else:
+                row["measurement_value"] = float(round(qty, 3))
+            takeoff.append(row)
+            break  # one measurement per trade keeps the spread varied
+
+    # ── Documents (6-8 realistic project docs derived from the template) ─
+    # Naming for the BOQ/tender export follows the project's classification
+    # standard so a German DIN/GAEB project ships a "GAEB X83 tender export",
+    # a UK NRM job ships an "NRM2 BOQ", a US MasterFormat job a
+    # "MasterFormat BOQ", etc. Every entry matches the ``DocumentDef`` tuple
+    # shape consumed at the document-seeding block.
+    std = (template.classification_standard or "").lower()
+    boq_export_name = {
+        "din276": "GAEB X83 tender export.x83",
+        "gaeb": "GAEB X83 tender export.x83",
+        "nrm": "NRM2 BOQ.xlsx",
+        "masterformat": "MasterFormat BOQ.xlsx",
+        "dpgf": "DPGF tender export.xlsx",
+        "sinapi": "SINAPI planilha orcamentaria.xlsx",
+    }.get(std, "Bill of Quantities export.xlsx")
+    boq_export_mime = (
+        "application/xml"
+        if boq_export_name.endswith(".x83")
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    lead_trade = trades[0][1] if trades else "General works"
+    second_trade = trades[1][1] if len(trades) > 1 else lead_trade
+    documents: list[dict] = [
+        (
+            "Building permit - authority approval.pdf",
+            f"Construction permit and authority approval package for {proj}.",
+            "permit",
+            "application/pdf",
+            3_800_000,
+            ["permit", "authority", "official"],
+        ),
+        (
+            "Architectural drawing set.pdf",
+            f"Coordinated architectural general arrangement drawings for {proj}.",
+            "drawing",
+            "application/pdf",
+            12_400_000,
+            ["architectural", "drawings", "ga"],
+        ),
+        (
+            "Structural calculations report.pdf",
+            f"Structural design calculations and load assumptions for {proj}.",
+            "engineering",
+            "application/pdf",
+            5_200_000,
+            ["structural", "calculations", "engineering"],
+        ),
+        (
+            boq_export_name,
+            f"Priced bill of quantities / tender export for {proj}.",
+            "tender",
+            boq_export_mime,
+            640_000,
+            ["boq", "tender", std or "boq"],
+        ),
+        (
+            "Method statement.pdf",
+            f"Construction method statement covering {lead_trade.lower()}.",
+            "method_statement",
+            "application/pdf",
+            1_900_000,
+            ["method-statement", "execution"],
+        ),
+        (
+            "Health and safety plan.pdf",
+            f"Construction phase health and safety plan for {proj}.",
+            "hse",
+            "application/pdf",
+            2_300_000,
+            ["hse", "safety", "compliance"],
+        ),
+        (
+            f"{lead_trade} technical specification.pdf",
+            f"Technical specification and product data for {lead_trade.lower()}.",
+            "specification",
+            "application/pdf",
+            1_500_000,
+            ["specification", "submittal"],
+        ),
+        (
+            f"{second_trade} shop drawings.pdf",
+            f"Subcontractor shop drawings submitted for {second_trade.lower()}.",
+            "drawing",
+            "application/pdf",
+            4_100_000,
+            ["shop-drawing", "submittal"],
+        ),
+    ]
+
+    # ── Risks (5-7, trade-anchored, currency-correct) ────────────────────
+    # Each tuple matches ``RiskDef`` exactly:
+    #   (code, title, description, category, probability, impact_cost,
+    #    impact_schedule_days, severity, mitigation_strategy, status)
+    risk_seeds = [
+        (
+            "design",
+            "Design coordination gaps between disciplines",
+            0.35,
+            0.012,
+            20,
+            "high",
+            "Run weekly BIM coordination workshops and resolve clashes before construction.",
+            "open",
+        ),
+        (
+            "schedule",
+            "Delayed material deliveries for long-lead items",
+            0.45,
+            0.006,
+            30,
+            "medium",
+            "Place early procurement orders and track lead times in the procurement log.",
+            "monitoring",
+        ),
+        (
+            "financial",
+            "Material price escalation over the build period",
+            0.5,
+            0.018,
+            0,
+            "medium",
+            "Lock prices with framework agreements and carry an escalation allowance.",
+            "monitoring",
+        ),
+        (
+            "safety",
+            "Working-at-height and lifting operations exposure",
+            0.3,
+            0.004,
+            10,
+            "high",
+            "Enforce permit-to-work, lift plans and daily toolbox talks.",
+            "open",
+        ),
+        (
+            "procurement",
+            "Limited availability of specialist subcontractors",
+            0.4,
+            0.009,
+            25,
+            "medium",
+            "Pre-qualify at least three subcontractors per specialist trade.",
+            "open",
+        ),
+        (
+            "technical",
+            "Unforeseen ground or existing-condition issues",
+            0.3,
+            0.014,
+            20,
+            "high",
+            "Commission additional site investigation before excavation.",
+            "monitoring",
+        ),
+        (
+            "environmental",
+            "Adverse weather disrupting the critical path",
+            0.4,
+            0.003,
+            15,
+            "low",
+            "Sequence weather-sensitive works into favourable months and build in float.",
+            "monitoring",
+        ),
+    ]
+    risk_total = _template_total(template) or 1_000_000.0
+    risks: list[dict] = []
+    risk_n = min(max(len(trades), 5), 7)
+    for i in range(risk_n):
+        cat, base_title, prob, cost_frac, days, sev, mitig, status = risk_seeds[i % len(risk_seeds)]
+        trade = trades[i % len(trades)][1] if trades else "General works"
+        cost = round(risk_total * cost_frac, 2)
+        risks.append(
+            (
+                f"R-{i + 1:03d}",
+                f"{base_title} ({trade})",
+                f"{base_title} affecting {trade.lower()} for {proj}.",
+                cat,
+                prob,
+                cost,
+                days,
+                sev,
+                mitig,
+                status,
+            )
+        )
+
+    # ── Change orders (3-5, value in template currency, reused VO realism) ─
+    # Each tuple matches ``ChangeOrderDef`` exactly:
+    #   (code, title, description, reason_category, status, cost_impact,
+    #    schedule_impact_days, items_list) where each item is
+    #   (description, change_type, orig_qty, new_qty, orig_rate, new_rate, unit)
+    co_reasons = ["client_request", "design_change", "site_condition", "value_engineering", "client_request"]
+    co_statuses = ["approved", "pending", "approved", "implemented", "pending"]
+    change_orders: list[dict] = []
+    co_n = min(max(len(trades), 3), 5)
+    for i in range(co_n):
+        code, trade, item = trades[i % len(trades)] if trades else ("", "General works", "")
+        # Derive a representative unit/rate from the first priced item of the
+        # matching section so the change-order line reads against real pricing.
+        unit = "lsum"
+        rate = 12000.0
+        if trades and (i % len(trades)) < len(template.sections):
+            sec_items = template.sections[i % len(trades)][3]
+            if sec_items:
+                first = sec_items[0]
+                try:
+                    unit = str(first[2]) or "lsum"
+                    rate = float(first[4])
+                except (IndexError, TypeError, ValueError):
+                    unit, rate = "lsum", 12000.0
+        add_qty = float(5 + i * 3)
+        cost_impact = round(add_qty * rate, 2)
+        change_orders.append(
+            (
+                f"CO-{i + 1:03d}",
+                f"Change order - {trade}: {item or 'additional works'}",
+                (
+                    f"{co_reasons[i % len(co_reasons)].replace('_', ' ').capitalize()} "
+                    f"affecting {trade.lower()} on {proj}."
+                ),
+                co_reasons[i % len(co_reasons)],
+                co_statuses[i % len(co_statuses)],
+                cost_impact,
+                2 + (i % 4),
+                [
+                    (
+                        f"{item or trade} - additional quantity",
+                        "added",
+                        "0",
+                        f"{add_qty:g}",
+                        "0",
+                        f"{rate:.2f}",
+                        unit,
+                    ),
+                ],
+            )
+        )
+
     return {
         "contacts": contacts,
         "tasks": tasks,
@@ -4563,6 +4942,11 @@ def _generate_module_data(
         "requirements": requirements,
         "progress": progress,
         "progress_plan": progress_plan,
+        # Gap modules with no generated fallback before this enrichment
+        "documents": documents,
+        "risks": risks,
+        "change_orders": change_orders,
+        "takeoff": takeoff,
     }
 
 
@@ -8250,6 +8634,16 @@ async def _seed_module_data(
         from app.modules.resources.models import Resource
 
         res_list = generated.get("resources", [])
+        # Resources use ondelete=SET NULL on their project FK (shared-pool
+        # design) and a globally-unique ``code``, so deleting a demo project
+        # orphans them and a re-seed (force_reinstall / qa-reset) would collide
+        # on the duplicate code. Clear any stale rows for exactly these codes
+        # first to keep seeding idempotent. PG enforces ON DELETE CASCADE for
+        # the dependent resource rows (assignments, skills, etc.).
+        res_codes = [r["code"] for r in res_list if r.get("code")]
+        if res_codes:
+            await session.execute(delete(Resource).where(Resource.code.in_(res_codes)))
+            await session.flush()
         for r in res_list:
             session.add(
                 Resource(
@@ -8341,6 +8735,35 @@ async def _seed_module_data(
     except Exception:
         logger.debug("Progress module not loaded, skipping demo progress")
 
+    # ── Takeoff measurements (so /takeoff is non-empty on every demo) ─────
+    try:
+        from app.modules.takeoff.models import TakeoffMeasurement
+
+        take_list = generated.get("takeoff", [])
+        for t in take_list:
+            mv = t.get("measurement_value")
+            session.add(
+                TakeoffMeasurement(
+                    id=_id(),
+                    project_id=project_id,
+                    document_id=None,
+                    page=t.get("page", 1),
+                    type=t["type"],
+                    group_name=t.get("group_name", "General"),
+                    group_color=t.get("group_color", "#3B82F6"),
+                    annotation=t.get("annotation"),
+                    points=[],
+                    measurement_value=(Decimal(str(mv)) if mv is not None else None),
+                    measurement_unit=t.get("measurement_unit", "m"),
+                    count_value=t.get("count_value"),
+                    created_by=owner_str,
+                    metadata_={"project_id": str(project_id), "demo_id": demo_id, "source": "boq_derived"},
+                )
+            )
+        results["takeoff"] = len(take_list)
+    except Exception:
+        logger.debug("Takeoff module not loaded, skipping demo takeoff measurements")
+
     await session.flush()
     return results
 
@@ -8350,6 +8773,7 @@ async def install_demo_project(
     demo_id: str,
     *,
     force_reinstall: bool = False,
+    partner_pack: str | None = None,
 ) -> dict:
     """Install a demo project with full BOQ, Schedule, Budget, and Tendering data.
 
@@ -8357,6 +8781,12 @@ async def install_demo_project(
     When the demo is already installed and ``force_reinstall`` is False, returns
     the existing project info with ``already_installed=True`` instead of creating
     a duplicate.
+
+    When ``partner_pack`` is set, the project is tagged with
+    ``metadata_["partner_pack"] = <slug>`` so an active pack can scope the
+    workspace to show only its own projects. An already-installed demo is
+    re-tagged in place (idempotent) so re-activating a pack scopes the existing
+    sample too. Deactivating the pack clears the tag again.
 
     Raises ``ValueError`` if ``demo_id`` is not in the registry.
     """
@@ -8373,6 +8803,13 @@ async def install_demo_project(
 
     if existing_demo and not force_reinstall:
         proj = existing_demo[0]
+        # Re-tag the existing demo for the pack so re-activation scopes it too.
+        if partner_pack:
+            md = dict(proj.metadata_ or {})
+            if md.get("partner_pack") != partner_pack:
+                md["partner_pack"] = partner_pack
+                proj.metadata_ = md
+                await session.flush()
         logger.info(
             "Demo '%s' already installed as project %s — skipping duplicate creation",
             demo_id,
@@ -8410,7 +8847,12 @@ async def install_demo_project(
         status="active",
         owner_id=owner_id,
         address=template.address,
-        metadata_={**template.project_metadata, "demo_id": demo_id, "is_demo": True},
+        metadata_={
+            **template.project_metadata,
+            "demo_id": demo_id,
+            "is_demo": True,
+            **({"partner_pack": partner_pack} if partner_pack else {}),
+        },
     )
     session.add(project)
     await session.flush()
@@ -8540,6 +8982,27 @@ async def install_demo_project(
             session.add(b_pos)
 
     await session.flush()
+
+    # ── 4c. Validation report (traffic-light dashboard) ────────────────
+    # Run the real validation engine over the just-seeded BOQ using the
+    # project's configured rule sets and persist one ValidationReport. This
+    # exercises product code so the validation dashboard is never empty.
+    # Resilient by design — a validation hiccup must never abort an install.
+    try:
+        from app.core.validation.rules import register_builtin_rules
+        from app.modules.validation.service import ValidationModuleService
+
+        # Idempotent: populates the registry on first call, no-op thereafter.
+        register_builtin_rules()
+        rule_sets = template.validation_rule_sets or ["boq_quality"]
+        await ValidationModuleService(session).run_validation(
+            project_id=project.id,
+            boq_id=boq.id,
+            rule_sets=rule_sets,
+            user_id=owner_id,
+        )
+    except Exception:  # pragma: no cover - never break a demo install
+        logger.warning("Demo validation report not seeded for %s", demo_id, exc_info=True)
 
     # ── 5. Schedule (4D) ──────────────────────────────────────────────
     total_months = template.total_months
@@ -8676,12 +9139,30 @@ async def install_demo_project(
         session.add(cf)
 
     # ── 8. EVM Snapshot (5D) ──────────────────────────────────────────
-    ev = grand_total * 0.52
-    pv = grand_total * 0.58
-    ac = grand_total * 0.54
-    spi = round(ev / pv, 2) if pv else 1.0
-    cpi = round(ev / ac, 2) if ac else 1.0
-    eac = round(grand_total / cpi, 2) if cpi else grand_total
+    # Honor the template's explicit EVM/finance overrides when provided.
+    # ``planned_budget`` sets the planned-value baseline, ``actual_spend_ratio``
+    # the booked actual cost, and ``spi_override`` / ``cpi_override`` the
+    # performance indices. We derive a self-consistent (ev, pv, ac) triple from
+    # the overrides so the stored SPI/CPI strictly equal EV/PV and EV/AC. When
+    # an override is zero/unset we fall back to the grand_total recompute.
+    planned = template.planned_budget if template.planned_budget else grand_total
+    if template.spi_override or template.cpi_override or template.actual_spend_ratio:
+        pv = planned
+        spi = template.spi_override if template.spi_override else round(grand_total * 0.52 / pv, 2) if pv else 1.0
+        cpi = template.cpi_override if template.cpi_override else 1.0
+        ev = pv * spi
+        ac = round(ev / cpi, 2) if cpi else ev
+        if template.actual_spend_ratio:
+            # Prefer the explicit booked-actual ratio; keep CPI consistent (EV/AC).
+            ac = planned * template.actual_spend_ratio
+            cpi = round(ev / ac, 2) if ac else 1.0
+    else:
+        ev = grand_total * 0.52
+        pv = grand_total * 0.58
+        ac = grand_total * 0.54
+        spi = round(ev / pv, 2) if pv else 1.0
+        cpi = round(ev / ac, 2) if ac else 1.0
+    eac = round((template.planned_budget or grand_total) / cpi, 2) if cpi else (template.planned_budget or grand_total)
     period_now = f"2026-{datetime.now(UTC).month:02d}"
 
     snap = CostSnapshot(
@@ -8692,8 +9173,8 @@ async def install_demo_project(
         earned_value=str(round(ev, 2)),
         actual_cost=str(round(ac, 2)),
         forecast_eac=str(round(eac, 2)),
-        spi=str(spi),
-        cpi=str(cpi),
+        spi=str(round(spi, 2)),
+        cpi=str(round(cpi, 2)),
         notes="Baseline snapshot",
         metadata_={},
     )
@@ -8768,6 +9249,18 @@ async def install_demo_project(
             session.add(bid)
 
     await session.flush()
+
+    # Template-derived module rows. The 5 built-ins keep their hand-authored
+    # dicts (they win on demo_id match); every other demo (the partner packs)
+    # falls back to this generated data, so the risk / change-order / document
+    # blocks below read ``rows = _HAND.get(demo_id) or generated.get(...)``.
+    # ``_seed_module_data`` recomputes its own copy from the same pure function
+    # for the remaining modules; the duplication is cheap and deterministic.
+    try:
+        _generated = _generate_module_data(template, project.id, owner_id, demo_id, start)
+    except Exception:  # pragma: no cover - defensive; never break the installer
+        logger.debug("Derived module-data generation failed for %s", demo_id, exc_info=True)
+        _generated = {}
 
     # ── 10. Risk Register ─────────────────────────────────────────────
     _DEMO_RISKS: dict[str, list[RiskDef]] = {
@@ -8976,7 +9469,7 @@ async def install_demo_project(
     }
 
     risk_count = 0
-    risk_data = _DEMO_RISKS.get(demo_id, [])
+    risk_data = _DEMO_RISKS.get(demo_id) or _generated.get("risks", [])
     for r_code, r_title, r_desc, r_cat, r_prob, r_cost, r_days, r_sev, r_mitig, r_status in risk_data:
         risk_score = round(r_prob * (r_cost + r_days * 5000), 2)
         risk = RiskItem(
@@ -9179,7 +9672,7 @@ async def install_demo_project(
     }
 
     co_count = 0
-    co_data = _DEMO_CHANGE_ORDERS.get(demo_id, [])
+    co_data = _DEMO_CHANGE_ORDERS.get(demo_id) or _generated.get("change_orders", [])
     for co_code, co_title, co_desc, co_reason, co_status, co_cost, co_days, co_items_data in co_data:
         co = ChangeOrder(
             id=_id(),
@@ -9410,7 +9903,7 @@ async def install_demo_project(
     }
 
     doc_count = 0
-    doc_data = _DEMO_DOCUMENTS.get(demo_id, [])
+    doc_data = _DEMO_DOCUMENTS.get(demo_id) or _generated.get("documents", [])
     for d_name, d_desc, d_cat, d_mime, d_size, d_tags in doc_data:
         doc = Document(
             id=_id(),
@@ -9441,6 +9934,21 @@ async def install_demo_project(
     )
     logger.info("Demo module data for %s: %s", demo_id, module_data)
 
+    # ── 14. Real BIM geometry + downloadable PDF (baked assets, no convert) ─
+    # Attach a real BIM model with real geometry and a real plan-set PDF from
+    # the committed flagship assets so /bim, /takeoff and /documents are never
+    # blank. ``flagship-house`` owns its own dedicated seed path and is skipped
+    # by ``bundle_key_for``. Fully resilient — a missing asset never aborts.
+    asset_result: dict = {"status": "skipped"}
+    try:
+        from app.scripts.seed_demo_assets import attach_demo_assets, bundle_key_for
+
+        bundle_key = bundle_key_for(demo_id)
+        if bundle_key:
+            asset_result = await attach_demo_assets(session, project.id, owner_id, bundle_key)
+    except Exception:  # pragma: no cover - never break a demo install
+        logger.warning("Demo BIM/PDF assets not attached for %s", demo_id, exc_info=True)
+
     return {
         "project_id": str(project.id),
         "project_name": template.project_name,
@@ -9455,6 +9963,7 @@ async def install_demo_project(
         "risks": risk_count,
         "change_orders": co_count,
         "documents": doc_count,
+        "assets": asset_result,
         **module_data,
     }
 

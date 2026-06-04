@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { Badge, Button, Input, Breadcrumb, ConfirmDialog, SkeletonGrid } from '@/shared/ui';
 import { useConfirm } from '@/shared/hooks/useConfirm';
+import { copyToClipboard } from '@/shared/lib/browser';
 import { apiGet, apiPost, apiDelete } from '@/shared/lib/api';
 import { useToastStore } from '@/stores/useToastStore';
 
@@ -506,7 +507,7 @@ function CalendarFeedSection() {
   const feedUrl = `${window.location.origin}/api/v1/integrations/calendar/feed.ics`;
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(feedUrl).then(() => {
+    copyToClipboard(feedUrl).then(() => {
       setCopied(true);
       addToast({
         type: 'success',

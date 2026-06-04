@@ -15,6 +15,7 @@ review panel (the architecture guide "AI-augmented, human-confirmed" principle).
 
 async def on_startup() -> None:
     """Module startup hook — register permissions + built-in agents."""
+    from app.modules.ai_agents.agents.advisors import register_advisor_agents
     from app.modules.ai_agents.agents.boq_drafter import register_boq_drafter
     from app.modules.ai_agents.agents.cost_classifier import register_cost_classifier
     from app.modules.ai_agents.agents.document_analyst import register_document_analyst
@@ -27,9 +28,13 @@ async def on_startup() -> None:
     # Built-in agent catalogue. Each agent is self-contained (its own tools +
     # an Agent descriptor with UI metadata); registration is idempotent so a
     # re-run on a hot reload just overwrites by name.
+    #
+    # Tool-backed agents (read the platform's real project data):
     register_boq_drafter()
     register_estimate_reviewer()
     register_cost_classifier()
     register_document_analyst()
     register_project_analyst()
     register_rate_benchmarker()
+    # Prompt-only advisory agents (help me think / draft / structure):
+    register_advisor_agents()

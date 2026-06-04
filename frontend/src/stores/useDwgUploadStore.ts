@@ -11,6 +11,7 @@
  */
 
 import { create } from 'zustand';
+import { uuid } from '@/shared/lib/browser';
 import { fetchDrawing, uploadDrawing } from '@/features/dwg-takeoff/api';
 import type { DwgDrawing } from '@/features/dwg-takeoff/api';
 
@@ -257,7 +258,7 @@ export const useDwgUploadStore = create<DwgUploadState>((set, get) => {
     jobs: new Map(),
 
     startUpload: (params) => {
-      const jobId = crypto.randomUUID();
+      const jobId = uuid();
       const job: DwgUploadJob = {
         id: jobId,
         fileName: params.file.name,

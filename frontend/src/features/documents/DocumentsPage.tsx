@@ -11,6 +11,7 @@ import { RequiresProject } from '@/shared/auth/RequiresProject';
 import SimilarItemsPanel from '@/shared/ui/SimilarItemsPanel';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { apiGet, apiDelete, apiPatch } from '@/shared/lib/api';
+import { uuid } from '@/shared/lib/browser';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
@@ -635,7 +636,7 @@ export function DocumentsPage() {
 
     // Add each file to the global queue and upload in background
     for (const file of validFiles) {
-      const taskId = crypto.randomUUID();
+      const taskId = uuid();
 
       addQueueTask({
         id: taskId,

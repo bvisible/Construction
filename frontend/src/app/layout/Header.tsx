@@ -13,6 +13,7 @@ import { CountryFlag, PartnerLogoBadge } from '@/shared/ui';
 import { usePartnerPack } from '@/shared/hooks/usePartnerPack';
 import { NotificationBell } from '@/shared/ui/NotificationBell';
 import { apiGet } from '@/shared/lib/api';
+import { copyToClipboard } from '@/shared/lib/browser';
 import {
   exportErrorReport,
   getErrorCount,
@@ -440,21 +441,20 @@ function BugReportMenu() {
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
-    void navigator.clipboard.writeText(body).then(
-      () => {
+    void copyToClipboard(body).then((ok) => {
+      if (ok) {
         addToast({
           type: 'info',
           title: t('app.report_bug_not_configured', { defaultValue: 'GitHub repo not configured' }),
           message: t('app.report_bug_copied', { defaultValue: 'Report copied to clipboard' }),
         });
-      },
-      () => {
+      } else {
         addToast({
           type: 'warning',
           title: t('app.report_bug_not_configured', { defaultValue: 'GitHub repo not configured' }),
         });
-      },
-    );
+      }
+    });
   };
 
   const handleEmail = () => {
@@ -738,21 +738,20 @@ function HelpMenu() {
       window.open(url, '_blank', 'noopener,noreferrer');
       return;
     }
-    void navigator.clipboard.writeText(body).then(
-      () => {
+    void copyToClipboard(body).then((ok) => {
+      if (ok) {
         addToast({
           type: 'info',
           title: t('app.report_bug_not_configured', { defaultValue: 'Bug reporting is not configured' }),
           message: t('app.report_bug_copied', { defaultValue: 'Report contents copied to clipboard' }),
         });
-      },
-      () => {
+      } else {
         addToast({
           type: 'warning',
           title: t('app.report_bug_not_configured', { defaultValue: 'Bug reporting is not configured' }),
         });
-      },
-    );
+      }
+    });
   };
 
   return (

@@ -1,8 +1,8 @@
 [package]
 name = "openestimate-desktop"
 version = "0.1.0"
-description = "OpenEstimate Desktop — Construction Cost Estimation"
-authors = ["OpenEstimate Contributors"]
+description = "OpenConstructionERP Desktop, construction cost estimation and BOQ platform"
+authors = ["DataDrivenConstruction <info@datadrivenconstruction.io>"]
 edition = "2021"
 
 [build-dependencies]

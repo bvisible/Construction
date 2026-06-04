@@ -17,6 +17,7 @@
     "sub": "Open-Source-ERP für Bauteams — Kalkulation, Terminplanung, Ausschreibungen, Verträge, Baustellenaufgaben und Reporting in einer Installation. Kosten- und Zeitwerte bleiben synchron mit den Plänen und dem zugehörigen LV.",
     "cta_install": "Jetzt installieren",
     "cta_star": "Auf GitHub sternen",
+    "download_label": "Oder lade einfach die kostenlose Desktop-App herunter - kein Python, kein Docker, nichts einzurichten:",
     "meta_selfhost": "Selbst gehostet",
     "mod_projects_title": "Projekte",
     "mod_projects_sub": "Portfolio",

@@ -96,6 +96,7 @@ import { useToastStore } from '@/stores/useToastStore';
 import { getIntlLocale } from '@/shared/lib/formatters';
 import { VariantPicker } from '@/features/costs/VariantPicker';
 import type { CostVariant, VariantStats } from '@/features/costs/api';
+import { copyToClipboard, readClipboard } from '@/shared/lib/browser';
 
 /* ── Column width persistence ─────────────────────────────────────── */
 
@@ -2096,7 +2097,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
         const text = formatCellForClipboard(value, colId);
 
         try {
-          await navigator.clipboard.writeText(text);
+          await copyToClipboard(text);
         } catch {
           // Clipboard API may be unavailable (e.g. insecure context) — silently ignore
         }
@@ -2118,7 +2119,7 @@ const BOQGrid = forwardRef<BOQGridHandle, BOQGridProps>(function BOQGrid({
 
         let clipboardText: string;
         try {
-          clipboardText = await navigator.clipboard.readText();
+          clipboardText = await readClipboard();
         } catch {
           // Clipboard read blocked — nothing we can do
           return;

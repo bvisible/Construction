@@ -64,14 +64,16 @@ def _deb_arch_tag() -> str:
 def _converter_subprocess_env(converter_path: Path) -> dict[str, str] | None:
     """Build the subprocess environment for launching a DDC converter.
 
-    On Linux the proprietary ODA/DDC shared objects live next to the binary's
-    install tree (``usr/lib/datadrivenconstruction`` + ``usr/lib``). The
-    binaries carry an ``$ORIGIN``-relative RUNPATH that resolves their *direct*
-    dependencies, but the converters also ``dlopen`` runtime plugins at
-    conversion time (e.g. ``AecScheduleData.tx`` for DWG/DGN) that are NOT
-    covered by RUNPATH. We therefore prepend the SDK lib dirs to
-    ``LD_LIBRARY_PATH`` so every dependency — linked or dlopen'd — resolves.
-    Harmless when RUNPATH already covers everything.
+    On Linux the DDC cad2data SDK shared objects (ddc-deps-kernel/drawings/
+    architecture, ddc-thirdparty) live next to the binary's install tree
+    (``usr/lib/datadrivenconstruction`` + ``usr/lib``). The frontend installer
+    unpacks the converter's ``.deb`` set into a user-writable dir (no apt, no
+    root), so those libraries are not on the system linker path. The binaries
+    carry an ``$ORIGIN``-relative RUNPATH that resolves their *direct*
+    dependencies, but the converters load further SDK libraries at conversion
+    time that RUNPATH does not cover. We therefore prepend the SDK lib dirs to
+    ``LD_LIBRARY_PATH`` so every dependency resolves. Harmless when RUNPATH
+    already covers everything.
 
     Returns ``None`` on Windows/macOS (inherit the parent environment unchanged;
     Windows resolves its bundled Qt6 DLLs from the converter's own directory via
@@ -256,7 +258,7 @@ def find_converter(extension: str) -> Path | None:
     # Per-arch no-root extract dir written by the auto-downloader
     # (takeoff.router._download_converter_files_linux): the real ELF binary
     # lands at ~/.openestimator/converters/_ddc_linux_<arch>/usr/bin/{Format}Exporter
-    # with the ODA libs alongside (resolved at launch via LD_LIBRARY_PATH set in
+    # with the DDC SDK libs alongside (resolved at launch via LD_LIBRARY_PATH set in
     # _converter_subprocess_env). Probe it FIRST so an auto-downloaded converter
     # is found with no apt install and no service restart.
     per_arch_linux_bin = (

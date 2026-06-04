@@ -17,6 +17,7 @@
     "sub": "ERP open-source pour les équipes du BTP — chiffrages, plannings, appels d'offres, contrats, tâches chantier et reporting en une seule installation. Les coûts et les délais restent synchronisés avec les plans et le bordereau (BOQ) associé.",
     "cta_install": "Installer maintenant",
     "cta_star": "Star sur GitHub",
+    "download_label": "Ou téléchargez simplement l'application de bureau gratuite - pas de Python, pas de Docker, rien à configurer :",
     "meta_selfhost": "Auto-hébergé",
     "mod_projects_title": "Projets",
     "mod_projects_sub": "portefeuille",

@@ -317,19 +317,38 @@ def _pack_country(slug: str) -> str | None:
 def _demo_install_list(slug: str, demo_count: int) -> list[str]:
     """Build the ordered, de-duplicated demo install list for the pack.
 
-    Flagship (``PACK_DEMO_PROJECT[slug]``) first, then every other
-    ``DEMO_CATALOG`` demo sharing the flagship's ``country``, truncated to
-    ``demo_count``.
+    A pack's manifest may declare an explicit ``demo_template_ids`` list. When
+    present, those ids (in order, de-duplicated, filtered to ids that resolve to
+    a loaded ``DemoTemplate``) are used verbatim — this guarantees every pack can
+    pin exactly the market-appropriate demos it ships, even when no second demo
+    shares the flagship's country (e.g. the cross-region modular / renewables
+    packs). When the manifest declares none, fall back to the historical
+    behaviour: flagship (``PACK_DEMO_PROJECT[slug]``) first, then every other
+    ``DEMO_CATALOG`` demo sharing the flagship's ``country``. The result is
+    truncated to ``demo_count``.
     """
-    from app.core.demo_projects import DEMO_CATALOG, PACK_DEMO_PROJECT
+    from app.core.demo_projects import DEMO_CATALOG, DEMO_TEMPLATES, PACK_DEMO_PROJECT
+    from app.core.partner_pack.discovery import get_pack_by_slug
 
     if demo_count <= 0:
         return []
 
+    # Prefer the manifest's explicit demo_template_ids when declared. Only keep
+    # ids that resolve to a real template so a typo never seeds a phantom demo.
+    m = get_pack_by_slug(slug)
+    explicit = list(getattr(m, "demo_template_ids", []) or []) if m else []
+    if explicit:
+        ordered: list[str] = []
+        for demo_id in explicit:
+            if demo_id in DEMO_TEMPLATES and demo_id not in ordered:
+                ordered.append(demo_id)
+        if ordered:
+            return ordered[:demo_count]
+
     flagship = PACK_DEMO_PROJECT.get(slug)
     country = _pack_country(slug)
 
-    ordered: list[str] = []
+    ordered = []
     if flagship:
         ordered.append(flagship)
     if country:
@@ -359,7 +378,7 @@ async def _step_demos(slug: str, demo_count: int) -> StepResult:
     for demo_id in install_ids:
         try:
             async with async_session_factory() as session:
-                await install_demo_project(session, demo_id)
+                await install_demo_project(session, demo_id, partner_pack=slug)
                 await session.commit()
             installed.append(demo_id)
         except Exception as exc:  # noqa: BLE001 — one bad demo never aborts the rest

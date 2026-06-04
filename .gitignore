@@ -150,6 +150,8 @@ test-screenshots/
 !frontend/public/og-image.png
 !frontend/public/*.jpg
 !frontend/public/*.jpeg
+# Partner-pack company logos are real shipped assets, not dev screenshots
+!packs/**/logo.png
 
 # QA test scripts (contain demo credentials)
 backend/qa_*.py

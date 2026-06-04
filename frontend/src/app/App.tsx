@@ -288,6 +288,11 @@ const PortalPage = lazy(() =>
 const ResourcesPage = lazy(() =>
   import('@/features/resources').then((m) => ({ default: m.ResourcesPage }))
 );
+const CapacityPlanningPage = lazy(() =>
+  import('@/features/portfolio/CapacityPlanningPage').then((m) => ({
+    default: m.CapacityPlanningPage,
+  }))
+);
 const ContractsPage = lazy(() =>
   import('@/features/contracts').then((m) => ({ default: m.ContractsPage }))
 );
@@ -1001,6 +1006,7 @@ export default function App() {
         <Route path="/projects/:projectId/portal" element={<P title="Subcontractor Portal"><PortalPage /></P>} />
         <Route path="/resources" element={<P title="Resources & Crew"><ResourcesPage /></P>} />
         <Route path="/projects/:projectId/resources" element={<P title="Resources & Crew"><ResourcesPage /></P>} />
+        <Route path="/portfolio/capacity" element={<P title="Capacity Planning"><CapacityPlanningPage /></P>} />
 
         {/* 18-Modules Wave — Commercial */}
         <Route path="/contracts" element={<P title="Contracts"><ContractsPage /></P>} />

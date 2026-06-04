@@ -32,6 +32,7 @@ from app.modules.resources.schemas import (
     CertificationResponse,
     CertificationUpdate,
     ConflictDetail,
+    PortfolioCapacityResponse,
     ResourceCreate,
     ResourceDashboardResponse,
     ResourceLinkCreate,
@@ -700,6 +701,30 @@ async def board(
             for e in entries
         ],
     )
+
+
+@router.get("/portfolio/capacity", response_model=PortfolioCapacityResponse)
+async def portfolio_capacity(
+    start: datetime = Query(...),
+    end: datetime = Query(...),
+    bucket: str = Query(default="week", pattern=r"^(week|month)$"),
+    _perm: None = Depends(RequirePermission("resources.read")),
+    service: ResourcesService = Depends(_get_service),
+) -> PortfolioCapacityResponse:
+    """Org-wide resource utilization heatmap for capacity planning.
+
+    Returns, per resource per time bucket, the total allocation across every
+    project plus the per-project breakdown, flagging over-allocation and
+    cross-project competition. Gated by ``resources.read`` only — like the
+    org-wide dispatcher board, this is a portfolio (not project-scoped) view.
+    """
+    if end <= start:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="end must be after start",
+        )
+    payload = await service.portfolio_capacity(start, end, bucket=bucket)
+    return PortfolioCapacityResponse.model_validate(payload)
 
 
 @router.get("/board/conflicts", response_model=list[BoardConflict])

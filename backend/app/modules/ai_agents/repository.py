@@ -7,7 +7,7 @@ import uuid
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.ai_agents.models import AgentRun, AgentStep
+from app.modules.ai_agents.models import AgentRun, AgentStep, CustomAgent
 
 
 class AgentRunRepository:
@@ -64,3 +64,44 @@ class AgentStepRepository:
         """Return every step for a run in chronological order."""
         stmt = select(AgentStep).where(AgentStep.run_id == run_id).order_by(AgentStep.step_idx.asc())
         return list((await self.session.execute(stmt)).scalars().all())
+
+
+class CustomAgentRepository:
+    """CRUD helpers for user-authored :class:`CustomAgent` rows.
+
+    Every read is scoped by ``user_id`` so a caller can only ever see, run,
+    edit, or delete their own custom agents (per-user privacy model shared
+    with agent runs).
+    """
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def create(self, agent: CustomAgent) -> CustomAgent:
+        self.session.add(agent)
+        await self.session.flush()
+        return agent
+
+    async def get_for_user(self, agent_id: uuid.UUID, user_id: uuid.UUID) -> CustomAgent | None:
+        """Return the custom agent if it exists AND belongs to ``user_id``."""
+        stmt = select(CustomAgent).where(
+            CustomAgent.id == agent_id,
+            CustomAgent.user_id == user_id,
+        )
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
+    async def list_for_user(self, user_id: uuid.UUID) -> list[CustomAgent]:
+        """Return the caller's custom agents, newest first."""
+        stmt = select(CustomAgent).where(CustomAgent.user_id == user_id).order_by(CustomAgent.created_at.desc())
+        return list((await self.session.execute(stmt)).scalars().all())
+
+    async def update(self, agent: CustomAgent, **fields: object) -> CustomAgent:
+        """Patch scalar fields on an owned custom agent and flush."""
+        for key, value in fields.items():
+            setattr(agent, key, value)
+        await self.session.flush()
+        return agent
+
+    async def delete(self, agent: CustomAgent) -> None:
+        await self.session.delete(agent)
+        await self.session.flush()

@@ -77,3 +77,123 @@ export function getApprovals(changeOrderId: string): Promise<ApprovalRow[]> {
     `/v1/changeorders/${changeOrderId}/approvals`,
   );
 }
+
+// ── What-If impact simulator (TOP-30 #11) ──────────────────────────────────
+
+/** Optional overrides for a what-if projection. Empty body = the CO as-is. */
+export interface SimulateImpactBody {
+  cost_impact?: string;
+  schedule_impact_days?: number;
+}
+
+export interface ImpactCost {
+  budget_before: string;
+  budget_after: string;
+  delta: string;
+  pct_of_budget: number;
+}
+
+export interface ImpactSchedule {
+  current_end_date: string | null;
+  projected_end_date: string | null;
+  days_added: number;
+  finish_moves: boolean;
+}
+
+export interface ImpactEVM {
+  bac_before: string;
+  bac_after: string;
+  eac_before: string;
+  eac_after: string;
+  vac_before: string;
+  vac_after: string;
+  spi: string;
+  cpi: string;
+}
+
+export interface ImpactBOQ {
+  item_count: number;
+  sections_added: number;
+  positions_added: number;
+  target_boq_name: string | null;
+}
+
+/** Full what-if projection (mirrors backend `SimulateImpactResponse`). */
+export interface SimulateImpactResponse {
+  order_id: string;
+  code: string;
+  base_currency: string;
+  as_of: string;
+  co_cost_native: string;
+  co_currency: string;
+  co_cost_base: string;
+  fx_converted: boolean;
+  cost: ImpactCost;
+  schedule: ImpactSchedule;
+  evm: ImpactEVM;
+  boq: ImpactBOQ;
+  notes: string[];
+}
+
+/** Run a read-only cost/schedule/EVM/BOQ projection for a change order. */
+export function simulateImpact(
+  changeOrderId: string,
+  body: SimulateImpactBody = {},
+): Promise<SimulateImpactResponse> {
+  return apiPost<SimulateImpactResponse, SimulateImpactBody>(
+    `/v1/changeorders/${changeOrderId}/simulate-impact/`,
+    body,
+  );
+}
+
+/** Snapshot the current what-if projection into the CO audit trail. */
+export function publishScenario(
+  changeOrderId: string,
+  body: SimulateImpactBody = {},
+): Promise<unknown> {
+  return apiPost<unknown, SimulateImpactBody>(
+    `/v1/changeorders/${changeOrderId}/publish-scenario/`,
+    body,
+  );
+}
+
+// ── AI / heuristic draft (TOP-30 #11) ──────────────────────────────────────
+
+export interface AIDraftBody {
+  project_id: string;
+  source_kind: 'free_text' | 'rfi' | 'daily_log';
+  source_id?: string | null;
+  source_text: string;
+  currency?: string;
+}
+
+export interface AIDraftLine {
+  description: string;
+  unit: string;
+  quantity: string;
+  rate: string;
+  cost_delta: string;
+  confidence: number;
+}
+
+/** A review-ready change-order draft (never auto-saved). */
+export interface AIDraftResponse {
+  title: string;
+  description: string;
+  reason_category: string;
+  cost_impact: string;
+  schedule_impact_days: number;
+  currency: string;
+  lines: AIDraftLine[];
+  confidence: number;
+  ai_used: boolean;
+  provider: string;
+  source_kind: string;
+  source_id: string | null;
+  note: string;
+}
+
+/** Draft a change order from source text (AI when a key is set, else heuristic). */
+export function aiDraftChangeOrder(body: AIDraftBody): Promise<AIDraftResponse> {
+  return apiPost<AIDraftResponse, AIDraftBody>(`/v1/changeorders/ai-draft/`, body);
+}

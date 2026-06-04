@@ -29,6 +29,8 @@ import {
   Sparkles,
 } from 'lucide-react';
 
+import { copyToClipboard } from '@/shared/lib/browser';
+
 import { fetchEmbedderStatus, type EmbedderStatus } from './api';
 
 function CopyableCommand({ command }: { command: string }) {
@@ -43,7 +45,7 @@ function CopyableCommand({ command }: { command: string }) {
 
   const onCopy = async () => {
     try {
-      await navigator.clipboard.writeText(command);
+      await copyToClipboard(command);
       setCopied(true);
     } catch {
       // Fallback: select-and-prompt; clipboard may be blocked under

@@ -57,8 +57,17 @@ async def submit_client_error(
     # caps the list to 128 entries.
     capped_stack = [line[:512] for line in payload.stack_lines[:64]]
 
+    # Put the real detail in the log message itself, not only in ``extra``.
+    # The stdlib formatter configured in app.main renders only ``%(message)s``,
+    # so anything passed via ``extra`` is silently dropped from the text log.
+    # That is why a real upload/runtime error previously showed up as a bare
+    # "client_error" with no detail. The structured ``extra`` is kept for JSON
+    # sinks that do render it.
     logger.warning(
-        "client_error",
+        "client_error id=%s path=%s msg=%s",
+        payload.error_id,
+        payload.path[:256] or "-",
+        payload.message[:512] or "-",
         extra={
             "client_error_id": payload.error_id,
             "client_timestamp": payload.timestamp,

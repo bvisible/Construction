@@ -10,7 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentDescriptor(BaseModel):
-    """A registered agent surfaced to clients."""
+    """A registered agent surfaced to clients.
+
+    Both built-in agents (from the in-memory registry) and user-authored
+    custom agents (from the DB) are serialised through this one schema so the
+    frontend renders them identically in the catalogue. ``is_custom`` lets the
+    UI show edit/delete affordances only on the caller's own custom agents.
+    """
 
     name: str
     description: str
@@ -24,6 +30,11 @@ class AgentDescriptor(BaseModel):
     icon: str = "bot"
     tagline: str = ""
     example_prompts: list[str] = Field(default_factory=list)
+
+    # True for user-authored agents (DB-backed, editable by their creator).
+    is_custom: bool = False
+    # Present only for custom agents — the row id, so the UI can edit/delete.
+    custom_id: UUID | None = None
 
 
 class ToolDescriptor(BaseModel):
@@ -130,3 +141,109 @@ class AgentHealthResponse(BaseModel):
     provider: str | None = None
     model: str | None = None
     settings_url: str = "/settings?tab=ai"
+
+
+# ── Custom agents (user-authored) ─────────────────────────────────────────────
+
+# Catalogue categories a custom agent may be filed under. Kept in sync with the
+# built-in agents' categories and the frontend category map so a custom agent
+# slots into an existing section instead of spawning a lone group.
+CUSTOM_AGENT_CATEGORIES = (
+    "estimating",
+    "quality",
+    "documents",
+    "analytics",
+    "planning",
+    "general",
+)
+
+
+class GuidedAgentSpec(BaseModel):
+    """The friendly, guided builder input a non-technical user fills in.
+
+    Rather than asking the user to write a raw system prompt, the builder
+    collects a few plain-language fields and the backend compiles them into a
+    well-formed system prompt (see ``service.compile_guided_prompt``). All
+    fields except ``goal`` are optional so the form stays light; the more the
+    user fills in, the sharper the resulting agent.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    # "Act as a ..." — the expert role the agent should play.
+    role: str = Field("", max_length=200)
+    # The single most important field: what should this agent help with / do.
+    goal: str = Field(..., min_length=3, max_length=2000)
+    # Who the answer is for (client, site team, junior estimator, ...).
+    audience: str = Field("", max_length=200)
+    # How the answer should be shaped (checklist, table, short email, ...).
+    output_format: str = Field("", max_length=400)
+    # Anything to avoid or always include (tone, length, must-nots).
+    extra_guidance: str = Field("", max_length=2000)
+
+
+class CustomAgentCreateRequest(BaseModel):
+    """Request body for ``POST /ai-agents/custom/``.
+
+    The caller supplies the card metadata plus EITHER a guided spec (preferred,
+    compiled into a system prompt server-side) OR a ready-made ``system_prompt``
+    (advanced escape hatch). At least one of the two must be present.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    display_name: str = Field(..., min_length=2, max_length=120)
+    tagline: str = Field("", max_length=280)
+    description: str = Field("", max_length=2000)
+    category: str = Field("general", max_length=40)
+    icon: str = Field("sparkles", max_length=40)
+    example_prompts: list[str] = Field(default_factory=list, max_length=6)
+
+    # Guided builder fields (preferred path).
+    guided: GuidedAgentSpec | None = None
+    # Advanced raw prompt (used as-is when no guided spec is given).
+    system_prompt: str = Field("", max_length=8000)
+
+
+class CustomAgentUpdateRequest(BaseModel):
+    """Request body for ``PUT /ai-agents/custom/{id}`` — full replace.
+
+    Same shape as create; the agent is rewritten from these values. Keeping it
+    a full replace (rather than a sparse patch) matches how the builder form
+    submits its complete state.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    display_name: str = Field(..., min_length=2, max_length=120)
+    tagline: str = Field("", max_length=280)
+    description: str = Field("", max_length=2000)
+    category: str = Field("general", max_length=40)
+    icon: str = Field("sparkles", max_length=40)
+    example_prompts: list[str] = Field(default_factory=list, max_length=6)
+    guided: GuidedAgentSpec | None = None
+    system_prompt: str = Field("", max_length=8000)
+
+
+class CustomAgentResponse(BaseModel):
+    """A user-authored custom agent row, returned by the custom-agent CRUD.
+
+    Carries the compiled ``system_prompt`` and the ``guided`` spec (when the
+    agent was built with the guided flow) so the edit form can re-hydrate the
+    friendly fields instead of confronting the user with the raw prompt.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    user_id: UUID
+    display_name: str
+    tagline: str = ""
+    description: str = ""
+    category: str = "general"
+    icon: str = "sparkles"
+    example_prompts: list[str] = Field(default_factory=list)
+    system_prompt: str = ""
+    guided: GuidedAgentSpec | None = None
+    created_at: datetime
+    updated_at: datetime

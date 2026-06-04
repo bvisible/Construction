@@ -468,6 +468,13 @@ const PunchKanbanCard = React.memo(function PunchKanbanCard({
       )}
 
       {/* Source badge */}
+      {item.metadata?.source === 'clash' && (
+        <div className="mt-1">
+          <Badge variant="error" size="sm">
+            {t('punch.source_clash', { defaultValue: 'From clash' })}
+          </Badge>
+        </div>
+      )}
       {item.metadata?.source === 'inspection' && (
         <div className="mt-1">
           <Badge variant="blue" size="sm">
@@ -1352,6 +1359,11 @@ const PunchTableRow = React.memo(function PunchTableRow({
           <p className="text-xs text-content-tertiary mt-0.5 truncate max-w-[250px]">
             {`(${item.location_x ?? '-'}, ${item.location_y ?? '-'})`}
           </p>
+        )}
+        {item.metadata?.source === 'clash' && (
+          <Badge variant="error" size="sm" className="mt-0.5">
+            {t('punch.source_clash', { defaultValue: 'From clash' })}
+          </Badge>
         )}
         {item.metadata?.source === 'inspection' && (
           <Badge variant="blue" size="sm" className="mt-0.5">

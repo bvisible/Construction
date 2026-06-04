@@ -26,6 +26,7 @@
  */
 
 import type { SceneManager } from './SceneManager';
+import { uuid } from '@/shared/lib/browser';
 
 const MAX_VIEWS_PER_MODEL = 100;
 
@@ -108,10 +109,7 @@ export interface AddViewpointResult {
 const storageKey = (modelId: string): string => `oe_bim_views_${modelId}`;
 
 function randomId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return `vp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return uuid();
 }
 
 function readAll(modelId: string): Viewpoint[] {

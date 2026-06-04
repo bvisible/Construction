@@ -454,6 +454,20 @@ const NCRRow = React.memo(function NCRRow({
           {ncr.title}
         </span>
 
+        {/* Origin badge - auto-raised from a clash */}
+        {ncr.metadata?.source === 'clash' && (
+          <Badge variant="error" size="sm" className="shrink-0">
+            {t('ncr.source_clash', { defaultValue: 'From clash' })}
+          </Badge>
+        )}
+
+        {/* Origin badge - auto-raised from blocking validation errors */}
+        {ncr.metadata?.source === 'validation' && (
+          <Badge variant="warning" size="sm" className="shrink-0">
+            {t('ncr.source_validation', { defaultValue: 'From validation' })}
+          </Badge>
+        )}
+
         {/* Type badge */}
         <Badge variant={typeCfg} size="sm">
           {t(`ncr.type_${ncr.ncr_type}`, {

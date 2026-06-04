@@ -28,6 +28,7 @@ import {
   WideModalField,
 } from '@/shared/ui';
 import { projectsApi } from '@/features/projects/api';
+import { copyToClipboard } from '@/shared/lib/browser';
 import { DateDisplay } from '@/shared/ui/DateDisplay';
 import { useToastStore } from '@/stores/useToastStore';
 import { getErrorMessage } from '@/shared/lib/api';
@@ -461,7 +462,7 @@ function MagicLinkBanner({
   const addToast = useToastStore((s) => s.addToast);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(token);
+      await copyToClipboard(token);
       addToast({
         type: 'success',
         title: t('portal.link_copied', { defaultValue: 'Magic link copied' }),

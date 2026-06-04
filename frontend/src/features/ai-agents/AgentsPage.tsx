@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Loader2,
   Play,
+  Plus,
   Settings as SettingsIcon,
   History,
   Sparkles,
@@ -16,9 +17,18 @@ import {
 import clsx from 'clsx';
 
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
-import { SkeletonCard, EmptyState } from '@/shared/ui';
-import { aiAgentsApi, type AgentDescriptor, type AgentRun } from './api';
+import { useToastStore } from '@/stores/useToastStore';
+import { useConfirm } from '@/shared/hooks/useConfirm';
+import { SkeletonCard, EmptyState, ConfirmDialog } from '@/shared/ui';
+import {
+  aiAgentsApi,
+  type AgentDescriptor,
+  type AgentRun,
+  type CustomAgent,
+  type CustomAgentInput,
+} from './api';
 import { AgentGallery } from './components/AgentGallery';
+import { CustomAgentBuilder } from './components/CustomAgentBuilder';
 import { RunTimeline } from './components/RunTimeline';
 import { RecentRunsList } from './components/RecentRunsList';
 import {
@@ -32,8 +42,14 @@ import {
 export function AgentsPage(): JSX.Element {
   const { t } = useTranslation();
   const projectId = useProjectContextStore((s) => s.activeProjectId);
+  const addToast = useToastStore((s) => s.addToast);
   const queryClient = useQueryClient();
+  const { confirm, ...confirmProps } = useConfirm();
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // Custom-agent builder modal state. `builderEditing` null + open = create.
+  const [builderOpen, setBuilderOpen] = useState(false);
+  const [builderEditing, setBuilderEditing] = useState<CustomAgent | null>(null);
 
   const [selected, setSelected] = useState<AgentDescriptor | null>(null);
   const [userInput, setUserInput] = useState('');
@@ -107,6 +123,81 @@ export function AgentsPage(): JSX.Element {
     startMutation.mutate();
   };
 
+  // ── Custom-agent builder ────────────────────────────────────────────────
+  const saveMutation = useMutation({
+    mutationFn: (input: CustomAgentInput) =>
+      builderEditing
+        ? aiAgentsApi.updateCustomAgent(builderEditing.id, input)
+        : aiAgentsApi.createCustomAgent(input),
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: ['ai-agents', 'list'] });
+      setBuilderOpen(false);
+      setBuilderEditing(null);
+      addToast({
+        type: 'success',
+        title: builderEditing
+          ? t('agents.builder.saved_toast', { defaultValue: 'Agent updated' })
+          : t('agents.builder.created_toast', { defaultValue: 'Agent created' }),
+        message: saved.display_name,
+      });
+    },
+  });
+
+  const openCreate = () => {
+    setBuilderEditing(null);
+    setBuilderOpen(true);
+  };
+
+  const openEdit = (agent: AgentDescriptor) => {
+    if (!agent.custom_id) return;
+    // The catalogue descriptor lacks the guided spec / raw prompt needed to
+    // re-hydrate the form, so fetch the full custom-agent row first.
+    aiAgentsApi
+      .listCustomAgents()
+      .then((rows) => {
+        const row = rows.find((r) => r.id === agent.custom_id);
+        if (row) {
+          setBuilderEditing(row);
+          setBuilderOpen(true);
+        }
+      })
+      .catch(() => {
+        addToast({
+          type: 'error',
+          title: t('agents.builder.load_error', { defaultValue: 'Could not open the agent' }),
+        });
+      });
+  };
+
+  const handleDelete = async (agent: AgentDescriptor) => {
+    if (!agent.custom_id) return;
+    const ok = await confirm({
+      title: t('agents.builder.delete_title', { defaultValue: 'Delete this agent?' }),
+      message: t('agents.builder.delete_message', {
+        defaultValue:
+          'This removes the agent from your catalogue. Past runs are kept. This cannot be undone.',
+      }),
+      variant: 'danger',
+      confirmLabel: t('agents.builder.delete_action', { defaultValue: 'Delete agent' }),
+    });
+    if (!ok) return;
+    try {
+      await aiAgentsApi.deleteCustomAgent(agent.custom_id);
+      // If the deleted agent was selected, clear the console.
+      if (selected?.name === agent.name) setSelected(null);
+      queryClient.invalidateQueries({ queryKey: ['ai-agents', 'list'] });
+      addToast({
+        type: 'success',
+        title: t('agents.builder.deleted_toast', { defaultValue: 'Agent deleted' }),
+      });
+    } catch {
+      addToast({
+        type: 'error',
+        title: t('agents.builder.delete_error', { defaultValue: 'Could not delete the agent' }),
+      });
+    }
+  };
+
   const agents = agentsQuery.data ?? [];
   const run = runQuery.data;
   const runs = runsQuery.data ?? [];
@@ -148,7 +239,7 @@ export function AgentsPage(): JSX.Element {
         <div className="rounded-lg bg-oe-blue-subtle p-2 text-oe-blue-text dark:bg-oe-blue/15">
           <Bot className="h-6 w-6" />
         </div>
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-semibold text-content-primary">
             {t('agents.title', { defaultValue: 'AI Agents' })}
           </h1>
@@ -159,6 +250,17 @@ export function AgentsPage(): JSX.Element {
             })}
           </p>
         </div>
+        <button
+          type="button"
+          onClick={openCreate}
+          className={clsx(
+            'inline-flex shrink-0 items-center gap-2 rounded-lg bg-oe-blue px-4 py-2 text-sm font-medium text-content-inverse transition-all',
+            'hover:bg-oe-blue-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-oe-blue focus-visible:ring-offset-2',
+          )}
+        >
+          <Plus className="h-4 w-4" />
+          {t('agents.builder.create_button', { defaultValue: 'Create your own agent' })}
+        </button>
       </div>
 
       {/* LLM-provider banner — surfaces the most common failure cause
@@ -349,6 +451,8 @@ export function AgentsPage(): JSX.Element {
                 selectedName={selected?.name ?? null}
                 onSelect={(agent) => selectAgent(agent)}
                 onPromptPick={(agent, prompt) => selectAgent(agent, prompt)}
+                onEdit={openEdit}
+                onDelete={handleDelete}
               />
             )}
           </section>
@@ -390,6 +494,25 @@ export function AgentsPage(): JSX.Element {
           )}
         </aside>
       </div>
+
+      {/* Custom-agent builder modal + delete confirmation. */}
+      <CustomAgentBuilder
+        open={builderOpen}
+        editing={builderEditing}
+        saving={saveMutation.isPending}
+        error={
+          saveMutation.isError
+            ? ((saveMutation.error as Error)?.message ??
+              t('agents.builder.save_error', { defaultValue: 'Could not save the agent.' }))
+            : null
+        }
+        onClose={() => {
+          setBuilderOpen(false);
+          setBuilderEditing(null);
+        }}
+        onSubmit={(input) => saveMutation.mutate(input)}
+      />
+      <ConfirmDialog {...confirmProps} />
     </div>
   );
 }

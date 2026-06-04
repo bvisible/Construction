@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { useTranslation } from 'react-i18next';
-import { CheckCircle2 } from 'lucide-react';
+import { CheckCircle2, Pencil, Trash2 } from 'lucide-react';
 
 import type { AgentDescriptor } from '../api';
 import { ToolBadge } from './ToolBadge';
@@ -17,6 +17,10 @@ interface AgentCardProps {
   onSelect: () => void;
   /** Select the agent AND prefill the run input with the example prompt. */
   onPromptPick: (prompt: string) => void;
+  /** Edit this agent — only provided for the caller's own custom agents. */
+  onEdit?: () => void;
+  /** Delete this agent — only provided for the caller's own custom agents. */
+  onDelete?: () => void;
 }
 
 const MAX_TOOLS = 4;
@@ -31,6 +35,8 @@ export function AgentCard({
   selected,
   onSelect,
   onPromptPick,
+  onEdit,
+  onDelete,
 }: AgentCardProps): JSX.Element {
   const { t } = useTranslation();
   const Icon = resolveAgentIcon(agent.icon);
@@ -40,23 +46,54 @@ export function AgentCard({
   const tools = agent.allowed_tools ?? [];
   const shownTools = tools.slice(0, MAX_TOOLS);
   const extraTools = tools.length - shownTools.length;
+  const showActions = !!(onEdit || onDelete);
 
   return (
     <div
       className={clsx(
-        'group rounded-xl border bg-surface-elevated p-4 text-left transition-all duration-normal ease-oe',
+        'group relative rounded-xl border bg-surface-elevated p-4 text-left transition-all duration-normal ease-oe',
         'shadow-xs hover:shadow-md',
         selected
           ? 'border-oe-blue/60 ring-2 ring-oe-blue/20'
           : 'border-border-light hover:border-border',
       )}
     >
+      {/* Edit / delete actions — only for the caller's own custom agents.
+          They reveal on hover/focus so a built-in-looking card stays clean. */}
+      {showActions && (
+        <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          {onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              aria-label={t('agents.builder.edit_action', { defaultValue: 'Edit agent' })}
+              className="flex h-7 w-7 items-center justify-center rounded-md bg-surface-secondary/80 text-content-tertiary backdrop-blur-sm transition-colors hover:bg-surface-tertiary hover:text-content-secondary"
+            >
+              <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
+          {onDelete && (
+            <button
+              type="button"
+              onClick={onDelete}
+              aria-label={t('agents.builder.delete_action', { defaultValue: 'Delete agent' })}
+              className="flex h-7 w-7 items-center justify-center rounded-md bg-surface-secondary/80 text-content-tertiary backdrop-blur-sm transition-colors hover:bg-semantic-error-bg hover:text-semantic-error"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Header — clicking selects the agent. */}
       <button
         type="button"
         onClick={onSelect}
         aria-pressed={selected}
-        className="flex w-full items-start gap-3 text-left focus-visible:outline-none"
+        className={clsx(
+          'flex w-full items-start gap-3 text-left focus-visible:outline-none',
+          showActions && 'pr-14',
+        )}
       >
         <span
           className={clsx(

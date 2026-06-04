@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { UploadCloud, X, FileUp } from 'lucide-react';
 import clsx from 'clsx';
+import { uuid } from '@/shared/lib/browser';
 import { useToastStore } from '@/stores/useToastStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useUploadQueueStore } from '@/stores/useUploadQueueStore';
@@ -90,7 +91,7 @@ export function UploadDialog({
       setUploading(true);
 
       for (const file of validFiles) {
-        const taskId = crypto.randomUUID();
+        const taskId = uuid();
         addQueueTask({
           id: taskId,
           type: 'file_upload',

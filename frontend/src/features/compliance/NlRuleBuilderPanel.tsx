@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Sparkles, Save, Wand2, AlertTriangle } from 'lucide-react';
 import { Button, Card, Badge } from '@/shared/ui';
+import { copyToClipboard } from '@/shared/lib/browser';
 import { useToastStore } from '@/stores/useToastStore';
 import {
   parseNlToDsl,
@@ -133,7 +134,7 @@ export function NlRuleBuilderPanel() {
   const handleCopyYaml = useCallback(async () => {
     if (!result?.dsl_yaml) return;
     try {
-      await navigator.clipboard.writeText(result.dsl_yaml);
+      await copyToClipboard(result.dsl_yaml);
       addToast({
         type: 'success',
         title: t('common.copied', { defaultValue: 'Copied' }),

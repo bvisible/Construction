@@ -164,14 +164,9 @@ class TestBuildGltf:
         bvs = build.gltf["bufferViews"]
         vals_bv = bvs[prop["values"]]
         offs_bv = bvs[prop["stringOffsets"]]
-        offsets = struct.unpack_from(
-            f"<{tbl['count'] + 1}I", blob, offs_bv["byteOffset"]
-        )
+        offsets = struct.unpack_from(f"<{tbl['count'] + 1}I", blob, offs_bv["byteOffset"])
         base = vals_bv["byteOffset"]
-        decoded = [
-            blob[base + offsets[i] : base + offsets[i + 1]].decode("utf-8")
-            for i in range(tbl["count"])
-        ]
+        decoded = [blob[base + offsets[i] : base + offsets[i + 1]].decode("utf-8") for i in range(tbl["count"])]
         assert decoded == ["elem_000", "elem_001", "elem_002"]
 
     def test_float_property_round_trips_from_binary(self):

@@ -687,20 +687,39 @@ export function ValidationPage() {
       const match = reports.find((r) => r.target_id === selectedBoqId);
       return match ?? null;
     },
-    enabled: !!selectedProjectId && !!selectedBoqId,
+    // Fire on an explicit ?report= deep link even before a BOQ is picked, so a
+    // link from a validation notification opens the report on its own.
+    enabled: (!!selectedProjectId && !!selectedBoqId) || !!reportIdParam,
     staleTime: 30_000,
   });
 
+  // Deep-link alignment: when arriving via ?report= (e.g. from a validation
+  // notification), the project/BOQ selectors are usually empty. Point them at
+  // the linked report's project and BOQ so the dropdowns, rule chips and the
+  // hydrate effect below all resolve to the report being viewed.
+  useEffect(() => {
+    if (!reportIdParam || !restoredReport) return;
+    if (restoredReport.project_id && restoredReport.project_id !== selectedProjectId) {
+      const name = projects?.find((p) => p.id === restoredReport.project_id)?.name ?? '';
+      setActiveProject(restoredReport.project_id, name);
+    }
+    if (restoredReport.target_id && restoredReport.target_id !== selectedBoqId) {
+      setSelectedBoqId(restoredReport.target_id);
+    }
+  }, [reportIdParam, restoredReport, selectedProjectId, selectedBoqId, projects, setActiveProject]);
+
   // Hydrate the page report from a restored persisted report (only when the
-  // user has not just produced a fresher one via a run).
+  // user has not just produced a fresher one via a run). A deep-linked report
+  // (explicit ?report= id) hydrates regardless of the BOQ selection, which the
+  // alignment effect above brings into sync a render later.
   useEffect(() => {
     if (!restoredReport) return;
-    if (restoredReport.target_id !== selectedBoqId) return;
+    if (!reportIdParam && restoredReport.target_id !== selectedBoqId) return;
     setReport((prev) => {
       if (prev && prev.id === restoredReport.id) return prev;
       return mapStoredReport(restoredReport);
     });
-  }, [restoredReport, selectedBoqId]);
+  }, [restoredReport, selectedBoqId, reportIdParam]);
 
   // Run validation mutation — persists a server-side ValidationReport via
   // the validation module (RBAC: validation.create) instead of the

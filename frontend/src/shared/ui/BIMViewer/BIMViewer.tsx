@@ -87,6 +87,7 @@ import { useBIMViewerStore } from '@/stores/useBIMViewerStore';
 import { useBIMGeometryCache } from '@/stores/useBIMGeometryCache';
 import { useBIMMeasurementsStore } from '@/stores/useBIMMeasurementsStore';
 import { useToastStore } from '@/stores/useToastStore';
+import { copyToClipboard } from '@/shared/lib/browser';
 
 /* ── Types ─────────────────────────────────────────────────────────────── */
 
@@ -2267,7 +2268,7 @@ export function BIMViewer({
       null,
       2,
     );
-    navigator.clipboard.writeText(text).catch(() => {/* ignore */});
+    copyToClipboard(text).catch(() => {/* ignore */});
   }, [contextMenu]);
 
   const handleCtxAddToBOQ = useCallback(() => {
@@ -3175,11 +3176,7 @@ export function BIMViewer({
                         lines.push('```');
                       }
                       const blob = lines.join('\n');
-                      try {
-                        navigator.clipboard?.writeText(blob);
-                      } catch {
-                        /* clipboard blocked — silent */
-                      }
+                      copyToClipboard(blob);
                     }}
                     className="text-[11px] text-amber-700/80 dark:text-amber-300/80 hover:text-amber-900 dark:hover:text-amber-100 underline-offset-2 hover:underline"
                   >
@@ -4323,7 +4320,7 @@ export function BIMViewer({
                       return el?.mesh_ref || el?.stable_id || eid;
                     }).join(', ')
                   : selectedElement.mesh_ref || selectedElement.stable_id || selectedElement.id;
-                navigator.clipboard.writeText(ids);
+                copyToClipboard(ids);
               }}
               className="flex items-center gap-1 text-[10px] text-content-tertiary hover:text-oe-blue transition-colors group"
               title={t('bim.copy_id', { defaultValue: 'Click to copy ID' })}
@@ -4456,7 +4453,7 @@ export function BIMViewer({
                       for (const [k, v] of Object.entries(elementProperties)) {
                         lines.push(`${k}: ${v}`);
                       }
-                      navigator.clipboard.writeText(lines.join('\n'));
+                      copyToClipboard(lines.join('\n'));
                     }}
                     className="text-[10px] text-content-tertiary hover:text-oe-blue transition-colors flex items-center gap-1"
                   >

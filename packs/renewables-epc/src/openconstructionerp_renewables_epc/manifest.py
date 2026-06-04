@@ -39,6 +39,11 @@ MANIFEST = PartnerPackManifest(
     ],
     default_modules=[],   # empty = show all
     hidden_modules=[],
+    # Cross-region pack: pin two EUR energy / heavy-civil EPC projects. The
+    # solar + BESS EPC flagship plus the cast-in-place RC structure (formwork-
+    # led) project - heavy civil/structural EPC works, a far better fit than the
+    # country-fill default (a Berlin residential complex).
+    demo_template_ids=["solar-bess-epc", "rc-structure-formwork"],
     branding=PartnerBranding(
         primary_color="#00A859",   # renewable green
         accent_color="#0072CE",    # energy blue

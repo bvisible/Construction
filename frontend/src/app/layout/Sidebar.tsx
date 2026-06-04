@@ -76,6 +76,7 @@ import {
   LineChart,
   Radar,
   ScrollText,
+  CalendarRange,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -319,6 +320,7 @@ const navGroups: NavGroup[] = [
       { labelKey: 'nav.schedule_advanced', to: '/schedule-advanced', icon: LineChart, advancedOnly: true },
       { labelKey: 'tasks.title', to: '/tasks', icon: ClipboardList },
       { labelKey: 'nav.5d_cost_model', to: '/5d', icon: TrendingUp, moduleKey: '5d', advancedOnly: true },
+      { labelKey: 'nav.capacity_planning', to: '/portfolio/capacity', icon: CalendarRange, advancedOnly: true },
       { labelKey: 'nav.risk_register', to: '/risks', icon: ShieldAlert, advancedOnly: true },
     ],
   },

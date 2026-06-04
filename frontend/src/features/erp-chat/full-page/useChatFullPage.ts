@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { aiApi, type AISettings } from '@/features/ai/api';
+import { uuid } from '@/shared/lib/browser';
 import type { ChatMessage, DataPanelEntry, ToolCallInfo } from '../types';
 
 const DEFAULT_SUGGESTIONS = [
@@ -13,7 +14,7 @@ const DEFAULT_SUGGESTIONS = [
 ];
 
 function uid(): string {
-  return crypto.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return uuid();
 }
 
 export interface UseChatFullPageReturn {

@@ -11,6 +11,11 @@ Subscriptions:
   QMS audit appear on the project NCR dashboard. Idempotent via the
   ``source_finding_id`` marker stored in ``NCR.metadata_``.
 
+* ``clash.high_severity.detected`` for a CRITICAL (or reviewer-confirmed)
+  clash → raise an NCR so the design/coordination non-conformance enters
+  the formal NCR workflow (root cause, corrective action, sign-off).
+  Idempotent on ``NCR.clash_result_id``.
+
 * ``ncr.closed_with_cost_impact`` → publish ``moc.candidate_from_ncr`` so
   the MoC module (or any subscriber) can auto-propose a Management-of-
   Change entry for scope-affecting NCRs. Cheap fan-out — no DB write here.
@@ -145,6 +150,228 @@ async def _on_qms_finding_raised(event: Event) -> None:
         logger.debug("ncr: _on_qms_finding_raised failed", exc_info=True)
 
 
+# ── clash.high_severity.detected → standalone-NCR row ───────────────────
+
+
+async def _on_clash_high_severity(event: Event) -> None:
+    """``clash.high_severity.detected`` → raise an NCR for serious clashes.
+
+    A high-severity clash is a coordination finding; a *critical* one (or a
+    reviewer who confirms a clash) is a formal non-conformance that belongs
+    in the NCR workflow. We therefore only materialise an NCR when the
+    severity is ``critical`` or the trigger is ``confirmed`` — routine high
+    clashes stay on the clash board (and become a punch item via the
+    punchlist bridge) to avoid NCR-dashboard noise.
+
+    Idempotent on ``NCR.clash_result_id`` so a re-published or re-confirmed
+    event for the same clash never raises a second NCR.
+    """
+    if not await _can_open_isolated_session():
+        return
+    data = event.data or {}
+    result_id = data.get("result_id")
+    project_id_raw = data.get("project_id")
+    if not (result_id and project_id_raw):
+        return
+
+    severity = str(data.get("severity") or "").lower()
+    trigger = str(data.get("trigger") or "").lower()
+    if severity != "critical" and trigger != "confirmed":
+        return
+
+    try:
+        project_id = uuid.UUID(str(project_id_raw))
+    except (ValueError, TypeError):
+        return
+
+    result_id_s = str(result_id)
+    try:
+        async with async_session_factory() as session:
+            # Idempotency — bail if an NCR already links this clash.
+            existing = (
+                await session.execute(
+                    select(NCR.id).where(
+                        NCR.project_id == project_id,
+                        NCR.clash_result_id == result_id_s,
+                    )
+                )
+            ).first()
+            if existing is not None:
+                return
+
+            a_name = str(data.get("a_name") or "").strip()
+            b_name = str(data.get("b_name") or "").strip()
+            clash_type = str(data.get("clash_type") or "clash").strip() or "clash"
+            elements = f"{a_name or '?'} vs {b_name or '?'}"
+            title = f"Clash NCR: {elements}"[:500]
+            description = (
+                f"Auto-raised from a {severity or 'high'}-severity clash "
+                f"(trigger: {trigger or 'detected'}).\n"
+                f"Elements: {elements}\n"
+                f"Clash type: {clash_type}\n"
+                f"Clash result: {result_id_s}"
+            )[:10000]
+
+            from app.modules.ncr.repository import NCRRepository
+
+            repo = NCRRepository(session)
+            ncr_number = await repo.next_ncr_number(project_id)
+            ncr = NCR(
+                project_id=project_id,
+                ncr_number=ncr_number,
+                title=title,
+                description=description,
+                ncr_type="design",
+                severity="critical" if severity == "critical" else "major",
+                status="identified",
+                location_description=elements[:500],
+                clash_result_id=result_id_s,
+                metadata_={
+                    "source": "clash",
+                    "source_event": "clash.high_severity.detected",
+                    "result_id": result_id_s,
+                    "run_id": str(data.get("run_id") or ""),
+                    "severity": severity,
+                    "trigger": trigger,
+                    "clash_type": clash_type,
+                },
+            )
+            session.add(ncr)
+            await session.commit()
+            logger.info(
+                "ncr: auto-raised NCR %s (%s) from clash %s (%s/%s)",
+                ncr.id,
+                ncr_number,
+                result_id_s,
+                severity,
+                trigger,
+            )
+            event_bus.publish_detached(
+                "ncr.created_from_clash",
+                {
+                    "ncr_id": str(ncr.id),
+                    "ncr_number": ncr_number,
+                    "project_id": str(project_id),
+                    "result_id": result_id_s,
+                    "severity": severity,
+                },
+                source_module="ncr",
+            )
+    except Exception:
+        logger.debug("ncr: _on_clash_high_severity failed", exc_info=True)
+
+
+# ── validation.results.errors_found → raise an NCR ──────────────────────
+
+
+async def _on_validation_errors_found(event: Event) -> None:
+    """``validation.results.errors_found`` → raise one NCR per validation run.
+
+    An ERROR-severity validation result blocks the data from being trusted; it
+    is a documentation/data non-conformance that belongs in the formal NCR
+    workflow (root cause, corrective action, sign-off). We raise a single NCR
+    per report summarising the blocking errors rather than one per error, to
+    keep the NCR dashboard readable.
+
+    Idempotent on ``metadata_['report_id']`` so re-running the same validation
+    (which produces a new report id) raises a fresh NCR, but a re-published
+    event for the *same* report never raises a duplicate.
+    """
+    if not await _can_open_isolated_session():
+        return
+    data = event.data or {}
+    report_id = data.get("report_id")
+    project_id_raw = data.get("project_id")
+    errors = data.get("errors") or []
+    error_count = int(data.get("error_count") or len(errors) or 0)
+    if not (report_id and project_id_raw) or error_count <= 0:
+        return
+
+    try:
+        project_id = uuid.UUID(str(project_id_raw))
+    except (ValueError, TypeError):
+        return
+
+    report_id_s = str(report_id)
+    try:
+        async with async_session_factory() as session:
+            # Idempotency — bail if an NCR already links this validation report.
+            # Match metadata in Python (as the QMS bridge does) rather than via a
+            # JSONB path operator, so the check never depends on column-type quirks.
+            existing_rows = (
+                await session.execute(select(NCR).where(NCR.project_id == project_id))
+            ).scalars().all()
+            for row in existing_rows:
+                md = row.metadata_ if isinstance(row.metadata_, dict) else {}
+                if md.get("source") == "validation" and md.get("report_id") == report_id_s:
+                    return
+
+            rule_set = str(data.get("rule_set") or "").strip()
+            target_id = str(data.get("target_id") or "").strip()
+            top = errors[:5]
+            bullet_lines = "\n".join(
+                f"- [{e.get('rule_id') or '?'}] {e.get('message') or ''}"
+                + (f" (at {e.get('element_ref')})" if e.get("element_ref") else "")
+                for e in top
+            )
+            more = error_count - len(top)
+            if more > 0:
+                bullet_lines += f"\n- ... and {more} more"
+            title = f"Validation errors in BOQ ({error_count})"[:500]
+            description = (
+                f"Auto-raised from a validation run that produced {error_count} "
+                f"blocking error(s).\n"
+                f"Rule set: {rule_set or 'n/a'}\n"
+                f"Validation report: {report_id_s}\n\n"
+                f"{bullet_lines}"
+            )[:10000]
+
+            from app.modules.ncr.repository import NCRRepository
+
+            repo = NCRRepository(session)
+            ncr_number = await repo.next_ncr_number(project_id)
+            ncr = NCR(
+                project_id=project_id,
+                ncr_number=ncr_number,
+                title=title,
+                description=description,
+                ncr_type="documentation",
+                severity="major",
+                status="identified",
+                metadata_={
+                    "source": "validation",
+                    "source_event": "validation.results.errors_found",
+                    "report_id": report_id_s,
+                    "target_id": target_id,
+                    "rule_set": rule_set,
+                    "error_count": error_count,
+                    "errors": top,
+                },
+            )
+            session.add(ncr)
+            await session.commit()
+            logger.info(
+                "ncr: auto-raised NCR %s (%s) from validation report %s (%d error(s))",
+                ncr.id,
+                ncr_number,
+                report_id_s,
+                error_count,
+            )
+            event_bus.publish_detached(
+                "ncr.created_from_validation",
+                {
+                    "ncr_id": str(ncr.id),
+                    "ncr_number": ncr_number,
+                    "project_id": str(project_id),
+                    "report_id": report_id_s,
+                    "error_count": error_count,
+                },
+                source_module="ncr",
+            )
+    except Exception:
+        logger.debug("ncr: _on_validation_errors_found failed", exc_info=True)
+
+
 # ── ncr.closed_with_cost_impact → MoC candidate fan-out ─────────────────
 
 
@@ -199,6 +426,8 @@ def register_subscribers() -> None:
     if getattr(event_bus, _SUBSCRIBED_FLAG, False):
         return
     event_bus.subscribe("qms.audit.finding_raised", _on_qms_finding_raised)
+    event_bus.subscribe("clash.high_severity.detected", _on_clash_high_severity)
+    event_bus.subscribe("validation.results.errors_found", _on_validation_errors_found)
     event_bus.subscribe("ncr.closed_with_cost_impact", _on_ncr_closed_with_cost_impact)
     setattr(event_bus, _SUBSCRIBED_FLAG, True)
-    logger.info("NCR: 2 cross-module subscriber(s) registered")
+    logger.info("NCR: 4 cross-module subscriber(s) registered")

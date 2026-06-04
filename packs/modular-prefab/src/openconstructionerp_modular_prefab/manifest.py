@@ -39,6 +39,11 @@ MANIFEST = PartnerPackManifest(
     ],
     default_modules=[],   # empty = show all
     hidden_modules=[],
+    # Cross-region pack: no second demo shares the flagship's country, so pin
+    # two EUR repeatable-housing projects. The Dutch volumetric modular-housing
+    # flagship plus the 48-unit Berlin residential complex - the closest
+    # repeatable, unit-based housing archetype in the same currency.
+    demo_template_ids=["modular-housing", "residential-berlin"],
     branding=PartnerBranding(
         primary_color="#1F4E79",   # industrial blue
         accent_color="#FFB81C",    # modular yellow

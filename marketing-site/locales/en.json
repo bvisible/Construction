@@ -10,7 +10,8 @@
     "github": "GitHub",
     "try_demo": "Try demo",
     "install": "Install",
-    "news": "News"
+    "news": "News",
+    "download": "Download"
   },
   "hero": {
     "version_meta": "shipped 2026-04-20",
@@ -18,6 +19,7 @@
     "sub": "Open-source ERP for construction teams — estimates, schedules, tenders, contracts, site tasks and reporting in one install. Cost and time figures stay in sync with the drawings and the BOQ behind them.",
     "cta_install": "Install now",
     "cta_star": "Star on GitHub",
+    "download_label": "Or just download the free desktop app - no Python, no Docker, nothing to set up:",
     "meta_selfhost": "Self-hosted",
     "mod_projects_title": "Projects",
     "mod_projects_sub": "portfolio",

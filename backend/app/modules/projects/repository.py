@@ -41,9 +41,22 @@ class ProjectRepository:
         Archived (soft-deleted) projects are excluded by default; pass an
         explicit `status` to override.
         """
+        from app.core.partner_pack.scope import scope_project_query
         from app.modules.teams.access import member_project_ids_subquery
 
         base = select(Project)
+
+        # Partner-pack scoping. When a pack is active the workspace presents a
+        # clean single-client view: only projects tagged with that pack's slug
+        # (metadata_->>'partner_pack') are listed. This deliberately overrides
+        # the admin-sees-all rule so an activated pack hides every unrelated
+        # project. Deactivating the pack untags its projects, so the normal
+        # un-scoped listing returns. Fail-soft: any partner-pack error leaves the
+        # standard ownership filter untouched.
+        base = scope_project_query(base, Project)
+
+        # Non-admins still only ever see projects they own or are a member of,
+        # whether or not a pack is active.
         if not is_admin:
             base = base.where((Project.owner_id == owner_id) | (Project.id.in_(member_project_ids_subquery(owner_id))))
         if status is not None:

@@ -1,0 +1,1500 @@
+{
+ "totals": {
+  "partial": 26,
+  "missing": 4
+ },
+ "already_done": [],
+ "items": [
+  {
+   "feature": "Clash + validation lifecycle events into notifications, punchlist and NCR",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": true,
+   "remaining": "1. Implement validation.report.created notification subscriber in notifications/events.py: when validation fails or has errors/warnings, notify project owner and BOQ creator. 2. Implement clash.high_severity.detected → auto-create PunchItem handler in punchlist/events.py: when critical/high clash detected, auto-create punch item with metadata link back to clash. 3. Implement clash.high_severity.detected → auto-create NCR handler in ncr/events.py: when critical clash confirmed, auto-create NCR record with linking metadata. 4. Add notification templates for validation failures and punch/NCR auto-creation confirmations. 5. Frontend: add UI indicators on clash detail showing linked punch items / NCRs when they exist. 6. Add sync logic: when clash is resolved/closed, auto-close linked punch/NCR items.",
+   "files": [
+    "backend/app/modules/notifications/events.py",
+    "backend/app/modules/notifications/templates.py",
+    "backend/app/modules/punchlist/events.py",
+    "backend/app/modules/ncr/events.py",
+    "backend/app/modules/clash/models.py (add metadata for punchlist/ncr links)",
+    "backend/app/modules/punchlist/models.py (add clash_result_id FK)",
+    "backend/app/modules/ncr/models.py (add clash_result_id FK)",
+    "backend/app/modules/validation/service.py",
+    "frontend/src/features/clash/ClashDetectionPage.tsx (show linked items UI)",
+    "frontend/src/features/punchlist (add clash origin badge)",
+    "frontend/src/features/ncr (add clash origin badge)",
+    "frontend/src/app/locales/en.ts (add i18n keys)",
+    "backend/alembic/versions (new migration for clash→punchlist/ncr FKs)"
+   ],
+   "shared": [
+    "backend/app/modules/notifications/events.py",
+    "backend/app/modules/notifications/templates.py",
+    "backend/app/core/events.py (event bus shared by all modules)"
+   ],
+   "ui": "Route: /clash?run={runId}&result={resultId} shows clash detail panel. Add right-side widget showing \"Created from NCR #NCR-042 on 2025-11-15\" and \"Spawned 2 punch items: [Structural reinforcement check] [Electrical outlet relocation]\" with links to each. When user clicks \"Create Punch Item\" button (new) or \"Create NCR\" button (new) in the detail panel, the system auto-populates the new item with clash context (elements, centroid coords, severity, discipline pair). Badge system: clash cards show red [NCR] + [Punch] chips when linked. Punchlist items show [Clash #CLASH-042] origin chip. NCR cards show [Clash → CLASH-042] origin link. Beautiful/clear design: use consistent icon (⚙️ for clash origin) + muted color (gray) so it doesn't overwhelm the primary severity/status info.",
+   "test": "Browser test (Chrome DevTools QA): 1. Create a clash run → engine detects 3 critical hard clashes between MEP + Structural. 2. Check notifications bell → each clash publishes one alert with \"critical clash detected\" severity + element names. 3. In clash detail, confirm I can see assignee/watchers received the notification (check in-app bell count incremented). 4. [FUTURE] Click new \"Create Punch Item\" → punchlist module auto-creates item with \"MEP × Structural interference at L3\" title, links back to this clash. 5. [FUTURE] Click new \"Create NCR\" → NCR module auto-creates record, severity=critical, linked to clash signature. 6. Change clash status to \"approved\" → confirm high-severity notification fires again with trigger=confirmed. 7. Resolve punchlist item → confirm linked clash status DOES NOT auto-change (independent lifecycle, only confirms coordination happened). 8. Screenshot must show: (current) clash detail panel with notification context displayed, (future) linked punch/NCR widget visible on detail, origin badges on punchlist/NCR list rows. Console must show zero errors, XHR 200s for all notification creation calls."
+  },
+  {
+   "feature": "Mobile field time and attendance with payroll-to-job-cost pipeline",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "\n1. Implement mobile field attendance & time capture:\n   - Complete the /field shell with actual tab implementations (Today/Capture/Crew tabs with API wiring)\n   - Build field diary time entry UI for recording start/end times and tasks\n   - Implement offline queue for field connectivity resilience\n   - Add PIN/magic-link auth to FieldMagicLink (already modeled, endpoints pending)\n\n2. Connect labour hours to cost model:\n   - Build event pipeline: fieldreports.workforce_logged → costmodel (publish event on report submission/approval)\n   - Implement labour cost calculator: hours_worked × resource.default_cost_rate (or assignment.cost_rate if assigned)\n   - Aggregate fieldreports hours per cost_category and wbs_id, then update costmodel budget lines\n   - Ensure daily_diary labour_hours_actual KPI feeds into cost snapshots (currently only emits event, not consumed)\n\n3. Build payroll integration layer (NEW module):\n   - Create backend/app/modules/payroll/ with models: PayrollBatch, PayrollEntry (linked to fieldreports + field_diary hours)\n   - Implement labour hour reconciliation: sum field_diary.hours + fieldreports.SiteWorkforceLog.hours_worked per resource/date\n   - Wire payroll batch approval to general ledger (finance module)\n   - Export payroll to accounting system (stub for ERP integration)\n\n4. Frontend payroll-to-cost reporting:\n   - Add Payroll > Batches list with approval workflow (draft → submitted → approved → posted)\n   - Link payroll entries back to field reports for audit trail\n   - Dashboard widget: cumulative labour cost vs budget ($ and %) from costmodel\n   - Mobile crew punch-in/out on field shell (Crew tab: start/end time, task selection)\n\n5. Data model refinement:\n   - Add labour_cost_actual to costmodel.BudgetLine (currently only has planned/committed/forecast)\n   - Add payroll_batch_id FK to SiteWorkforceLog (audit trail, prevent duplicate payroll posting)\n   - Add resource_id FK to SiteWorkforceLog (currently only worker_type as string; needed for cost_rate lookup)\n   - Create Assignment-aware payroll so assigned resources pull correct cost_rate (not default_cost_rate)\n\n6. Database migration (required):\n   - Create oe_payroll_batch and oe_payroll_entry tables\n   - Add labour_cost_actual column to oe_costmodel_budget_line\n   - Add resource_id and payroll_batch_id to oe_fieldreports_workforce\n   - Backfill missing data from legacy daily_diary and field_diary entries\n",
+   "files": [
+    "backend/app/modules/field_diary/router.py",
+    "backend/app/modules/field_diary/service.py",
+    "backend/app/modules/field_diary/events.py",
+    "backend/app/modules/fieldreports/events.py",
+    "backend/app/modules/fieldreports/service.py",
+    "backend/app/modules/fieldreports/models.py",
+    "backend/app/modules/fieldreports/schemas.py",
+    "backend/app/modules/payroll/__init__.py",
+    "backend/app/modules/payroll/models.py",
+    "backend/app/modules/payroll/service.py",
+    "backend/app/modules/payroll/router.py",
+    "backend/app/modules/payroll/schemas.py",
+    "backend/app/modules/payroll/repository.py",
+    "backend/app/modules/payroll/manifest.py",
+    "backend/app/modules/payroll/permissions.py",
+    "backend/app/modules/costmodel/models.py",
+    "backend/app/modules/costmodel/service.py",
+    "backend/app/modules/finance/service.py",
+    "backend/alembic/versions/*.py",
+    "frontend/src/features/field/FieldShellPage.tsx",
+    "frontend/src/features/field/FieldTodayTab.tsx",
+    "frontend/src/features/field/FieldCaptureTab.tsx",
+    "frontend/src/features/field/FieldCrewTab.tsx",
+    "frontend/src/features/field/FieldProfileTab.tsx",
+    "frontend/src/features/field/api.ts",
+    "frontend/src/features/payroll/PayrollPage.tsx",
+    "frontend/src/features/payroll/PayrollBatchList.tsx",
+    "frontend/src/features/payroll/PayrollBatchDetail.tsx",
+    "frontend/src/features/payroll/api.ts"
+   ],
+   "shared": [
+    "backend/app/modules/fieldreports/models.py",
+    "backend/app/modules/fieldreports/service.py",
+    "backend/app/modules/fieldreports/events.py",
+    "backend/app/modules/field_diary/service.py",
+    "backend/app/modules/field_diary/events.py",
+    "backend/app/modules/costmodel/models.py",
+    "backend/app/modules/costmodel/service.py",
+    "backend/app/modules/resources/models.py",
+    "backend/app/modules/resources/service.py",
+    "backend/alembic/versions/*.py"
+   ],
+   "ui": "\nMobile field worker interface (/field):\n- Shell: Bottom-nav with 4 tabs (Today, Capture, Crew, Me)\n- Today tab: Calendar + quick-add time log widget, show crew on-site, daily summary (hours, tasks)\n- Capture tab: Camera + voice-to-text for site observations (photos/video metadata)\n- Crew tab: Real-time crew punch board (name, clock-in/out, assigned task, hours today)\n- Me tab: Profile, shift history, payroll statement (YTD hours & earnings)\n\nDesktop payroll interface (/payroll):\n- Batch list: Filter by date range, status (draft/submitted/approved/posted), export CSV\n- Batch detail: Table of labour entries (worker, date, hours, trade, cost_category, hourly_rate, amount)\n- Approval workflow: Submit → Manager review → Approve → Post to GL\n- Cost reconciliation: Chart of payroll hours vs fieldreports hours (show gaps)\n- Dashboard widget on /costmodel: \"Labour Cost This Month\" card showing actual vs budget\n\nKey UX principles for clarity/simplicity/beauty:\n- Field mobile: offline-first, large touch targets (48px+), high contrast, minimal text\n- Payroll desktop: familiar spreadsheet style with inline edit, approval badges, drill-down to source documents\n- Cost dashboard: clear visual hierarchy (actual highlighted, budget muted), real-time status badges\n",
+   "test": "\nBrowser test (desktop payroll workflow):\n1. Navigate to /payroll\n2. See empty batch list (or existing batches from seeded data)\n3. Create new batch: Date range picker, select projects, click \"Generate from Field Reports\"\n4. Verify batch populates with SiteWorkforceLog entries (headcount × hours × rate) from fieldreports_workforce table\n5. Review entry: click a row, inline-edit hours, verify amount recalculates (hours × cost_rate)\n6. Approve batch: change status to \"submitted\", then \"approved\", verify GL posting event emitted\n7. Check /costmodel: verify labour_cost_actual updated on budget lines matching batch entries\n8. Export: click Download CSV, verify file contains batch entries in standard payroll format\n\nBrowser test (mobile field worker):\n1. Navigate to /field/{magic_link_token}\n2. Enter PIN from SMS/email\n3. Land on FieldShellPage with Today tab active\n4. Click \"Start Shift\" on Today tab, system records clock-in time\n5. Switch to Crew tab: see list of on-site workers with their clock-in times\n6. Click on own name, change assigned task from dropdown, verify save\n7. Switch to Capture tab: snap a site photo, system geo-tags it\n8. Click back to Today, verify shift clock-in shown, accumulating hours displayed\n9. Offline: kill network, record another activity, verify queued locally\n10. Restore network: activity posts to backend, shows in fieldreports summary\n11. At /fieldreports: verify new SiteWorkforceLog entry appears with correct hours_worked, cost_category, wbs_id\n\nAssertion: Cost rollup on /costmodel shows labour cost increment matching (hours × rate) from payroll batch.\n"
+  },
+  {
+   "feature": "Event-driven live EVM and KPI refresh with actuals",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "1. Wire event subscriptions from finance/schedule/risk/safety modules into reporting/bi_dashboards to invalidate KPI cache on procurement/schedule-update/risk-change/safety-incident events. 2. Implement persistent KPI snapshot cache with watermark (last_invalidated_at) that auto-updates on events. 3. Change costmodel EVM from snapshot-based to live-derived: compute PV/EV/AC on-demand from schedule baseline + progress + finance actuals + contracts, not from manual snapshots. 4. Add WebSocket or Server-Sent Events (SSE) to push KPI changes to frontend instead of 60s polling. 5. Replace manual admin endpoint trigger with automatic cron job (e.g., 0 0 * * * for daily) calling auto_recalculate_kpis(). 6. Create KPI invalidation event (kpi.invalidated) and emit it when schedule/finance/risk/safety events fire, wiring frontend to listen and refetch on-demand.",
+   "files": [
+    "backend/app/modules/reporting/service.py",
+    "backend/app/modules/reporting/router.py",
+    "backend/app/modules/reporting/models.py",
+    "backend/app/modules/reporting/__init__.py",
+    "backend/app/modules/bi_dashboards/events.py",
+    "backend/app/modules/bi_dashboards/service.py",
+    "backend/app/modules/bi_dashboards/models.py",
+    "backend/app/modules/costmodel/service.py",
+    "backend/app/modules/costmodel/models.py",
+    "backend/app/modules/finance/service.py",
+    "backend/app/modules/schedule/service.py",
+    "backend/app/modules/risk/service.py",
+    "backend/app/modules/safety/service.py",
+    "backend/app/core/events.py",
+    "backend/alembic/versions/v_new_kpi_cache_watermark.py",
+    "frontend/src/features/reporting/hooks/useKPIRefresh.ts",
+    "frontend/src/features/bi-dashboards/hooks/useKPIDashboardSubscription.ts",
+    "frontend/src/features/dashboard/hooks/useLiveEVMRefresh.ts"
+   ],
+   "shared": [
+    "backend/app/modules/reporting/service.py",
+    "backend/app/modules/bi_dashboards/events.py",
+    "backend/app/modules/bi_dashboards/service.py",
+    "backend/app/core/events.py"
+   ],
+   "ui": "EVM Dashboard (/projects/:id/5d, /projects/:id/evm): Replace static snapshot values (PV/EV/AC/SPI/CPI) with live-derived metrics that update in real-time. Add a refresh badge showing 'live' vs 'last updated X min ago'. KPI Snapshots Page (/reporting/snapshots): Replace manual 'Recalculate Now' button with auto-refresh indicator; show invalidation watermark per KPI. BI Dashboards (/bi-dashboards): Add 'auto-refresh enabled' toggle per dashboard; when enabled, KPI cards update via push (WebSocket/SSE) within 5s of upstream event (finance/schedule/risk change). Portfolio KPI Cards (/dashboard): Show real-time SPI/CPI/budget health badges that refresh on contract-signed, PO-issued, GR-confirmed, schedule-progress-recorded, risk-created events.",
+   "test": "1. Backend integration: (a) Create a PO in procurement with amount 100k → verify finance event fires → check ProjectBudget.committed += 100k → trigger bi_dashboards.kpi_recompute event → verify KPI invalidation watermark advances. (b) Record schedule progress on activity → verify schedule event fires → check if KPI snapshot includes updated schedule_progress_pct. (c) Create a risk → verify event fires → check KPI snapshot includes updated risk_score_avg. 2. Frontend: (a) Open dashboard (/projects/:id) → manually trigger PO issue from same browser in new tab → verify KPI card on dashboard auto-refreshes within 5s without user clicking refresh (WebSocket/SSE). (b) Open BI Dashboard → enable auto-refresh toggle → record field report progress → verify KPI cards update live. (c) Portfolio dashboard (/dashboard) → trigger multiple events (GR, contract signed, risk created) → verify all KPI badges update together, not stale. 3. Polling fallback: (a) Close WebSocket connection (simulate offline) → verify dashboard falls back to 60s polling without user noticing. (b) Re-establish connection → verify no duplicate updates."
+  },
+  {
+   "feature": "Bi-directional ERP/accounting connectors (NetSuite, Sage, QuickBooks, DATEV, Oracle)",
+   "status": "missing",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "Design and implement a complete bi-directional ERP/accounting connector abstraction: 1) Create connector abstract base class/protocol in backend/app/modules/finance/connectors/base.py defining sync interfaces; 2) Implement individual connectors for NetSuite, Sage, QuickBooks, DATEV, Oracle in separate modules; 3) Add AccountingConnectorConfig model to track enabled connectors, credentials, and sync schedules; 4) Implement bidirectional sync service (push invoices/payments to remote systems, pull GL/accounts data); 5) Add webhook/event subscription to trigger outbound syncs; 6) Create frontend pages for connector setup, credential management, and sync logs; 7) Add background job for scheduled syncs; 8) Implement field mapping UI between ERP invoice/payment fields and remote system requirements; 9) Add error handling and retry logic for failed syncs; 10) Create comprehensive test suite for mock connectors",
+   "files": [
+    "backend/app/modules/finance/connectors/__init__.py",
+    "backend/app/modules/finance/connectors/base.py",
+    "backend/app/modules/finance/connectors/netsuite.py",
+    "backend/app/modules/finance/connectors/quickbooks.py",
+    "backend/app/modules/finance/connectors/sage.py",
+    "backend/app/modules/finance/connectors/datev.py",
+    "backend/app/modules/finance/connectors/oracle.py",
+    "backend/app/modules/finance/models.py (add AccountingConnectorConfig, SyncLog, FieldMapping tables)",
+    "backend/app/modules/finance/router.py (add connector CRUD endpoints)",
+    "backend/app/modules/finance/service.py (add sync dispatcher)",
+    "backend/app/modules/finance/schemas.py (add connector config schemas)",
+    "backend/app/modules/finance/events.py (add sync triggers)",
+    "backend/app/core/job_runner.py (extend for scheduled syncs)",
+    "frontend/src/features/finance/ConnectorSetup.tsx",
+    "frontend/src/features/finance/ConnectorManagement.tsx",
+    "frontend/src/features/finance/SyncLogs.tsx",
+    "backend/alembic/versions/v0XX_add_accounting_connectors.py"
+   ],
+   "shared": [
+    "backend/app/modules/finance/models.py",
+    "backend/app/modules/finance/router.py",
+    "backend/app/modules/finance/service.py",
+    "backend/app/modules/finance/schemas.py",
+    "backend/app/modules/finance/events.py",
+    "backend/app/core/job_runner.py"
+   ],
+   "ui": "Route: /finance/connectors (new page under Finance module). Components: 1) Connector Gallery showing NetSuite, Sage, QuickBooks, DATEV, Oracle with setup status (not connected/connecting/connected); 2) Setup wizard per connector type capturing API credentials (OAuth or key-based per system); 3) Field Mapping UI to define how ERP invoice fields (invoice_number, amount_total, etc.) map to each remote system's required fields; 4) Sync Schedule panel (real-time on event, hourly, daily, weekly); 5) Sync Logs viewer showing last sync timestamp, success/failure status, error details; 6) Test Connection button; 7) Enable/Disable toggle for each connector. Make it clear which systems are one-way (push only) vs bidirectional. Show sync direction icons. Error states must display which field mapping is missing or which API call failed.",
+   "test": "Test route /finance/connectors: 1) Click \\\"Add Connector\\\", select NetSuite → verify wizard opens with OAuth flow fields; 2) Fill API credentials → click Test Connection → verify success/error message; 3) Define field mappings (invoice_number → ExtID, amount_total → LineItems[].Amount) → save; 4) Set sync to \\\"On Invoice Approved\\\" event → create test invoice, approve it → verify sync log shows delivery attempt; 5) Toggle connector off → create another invoice, approve → verify sync log has no new entry; 6) For pull sync: click \\\"Sync Now\\\" → verify it fetches GL accounts from remote system and logs them; 7) Verify sync logs page shows timeline of all attempts (success in green, failures in red with error detail); 8) Verify data reconciliation: open invoice in ERP, check its remote_system_id field is populated with the synced ID. Screenshots must show: connector gallery with status badges, completed field mapping, sync logs with timestamps, test connection success modal, error message for invalid credentials.\""
+  },
+  {
+   "feature": "Cross-project portfolio resource leveling and capacity planning",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "1. **Cross-Project Conflict Detection**: Extend propose_assignment() to detect conflicts across projects when assigning shared (home_project_id=NULL) resources. Currently only warns within each project's scope.\n\n2. **Portfolio-Level Leveling Endpoint**: Create POST /api/v1/schedule-advanced/level-resources-portfolio that accepts multiple schedule_ids and a shared resource pool with global limits, returns conflict-free assignments across all projects.\n\n3. **Global Resource Pool Management**: Add database views/models to materialize cross-project resource capacity and allocation for reporting; UI dashboard to visualize org-wide utilization.\n\n4. **Portfolio Capacity Planning UI**: New route /portfolio/capacity-planning with: (a) resource utilization heatmap across all projects, (b) leveling tool to apply global constraints, (c) conflict visualization showing which projects compete for same resources.\n\n5. **Booking Rules Across Projects**: Implement priority rules (e.g. critical-path projects, home-project affinity) to auto-schedule floating resources when multiple projects need them concurrently.",
+   "files": [
+    "backend/app/modules/resources/service.py",
+    "backend/app/modules/resources/repository.py",
+    "backend/app/modules/schedule_advanced/service.py",
+    "backend/app/modules/schedule_advanced/router.py",
+    "backend/app/modules/schedule_advanced/schemas.py",
+    "backend/app/modules/schedule_advanced/leveling.py",
+    "frontend/src/features/schedule/CPMView.tsx",
+    "frontend/src/features/schedule/api.ts",
+    "frontend/src/features/portfolio/CapacityPlanningPage.tsx",
+    "frontend/src/features/portfolio/api.ts"
+   ],
+   "shared": [
+    "backend/app/modules/resources/service.py",
+    "backend/app/modules/resources/repository.py",
+    "backend/app/modules/schedule_advanced/service.py",
+    "backend/app/modules/schedule_advanced/router.py",
+    "backend/app/modules/schedule_advanced/schemas.py"
+   ],
+   "ui": "**Route**: /portfolio/capacity-planning (new top-level page under Planning section)\n\n**Three-pane layout**:\n1. **Left sidebar**: Org-wide project tree + filter by resource type/skill\n2. **Center**: Gantt-style resource utilization heatmap (time × resource_id, color-coded by project)\n3. **Right panel**: \n   - \"Resource Pools\" card — list floating resources (home_project_id=NULL) + their current allocation %\n   - \"Apply Leveling\" card — input resource limits per resource code, submit to level across all active projects\n   - \"Conflicts\" card — table of cross-project over-allocations (red badge count)\n\n**Leveling modal** (from Apply Leveling):\n- Dropdown to select resource(s) or \"All Floating\"\n- Slider/input for max concurrent units per resource\n- Checkbox \"Respect project priorities\" (critical-path projects win)\n- \"Preview\" button shows shifted activities + Gantt before/after\n- \"Apply\" commits shifts to all schedules\n\n**Make it clear/simple/beautiful**:\n- Use gradient fill (green=under 50%, yellow=50-100%, red>100%) for utilization bars\n- Show resource code + type icon (person/crew/equipment) in legend\n- Inline conflict warnings with \"Fix now\" button\n- Export to CSV: resource utilization report",
+   "test": "**Browser test**: \n1. Navigate to /portfolio/capacity-planning\n2. Verify **init state**: Gantt heatmap renders all active projects' resources, no conflicts highlighted initially\n3. Click \"Apply Leveling\" → modal opens with available floating resources + input fields\n4. Enter resource_limit=2 for \"Carpenter\", click \"Preview\" → verify red conflict badge appears for dates where 3+ carpenters assigned across projects\n5. Click \"Apply\" → wait for POST /level-resources-portfolio to complete, verify assignments shifted in returned delta\n6. Refresh page → confirm Gantt reflects new shifted ES dates (activities moved right, color → green)\n7. Check one affected project's schedule view → verify activities match portfolio leveling output (no regression)\n8. **Conflict case**: Assign same carpenter 100% to Project-A (Jan 1–31) and 100% to Project-B (Jan 15–31) → board/conflicts endpoint should flag \"overallocation\" with both projects listed\n9. **Screenshot validation**: Heatmap must show cross-project overlaps clearly distinct from per-project overlaps (e.g. different shade or icon)"
+  },
+  {
+   "feature": "Unify schedule dependency graph into one source of truth + completion guards",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": true,
+   "remaining": "1. UNIFY DEPENDENCY GRAPH: Make Activity.dependencies JSON the single source of truth (or migrate to ScheduleRelationship-only); ensure all writers (create_relationship, update_activity, API imports) keep both stores in sync OR migrate to use only one. 2. IMPLEMENT COMPLETION GUARD: Add logic in update_progress() and update_activity() to prevent marking an activity completed if any of its predecessors (from both ScheduleRelationship AND Activity.dependencies) are not completed. 3. AUDIT API ENDPOINTS: Verify all relationship manipulation endpoints sync both stores or consolidate to one. 4. FRONTEND: Add visual feedback showing which activities are blocked by incomplete predecessors.",
+   "files": [
+    "backend/app/modules/schedule/models.py",
+    "backend/app/modules/schedule/service.py",
+    "backend/app/modules/schedule/router.py",
+    "backend/app/modules/schedule/schemas.py",
+    "backend/app/modules/schedule/repository.py",
+    "frontend/src/features/schedule/api.ts",
+    "frontend/src/features/schedule/SchedulePage.tsx",
+    "frontend/src/features/schedule/CPMView.tsx"
+   ],
+   "shared": [
+    "backend/app/modules/schedule/service.py",
+    "backend/app/modules/schedule/router.py",
+    "backend/app/modules/schedule/models.py"
+   ],
+   "ui": "Activity row in Gantt chart should display a visual indicator (lock icon + tooltip) when the activity is blocked by incomplete predecessors. When user attempts to mark activity as completed, a dialog should appear listing the incomplete predecessor activities that must be finished first. Status badge should change color (gray/disabled) when blocked. On the activity detail panel, a \"Dependencies\" section should show predecessors with their completion status (green checkmark = completed, red = incomplete).",
+   "test": "1. Create a schedule with 3 activities: A, B, C. 2. Create dependency B->A (FS) via API. 3. Verify A.dependencies JSON is updated AND ScheduleRelationship table has the row. 4. Call update_progress(B, 100) while A is not_started - should return HTTP 409 with message about blocked predecessor. 5. Complete A, then complete B - should succeed. 6. Update C to have dependency on incomplete B via update_activity() - should fail with 409. 7. In UI: mark A complete, verify B's Gantt cell shows unlock icon, click mark-complete on B, verify success, try marking B incomplete then re-complete C, verify 409 dialog appears listing incomplete B."
+  },
+  {
+   "feature": "AI photo intelligence: jobsite image analysis, auto-tagging, georeferencing",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "1. NO automatic AI extraction/tagging on photo upload - manual form inputs only (gps_lat, gps_lon, tags, category). Need to integrate extract_exif_gps() into upload_photo() flow to auto-populate GPS from EXIF if present.\n2. NO defect classification on photos. Current system has 6 category choices (site/progress/defect/delivery/safety/other) but no AI auto-classification based on image content.\n3. NO object detection or defect severity scoring - photo.py extractor is explicitly a stub awaiting full CV pipeline (PaddleOCR + YOLO).\n4. NO batch upload feature for photos (single-file upload only via /photos/upload and /ai/photo-estimate).\n5. NO dimension extraction from photos beyond the AI estimate endpoint (no structured OCR of measurements, labels, or architectural notation).\n6. NO photo timeline with AI insights (current timeline shows thumbnails only, no extracted metadata summary).\n7. CV pipeline service (services/cv-pipeline/) does not exist in codebase - Phase 3 \"AI Takeoff\" architecture guide artifact only.",
+   "files": [
+    "backend/app/modules/documents/service.py",
+    "backend/app/modules/documents/router.py",
+    "backend/app/modules/daily_diary/weather.py",
+    "backend/app/modules/documents/models.py",
+    "backend/app/core/match_service/extractors/photo.py",
+    "frontend/src/features/documents/PhotoGalleryPage.tsx",
+    "frontend/src/features/documents/api.ts",
+    "backend/app/modules/ai/service.py",
+    "backend/app/modules/ai/router.py",
+    "backend/alembic/versions/*.py (new migration for cv_confidence, estimated_category, ai_extracted_tags columns)"
+   ],
+   "shared": [
+    "backend/app/modules/documents/models.py",
+    "backend/app/modules/documents/service.py",
+    "backend/app/core/match_service/extractors/photo.py"
+   ],
+   "ui": "Route: /photos (Photo Gallery page) and /daily-diary (Daily Diary with photo panel). Current state: basic grid gallery with metadata display, manual category selection dropdown, tag input field, caption text area, GPS coordinates shown when present. For full feature: (1) Auto-extracted GPS coordinates displayed on upload confirmation with map preview, (2) Auto-classification badge showing detected defect severity (e.g., \"Minor crack\" with confidence %), (3) AI-generated tags displayed under manual tags with \"AI-suggested\" label, (4) Batch upload UI with progress bar and per-image status, (5) Photo timeline with extracted measurements and defect annotations overlaid on thumbnails.",
+   "test": "Manual browser test on /photos route: (1) Upload a JPG with EXIF GPS metadata; verify lat/lng auto-populate and map pin appears. (2) Upload a photo of a construction defect (crack, corrosion, water damage); verify system suggests defect category and severity tag. (3) Upload photo with visible measurements; verify AI extracts dimension text and populates dimension fields. (4) Select 5-10 photos and test batch operation to apply category/tags to multiple at once. (5) Verify lightbox view displays all extracted metadata (GPS, defects, measurements) in info panel. (6) Navigate /daily-diary for a project; verify photo panel shows geo-tagged photos on an embedded map overlay. (7) Test photo-estimate endpoint (/ai/photo-estimate) by uploading building photo; confirm returned BOQ contains dimension-based quantities inferred from image."
+  },
+  {
+   "feature": "Tendering vs Bid Management award reconciliation (single award source of truth)",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": false,
+   "remaining": "1. Subscribe procurement to 'bid_management.package.awarded' event (add event_bus.subscribe line in procurement/events.py)\n2. Create new async handler _on_bid_management_awarded in procurement/events.py that mirrors _on_tender_awarded logic\n3. Map bid_management package/award data to PurchaseOrder creation (extract supplier from Bidder, line items from BidSubmissionLine)\n4. Add idempotency guard using metadata.bid_package_id (similar to tender_package_id for tendering)\n5. Add unit tests for auto-PO creation from bid_management awards\n6. Add frontend notification/toast when PO is auto-created from bid_management award (currently only tendering has this UX)",
+   "files": [
+    "backend/app/modules/procurement/events.py",
+    "backend/app/modules/bid_management/models.py",
+    "backend/app/modules/bid_management/schemas.py",
+    "backend/app/modules/tests/test_procurement_events.py",
+    "frontend/src/features/bid-management/containers/BidAwardCard.tsx",
+    "frontend/src/features/bid-management/services/bidAwardService.ts"
+   ],
+   "shared": [
+    "backend/app/modules/procurement/events.py"
+   ],
+   "ui": "When a user awards a bid_management package, show a success toast notification indicating that a draft PO was auto-created (similar to tendering award flow). The PO link should appear in the package's award card, with a \"View PO\" button that navigates to /procurement/purchase-orders/{po_id}",
+   "test": "1. Navigate to /bid-management/packages/{id} in a project\n2. Create a bid package with multiple line items\n3. Send invitations and record a winning submission\n4. Click \"Award Package\" with a selected bidder and amount\n5. Verify in /procurement/purchase-orders that a new draft PO was created\n6. Verify PO has metadata.bid_package_id set to the package ID\n7. Verify PO number is auto-incremented per project\n8. Verify PO items mirror the winning submission's line items\n9. Re-award the same package to a different bidder - verify no duplicate PO is created (idempotency via metadata check)"
+  },
+  {
+   "feature": "Lien waiver automation and invoice-approval enforcement",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": true,
+   "remaining": "1. Add next_payment_blocked_waiver() function to subcontractors/service.py or extend next_payment_blocked() to handle both certificates and lien-waiver requirements. 2. Gate approve_payment_application_finance() and mark_paid() methods on waiver presence check. 3. Return 409 Conflict (or 422) if payment approval blocked by missing waiver with reason 'missing_waiver' or 'waiver_amount_mismatch'. 4. Add waiver-status reasons to PaymentBlockResult schema. 5. Frontend: add 'Waiver Status' column to payment/invoice approval UI (finance/FinancePage.tsx or new approval modal). 6. Frontend: disable 'Mark Paid' / 'Approve for Payment' button if waiver is required but missing. 7. Frontend: add visual indicator (badge/tooltip) on payment rows showing block reason. 8. Optional: add approval_routes event subscriber in finance module to emit 'payment.waiver_required' signal. 9. Optional: add project-level or agreement-level policy to enforce waiver requirement (conditional vs unconditional). 10. Update API docstrings to document payment-waiver coupling and blocking rules.",
+   "files": [
+    "backend/app/modules/subcontractors/models.py (add waiver fields to PaymentApplication or extend PaymentBlockResult)",
+    "backend/app/modules/subcontractors/service.py (add/extend next_payment_blocked_waiver, gate payment transitions)",
+    "backend/app/modules/subcontractors/repository.py (add waiver query methods for payment lookups)",
+    "backend/app/modules/subcontractors/router.py (gate POST /payment-applications/{id}/approve and /mark-paid endpoints)",
+    "backend/app/modules/finance/service.py (if bridging to finance invoices, add waiver check logic)",
+    "backend/app/modules/finance/router.py (add waiver validation in approve_invoice/pay_invoice if bridging)",
+    "frontend/src/features/subcontractors/api.ts (export waiver check helpers if creating generic payment-approval UI)",
+    "frontend/src/features/finance/FinancePage.tsx (add waiver-status column, disable buttons on block)",
+    "frontend/src/features/modules/payment-applications-approval-modal.tsx (new file or extend existing to show waiver status)",
+    "frontend/src/features/subcontractors/PaymentApplicationApprovalCard.tsx (add waiver indicator, link to lien panel)"
+   ],
+   "shared": [
+    "backend/app/modules/subcontractors/service.py (shared with payment application workflows, prequalification, rating, certificates)",
+    "backend/app/modules/subcontractors/router.py (shared with all subcontractor endpoints)",
+    "backend/app/modules/approval_routes/models.py (shared target_kind definition - may need to add 'payment_application' kind)",
+    "frontend/src/features/subcontractors/api.ts (shared subcontractor API layer)"
+   ],
+   "ui": "Payment/Invoice Approval Flow - Current UI: User sees payment application in foreman/finance approval queue, can approve/reject without any waiver visibility. Missing UI: (1) 'Waiver Status' badge/column on payment list showing 'OK', 'Missing', or 'Mismatch'. (2) In approval modal/drawer, show blocking reason if waiver required but absent, e.g. 'Lien waiver required before payment approval' with link to upload. (3) Disable 'Approve' and 'Pay' buttons until waiver requirement cleared. (4) Show waiver details (type, date, amount) inline in approval view for quick validation. (5) Optional: add 'Require Waiver' toggle in payment application creation form. Make it simple: red X or green checkmark icon next to payment, tooltip on hover, modal blocking reason on approval attempt.",
+   "test": "Test route: /subcontractors (or /projects/:id/payments if bridged). (1) Create subcontractor + payment application. (2) Attempt to approve/pay WITHOUT uploading waiver → expect 409 Conflict with detail 'missing_lien_waiver'. (3) Upload valid PDF waiver of matching type (conditional_partial for partial payment, unconditional for final). (4) Retry payment approval → expect 200 OK. (5) UI test: navigate to payment approval modal, verify 'Waiver Status' column shows 'Missing', button disabled until waiver uploaded via link. (6) Upload waiver, verify modal refreshes, button enabled. (7) Check amount mismatch scenario (payment 5000, waiver 4000) → expect 409 'waiver_amount_mismatch'. (8) Verify frontend breadcrumb/link from payment approval to subcontractor lien-waiver panel works. (9) Screenshot must show waiver blocking reason in red/yellow, disabled button, and link to upload."
+  },
+  {
+   "feature": "Commitment management: PO and subcontract approval workflows with live budget sync",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": true,
+   "remaining": "1. **Add PO approval status**: Insert new 'approved' status in PO_STATUS_TRANSITIONS; update schema to allow draft→approved transition before issue\n2. **Trigger approval workflows**: Modify procurement.service.create_po() to check for active PO approval routes and call approval_routes.service.start_instance() if a route exists\n3. **Link approval completion to PO status**: Add event listener in procurement/events.py that subscribes to approval_routes.instance.completed with target_kind=purchase_order; on approval, transition PO from draft→approved\n4. **Update budget on approval** (not issuance): Move budget commitment sync from procurement.po.issued to a new approval-triggered event; modify finance/events.py to listen for PO approval completion instead of issuance\n5. **Subcontract integration**: Define what 'subcontract' entity actually is (contracts module? separate model?); if contracts-based, repeat steps 1-4 for contracts module with target_kind=contract\n6. **Frontend**: Add approval workflow UI to ProcurementPage and ContractPage to show approval routing, start workflows, view decisions, re-submit on rejection\n7. **Test & migration**: Add unit tests for new event listeners and approval FSM; write migration if schema changes needed",
+   "files": [
+    "backend/app/modules/procurement/service.py",
+    "backend/app/modules/procurement/models.py",
+    "backend/app/modules/procurement/router.py",
+    "backend/app/modules/procurement/events.py",
+    "backend/app/modules/procurement/schemas.py",
+    "backend/app/modules/finance/events.py",
+    "backend/app/modules/contracts/service.py",
+    "backend/app/modules/contracts/models.py",
+    "backend/app/modules/contracts/router.py",
+    "backend/app/modules/contracts/events.py",
+    "frontend/src/features/procurement/ProcurementPage.tsx",
+    "frontend/src/features/procurement/api.ts",
+    "frontend/src/features/contracts/ContractPage.tsx",
+    "frontend/src/features/contracts/api.ts"
+   ],
+   "shared": [
+    "backend/app/modules/finance/events.py",
+    "backend/app/modules/approval_routes/service.py",
+    "frontend/src/features/approval-routes/ApprovalInstanceCard.tsx"
+   ],
+   "ui": "**ProcurementPage & ContractPage**: Add approval workflow UI section above the current issue/action buttons. Show: (1) whether an approval route is active for this PO/contract; (2) if pending approval, display the approval instance card with current step, approvers, decision buttons; (3) approval history timeline. Route: /projects/{id}/procurement (existing), /projects/{id}/contracts/{id} (existing). For simple/clear: use approval-routes' ApprovalInstanceCard component as a read-only widget on detail view; integrate decision UI inline when pending. Visual: approval status badge (Pending Approval → Approved → Issued), approval step timeline mirroring the contract-claim-approval UI already in contracts module.",
+   "test": "Browser test: (1) Navigate to /projects/{id}/procurement, create a PO with status=draft; (2) verify no approval UI appears if no approval route is defined; (3) create an approval route for target_kind=purchase_order in /projects/{id}/approval-routes; (4) reload PO detail view, confirm approval instance card appears showing pending approval; (5) submit approval decision as a user with approve permission; (6) verify PO transitions from draft→approved (visible in status badge); (7) verify ProjectBudget.committed increased (via /5d/budget-lines endpoint); (8) issue the approved PO and verify it moves to issued status; (9) repeat for contracts. Screenshots must show: PO detail with \"Pending Approval\" badge, approval instance card with approver name and decision buttons, timeline of approval steps, final \"Approved\" badge before issue action."
+  },
+  {
+   "feature": "Feature #11: Change Order AI auto-draft from RFI/daily-log + cost/schedule impact simulator",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "Remaining work to complete Feature #11:\n1. AI DRAFT FROM RFI: Extend RFI → CO conversion from manual pre-fill to AI-driven draft. Currently endpoint POST /{rfi_id}/create-variation/ uses a hardcoded template. Needed: invoke Claude API to analyze RFI question/response and generate multi-line CO description, cost breakdown suggestion, schedule impact justification. Return confidence scores.\n2. AI DRAFT FROM DAILY LOG: Add endpoint POST /changeorders/from-daily-log/{daily_log_id} to draft a CO from a daily diary entry. Parse log text (site events, delays, extra work) via Claude to extract scope changes, cost impact estimate, schedule delta, line-item suggestions.\n3. WHAT-IF IMPACT SIMULATOR: Add new endpoint POST /changeorders/{order_id}/simulate-impact to model cost/schedule effects BEFORE approval. Input: proposed line items, estimate currency FX movements, resource rates. Output: revised budget forecast, schedule delta, BOQ impact preview, EVM (BAC/SPI/CPI) projection with the CO applied.\n4. DB: Add columns to ChangeOrder for ai_generated_flag (bool), ai_confidence (0-100), simulated_impact_json (stores what-if scenario snapshots), source_log_id (for daily-log-sourced COs).\n5. FRONTEND: Add UI panels for (a) \"AI Draft from RFI\" button on RFI detail showing Claude-generated title/description/line-items pre-review, (b) \"Create CO from Daily Log\" flow in CO list, (c) \"What-If Impact\" sidebar on CO detail showing budget forecast, schedule slip, BOQ effect, allow user to tweak line items and re-run simulator.\n6. SERVICE: Wire impact simulator to call out to schedule module to compute critical-path effects, fetch current FX rates for multi-currency projects, call budget service to show revised EVM metrics.\n7. TESTS: Unit tests for AI draft service (mock Claude calls), integration tests for simulator (verify cost/schedule rollup, BOQ writeback preview), end-to-end approval flow with AI-drafted CO.",
+   "files": [
+    "backend/app/modules/changeorders/models.py (add ai_generated, ai_confidence, simulated_impact_json, source_daily_log_id columns)",
+    "backend/app/modules/changeorders/schemas.py (add ChangeOrderDraftRequest, SimulateImpactRequest, SimulateImpactResponse)",
+    "backend/app/modules/changeorders/service.py (add draft_from_rfi_ai(), draft_from_daily_log_ai(), simulate_impact() methods)",
+    "backend/app/modules/changeorders/router.py (add POST /{order_id}/draft-from-daily-log, POST /{order_id}/simulate-impact endpoints)",
+    "backend/app/modules/rfi/router.py (extend POST /{rfi_id}/create-variation/ to call AI draft service instead of template)",
+    "backend/app/modules/changeorders/events.py (emit changeorder.ai_drafted, changeorder.impact_simulated events)",
+    "backend/alembic/versions/v31XX_changeorders_ai_draft_columns.py (migration for new columns)",
+    "frontend/src/features/changeorders/ChangeOrdersPage.tsx (add AI Draft UI, What-If Impact panel, daily-log picker)",
+    "frontend/src/features/changeorders/ImpactSimulator.tsx (new component: impact forecast, line-item tweaker, BOQ preview, EVM projections)",
+    "frontend/src/features/changeorders/AIProposalReview.tsx (new component: show Claude-generated draft with confidence scores, allow inline edits before confirm)",
+    "frontend/src/features/daily-diary/DailyDiaryPage.tsx (add 'Create CO' action on diary entry)",
+    "frontend/src/features/rfi/RFIPage.tsx (already has button, no change needed if router extended)",
+    "backend/app/core/llm.py (add change_order_draft_prompt, impact_simulator_prompt if not exists)"
+   ],
+   "shared": [
+    "backend/app/modules/changeorders/models.py (shared with all CO features; any schema change risks other CO workflows)",
+    "backend/app/modules/rfi/router.py (shared with RFI approval and link-management; CO creation endpoint change must not break existing RFI closure)",
+    "backend/app/modules/changeorders/service.py (shared; new AI draft and simulator methods sit alongside item management, status FSM, approval chain — high-coupling risk)",
+    "frontend/src/features/changeorders/ChangeOrdersPage.tsx (shared; adding AI UI panels and daily-log picker increases component complexity, may collide with other CO list/detail UX work)"
+   ],
+   "ui": "\nLOCATION: /projects/:project_id/changeorders (new panels and actions).\n\n1. CHANGEORDER LIST PAGE (/changeorders):\n   - New button above table: \"Create CO from Daily Log\" → opens dialog to pick date range + daily diary entry, click \"AI Draft\" to invoke Claude, review proposal, confirm.\n   - Existing RFI list action \"Create Variation\" already works; no UI change needed unless we enhance it to show AI confidence.\n\n2. CHANGEORDER DETAIL PAGE (/changeorders/:id):\n   - Add left sidebar panel: \"What-If Impact Simulator\" (collapsible).\n     - Shows current cost_impact, schedule_impact_days.\n     - Input row: \"Adjust cost by [±X currency]\" → recalculates, shows \"Revised budget: X, delta vs. baseline: Y\".\n     - Input row: \"Add schedule days: [N]\" → shows critical-path effect, revised project end date.\n     - Preview table: BOQ section (if this CO approved, will add X positions to primary BOQ).\n     - EVM snapshot: \"With this CO: BAC = X, EAC = Y, SPI = Z\" (read-only, no edit here).\n     - Button \"Publish Scenario\" → snapshots the what-if in metadata for audit.\n   - Add action button (top right, when status=draft): \"AI Rewrite\" → shows Claude-generated alternative description/line-items with confidence % per line, inline edit, confirm replace.\n\n3. STYLE & CLARITY:\n   - AI-generated content always marked with a subtle badge/icon (\"Generated by Claude\") and a \"Verify with QS\" alert.\n   - Confidence scores (0-100%) shown as a small meter next to each line (green ≥80%, yellow 50-80%, red <50%).\n   - Impact simulator always shows a timestamp \"Forecast as of [date]\" so user knows if rates/schedule are stale.\n   - What-if changes never auto-save; require explicit \"Apply to Order\" button so drafts don't drift.\n\nDESIGN PRINCIPLE: AI as suggestion, human as decision-maker. Every AI output is review-ready, not auto-applied.",
+   "test": "\nBROWSER TEST (manual QA on /projects/:project_id/changeorders):\n1. Create CO from Daily Log:\n   - Route to CO list, click \"Create CO from Daily Log\".\n   - Pick date range covering a diary entry with text like \"Extra excavation due to rock. ~3 days delay. Material cost ~USD 15k\".\n   - Click \"AI Draft\" → confirm Claude generates title, description, line items, cost_impact ~15k, schedule_impact_days ~3.\n   - Review proposal, change description, confirm CO creation.\n   - Verify CO lands in 'draft' status with ai_generated=true, ai_confidence=72 (example) in metadata.\n   - Verify linked_daily_log_ids contains the diary entry UUID.\n\n2. What-If Impact Simulator:\n   - Open a drafted CO with cost_impact=10000, schedule_impact_days=2.\n   - Open \"What-If Impact Simulator\" panel.\n   - Adjust cost by +5000 (input field).\n   - Verify display updates: \"Revised budget: 15000\", \"delta vs. current CO: +5000\".\n   - Adjust schedule by +3 days.\n   - Verify \"Critical path impact: YES, project end slip: 3d\" (assuming schedule module returns that).\n   - Check BOQ preview table shows \"Will add 2 sections, 8 positions to Project BOQ [name]\".\n   - Check EVM snapshot shows updated BAC, SPI, CPI with new figures.\n   - Click \"Publish Scenario\" → verify snapshot stored in CO metadata.\n   - Reload page → verify what-if state is gone (not auto-saved), must re-enter.\n\n3. RFI to CO (enhanced):\n   - Open RFI detail page, status='answered', cost_impact='true', cost_impact_value='8500'.\n   - Click \"Create Variation\" button.\n   - Confirm original hardcoded template still works (for backward compat), OR verify Claude-enhanced version shows \"AI Enhanced\" badge + confidence ≥80%.\n   - Edit proposal text, click confirm.\n   - Verify CO created with title/description reflecting RFI + cost_impact=8500, metadata.source='rfi'.\n\n4. Approval Chain + AI Draft:\n   - Draft CO (AI-generated or manual).\n   - Submit → status='submitted'.\n   - Start approval chain with 2 approvers.\n   - First approver opens CO detail, runs \"What-If Impact Simulator\" to check cost/schedule effects before decision.\n   - Approver approves → CO moves to next step, cost_impact written to project.budget_estimate.\n   - Verify event changeorder.approved fired with boq_applied=true (if BOQ writeback happened).\n\nSCREENSHOT/ASSERTION CHECKLIST:\n- [ ] AI Draft from Daily Log dialog shows spinner while Claude processes.\n- [ ] Generated proposal shows confidence meter: \"Title (87%)\", \"Cost Delta (73%)\", each line item flagged.\n- [ ] What-If Impact panel shows before/after cost, schedule, BOQ impact side-by-side.\n- [ ] EVM projections visible without separate modal.\n- [ ] All AI-generated content has \"Generated by Claude\" micro-badge.\n- [ ] Simulator what-if changes do NOT auto-save (refresh must clear).\n- [ ] CO created from daily log shows linked entry in metadata, not in items.\n- [ ] Approval chain UI unchanged, approval still works with simulated CO."
+  },
+  {
+   "feature": "Inspection and Test Plan (ITP) workflow with hold points and quality gates",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": true,
+   "remaining": "\n1. **Specification linkage** - Add foreign keys from ITPItem to source specs (BOQ lines, drawing specs, BIM requirements, specification documents). Currently ITPItem is orphaned with no parent spec reference.\n\n2. **Evidence document permanence** - Replace photos_json sparse array with a proper attachment system (link to file_manager module or create oe_qms_inspection_attachment table with URL, hash, uploaded_by, uploaded_at, file_signature). Add audit-ready evidence export.\n\n3. **Quality gate enforcement at workflow boundary** - Wire QMS inspection results into enterprise_workflows / approval_routes so that downstream activities (task progression, cost commitment, change order approval, contract execution) are gated on inspection pass/fail. Currently inspection completion is silent to other modules.\n\n4. **Approval workflow integration** - Integrate with the existing approval_routes module so conditional-pass or failed-inspection results trigger formal approval requests to project stakeholders (GC, client, designer).\n\n5. **Hold-point dependency sequencing** - Add predecessor_itp_item_id field to ITPItem and enforce that predecessor must be in passed status before allowing an inspection to be scheduled on the dependent item.\n\n6. **Responsible-role enforcement** - Validate signer_role against the user's actual project role during signature collection. Gate signature collection so only users in the responsible_role (or higher authority) can sign.\n\n7. **Compliance-ready export** - Add endpoint to export inspection record with full audit trail, all signatures, evidence, and metadata in a PDF or signed XML format suitable for regulatory submission (ISO 19650, FIDIC, jurisdiction-specific).\n\n8. **Event publishing for downstream subscribers** - Publish qms.inspection.hold_point_failed when an inspection on a hold point fails, so notifications, punchlist, NCR and risk modules can auto-react (e.g., create a high-severity punch item, raise an NCR, escalate a risk).\n\n9. **Signature non-repudiation** - Add signature timestamp, signer IP, signer browser user-agent, and optional digital signature (e.g., JWT or WebAuthn attestation) to QMSInspectionSignature for audit-trail integrity.\n\n10. **Hold-point release/unlock workflow** - Add a release mechanism so a hold point can be explicitly opened/closed by authorized roles, with event publishing and audit trail recording the release decision and justification.\n",
+   "files": [
+    "backend/app/modules/qms/models.py - Add ITP spec linkage (csi_section_ref, drawing_ref, bim_requirement_id, boq_line_id), inspection attachment table (oe_qms_inspection_attachment), hold-point dependency (predecessor_itp_item_id), signature non-repudiation fields (timestamp_utc, signer_ip, signer_user_agent, signature_token)",
+    "backend/app/modules/qms/schemas.py - Add schemas for spec linkage, attachment metadata, hold-point sequencing, compliance export, signature verification",
+    "backend/app/modules/qms/service.py - Add spec-linkage validation, attachment storage service, hold-point dependency guard (check predecessor passed before scheduling), signature non-repudiation capture, approval-route integration, event publishing for downstream subscribers (qms.inspection.hold_point_failed, qms.inspection.hold_point_passed), compliance-export logic, responsible-role validation",
+    "backend/app/modules/qms/router.py - Add endpoints for: attach evidence to inspection (POST /inspections/{id}/attachments), export inspection audit report (GET /inspections/{id}/export-compliance), list spec linkages (GET /inspections/{id}/linked-specs), release/unlock hold point (POST /inspections/{id}/release), verify signature chain (GET /inspections/{id}/signature-verification)",
+    "backend/app/modules/qms/repository.py - Add methods for: create_attachment, list_attachments, get_attachment, link_itp_to_spec, list_linked_specs, check_predecessor_status, export_inspection_record",
+    "backend/app/modules/qms/events.py - Add subscriber for enterprise_workflows to gate task/cost/contract progression on inspection result; add event publishing for qms.inspection.hold_point_failed (with failed_items, reason, impact_estimate), qms.inspection.hold_point_passed (with itp_item_id, project_id, hold_point_name), qms.inspection.hold_point_released (with release_date, released_by, justification)",
+    "backend/app/modules/approval_routes/models.py or events.py - Add support for inspection-result as an approval trigger (e.g., failed inspection triggers approval request to project owner/designer before proceeding)",
+    "frontend/src/features/qms/QMSPage.tsx - Add spec linkage display (show parent BOQ line, drawing ref, BIM element if linked), evidence attachment UI (preview, download, verify hash), hold-point dependency tree visualization, responsible-role indicator and lockout message if current user cannot sign, compliance-export button, release hold-point action (if authorized), signature non-repudiation display (timestamp, IP, user-agent, token)",
+    "frontend/src/features/qms/api.ts - Add functions for: attachInspectionEvidence, listInspectionAttachments, downloadAttachment, verifyAttachmentHash, exportInspectionCompliance, getLinkedSpecs, releaseHoldPoint, verifySignatureChain, checkPredecessorStatus",
+    "frontend/src/features/enterprise_workflows or approval_routes - Add UI integration to show inspection-triggered approval requests, gate task/cost UI pending inspection pass"
+   ],
+   "shared": [
+    "backend/app/modules/qms/events.py - will publish events that notifications, punchlist, ncr, risk, enterprise_workflows modules subscribe to",
+    "backend/app/modules/approval_routes/models.py - if adding approval-route trigger for inspections, affects contracts, submittals, rfi modules that already use it",
+    "frontend/src/features/modules - will need to wire inspection results into the module-preview cards so users see hold-point status across the app"
+   ],
+   "ui": "\nMain UX surface: `/qms` → Inspections tab\n\n**Create/Edit Inspection Modal (Enhanced):**\n- (Existing) Schedule inspection against ITP item, location_ref, inspector_user_id, scheduled_at\n- (NEW) Show spec linkage: \"Linked to BOQ line L-12.3, Drawing A101 Section 3.2.1, BIM element Wall-North-L2\" with clickable links to the spec document\n- (NEW) Evidence attachment section: drag-drop or file picker to attach photos, PDFs, test reports; show list with preview thumbnail, file hash (SHA256 for audit), uploaded_by, uploaded_at; add \"Verify Evidence\" button to check hash integrity\n- (Existing) Hold-point type indicator badge (Hold / Witness / Review)\n- (Existing) Responsible role display with lock icon if current user cannot sign\n\n**Inspection Detail Panel (Enhanced):**\n- Show full FSM timeline (scheduled → in_progress → [passed/failed/conditional])\n- (NEW) Hold-point dependencies tree: \"This hold point blocks Hold Point 6 (concrete pour) — predecessor status: ✓ Passed on 2026-06-01\"\n- (Existing) Signature collection UI: \"Collected 2/3 required signatures: ✓ GC Inspector (alice@..., 2026-06-01T10:15:00Z), ✓ Designer (bob@..., 2026-06-01T10:16:00Z), ⏳ Client QA (pending)\"\n- (NEW) Signature non-repudiation info: timestamp, signer IP, browser user-agent, digital signature token (click to verify)\n- (Existing) Complete button (disabled until signatures collected) with result selector (Passed / Failed / Conditional)\n- (NEW) Release hold-point action (if current user is project manager/GC): \"Release this hold point manually\" with justification text field\n- (NEW) Export compliance report button: generates PDF with inspection detail, all signatures with timestamps and non-repudiation metadata, evidence attachments with hashes, audit trail of all transitions and releases, suitable for ISO/FIDIC audit\n\n**ITP Plan Detail (Enhanced):**\n- (Existing) Control points list with sequence, hold_witness_point type, signatories_required\n- (NEW) Spec linkage column: show parent specs with link icon; click to expand inline and see drawing reference, section number, CSI division\n- (NEW) Hold-point dependency diagram: shows which control points block which; can reorder/resequence with visual feedback\n- (Existing) Add control point button; (NEW) add spec linkage selector when creating a control point\n\n**Inspections List (Enhanced):**\n- (Existing) Columns: work_type, location_ref, inspector, status\n- (NEW) Add column: \"Linked Spec\" showing BOQ line or drawing reference (truncated, expandable)\n- (NEW) Add column: \"Evidence\" showing attachment count with icon badge\n- (NEW) Add column: \"Sig Progress\" showing \"2/3\" indicator\n\n**Quality Gates Integration (NEW tabbed surface):**\n- New \"Quality Gates\" tab in /qms showing: inspection hold points that are currently blocking downstream work\n  - E.g., \"Concrete slab inspection FAILED — blocking Task #234 'Steel placement' (waits for hold-point release)\"\n  - Show release action if authorized\n  - Show auto-created downstream artifacts (NCR, punch item, variation request, task blocker)\n\nMake the UI clear and simple by:\n- Use color badges (red for Failed hold point, yellow for Conditional, green for Passed)\n- Show spec linkage as breadcrumb: \"BOQ L-12 → Drawing A101 → Control Point 3\"\n- Signature progress as a horizontal bar: [████████░░] 2/3\n- Make the export-compliance button obvious (download icon) so auditors can grab signed, timestamped records\n- Lock icons and tooltips (\"You cannot sign as 'Client QA' in your current role\") to prevent confusing rejections\n",
+   "test": "\n**Route and Flow:**\n1. Navigate to `/qms` → Inspections tab\n2. (Prerequisite) Create ITP plan with hold-point control points, link each to a BOQ line and drawing spec\n3. Schedule inspection on control point #1 (hold type), upload photo evidence, verify hash appears\n4. Request GC inspector + client QA signatures (set signatories_required=2)\n5. (As GC inspector) Add signature with comment → check timestamp and IP captured\n6. (As client QA) Add signature → check collected signatures now shows 2/2\n7. Click Complete → expect modal to enforce hold-point dependency check; if predecessor failed, show error \"Cannot complete: Hold Point 1 (concrete) must pass first\"\n8. Complete as Passed → check:\n   - QMSAuditLog captures transition with before/after state\n   - Events publish (qms.inspection.hold_point_passed sent to event bus)\n   - Downstream subscribers react (notification sent to project owner, punchlist cleared if linked, task unblocked if gated)\n9. Download compliance report (button on detail) → PDF opens with:\n   - Inspection metadata (ITP plan, control point, location, scheduled date)\n   - All evidence attachments with SHA256 hashes\n   - Signature table: signer, role, date, time, IP, user-agent, signature token (QR or link to verify)\n   - Audit trail: all status changes, actor, timestamp, reason\n   - Spec linkage: \"Ref BOQ L-12.3, Drawing A101 Section 3.2.1, CSI 03 Concrete\"\n10. (Optional) Release a hold point manually with justification; verify release event is logged and audit trail shows who released and why\n11. In a follow-up task, verify it is unblocked (task detail no longer shows hold-point blocker)\n\n**Screenshot Proof Points:**\n- ITP plan detail shows linked specs and hold-point dependency tree (breadcrumbs and diagram)\n- Inspection detail modal with evidence section showing uploaded photos, file hash, verify button working\n- Signature list showing: timestamp, signer IP, signature token with visual integrity indicator\n- Complete button initially disabled (greyed), then enabled once 2/2 signatures collected\n- Compliance export PDF displays inspection data in audit-ready format with all signatures and evidence references\n- Downstream task or NCR created from failed inspection, visible in other modules with backlink to inspection\n"
+  },
+  {
+   "feature": "Compute LTIFR/TRIR and safety trend analytics",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": false,
+   "remaining": "Frontend only: (1) Update SafetyStats interface to include all fields from backend SafetyStatsResponse (ltifr, trir, recordable_incidents, total_observations, total_days_lost, observations_by_risk_tier, unparseable_incident_dates). (2) Add KPI dashboard cards on safety page to display LTIFR and TRIR with units and confidence indicators (None when man-hours missing). (3) Build a trend chart component (monthly/weekly toggle) showing incident count, observation count, days lost over time. (4) Add i18n keys for LTIFR/TRIR labels and help text in all 26 locales. (5) Wire trend query to fetch SafetyTrendsResponse and render as line/bar chart with period selector.",
+   "files": [
+    "frontend/src/features/safety/SafetyPage.tsx",
+    "frontend/src/app/locales/en.ts",
+    "frontend/src/app/locales/de.ts",
+    "frontend/src/app/locales/fr.ts",
+    "(+23 more locale files)",
+    "(optional) frontend/src/components/SafetyTrendChart.tsx (new)"
+   ],
+   "shared": [
+    "frontend/src/features/safety/SafetyPage.tsx"
+   ],
+   "ui": "Safety page (/projects/:projectId/safety): Add two new sections below the existing QualityDashboardSummary card row:\n\n1. **KPI Cards Row**: Display LTIFR and TRIR as clickable metric cards (3 cards: TRIR | LTIFR | Recordable Incidents), each showing the numeric value, unit, and a small info icon explaining the OSHA standard. When man-hours_total is missing from incidents, show \"—\" with a tooltip \"No man-hours data\".\n\n2. **Trend Chart Card**: A collapsible card with (a) period toggle (Monthly / Weekly), (b) a combo chart showing incident count (bars), observation count (bars), days_lost (line), (c) horizontal legend and helpful tooltip on hover with exact period values. X-axis shows period labels (\"2026-01\", \"2026-W05\", etc.), Y-axis scales automatically.\n\nMake the cards clean, accessible (WCAG 2.1), and use the existing design system colors (oe-blue for callouts, semantic-error for risk threshold alerts).",
+   "test": "\n1. Navigate to /projects/:projectId/safety on a project with ≥3 incidents, each with metadata.man_hours_total populated (e.g., 100, 200, 150).\n2. Verify SafetyPage queries GET /v1/safety/stats/?project_id=:id and GET /v1/safety/trends/?project_id=:id&period=monthly.\n3. Check that KPI cards display calculated LTIFR (e.g., \"2.50 per 1M hrs\") and TRIR (e.g., \"1.00 per 200k hrs\") correctly.\n4. Click the period toggle to switch from monthly to weekly; verify chart re-queries with period=weekly and shows weekly labels (2026-W05, etc.).\n5. Hover over chart bars/lines; verify tooltip shows period + incident count + observation count + days_lost.\n6. Create a new incident without man_hours_total; reload; verify LTIFR/TRIR cards show \"—\" and display a help tooltip.\n7. Test in 3 locales (en, de, fr) to confirm label keys are present and i18n strings render correctly.\n8. Verify keyboard navigation through KPI cards and chart (arrow keys, tab).\n9. Screenshot the final safety page to confirm visual hierarchy and spacing match the existing QualityDashboardSummary cards above.\n"
+  },
+  {
+   "feature": "Native offline-first mobile app with sync-on-reconnect",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "\nPhase 1 (MVP — offline diary + punch capture end-to-end):\n1. Create migration v42_field_pwa_sync:\n   - New table oe_field_sync_op (id, session_id, client_op_id, project_id, target_module, target_kind, verb, status, result_id, http_status, captured_at, error_detail, metadata_, created_at, updated_at)\n   - Unique constraint on (session_id, client_op_id)\n   - Index on (project_id, target_module)\n   - Add columns: oe_inspections_inspection (geo_lat, geo_lon), oe_field_diary_entry (field_source)\n   - Pre-create_all import for oe_field_sync_op in main.py\n\n2. Backend field_diary module:\n   - Add FieldSyncOp model to models.py (copy migration DDL, with Base inheritance for id/created_at/updated_at)\n   - Add FieldSyncOpRepository in repository.py\n   - Add FieldSyncService in service.py: apply_op(session, op, target_kind) with idempotency check, dispatch to punchlist/inspections/daily_diary services, record ledger row\n   - Add capture endpoints to router.py:\n     • GET /today/ → FieldTodayResponse (diary header, open punch count, open inspection count, weather, server_time)\n     • POST /capture/photo/ (multipart file + form fields: target, note, lat, lon, accuracy_m, captured_at, client_op_id, punch_item_id)\n     • POST /capture/punch/ → FieldPunchCreate (title, description, priority, trade, lat, lon, captured_at, client_op_id)\n     • POST /sync/batch/ → FieldSyncBatch (list of ops, max 50)\n     • GET /sync/ops/ (query: since ISO) → list[FieldSyncOpResponse]\n   - Add Pydantic schemas: FieldCapture, FieldPunchCreate, FieldInspectionCreate, FieldCaptureResponse, FieldTodayResponse, FieldSyncBatch, FieldSyncOpResponse\n   - Wire magic-byte validation via app.core.file_signature.require for /capture/photo/\n   - Add daily_diary subscriber: on field_diary.entry.submitted event, create DiaryEntry (type='field', source_module='field_diary', source_ref=field_entry_id) in the office diary\n\n3. Frontend field shell replacement:\n   - Replace FieldShellPage skeleton (tsx:48-111) with bottom-nav shell mounting useFieldSync (new hook)\n   - Create useFieldSync (modelled on useOnlineStatus.ts replayMutations, uses field session headers not JWT): drain queue FIFO max 5 parallel, attach Authorization + X-Field-PIN, handle 409 conflicts\n   - Create submitFieldMutation helper: if online POST directly, if offline queueMutation(client_op_id) + optimistic placeholder\n   - Create FieldAuthPage at /field/:token: PIN entry → consume endpoint → field auth store\n   - Create field stores/useFieldSessionStore.ts (Zustand): field session token + PIN in memory\n   - Extend offlineStore.ts: bump DB version 1→2, create fieldPhotos object store in onupgradeneeded\n   - Create tab components: FieldTodayTab, FieldCrewTab (read-only stub), FieldProfileTab (sign out + clear queue)\n   - Create FieldCaptureFlow: 3-screen camera → categorise (diary/punch/photo/note) → details+submit, photo resize to 1600px before queueing\n   - Mount OfflineBanner inside FieldShellPage (not AppLayout)\n\n4. Wiring:\n   - Wire capture endpoint responses through FieldSyncService.apply_op → downstream module services\n   - Punchlist photo cross-link (existing router.py:346,412 code path, reused)\n   - Field-to-office diary bridge (new subscriber in daily_diary/events.py)\n\nPhase 2 (6 days): inspections capture, conflict review, crew read, geo pins\nPhase 3 (5 days): exponential backoff, fieldPhotos cap, captive-portal detection, SW resolution, PWA install prompt\n\nCurrent gaps: Every component listed above under Phase 1 is missing (22 files/sections to create or modify).\n",
+   "files": [
+    "backend/alembic/versions/v42_field_pwa_sync.py (new migration)",
+    "backend/app/main.py (add FieldSyncOp pre-create_all import)",
+    "backend/app/modules/field_diary/models.py (add FieldSyncOp class)",
+    "backend/app/modules/field_diary/repository.py (add FieldSyncOpRepository)",
+    "backend/app/modules/field_diary/service.py (add FieldSyncService class with apply_op method, add capture/sync endpoint logic)",
+    "backend/app/modules/field_diary/schemas.py (add FieldCapture, FieldPunchCreate, FieldInspectionCreate, FieldCaptureResponse, FieldTodayResponse, FieldSyncBatch, FieldSyncOpResponse)",
+    "backend/app/modules/field_diary/router.py (add 5 capture/sync endpoints: /today/, /capture/photo/, /capture/punch/, /sync/batch/, /sync/ops/)",
+    "backend/app/modules/daily_diary/events.py (add field_diary.entry.submitted subscriber that creates office diary entry with source_module/source_ref)",
+    "frontend/src/features/field/FieldShellPage.tsx (replace skeleton with working shell, mount useFieldSync)",
+    "frontend/src/features/field/FieldAuthPage.tsx (new: PIN entry → consume → store session)",
+    "frontend/src/features/field/tabs/FieldTodayTab.tsx (new: GET /today/, weather, crew, punch items, sync badge)",
+    "frontend/src/features/field/tabs/FieldCrewTab.tsx (new: stub read-only crew list)",
+    "frontend/src/features/field/tabs/FieldProfileTab.tsx (new: switch project, sign out + clear queue, conflicts list)",
+    "frontend/src/features/field/capture/FieldCaptureFlow.tsx (new: 3-screen camera→categorise→details)",
+    "frontend/src/features/field/capture/FieldPunchForm.tsx (new: single-column form, voice-friendly)",
+    "frontend/src/features/field/capture/FieldDiaryEntryForm.tsx (new: single-column form)",
+    "frontend/src/features/field/useFieldSync.ts (new: drain loop, field session headers, handles 409 conflicts)",
+    "frontend/src/features/field/submitFieldMutation.ts (new: online→POST, offline→queue+optimistic)",
+    "frontend/src/stores/useFieldSessionStore.ts (new: Zustand store for session token + PIN)",
+    "frontend/src/shared/lib/offlineStore.ts (bump DB version 1→2, create fieldPhotos store in onupgradeneeded)",
+    "frontend/src/app/App.tsx (update lazy route if FieldAuthPage needs separate route)"
+   ],
+   "shared": [
+    "backend/app/modules/field_diary/router.py (shared with other field roadmap items using the same endpoints)",
+    "backend/app/modules/field_diary/service.py (shared: FieldDiaryService extended with new capture logic)",
+    "backend/app/modules/field_diary/models.py (shared: new FieldSyncOp table used by all field captures)",
+    "frontend/src/features/field/FieldShellPage.tsx (shared: main field shell container)",
+    "frontend/src/shared/lib/offlineStore.ts (shared: IndexedDB substrate for all offline features)",
+    "frontend/src/shared/hooks/useOnlineStatus.ts (shared: online/offline event subscription)"
+   ],
+   "ui": "\n/field route surfaces a dedicated mobile shell (bottom-nav 4 tabs: Today/Capture/Crew/Profile) distinct from desktop AppLayout. Today tab shows weather card (☀ temp wind), crew count, user's pending-sync entries badge (⤴), quick-action buttons (+Note, HSE incident stub, NCR stub), top open punch items as tappable cards. Capture tab is full-screen camera → category selection (64-wide tile grid: punch, inspection, diary, photo, general-note) → voice-input note field with auto-tagged GPS + time. Profile shows project name, sign-out button, pending-sync conflict list with tap-to-review for 409d items. Every tap target ≥48×48px, light-default theme (outdoor sun glare), standalone PWA installable from home screen. The field worker stays on /field throughout; no navigation to desktop product surfaces. Offline state shows OfflineBanner at top of shell, pending-sync badge glows, \"Saved offline\" toast on each queuedmutation, no network spinner (queue is invisible persistence).\n</ui_surface>\n<parameter name=\"test_plan\">\n1. Backend integration (pytest): \n   - Provision field worker, issue magic link, redeem token + PIN\n   - POST /capture/punch/ → creates real oe_punchlist_item, records oe_field_sync_op row with status=applied\n   - Replay same punch (same client_op_id) → returns same result_id, zero new rows (idempotency)\n   - Cross-project access: session pinned to Project A, /capture/punch/ with project B in body → 401 or 403 (grant check)\n   - /today/ returns diary header, punch count, server_time\n   - Photo upload: POST /capture/photo/ with JPEG → magic-byte validates, creates entry in Documents hub\n   - Field diary submitted → daily_diary subscriber fires, creates office diary row with source_module='field_diary'\n\n2. Frontend Playwright (vite preview / :8000):\n   - Open /field/:token → FieldAuthPage PIN entry → enter 6 digits → redirects to /field, bottom-nav renders\n   - Tap Capture → camera viewfinder loads → take photo → categorize (punch) → add voice note → submit\n   - While online: POST succeeds, punch appears in store instantly, no queue\n   - Offline (DevTools throttle offline): tap Capture again → \"Saved offline\" toast, pending-sync badge on Today tab\n   - Toggle online: useFieldSync drains queue, badge clears, punch appears in store\n   - Replay offline writes (toggle offline/online twice): no duplicate rows in the backend\n   - Axe-core: every button/input ≥48×48 (QA crawler integration), console 0 errors\n   - Profile → sign out → queue cleared, session token gone, re-opening /field/:token re-prompts PIN\n\n3. Manual smoke (demo VPS):\n   - Admin grants field_worker access to project A and module_key='field_diary'\n   - Worker scans/bookmarks /field/:token, enters PIN, captures punch on-site offline\n   - Back in office on desktop Punch List page: field-captured punch item visible with geotagged pin on Geo Hub\n   - Daily Diary for that date shows field-captured diary entry folded in\n",
+   "test": ""
+  },
+  {
+   "feature": "Automated client/owner progress reporting with narrative summarization",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "1. CORE MISSING: Zero narrative text generation - no LLM agent to synthesize progress from photos+metrics+task completion into human-readable prose\n2. MISSING: No dedicated progress report generator - ReportingService._build_default_snapshot() does NOT include progress module data (photos, percent_complete, milestones)\n3. MISSING: Portal/client exposure - scheduled reports are NOT wired to send to portal users; recipients list stored but no email/notification dispatch to portal users\n4. MISSING: Progress-specific report type - GenerateReportRequest.report_type enum ('project_status|cost_report|schedule_status|safety_report|inspection_report|portfolio_summary') has NO 'progress_report' option\n5. MISSING: Photo integration - ReportRenderer has NO section handler for progress photos (builtin photo gallery); renderer.py:44 only handles pre-defined section IDs but not photos\n6. PARTIAL: Task completion aggregation - progress module tracks percent_complete but service layer does NOT compute task-completion counts or aggregate metrics for reports\n7. MISSING: Distribution mechanism - ReportScheduleRequest.recipients stored but no email/notification sender fires off scheduled reports to recipients; no email templating exists for progress reports",
+   "files": [
+    "backend/app/modules/reporting/models.py",
+    "backend/app/modules/reporting/schemas.py",
+    "backend/app/modules/reporting/service.py",
+    "backend/app/modules/reporting/router.py",
+    "backend/app/modules/reporting/renderer.py",
+    "backend/app/modules/ai_agents/agents/progress_reporter.py (new)",
+    "backend/app/modules/progress/service.py",
+    "backend/app/modules/portal/service.py",
+    "backend/app/modules/notifications/service.py (or email sender)",
+    "backend/app/core/jobs_tasks.py",
+    "frontend/src/features/reporting/ReportingPage.tsx",
+    "frontend/src/features/portal/PortalPage.tsx",
+    "frontend/src/features/buyer-portal/BuyerPortalPage.tsx"
+   ],
+   "shared": [
+    "backend/app/modules/reporting/service.py - already touched by bi_dashboards, costmodel, fieldreports",
+    "backend/app/modules/reporting/schemas.py - shared with every report-generation caller",
+    "backend/app/modules/reporting/renderer.py - shared with all report format/layout decisions"
+   ],
+   "ui": "CLIENT VIEW (portal):\n- New /portal/project/:id/progress-reports tab showing historical scheduled reports + ability to trigger manual generation\n- Each report card: title, generation date, format (PDF download), 1-2 sentence AI summary preview\n- Expand to see: full narrative, metrics tables (progress %, milestones, risks), photo gallery (6-up grid), schedule status\n\nINTERNAL VIEW (reporting UI):\n- Add new 'Progress Report' option to template creation (currently: project_status | cost_report | schedule_status | safety_report | inspection_report | portfolio_summary)\n- Schedule panel shows: cron expression, recipient list (email + portal user IDs), last/next run times\n- Preview button renders sample narrative + metrics table in modal\n- Run-now button immediately triggers generation + shows 'sending to X recipients' confirmation\n\nMAKE SIMPLE: \n- Narrative text: 1 paragraph max (~100 words), bullet-point format for metrics (% complete, on-schedule status, top 3 risks)\n- Photo display: linked but not embedded in PDF (email link to portal gallery, PDF links to photo URLs)\n- No custom report templating — use system template with fixed structure for all progress reports",
+   "test": "BROWSER TEST: \n1. Route: /dashboard?project=<uuid> (internal project dashboard)\n   - Click /reporting tab → 'Templates' section\n   - Click '+Create Template' → select report_type='progress_report' (must be added to enum)\n   - Fill: name='Weekly Progress Update', schedule_cron='0 9 * * 1' (Monday 09:00)\n   - Add recipients: [user1@example.com, portal_user_uuid_1]\n   - Click 'Schedule' → confirm 'Next run: Monday 09:00 UTC'\n   \n2. Route: /dashboard?project=<uuid> → /reporting → 'Reports' tab\n   - Click 'Generate Now' on the Weekly Progress template\n   - Screenshot MUST show: title, generation timestamp, preview link, status='rendered'\n   \n3. Route: /portal/project/<uuid>/progress-reports (client-side, requires portal session)\n   - Screenshot MUST show: list of historical progress reports with AI-generated 1-paragraph summary\n   - Click report → screenshot shows: (a) narrative prose, (b) metrics table (% complete, schedule status), (c) photo gallery (6-up), (d) PDF download button\n   - Summary text MUST include: project name, percent complete, schedule status, top risk, no fabricated data\n\n4. ADMIN EMAIL TEST (backend):\n   - Manually trigger scheduler via /api/v1/reporting/generate with progress_report type\n   - Verify: GeneratedReport row created with data_snapshot containing progress section\n   - Verify: Email/notification SENT to portal users + internal recipients (check logs)\n   \nPROOF OF SUCCESS:\n- Generated report HTML contains: <h2>Progress Summary</h2>, narrative paragraph, metrics table, progress photos gallery\n- data_snapshot JSON includes: {\"progress\": {\"overall_pct\": 45.2, \"milestones_completed\": [...], \"top_risks\": [...]}}\n- Portal client sees: report preview card with AI summary, click expands to full narrative + metrics + photos\n- No console errors; no 'no-stubs' violations (must read real progress module data, not defaults)"
+  },
+  {
+   "feature": "Semantic AI assistant over project documents (cross-module retrieval)",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": false,
+   "remaining": "Create vector adapters for RFI, submittals, and correspondence modules; add them to vector_index registry; wire event handlers for indexing on create/update/delete; add search_rfis, search_submittals, search_correspondence tools to erp_chat with proper permissions; update frontend search modal to group RFI/submittal hits as separate facets instead of lumping into Documents; optionally implement PDF content extraction pipeline for true document semantic search; add SQL fallback queries for new collections in search service",
+   "files": [
+    "backend/app/modules/rfi/vector_adapter.py",
+    "backend/app/modules/submittals/vector_adapter.py",
+    "backend/app/modules/correspondence/vector_adapter.py",
+    "backend/app/core/vector_index.py",
+    "backend/app/modules/search/service.py",
+    "backend/app/modules/erp_chat/tools.py",
+    "backend/app/modules/rfi/events.py",
+    "backend/app/modules/submittals/events.py",
+    "backend/app/modules/correspondence/events.py",
+    "frontend/src/features/search/GlobalSearchModal.tsx",
+    "frontend/src/features/erp-chat/FloatingChatPanel.tsx"
+   ],
+   "shared": [
+    "backend/app/core/vector_index.py",
+    "backend/app/modules/search/service.py",
+    "backend/app/modules/erp_chat/tools.py",
+    "frontend/src/features/search/GlobalSearchModal.tsx"
+   ],
+   "ui": "Semantic search in two places: (1) Cmd+K global search modal at top of any page shows facet pills for each collection type including new RFI/Submittal/Correspondence pills; (2) Floating chat panel (bottom right) can invoke search_rfis, search_submittals tools which display result cards with title, snippet, score, module label. Simple and clear: grouped by type, each hit clickable to navigate to detail page, score badge shows confidence (0-100%), snippet shows context. Make it obvious these are semantic (fuzzy match, not exact keyword search) via a sparkle icon and 'AI-powered search' label.",
+   "test": "Route: /chat or floating panel bottom-right. Steps: (1) Type 'tell me about foundation issues in RFIs' in chat input. (2) Watch AI call search_anything or search_rfis tool. (3) Verify returned hits include RFI objects with fields: id, title (RFI number + subject), snippet (first 220 chars of question/answer), score (0.7-0.95), module=rfi, project_id. (4) In Cmd+K modal, search 'waterproofing membrane'. Verify results grouped by collection show both Documents facet pills AND new RFI/Submittal facet pills if they have matches. (5) Click an RFI hit, navigate to /projects/{id}/rfi/{id}, verify detail page loads. (6) Screenshot must show: search input + loading spinner while fetching + result cards with colored facet labels + score badges + snippet text. No stubs, all data filled."
+  },
+  {
+   "feature": "Auto-revision comparison for drawing/BIM changes with cost impact",
+   "status": "missing",
+   "effort": "XL",
+   "needs_migration": false,
+   "remaining": "Implement complete revision comparison feature for DWG/PDF drawings:\n\n1. Backend services (dwg_takeoff + takeoff modules):\n   - Add async compare_versions(drawing_id, version1_id, version2_id) to compute entity/layer deltas\n   - Add async compute_annotation_delta(drawing_id, v1, v2) to identify changed annotations\n   - Query BOQ positions linked to annotations in both versions to calculate cost impact via position totals\n   - Expose via new POST /drawings/{id}/compare/{other_version_id} endpoint returning DwgDrawingDiffResponse with summary\n   - For PDF takeoff: compare_documents(doc1_id, doc2_id) with measurement deltas linked to BOQ impacts\n\n2. Frontend components (dwg_takeoff):\n   - Add DwgDrawingCompareDrawer component (mirrors BOQCompareDrawer pattern from frontend/src/features/boq/BOQCompareDrawer.tsx)\n   - Version selector dropdown to pick comparison baseline\n   - Entity diff table: added/removed/modified entities with geometry/layer deltas\n   - Annotation diff table: measurement changes with linked BOQ position cost impact\n   - Visual overlay mode (onion-skin) showing both versions on canvas with opacity slider (similar to PdfCompare)\n   - Cost impact summary widget showing total quantity delta → cost delta for linked positions\n\n3. API layer (frontend):\n   - Add fetchDrawingVersions(drawing_id) to list all versions for a drawing\n   - Add compareDrawings(drawing_id, other_version_id) POST call\n   - DwgDrawingDiff response shape with rows of type (added|removed|modified) + cost_impact field per entity\n\n4. UI surface polish:\n   - Add \"Compare\" button to DrawingFilmstrip card header\n   - Modal/drawer opens with version selector (list of all older versions)\n   - Tabbed view: Entities | Annotations | Cost Summary\n   - Filter toggle for \"Hide unchanged\" (like BOQCompareDrawer)\n   - Select diff result to highlight in 3D canvas or PDF overlay\n\n5. Precision:\n   - Use Decimal(18,6) for all measured deltas (matches dwg_takeoff and takeoff measurement columns)\n   - Currency-aware cost deltas via existing project FX tables (reuse _resolve_project_fx from BOQ service)\n   - Annotation measurement changes roll through to linked BOQ positions' cost impact the same way link-to-boq does now",
+   "files": [
+    "backend/app/modules/dwg_takeoff/models.py (no schema change needed - versions already tracked)",
+    "backend/app/modules/dwg_takeoff/schemas.py (add DwgDrawingVersionResponse, DwgEntityDiffRow, DwgDrawingDiffResponse)",
+    "backend/app/modules/dwg_takeoff/service.py (add compare_versions, compute_annotation_delta, _calculate_cost_impact)",
+    "backend/app/modules/dwg_takeoff/router.py (add POST /drawings/{id}/compare/{other_version_id}, GET /drawings/{id}/versions/)",
+    "backend/app/modules/takeoff/models.py (no change - PDF takeoff versions already exist via document versioning)",
+    "backend/app/modules/takeoff/service.py (add compare_documents, measurement_delta_cost_impact)",
+    "backend/app/modules/takeoff/router.py (add POST /documents/{id}/compare/{other_id})",
+    "frontend/src/features/dwg-takeoff/api.ts (add fetchDrawingVersions, compareDrawings, DwgDrawingDiff types)",
+    "frontend/src/features/dwg-takeoff/DwgDrawingCompareDrawer.tsx (new file - revision comparison UI)",
+    "frontend/src/features/dwg-takeoff/DwgTakeoffPage.tsx (add Compare button to card, integrate drawer)",
+    "frontend/src/features/dwg-takeoff/components/AnnotationOverlay.tsx (add diff overlay mode for revisions)",
+    "frontend/src/features/takeoff/PdfCompareDrawer.tsx (new file - PDF revision comparison, similar to PdfCompare for markups)"
+   ],
+   "shared": [
+    "backend/app/modules/boq/service.py - will need to import _resolve_project_fx and cost delta logic for consistency",
+    "backend/app/modules/boq/models.py - Position model referenced when calculating cost impact from linked annotations",
+    "frontend/src/features/boq/compareHelpers.ts - diff classification logic (added/removed/modified/unchanged) reusable for drawing entities"
+   ],
+   "ui": "Route: /dwg-takeoff or /takeoff\n\nSurface structure:\n1. DrawingFilmstrip card (existing): add \"Compare\" action button (GitCompare icon) on hover or via dropdown\n2. DwgDrawingCompareDrawer (new):\n   - Right-side panel (fixed position, z-50) mirroring BOQCompareDrawer layout\n   - Header: \"Comparing versions\" with close button\n   - Selector row: \"Version [current_number]\" → dropdown to pick older version\n   - Tabbed view:\n     * Entities: table with columns [Change Type | Layer | Entity Type | Geometry Delta | Count]\n     * Annotations: table with [Change Type | Type | Measurement Old → New | Linked BOQ | Cost Impact (if linked)]\n     * Summary: \"Added: 5 entities | Removed: 2 entities | Modified: 12 entities | Total cost delta: +$1,250.00\"\n   - Toggle: \"Hide unchanged\" (default ON, matching BOQCompareDrawer UX)\n   - Visual overlay mode option: \"Show as 3D overlay\" (renders old version at 50% opacity under current)\n\n3. Cost impact column (key feature):\n   - Shows when annotation linked to BOQ position\n   - Formula: (new_measurement_value - old_measurement_value) × linked_position.unit_rate = cost_delta\n   - Currency: project base currency (from FX table, never multiple currencies blended)\n   - Format: \"+$1,250.00\" (green) or \"−$500.00\" (red)\n   - Aggregated in summary: \"Total impact from linked changes: +$2,100.00\"\n\n4. Beauty & clarity:\n   - Use Lucide icons (Plus/Minus/PencilRuler) for change types (added/removed/modified)\n   - Colour code: emerald for added, rose for removed, amber for modified (from BIMDiffPanel)\n   - Responsive: full height on desktop, modal on mobile (like markups/PdfCompare)\n   - Accessible: keyboard nav (Tab through tabs + rows), Escape to close",
+   "test": "Browser test: DWG/PDF revision comparison with cost impact\n\nRoute: /dwg-takeoff (or /takeoff for PDF)\n\nSetup:\n1. Upload drawing V1 (DrawingA.dwg with 10 line entities, 5 area annotations)\n2. Create annotation on entity layer \"WALLS\" with measurement_value=50m, link to BOQ position P1 (unit_rate=$100/m, total=$5,000)\n3. Upload same drawing V2 (DrawingA-Rev2.dwg with 12 line entities, 6 area annotations, walls drawn differently)\n4. Create annotation on V2 with measurement_value=55m, link to same BOQ position P1\n\nExpected test flow:\n1. Click \"Compare\" on V2 drawing card → DwgDrawingCompareDrawer opens\n2. Selector shows \"Version 2\" with dropdown listing \"Version 1\"\n3. Select \"Version 1\" → diff loads\n4. Verify Entities tab shows:\n   - \"Added\" row for 2 new entities (green Plus icon)\n   - \"Removed\" row for 0 entities\n   - \"Modified\" count accurate\n5. Verify Annotations tab shows:\n   - \"Modified\" row for wall measurement: \"50m → 55m\"\n   - Linked BOQ column shows \"P1 | Concrete walls\"\n   - Cost Impact column shows \"+$500.00\" (5m × $100/m) in green\n6. Verify Summary shows:\n   - \"Added: 2 entities | Modified: ... | Total cost delta from linked changes: +$500.00\"\n7. Toggle \"Hide unchanged\" ON → only added/modified rows remain\n8. Click \"Show as 3D overlay\" → V1 renders at 50% opacity under V2, can drag opacity slider\n9. Screenshot must show: version number, both tabs, cost impact calculation visible, summary totals, overlay mode functional\n\nVerification success: cost impact calculated correctly, linked BOQ position identified, currency respected, UI responsive"
+  },
+  {
+   "feature": "ML-based quantity extraction and symbol recognition from drawings",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "CRITICAL GAPS: 1) No image/photo UI in match-elements wizard - the SessionCreate schema accepts image dict but frontend MatchWizard (MatchWizard.tsx, MatchWizardFlow.tsx) has no \"Upload Photo/Drawing\" step or file picker; 2) No symbol recognition via YOLO - cv-pipeline service exists as empty dir, no actual YOLO model loading or inference in production; 3) No OCR-based dimension extraction - test file references YOLO for PDF takeoff symbols but actual PDF extraction (takeoff/service.py:872 extract_tables) uses only pdfplumber table detection without symbol/dimension recognition; 4) No auto-populate BOQ from detected symbols - image source extracts elements via AI vision prompt but does not auto-link to rates or BOQ; 5) cv-pipeline is referenced but unimplemented - services/cv-pipeline/ directory is empty. To complete: (a) Build UI step in MatchWizard for image/photo upload + preview; (b) implement cv-pipeline service with YOLO symbol detection for PDF pages; (c) wire symbol detections into group aggregation; (d) add dimension OCR via PaddleOCR; (e) implement smart rate-code detection for symbols in drawing; (f) add \"Auto-extract from PDF\" flow that detects symbols → extracts dimensions → suggests BOQ positions.",
+   "files": [
+    "backend/app/modules/match_elements/sources/image_adapter.py",
+    "backend/app/modules/match_elements/router.py",
+    "backend/app/modules/match_elements/service.py",
+    "backend/app/modules/match_elements/schemas.py",
+    "backend/app/modules/match_elements/models.py",
+    "backend/app/modules/takeoff/service.py",
+    "backend/app/modules/takeoff/router.py",
+    "backend/app/modules/takeoff/models.py",
+    "frontend/src/features/match-elements/MatchWizard.tsx",
+    "frontend/src/features/match-elements/MatchWizardFlow.tsx",
+    "frontend/src/features/match-elements/api.ts",
+    "frontend/src/features/match-elements/components/SourceSelector.tsx (new)",
+    "frontend/src/features/takeoff/TakeoffPage.tsx",
+    "services/cv-pipeline/symbol_detector.py (new)",
+    "services/cv-pipeline/ocr_extractor.py (new)",
+    "services/cv-pipeline/__init__.py (new)",
+    "backend/app/core/match_service/extractors/symbol.py (new)"
+   ],
+   "shared": [
+    "backend/app/modules/match_elements/service.py",
+    "backend/app/modules/match_elements/router.py",
+    "frontend/src/features/match-elements/MatchWizard.tsx",
+    "frontend/src/features/match-elements/api.ts"
+   ],
+   "ui": "Route /match-elements needs a new \"Photo/Drawing\" tile in the source selector (step 1 of wizard) alongside BIM/DWG/Excel/Text/PDF. Clicking it opens an image upload dialog (drag-drop + file picker, PNG/JPG/WebP). Preview pane shows uploaded image + detected symbol overlays (bounding boxes) with confidence badges. On first symbol detection, show a real-time detection progress card ('Scanning... 3 of 12 symbols detected'). Grouping panel (step 4) should show detected symbols as chip categories (e.g., \"Wall (5x)\", \"Door (2x)\", \"Window (3x)\") with OCR dimensions in parentheses. Match detail panel (step 6) should highlight which matched rate code came from symbol detection vs. AI vision text. For takeoff at /takeoff/documents, add a \"Detect symbols\" checkbox on the upload form - when enabled, overlay symbol detection bounding boxes on the PDF preview with a \"Dimension extractor\" toggle showing OCR text + confidence. Export should include a \"Symbol source\" column showing which rows came from symbol detection. Overall aesthetic: make symbol detection confidence visible (green=high, yellow=medium, red=low badges) and allow inline override (user clicks a detected symbol, edits the dimension/quantity right there, updates grouping).",
+   "test": "Route /match-elements?source=image step 1: Verify user can select \"Photo/Drawing\" source (UI). Step 2: Upload a construction drawing PDF or photo (drag-drop or file picker). Step 3: Auto-detect symbols on first page (e.g., wall symbol → labeled '5m' next to it). Step 4: OCR dimension text near symbol ('5m' becomes quantity=5, unit=m). Step 5: AI vision extracts all visible elements → groups by type. Step 6: Screenshot should show extracted elements in the grouping panel with detected dimensions. Step 7: Click 'Run Match' → system auto-suggests rate codes for detected symbols (e.g., symbol='wall' + dimension='5m' → suggests 'Standard Wall 1m' at qty=5). Step 8: Apply to BOQ → verify BOQ position created with auto-populated quantity from OCR. For PDF takeoff at /takeoff/documents: upload a bill-of-quantities PDF → extract-tables should detect and OCR table headers + symbol annotations → auto-populate quantities. Final screenshot proof: BOQ row shows description + quantity that came from PDF symbol recognition, not manual entry."
+  },
+  {
+   "feature": "Predictive schedule and cost risk analytics with early-warning alerts",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "\nDesign and wire three core systems:\n1. **Predictive Trigger Engine** — Backend job that periodically (daily/weekly) calculates forecast metrics (EAC vs BAC, ETC vs remaining schedule, SV/CV indices) and compares against user-configured thresholds (e.g., 'alert if CPI < 0.95' or 'if SV > +14 days'). Publishes events like `schedule.forecast.slippage_detected` and `cost.forecast.overrun_detected`.\n2. **Alert Rules &amp; Subscriptions** — Add configurable alert rules (threshold-based) in the BI Dashboards alert_dsl.py or a new RiskAlerts model. Wire notifications module to subscribe to forecast events and fan out to users via email/webhook/in-app.\n3. **Early-Warning Dashboard Surface** — New section in /project-intelligence (or dedicated /forecasts route) showing: (a) current SPI/CPI with trend arrows, (b) EAC vs BAC delta, (c) schedule completion burndown vs baseline, (d) active alerts with snooze/acknowledge UX, (e) Monte Carlo P80/P95 vs contingency reserve adequacy. Should mirror the existing risk/cost surfaces.\n4. **Data collection for prediction** — Extend collector.py to capture time-series snapshots of EVM (SPI, CPI, forecast trend) so the UI can render \"if trend continues, finish date will slip by X days\" heuristics.\n",
+   "files": [
+    "backend/app/modules/project_intelligence/models.py (new or extend risk/full_evm)",
+    "backend/app/modules/project_intelligence/schemas.py",
+    "backend/app/modules/project_intelligence/collector.py — add forecast metrics (EAC, ETC, SPI, CPI, projected end date)",
+    "backend/app/modules/project_intelligence/scorer.py — add gap detection for 'EAC > BAC' and 'SV indicates slippage'",
+    "backend/app/modules/project_intelligence/advisor.py — add forward-looking recommendations based on forecast gaps",
+    "backend/app/modules/project_intelligence/router.py — add GET /forecasts endpoint with EVM trend + alert summary",
+    "backend/app/modules/notifications/models.py — add AlertRule model for threshold-based rules (optional: extend bi_dashboards.models.Alert if unifying)",
+    "backend/app/modules/notifications/service.py — add create_forecast_alert() method",
+    "backend/app/modules/notifications/_wave*_subscribers.py — add subscriber for forecast events",
+    "backend/app/modules/full_evm/service.py — add background job / scheduled task to compute forecasts periodically",
+    "backend/app/core/events.py or backend/app/core/scheduler.py — register forecast calculation as a recurring job",
+    "frontend/src/features/project-intelligence/components/ProjectKPIHero.tsx or new ForecastCard.tsx — show SPI/CPI sparklines + alerts",
+    "frontend/src/features/project-intelligence/components/ForecastPanel.tsx (new) — EAC vs BAC, ETC burndown, active alerts with acknowledge button",
+    "frontend/src/features/project-intelligence/ProjectIntelligencePage.tsx — wire forecast tab and alert banner",
+    "migrations: new DB table for AlertRule (or extend existing alert tables) + columns on EVMForecast for alert_status / triggered_at"
+   ],
+   "shared": [
+    "backend/app/modules/notifications/models.py — already used by submittals, risks, NCRs, etc.",
+    "backend/app/modules/notifications/service.py — shared notification dispatch logic",
+    "backend/app/core/events.py — shared event bus (already emits risk, schedule, costmodel mutations)",
+    "frontend/src/features/project-intelligence/ProjectIntelligencePage.tsx — already displays score, gaps, domain details; forecast would be added as a 5th tab or alert banner"
+   ],
+   "ui": "\n**Route:** `/project-intelligence` (extend existing Estimation Dashboard)\n\n**New section placement:**\n1. **Above the domain tabs** — Sticky alert banner showing \"Schedule at risk: EAC +14 days vs baseline. Confirm mitigation or snooze.\" with Acknowledge / Snooze buttons.\n2. **New Forecasts tab** (or fold into existing Risk tab):\n   - **Top row:** SPI / CPI chips with trend mini-sparklines (e.g., \"SPI: 0.92 ↓\") colored by health (green >0.95, amber 0.90–0.95, red <0.90).\n   - **Middle:** Forecast-to-Completion card:\n     - Left: Baseline vs Actual vs EAC timelines (horizontal bar chart, three rows).\n     - Right: Contingency Adequacy gauge — shows if P95 cost contingency covers projected overrun.\n   - **Bottom:** Active Alerts table:\n     - Columns: Type (Cost Overrun / Schedule Slip), Severity, Threshold (e.g., \"CPI &lt; 0.95\"), Current Value, Triggered At, Actions (Acknowledge, View Forecast).\n     - Empty state: \"No active alerts. Project is tracking well.\"\n\n**Visual clarity:**\n- Use the existing semantic colors: error (red) for P95/severe alerts, warning (amber) for P80/moderate, success (green) for healthy.\n- Show \"days to finish\" prominently — e.g., \"Baseline: May 31 | Forecast: June 14 (+14 days)\" in the schedule section.\n- Tornado chart (from Monte Carlo) should be visible alongside — highlight which risks dominate the overrun scenario.\n",
+   "test": "\n1. **Baseline setup:** Create a project with BOQ, schedule (baseline set), and cost model with actuals (EVM snapshot).\n2. **Monte Carlo run:** On /project-intelligence, open Risk tab — MonteCarloTab, set P50/P80/P95 cost contingencies.\n3. **Forecast trigger:** Via backend job (or manual endpoint), compute forecast where EAC > BAC by 10%, and SPI = 0.88 (schedule lagging).\n4. **Alert creation:** Verify that a cost-overrun alert and schedule-slip alert appear in the Forecasts tab alert table.\n5. **Screenshot proof:**\n   - Alert banner at top of page (red, \"Schedule at risk\").\n   - Forecasts tab open showing SPI/CPI chips (SPI: 0.88, red).\n   - Forecast-to-Completion card with three timelines and contingency gauge showing red (inadequate).\n   - Alert table with 2 rows (cost + schedule).\n   - User clicks \"Acknowledge\" — alert status changes to \"acknowledged\", button greys out.\n   - Click \"View Forecast\" on cost alert — navigates to /project-intelligence?tab=forecasts&amp;alert_id=&lt;id&gt;.\n6. **Background job verification:**\n   - Insert a new EVM snapshot with worse CPI/SPI.\n   - Wait for job to run (or call endpoint).\n   - Verify new forecast created and alerts updated in the database.\n"
+  },
+  {
+   "feature": "Vendor and subcontractor performance scorecards with prequalification",
+   "status": "partial",
+   "effort": "XL",
+   "needs_migration": true,
+   "remaining": "1. Implement procurement-side supplier/vendor scorecard model (Vendor table with rating columns or extend PurchaseOrder vendor_contact_id FK to point to a master vendor record with persistent score). 2. Wire procurement to subscribe to subcontractors.rating.updated events OR create bidirectional link so NCR/HSE/schedule events also update procurement vendor scorecard. 3. Implement actual handler in _on_supplier_rating_update() to persist supplier score deltas and mark vendor under_review when defects occur. 4. Add vendor prequalification gating: validate vendor's prequalification_status and is_blocked flag in create_po() / issue_po() / update_po() to reject or warn when vendor is not approved or is blocked. 5. Implement questionnaire validation and auto-scoring logic for prequal (currently prequal_questionnaire is just a JSON blob with no validation). 6. Create unified vendor master linking procurement contact_id to subcontractor legal_name for cross-module lookups. 7. Add frontend warnings/badges on ProcurementPage PO rows when vendor is not prequalified or has low scorecard rating.",
+   "files": [
+    "backend/app/modules/procurement/models.py",
+    "backend/app/modules/procurement/service.py",
+    "backend/app/modules/procurement/router.py",
+    "backend/app/modules/procurement/events.py",
+    "backend/app/modules/procurement/schemas.py",
+    "backend/app/modules/subcontractors/models.py",
+    "backend/app/modules/subcontractors/service.py",
+    "backend/app/modules/subcontractors/events.py",
+    "frontend/src/features/procurement/ProcurementPage.tsx",
+    "frontend/src/features/procurement/SupplierScorecardModal.tsx",
+    "frontend/src/features/procurement/api.ts",
+    "frontend/src/features/subcontractors/PrequalModal.tsx",
+    "frontend/src/features/subcontractors/api.ts"
+   ],
+   "shared": [
+    "backend/app/modules/procurement/events.py",
+    "backend/app/modules/procurement/service.py",
+    "frontend/src/features/procurement/ProcurementPage.tsx"
+   ],
+   "ui": "1. **Procurement page**: Add vendor-status badge/icon next to supplier name in PO list (green=approved, yellow=under_review, red=rejected/blocked). Add vendor scorecard link. Add warning banner if trying to order from non-approved vendor. 2. **Subcontractors detail page**: Already shows ScorecardTile in Ratings tab; add inline gating indicator showing if subcontractor can be selected as PO vendor (approved/rejected/blocked status prominent). 3. **Vendor lookup modal** (when selecting PO vendor): Filter/warn on prequalification status and block flags. Show mini scorecard (overall score 0-100) for each vendor. 4. **Dashboard**: Add Procurement vendor scorecard rollup (top 10 suppliers by spend with on-time, rejection, variance trends).",
+   "test": "**Scenario A - Subcontractor Rating Flow**: 1. Create a subcontractor (pending prequal). 2. Raise an NCR linked to that sub → verify subcontractors.rating table gets a row with ncr_count=1 and overall_score decremented. 3. Verify ScorecardTile on subcontractor detail shows the updated score. **Scenario B - Prequalification Gating**: 1. Create a subcontractor with prequalification_status='rejected'. 2. Try to create a PO with that subcontractor as vendor → expect error/warning or PO creation blocked. 3. Approve the prequal → verify PO creation now allowed. **Scenario C - Supplier Scorecard**: 1. Create multiple POs with same vendor contact_id. 2. Create GRs: some on-time, some late, some rejected. 3. Open SupplierScorecardModal for that vendor → verify on_time_delivery_pct, qty_variance_pct, gr_rejection_rate are computed correctly. **Screenshot proof**: ScorecardTile shows 4 dials (Safety/Quality/Schedule/Cost) with 0-100 scores and trend arrows. SupplierScorecardModal shows 3 KPI tiles (Truck/TrendingUp/AlertTriangle icons) with green/amber/red badges and % values."
+  },
+  {
+   "feature": "ISO 19650 CDE maturity and suitability workflows",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": false,
+   "remaining": "1. **Align Documents state-transition validator with CDEStateMachine**: Replace DocumentService.VALID_CDE_TRANSITIONS (which allows backtracking) with a call to CDEStateMachine, or import the gate definitions from cde_states.py. Remove the backtrack transitions (SHARED→WIP, PUBLISHED→WIP, ARCHIVED→WIP).\n\n2. **Add suitability_code validation to documents PATCH**: Import validate_suitability_for_state() from cde.suitability module into documents/service.py. In update_document(), when suitability_code is being set, validate it against the (new or existing) cde_state before applying the update.\n\n3. **Enforce gate checks on documents PATCH**: When cde_state is transitioned via PATCH (not via the dedicated /containers/{id}/transition/ endpoint), enforce the same gate checks (role-based, signature for Gate B) that the CDE module enforces. Currently documents PATCH bypasses gates entirely.\n\n4. **Update DocumentUpdate schema**: Add a Pydantic model_validator to DocumentUpdate that checks consistency between cde_state and suitability_code (mirrors the constraint in cde/schemas.py:ContainerCreate).\n\n5. **Frontend: propagate suitability_code to Documents index**: If Documents are cross-linked to CDE revisions, ensure the Documents UI surfaces suitability_code as a read-only field (like cde_state badge) so users see the full ISO 19650 maturity level.",
+   "files": [
+    "backend/app/modules/documents/service.py",
+    "backend/app/modules/documents/schemas.py",
+    "backend/app/modules/documents/router.py",
+    "backend/app/core/cde_states.py",
+    "backend/app/modules/cde/suitability.py",
+    "frontend/src/features/documents/DocumentsPage.tsx",
+    "frontend/src/features/documents/api.ts"
+   ],
+   "shared": [
+    "backend/app/modules/documents/service.py",
+    "backend/app/modules/documents/schemas.py",
+    "backend/app/core/cde_states.py"
+   ],
+   "ui": "Documents Hub (/documents route) should display ISO 19650 maturity inline:\n- Add a small badge next to each document showing cde_state (matching the color scheme from CDEPage: wip=yellow, shared=blue, published=green, archived=gray)\n- Optionally show suitability_code in a tooltip or secondary row (S1-S7 for shared, A1-A5 for published, etc.)\n- The Documents list already shows cde_state in code but doesn't render it; activate the existing rendering at frontend/src/features/documents/DocumentsPage.tsx:1248-1251\n- CDE Page already shows suitability_code correctly in the container table and create modal; ensure Documents Page mirrors this when viewing linked revisions",
+   "test": "**Route**: /documents (Documents Hub)\n\n**Test 1 - Suitability validation on PATCH**:\n1. Create a document via upload, it starts at cde_state=null (treated as 'wip')\n2. PATCH the document with cde_state='shared' + suitability_code='S99' (invalid code)\n3. Expected: 400 error \"Suitability code S99 is not allowed in state shared. Allowed codes: [S1, S2, S3, S4, S6, S7]\"\n4. Current: PATCH succeeds, document now has invalid combo (shared + S99)\n\n**Test 2 - State-transition alignment with CDEStateMachine**:\n1. Create document in wip state\n2. PATCH to shared (allowed)\n3. PATCH to wip (backtrack) — should fail with 400\n4. Current: succeeds (VALID_CDE_TRANSITIONS allows it)\n\n**Test 3 - UI display of suitability**:\n1. Navigate to Documents page\n2. Filter or search for a document linked to a CDE revision (where suitability_code is set)\n3. Expected: suitability_code displays as badge or tooltip on the card (matching CDE page display)\n4. Current: not shown in UI (model has field but rendering disabled)\n\n**Test 4 - Gate enforcement on PATCH (Gate B)**:\n1. Create document in shared state\n2. Try to PATCH cde_state='published' without approver_signature (as non-admin user)\n3. Expected: 400 \"Gate B requires approver_signature\" (same as /containers/{id}/transition/)\n4. Current: PATCH succeeds, no signature check"
+  },
+  {
+   "feature": "Subcontractor portal with mobile invoice submission and payment tracking",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": false,
+   "remaining": "1. Backend: Create portal-facing payment-application endpoints: GET /me/payment-applications, GET /me/payment-applications/{id}, POST /me/payment-applications (submit new), GET /me/payment-applications/{id}/status. 2. Backend: Implement payment_submission magic-link flow in PortalService.consume_magic_link() to redirect to submission form. 3. Backend: Add RLS enforcement - subcontractor can only submit/view applications for agreements they have access to. 4. Frontend: Build PaymentApplicationList component for portal users showing status, amounts, retention, due dates. 5. Frontend: Build PaymentApplicationForm component with work-package line-item editor, retention calculator, submit. 6. Frontend: Add /portal/payments route and integrate into portal navigation. 7. Frontend: Create mobile-responsive invoice form (single-column layout, touch-friendly inputs). 8. Frontend: Add payment tracking dashboard tile showing outstanding balance, payment history, next due date. 9. Database: No new migrations needed (PaymentApplication schema already exists). 10. Testing: Add portal RLS tests for payment_application resource access.",
+   "files": [
+    "backend/app/modules/portal/router.py",
+    "backend/app/modules/portal/service.py",
+    "backend/app/modules/portal/schemas.py",
+    "backend/app/modules/portal/repository.py",
+    "frontend/src/features/portal/PortalPage.tsx",
+    "frontend/src/features/portal/api.ts",
+    "frontend/src/app/App.tsx",
+    "frontend/src/features/portal/PaymentApplicationList.tsx (new)",
+    "frontend/src/features/portal/PaymentApplicationForm.tsx (new)",
+    "backend/tests/modules/portal/test_payment_applications.py (new)"
+   ],
+   "shared": [
+    "backend/app/modules/portal/router.py (also touched by any portal feature work)",
+    "backend/app/modules/portal/service.py (core portal business logic, high reuse)",
+    "frontend/src/features/portal/PortalPage.tsx (admin portal UI, will conflict with other portal enhancements)",
+    "frontend/src/features/portal/api.ts (portal API layer, shared by all portal user-facing features)"
+   ],
+   "ui": "Route: /portal (authenticated portal user). Components: (1) PaymentApplicationList - table showing agreement, application_number, period_start/end, gross/net/retention amounts, status badge (submitted/foreman_approved/finance_approved/paid/rejected), approval timestamps. (2) PaymentApplicationForm - work-package selector, line-item grid (work_package_name, planned_value, claimed_amount input, certified_amount display, approved_amount display), retention auto-calc, gross/net summary, submit button, upload lien waiver. (3) Payment tracking dashboard tile showing: outstanding balance, paid-to-date, retention held, next due date, 12-month payment timeline. Mobile: Single-column form, touch-friendly number inputs with spinner controls, collapse work-package groups, sticky submit button bottom bar. Make clear what's pending vs approved vs paid via color-coded status badges.",
+   "test": "Browser test (Chrome mobile 375px): (1) Login to portal with subcontractor magic link, navigate to /portal/payments. (2) Verify PaymentApplicationList loads with at least one payment application showing status, amounts. (3) Click to expand application detail, verify work packages display. (4) Click submit button, form opens with pre-filled agreement. (5) Modify claimed_amount in first work package, verify gross/retention auto-recalcs, net updates. (6) Add a file upload (lien waiver), submit form, verify POST succeeds. (7) Check audit log shows portal user created payment_application with RLS grant verified. (8) Return to list, verify new application appears with submitted status. (9) Desktop: Verify form layout uses full width, work packages in editable table. (10) Screenshot portal dashboard tile showing payment summary. Verify all text is translated (i18n keys exist in all 26 locales)."
+  },
+  {
+   "feature": "Persistent clash detection profiles and multi-property clash grouping",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": null,
+   "remaining": "1. Create oe_clash_profile table (ORM model) with columns: id, project_id, name, description, tolerance_m, clearance_m, clash_type, mode, discipline_filter, set_a, set_b, rules (JSON), created_by, created_at—essentially a template of ClashRun configuration. 2. Add API endpoints: GET /projects/{id}/profiles (list), POST /projects/{id}/profiles (create), GET /projects/{id}/profiles/{id} (read), PATCH /projects/{id}/profiles/{id} (update), DELETE /projects/{id}/profiles/{id} (delete), POST /projects/{id}/profiles/{id}/apply-to-run (create new run from profile). 3. Update ClashRunCreate schema to accept optional profile_id parameter to pre-populate the form. 4. Add frontend UI: Profile manager page (/clash/profiles), save-as-profile button on runs, profile picker in the run config form. 5. For multi-property grouping: Extend _build_summary to accept optional grouping_dimensions parameter; generate N-dimensional faceted matrices or a single unified grouping dimension the user selects. 6. Add element_system or equivalent column to track equipment system/category per element for third-dimension grouping. 7. Extend ClashResult snapshot to capture element_system alongside a_system/b_system.",
+   "files": [
+    "backend/app/modules/clash/models.py",
+    "backend/app/modules/clash/schemas.py",
+    "backend/app/modules/clash/router.py",
+    "backend/app/modules/clash/service.py",
+    "backend/app/modules/clash/repository.py",
+    "backend/alembic/versions/v3050_clash_profiles.py",
+    "frontend/src/features/clash/ClashDetectionPage.tsx",
+    "frontend/src/features/clash/ClashProfileManager.tsx",
+    "frontend/src/features/clash/api.ts"
+   ],
+   "shared": [],
+   "ui": "",
+   "test": ""
+  },
+  {
+   "feature": "Risk escalation auto-creates mitigation tasks; schedule slip auto-creates risk",
+   "status": "missing",
+   "effort": "L",
+   "needs_migration": false,
+   "remaining": "1. Implement tier escalation detection in risk.service.update_risk(): Compare old vs new risk_tier (computed from probability_score x impact_score), publish 'risk.tier.escalated' event when tier increases\n2. Add risk.events subscriber listening to 'risk.tier.escalated' that auto-creates a Task with type='mitigation', title='Escalated mitigation for {risk.code}', linked to the risk via metadata\n3. Implement schedule slip detection in schedule/service.py: Add logic to compare actual_end_date vs baseline_end_date when activity_progress ≥ 100% or during schedule recalculation, publish 'schedule.activity.slipped' event with delta_days\n4. Add schedule.events subscriber listening to 'schedule.activity.slipped' that auto-creates a Risk with category='schedule', title='Schedule slip: {activity.code} slipped {days} days', severity based on critical_path status\n5. Add optional UI toggles (project settings) to enable/disable auto-task and auto-risk creation\n6. Frontend components: Show \"Auto-created from risk escalation\" badge on tasks; show \"Auto-created from schedule slip\" badge on risks with back-link\n7. Database: No schema migration needed (metadata fields exist for linkage tracing)",
+   "files": [
+    "backend/app/modules/risk/service.py",
+    "backend/app/modules/risk/events.py",
+    "backend/app/modules/risk/models.py",
+    "backend/app/modules/schedule/service.py",
+    "backend/app/modules/schedule/events.py",
+    "backend/app/modules/schedule/models.py",
+    "backend/app/modules/tasks/service.py",
+    "backend/app/modules/tasks/models.py",
+    "backend/app/modules/projects/models.py",
+    "backend/app/modules/projects/service.py",
+    "frontend/src/features/risk/RiskRegisterPage.tsx",
+    "frontend/src/features/tasks/TasksPage.tsx",
+    "frontend/src/features/schedule/SchedulePage.tsx"
+   ],
+   "shared": [
+    "backend/app/modules/risk/service.py",
+    "backend/app/modules/risk/events.py",
+    "backend/app/modules/schedule/service.py",
+    "backend/app/modules/schedule/events.py",
+    "backend/app/modules/tasks/service.py",
+    "backend/app/modules/projects/models.py"
+   ],
+   "ui": "\n**Risk Escalation Tab (Risk Register Page)**\n- Add a new \"Actions\" column to risk list showing \"⬆ Escalated\" badge with yellow/red icon when tier changed\n- On risk detail page, add collapsible \"Auto-Created Tasks\" panel showing tasks spawned by escalation (linked via metadata.source=risk_escalation)\n- Mitigation task cards show: title, auto-link to original risk (risk code + link), due date defaults to risk owner's suggestion\n\n**Schedule Slip Auto-Risk (Schedule Page)**\n- Add \"⚠ New Risks from Slips\" section in schedule summary showing recently auto-created risks\n- On activity detail, show \"Risk created: {risk.code}\" badge with link when slip detected\n- Risk detail shows \"Generated by: Activity {activity.code} slipped {days} days\" with back-link\n\n**Settings (Project Configuration)**\n- Toggle \"Auto-create mitigation tasks on risk escalation\" (default: off to avoid spam, on to enable)\n- Toggle \"Auto-create risks from critical-path slips\" (default: off for schedule module, on for risk-aware orgs)\n\nKeep UI minimalist: badges + metadata links only, no heavy animations or toasts.\n",
+   "test": "\n**Test: Risk Escalation Auto-Creates Task**\n1. Navigate to /projects/{id}/risk\n2. Create risk R-001 with severity=medium, probability=0.5 (tier=medium)\n3. Edit R-001: change severity to critical (tier becomes critical)\n4. Verify: New task T-001 type=mitigation appears in /projects/{id}/tasks with title containing \"escalation\"\n5. Task.metadata.source_risk_id == R-001.id\n6. Click task → shows \"Created by risk escalation of R-001\"\n\n**Test: Schedule Slip Auto-Creates Risk**\n1. Navigate to /projects/{id}/schedule\n2. Create activity A-001 (start=2026-06-05, end=2026-06-10, on critical path)\n3. Record progress: end-date shifts to 2026-06-15 (5-day slip)\n4. Verify: New risk R-XXX category=schedule appears in /projects/{id}/risk\n5. Risk title contains \"Activity A-001 slipped 5 days\"\n6. Risk.metadata.source_activity_id == A-001.id\n7. Click risk → shows \"Created by schedule slip of A-001\"\n"
+  },
+  {
+   "feature": "Digital handover and closeout package assembly",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": false,
+   "remaining": "\n1. **Frontend API integration** — Add to api.ts: getHandoverBundle(), createHandoverDoc(), updateHandoverDoc(), deleteHandoverDoc()\n2. **Frontend UI — Handover Package View** — New component in PropertyDevPage.tsx HandoversTab to:\n   - Display HandoverBundleResponse with list of required/delivered docs\n   - Show delivery status (delivered_count / required_count)\n   - Show missing_required list with red warning if not ready_for_handover\n3. **Frontend UI — Document Management** — Add modal/panel for:\n   - Adding handover documents (doc_type dropdown, title, file_url, is_required toggle)\n   - Updating delivery status (checkbox + timestamp)\n   - Deleting documents\n   - Filtering by status (required, delivered, pending)\n4. **Export/Download** — Create ZIP package endpoint to gather all delivered docs + handover certificate PDF + warranty certificate + snag photos into one downloadable file (currently no /handovers/{id}/export or /handovers/{id}/download endpoint)\n5. **Portal integration** — Ensure buyer portal can download their handover package (currently only backend endpoint exists at /handovers/{id}/docs)\n6. **Validation workflow** — Add validation logic to prevent handover completion if required docs are missing (hook into complete_handover endpoint)\n7. **Document linking** — Connect to CDE (ISO 19650) state management so handover package docs can be marked as published/archived\n8. **Localization** — Add i18n keys for handover doc types (warranty, manual, epc, nhbc, hs_file, key_receipt, inspection_cert, certificate_completion, insurance)\n",
+   "files": [
+    "frontend/src/features/property-dev/api.ts — add HandoverDoc interface, HandoverBundleResponse type, and API functions (getHandoverBundle, createHandoverDoc, updateHandoverDoc, deleteHandoverDoc, exportHandoverPackage)",
+    "frontend/src/features/property-dev/PropertyDevPage.tsx — add HandoverDocumentsSection component in HandoverPlotRow to display and manage handover docs + package assembly UI",
+    "frontend/src/features/property-dev/PropertyDevPage.tsx — modify HandoversTab to render new handover docs section per handover",
+    "backend/app/modules/property_dev/router.py — add POST /handovers/{h_id}/export endpoint to generate ZIP of all delivered docs + certificates",
+    "backend/app/modules/property_dev/service.py — add export_handover_package() method to gather docs, render certificates, bundle into ZIP",
+    "backend/app/modules/property_dev/router.py — add validation in complete_handover to check ready_for_handover flag from handover_bundle()",
+    "frontend/src/app/locales/en.ts — add i18n keys for handover doc types and package UI strings",
+    "frontend/src/app/locales/de.ts, fr.ts, etc. — translate handover package UI strings (25 locales total)"
+   ],
+   "shared": [
+    "backend/app/modules/property_dev/models.py — HandoverDoc used by other modules (notifications, warranty claims, snag bridge)",
+    "backend/app/modules/property_dev/router.py — handover endpoints shared with buyer portal, inspections module, warranty module",
+    "backend/app/modules/cde/service.py — state management may need integration with handover package publish workflow"
+   ],
+   "ui": "\nRoute: `/property-dev` (existing PropertyDevPage)\nComponent: New **HandoverDocumentsSection** in HandoverPlotRow (after snags block)\n\nVisual structure:\n- Card titled \"Handover Package\" with icon (Package/FileArchive)\n- Status badge: \"Ready\" (green) if ready_for_handover=true, else \"Missing docs\" (red)\n- Two-row table:\n  - Header: Document Type | Title | Status | Actions\n  - Rows per doc: [doc_type] | [title] | [Delivered/Pending] | [Edit/Delete]\n- Summary line: \"X of Y required docs delivered\" (e.g., \"3 of 5\")\n- Red warning box if missing_required.length > 0: \"Missing: [warranty, hs_file]\"\n- Button row:\n  - \"+ Add Document\" (opens modal with doc_type dropdown, title input, file_url, is_required toggle)\n  - \"Export Package\" (downloads ZIP of all delivered docs + handover cert + warranty cert)\n  - \"Download Package\" (same as export, one button)\n\nDesign notes:\n- Use same card/table styling as snags block for visual consistency\n- Handover docs should appear BELOW snags in the accordion flow\n- Make \"Export Package\" button prominent (primary) when ready_for_handover=true, ghost when false\n- Deliver status should show as checkbox + delivered_at date, not just pending/delivered badge\n- Sort table: required docs first, then by created_at descending\n",
+   "test": "\n**Route**: `/property-dev`\n**Setup**: Create a development with 1 plot, assign a buyer, create a handover\n\n**Test 1 — Handover Package View**\n1. Navigate to Handovers tab\n2. Click expand on a plot with handover\n3. Verify \"Handover Package\" section appears below snags\n4. Verify it shows \"0 of X required docs delivered\" (X = number of doc types marked as required)\n5. Verify red warning \"Missing: [list of missing required types]\"\n\n**Test 2 — Add Document**\n1. Click \"+ Add Document\"\n2. Select doc_type = \"warranty\"\n3. Enter title = \"Manufacturer Warranty\"\n4. Toggle is_required = true\n5. Submit\n6. Verify doc appears in table with Pending status\n7. Verify required_count increments\n\n**Test 3 — Mark Delivered**\n1. Click checkbox on a document row\n2. Verify is_delivered flips to true\n3. Verify delivered_at timestamp populates\n4. Verify status changes to \"Delivered\"\n5. Verify delivered_count increments\n6. If all required docs are now delivered, verify badge changes to \"Ready\" and export button becomes primary\n\n**Test 4 — Export Package (when ready)**\n1. Mark all required docs as delivered\n2. Click \"Export Package\"\n3. Verify browser downloads a ZIP file named handover_{plot_number}_{date}.zip\n4. Unzip and verify it contains:\n   - All delivered doc files (by file_url)\n   - handover_certificate.pdf (auto-generated from document_templates)\n   - warranty_certificate.pdf\n   - snag_photos/ subfolder with any uploaded snag photos\n\n**Test 5 — Validation**\n1. Try to click \"Mark completed\" on handover when required docs are missing\n2. Verify it either:\n   - Disables the button with tooltip \"Complete required handover docs first\", OR\n   - Shows a validation error modal listing missing docs\n3. After all docs delivered, verify \"Mark completed\" is enabled and completes successfully\n\n**Screenshot must show**:\n- Handover Package card with 2–5 documents listed\n- Status badge showing Ready or Missing docs\n- At least one document with Delivered status (checked) and date\n- At least one document with Pending status (unchecked)\n- Missing docs warning in red (if any required docs pending)\n- Export Package button (prominent)\n- All i18n keys rendering in the selected locale (not raw key names)\n"
+  },
+  {
+   "feature": "Equipment predictive maintenance and fleet utilization analytics",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": true,
+   "remaining": "Create ML-based predictive maintenance and utilization optimization layer: (1) Add schema fields to Equipment and TelemetryReading for predicted_failure_date, failure_confidence, anomaly_detected, maintenance_trend; (2) Create predictive_service.py with analyze_equipment_health(), forecast_maintenance_need(), fleet_optimization_recommendations() methods; (3) Add router endpoints GET /equipment/{id}/health-analytics, GET /equipment/{id}/failure-forecast, GET /dashboard/fleet/optimization; (4) Create database health_snapshot and optimization_recommendation tables via migration; (5) Implement periodic scoring job (every 6-12 hours) to pre-compute failure risk and trends; (6) Build frontend Health and Analytics tab with failure risk gauge, anomaly alerts, usage trend charts, maintenance recommendations; (7) Add fleet optimization cards showing underutilized units, maintenance bundles, cost savings opportunities; (8) Implement i18n for new UI strings across 27 languages.",
+   "files": [
+    "backend/app/modules/equipment/models.py",
+    "backend/app/modules/equipment/schemas.py",
+    "backend/app/modules/equipment/repository.py",
+    "backend/app/modules/equipment/service.py",
+    "backend/app/modules/equipment/router.py",
+    "backend/app/modules/equipment/predictive_service.py",
+    "backend/alembic/versions/v*_equipment_predictive_analytics.py",
+    "frontend/src/features/equipment/EquipmentPage.tsx",
+    "frontend/src/features/equipment/api.ts",
+    "frontend/src/features/equipment/components/EquipmentHealthDashboard.tsx",
+    "frontend/src/features/equipment/components/FailureForecastCard.tsx",
+    "frontend/src/features/equipment/components/FleetOptimizationPanel.tsx"
+   ],
+   "shared": [
+    "backend/app/modules/equipment/models.py",
+    "backend/app/modules/equipment/schemas.py",
+    "backend/app/modules/equipment/service.py",
+    "backend/app/modules/equipment/router.py"
+   ],
+   "ui": "Per-equipment dashboard (route /equipment/:id): New Health and Analytics tab showing failure risk gauge (0-100, red-yellow-green), predicted failure date, confidence percent, 30-day usage trend chart, fuel efficiency trend, anomaly list. Fleet dashboard (route /equipment): Fleet Intelligence card with 4 KPIs: utilization vs target, maintenance savings opportunity, underutilized units count, upcoming failures forecast. Each card is interactive: clicking underutilized units filters table; clicking savings opportunity shows bundle modal with dates/parts/cost breakdown. Design uses existing OE system (Card, Badge, SkeletonTable), recharts sparklines, Lucide-react gauge icon. Action buttons: Schedule Maintenance, View Full Report. Tooltips explain confidence and risk factors. No jargon; use Health Score not MTBF/PHM.",
+   "test": "Test 1 (Failure Forecast): Navigate to /equipment/[uuid-with-telemetry-history], click Health and Analytics tab, verify failure risk gauge displays 0-100 in red/yellow/green, predicted failure date label shows ISO date, confidence percent displays, 30-day usage trend chart renders, alert banner shows if risk greater than 70 percent, Schedule Maintenance button opens WorkOrderFormModal. Test 2 (Fleet Optimization): Navigate to /equipment list view, scroll to Fleet Intelligence card, verify 4 cards display with data, click Underutilized Units and confirm table filters to utilization less than 40 percent, click Maintenance Savings and confirm bundle modal shows. Test 3 (Telemetry Anomaly Detection): POST telemetry with fuel spike (10x normal), call GET /equipment/{id}/health-analytics, verify response includes anomaly_detected=true, anomalies list with timestamp/type, failure_risk_pct greater than 0, predicted_failure_date within 90 days. Test 4 (Localization): Switch language to de/fr/es/ja, verify health tab label, gauge tooltip, anomaly labels, buttons all translate via t() calls, no English text appears."
+  },
+  {
+   "feature": "Compliance rule engine enforced at workflow level with rule packs",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": true,
+   "remaining": "1. Implement workflow-level enforcement: Add validation_engine.validate() calls in contract state transitions (draft→active, etc.), SCO creation/activation, and other workflow boundaries that must be gated by compliance rules.\n2. Create jurisdiction rule packs: Define rule set manifests (e.g., 'ae_compliance', 'in_compliance', 'ru_compliance', 'sa_compliance') that bundle jurisdiction-specific rules; store pack metadata in DB or as seed data so packs are discoverable and assignable to projects.\n3. Wire rule packs to projects: Extend project model to allow selecting rule packs at setup (not just validation_rule_sets); apply them as default rule sets during workflow validation.\n4. Block workflow on compliance errors: Modify state transition endpoints (contracts, SCOs, etc.) to raise HTTP 422/409 with detailed rule violation list when report.has_errors is true and severity=ERROR.\n5. Add enforcement UI: In contract/workflow forms, show real-time validation results from compliance rules; highlight blocking errors before user can advance to next state.\n6. Create compliance audit trail: Log which rule packs were applied to which state transitions; persist ValidationReport or a digest in entity metadata for audit/compliance proof.\n7. Test enforcement: Add integration tests verifying that contracts cannot transition to 'active' if they violate assigned rule pack errors; SCOs cannot be created if they fail jurisdiction-scoped rules.",
+   "files": [
+    "backend/app/modules/compliance/models.py",
+    "backend/app/modules/compliance/service.py",
+    "backend/app/modules/compliance/router.py",
+    "backend/app/modules/compliance/repository.py",
+    "backend/app/modules/compliance/events.py",
+    "backend/app/modules/contracts/service.py",
+    "backend/app/modules/contracts/router.py",
+    "backend/app/modules/contracts/models.py",
+    "backend/app/modules/projects/models.py",
+    "backend/app/modules/projects/service.py",
+    "backend/app/modules/projects/schemas.py",
+    "backend/app/core/partner_pack/manifest.py",
+    "backend/app/core/partner_pack/apply.py",
+    "backend/app/core/validation/engine.py",
+    "backend/app/core/validation/rules/__init__.py",
+    "backend/alembic/versions/v*_compliance_rule_packs.py",
+    "frontend/src/features/compliance/index.ts",
+    "frontend/src/features/compliance/api.ts",
+    "frontend/src/features/contracts/ComplianceGate.tsx",
+    "frontend/src/features/contracts/ContractWorkflow.tsx",
+    "backend/tests/integration/test_contracts_compliance_enforcement.py",
+    "backend/tests/integration/test_compliance_rule_packs.py"
+   ],
+   "shared": [
+    "backend/app/modules/projects/models.py",
+    "backend/app/modules/projects/service.py",
+    "backend/app/core/validation/engine.py",
+    "backend/app/core/partner_pack/manifest.py",
+    "backend/alembic/versions/v*_compliance_rule_packs.py"
+   ],
+   "ui": "Create a \"Compliance Gate\" panel shown during contract state transitions (draft→active), SCO creation/approval flows, and other regulated workflows. Surface: (1) Active rule packs for the project + jurisdiction, (2) Real-time validation results grouped by severity (blocking ERRORs red, WARNINGs yellow, INFOs blue), (3) Rule violation details with suggestions for each failed check, (4) \"Cannot proceed\" blocker if any ERROR-severity violations exist, (5) Audit trail showing which rules were applied and their results. Make it modal/overlay that users must explicitly acknowledge before proceeding. Show passed rules count for transparency (\"12 compliance checks passed, 2 blocking issues\").</ui_surface>\n<parameter name=\"test_plan\">Browser test: Navigate to /contracts, create a new contract with data that deliberately violates a compliance rule (e.g., missing DIN 276 classification if din276 rule pack is active). Click \"Sign Contract\" (draft→active transition). Verify: (1) Compliance Gate modal appears showing validation report, (2) ERROR-severity violations are highlighted in red with rule name and suggestion, (3) \"Sign\" button is disabled/grayed out, (4) User cannot proceed until violations are fixed or rule pack is deactivated. Fix the contract data (add DIN 276 code), re-validate, verify gate clears and \"Sign\" button becomes enabled. Also test: creating SCO in same contract, verifying same compliance gate is enforced. Take screenshot showing modal with blocked state and rule violations clearly visible.</ui_surface>\n<parameter name=\"risk_notes\">Risk 1: Existing contracts already in 'active' or 'signed' status will not retroactively run compliance validation on first load - this is correct (audit trail), but document that validation is forward-only. Risk 2: Jurisdiction-scoped rule packs require a jurisdiction field to be populated on project metadata - if missing, fallback to a 'universal' pack. Risk 3: User confusion if rule pack is switched mid-project (e.g., changes project region from DE to IN) - any existing data may now fail new rules. Mitigate with warning/audit log on pack change. Risk 4: Performance - validating every position in a 1000-item BOQ during contract transition could be slow; cache rule compilation and consider async validation with background job. Risk 5: API contract change - adding enforcement to state transitions will break any clients that don't handle 422 Validation responses; version the endpoint or communicate breaking change in release notes.</risk_notes>\n",
+   "test": ""
+  },
+  {
+   "feature": "Model-based progress visualization (asset status overlay in 3D viewer)",
+   "status": "partial",
+   "effort": "M",
+   "needs_migration": false,
+   "remaining": "1. Create 'boq_progress' color mode in BIMPage and BIMViewer that queries latest ProgressEntry per linked BOQ position\n2. Add ProgressEntry data to BIMElement query results (list_elements_with_links needs to JOIN oe_progress_entry and compute current_pct per element)\n3. Implement color legend (0-25%=red, 25-50%=orange, 50-75%=yellow, 75-100%=green) for progress visualization\n4. Add progress UI indicators in element info panel\n5. (Future) Extend visualization to punch items (requires punch list module API integration)\n6. (Future) Extend visualization to invoice/cost progress (requires cost module integration)",
+   "files": [
+    "backend/app/modules/bim_hub/service.py",
+    "backend/app/modules/bim_hub/schemas.py",
+    "backend/app/modules/bim_hub/router.py",
+    "frontend/src/shared/ui/BIMViewer/BIMViewer.tsx",
+    "frontend/src/shared/ui/BIMViewer/use4dTimeline.ts",
+    "frontend/src/features/bim/BIMPage.tsx",
+    "frontend/src/features/bim/api.ts"
+   ],
+   "shared": [
+    "backend/app/modules/bim_hub/schemas.py",
+    "backend/app/modules/bim_hub/service.py",
+    "frontend/src/shared/ui/BIMViewer/BIMViewer.tsx"
+   ],
+   "ui": "Add \"By progress\" option in the BIM color-by dropdown (next to \"4D timeline\"). When selected: display a gradient heat map overlay where elements are colored by their latest BOQ position percent_complete: red (0%), orange (25%), yellow (50%), light-green (75%), green (100%). Include a horizontal legend bar showing the gradient and current min/max values. Elements with no linked BOQ positions should appear neutral grey. Show the element's current progress %age in the info panel when hovering.",
+   "test": "1. Navigate to /bim with a project that has linked BOQ positions with progress entries recorded\n2. Select \"By progress\" from the color-by dropdown\n3. Verify: elements linked to BOQ positions are color-coded by their latest percent_complete value\n4. Verify: hover tooltips show \"BOQ Progress: XX%\"\n5. Verify: the legend bar displays the min/max progress values\n6. Verify: unlinked elements appear grey/neutral\n7. Record new ProgressEntry via /v1/progress/entries/ API and refresh - verify color updates in real-time"
+  },
+  {
+   "feature": "No-code agent builder for workflow automation",
+   "status": "partial",
+   "effort": "L",
+   "needs_migration": true,
+   "remaining": "1. Scheduler/Trigger Engine: Add cron-based scheduling (APScheduler integration), event-triggered runs (RFI creation, document upload), webhook endpoints. 2. Tool Access for Custom Agents: Implement tool picker in builder UI, update custom_agent_to_runtime() to include allowed_tools, add permissions validation for tool access. 3. Workflow Actions: 'Apply agent output' button to auto-create BOQ positions/documents, integration with approval_routes to trigger workflows from agent output, JSON schema templates for structured outputs. 4. Monitoring: Dashboard for scheduled runs, failure notifications, audit log of automated actions.",
+   "files": [
+    "backend/app/modules/ai_agents/models.py",
+    "backend/app/modules/ai_agents/schemas.py",
+    "backend/app/modules/ai_agents/router.py",
+    "backend/app/modules/ai_agents/service.py",
+    "backend/app/modules/ai_agents/scheduler.py",
+    "backend/app/modules/ai_agents/triggers.py",
+    "backend/app/modules/ai_agents/base.py",
+    "frontend/src/features/ai-agents/components/CustomAgentBuilder.tsx",
+    "frontend/src/features/ai-agents/components/SchedulePanel.tsx",
+    "frontend/src/features/ai-agents/api.ts",
+    "frontend/src/features/ai-agents/AgentsPage.tsx",
+    "backend/alembic/versions/[new_migration].py"
+   ],
+   "shared": [
+    "backend/app/modules/ai_agents/models.py",
+    "backend/app/modules/ai_agents/service.py",
+    "frontend/src/features/ai-agents/api.ts"
+   ],
+   "ui": "Route: /ai-agents. Today: Custom-agent builder modal with guided form (role, goal, audience, format, extra guidance), icon picker (20 icons), category selection (6 categories), example prompts, advanced raw-prompt toggle. Missing: (1) Trigger/Schedule panel in builder — add 'Schedule' tab with cron UI or event picker (e.g., 'Run daily at 9am' or 'When RFI is created'); (2) Tool picker — checkboxes showing available tools (search_costs, create_position, search_documents, etc.) user can allow their agent to call; (3) Workflow action buttons — 'Apply to BOQ' / 'Approve and post' buttons in run timeline to auto-apply agent output. Beautiful design: Keep builder lightweight with guided questions visible by default, schedule + tools in collapsible 'Advanced' section. Show tool capabilities (icon + description) so user understands what they're granting. In run timeline, show 'Apply' buttons only if output is safe to auto-apply (structured JSON with required fields).",
+   "test": "Browser test (route /ai-agents): (1) Click '+Create your own agent', fill guided form (role='Senior Estimator', goal='Draft variation letters from change logs'), verify agent card appears in catalogue. (2) Select agent, run manually with user input, verify ReAct timeline shows thoughts + final answer. (3) **Missing test:** Try to enable tool access for agent (tool picker should exist in Advanced section) — currently returns empty. (4) **Missing test:** Go to Schedule tab in builder, set 'Run daily at 8am' cron, save agent, wait for next scheduled time, verify run appears in Recent runs with auto badge. (5) **Missing test:** Create RFI, verify agent with On RFI created trigger fires automatically. (6) **Missing test:** In run timeline, click 'Apply to BOQ' button and verify new position is created. Screenshot should show: custom agent card with icon+category, run timeline with thoughts/observations/answer, no tool picker, no schedule UI, no Apply buttons.\""
+  },
+  {
+   "feature": "Time-location (Takt / line-of-balance) scheduling for repetitive work",
+   "status": "missing",
+   "effort": "L",
+   "needs_migration": true,
+   "remaining": "1. Create TaktSchedule ORM model (container for repetitive workflows at multiple locations).\n2. Create Location and LocationSequence models (logical or physical zones where work repeats).\n3. Create TaktActivity model (activity assigned to a location, with crew_cycle_duration and crew_assignment).\n4. Implement takt-cycle computation logic in backend (linear schedule calculation, critical path through location sequence).\n5. Add database tables: oe_schedule_takt_schedule, oe_schedule_takt_location, oe_schedule_takt_activity, oe_schedule_location_sequence.\n6. Create backend service (TaktScheduleService) with methods: compute_line_of_balance(), compute_takt_duration(), detect_critical_location_path().\n7. Add router endpoints: POST/GET /takt-schedules, POST /compute-lob, GET /line-of-balance-view/{schedule_id}.\n8. Implement frontend TaktSchedulePage.tsx component with three view modes: Gantt (traditional), Line-of-Balance (location sequence chart), and Takt (crew-flow diagram).\n9. Wire line-of-balance visualization: x-axis = time, y-axis = location sequence, diagonal bars = activity execution across locations.\n10. Wire takt crew-flow view: x-axis = time, y-axis = crew/resource, shows crew cycling through locations with rest/buffer periods.\n11. Add data migration for takt fields in Activity model (crew_cycle_duration, location_id, takt_rhythm_days).\n12. Add validation: detect takt feasibility (cycle times must align across all locations, buffer periods must allow handoff).\n13. Add event publishing: takt.schedule.created, takt.cycle_updated, location_sequence.reordered.\n14. Add i18n strings for takt terminology across all 26 locales.\n15. Integrate with CPM: overlay takt schedule on critical path, highlight location-sequence critical path (not activity-sequence).",
+   "files": [
+    "backend/app/modules/schedule_advanced/models.py (add TaktSchedule, Location, LocationSequence, TaktActivity classes)",
+    "backend/app/modules/schedule_advanced/schemas.py (add TaktScheduleCreate, TaktScheduleResponse, LineOfBalanceResponse, TaktViewResponse schemas)",
+    "backend/app/modules/schedule_advanced/service.py (add TaktScheduleService with compute_line_of_balance, compute_takt_duration, detect_critical_location_path methods)",
+    "backend/app/modules/schedule_advanced/router.py (add routes for /takt-schedules CRUD and /takt-schedules/{id}/line-of-balance POST/GET)",
+    "backend/app/modules/schedule_advanced/repository.py (add TaktScheduleRepository, LocationRepository, TaktActivityRepository)",
+    "backend/app/modules/schedule_advanced/cpm.py (add line-of-balance algorithm: linear schedule through location sequence instead of activity sequence)",
+    "backend/app/modules/schedule_advanced/events.py (add takt.schedule.created, takt.cycle_updated event subscriptions and publishing)",
+    "backend/app/core/migrations/(new migration file for takt tables)",
+    "frontend/src/features/schedule-advanced/TaktSchedulePage.tsx (new page with three view modes: Gantt, LOB, Takt)",
+    "frontend/src/features/schedule-advanced/LineOfBalanceView.tsx (new component rendering location-sequence chart with diagonal activity bars)",
+    "frontend/src/features/schedule-advanced/TaktCrewFlowView.tsx (new component rendering crew cycling through locations over time)",
+    "frontend/src/features/schedule-advanced/api.ts (add getTaktSchedules, createTaktSchedule, computeLineOfBalance endpoints)",
+    "frontend/src/shared/ui/LineOfBalanceChart/index.ts (new chart component library for LOB visualization)",
+    "frontend/src/app/locales/en.ts and all 25 other locale files (add takt terminology and labels)"
+   ],
+   "shared": [
+    "backend/app/modules/schedule_advanced/models.py (likely to be touched by other roadmap items adding fields to schedule/activity models)",
+    "backend/app/modules/schedule_advanced/service.py (shared by CPM, resource leveling, and other schedule algorithms)",
+    "backend/app/modules/schedule_advanced/router.py (shared by multiple schedule UI features)",
+    "backend/app/modules/schedule_advanced/events.py (shared event publishing for schedule domain)",
+    "frontend/src/features/schedule-advanced/api.ts (shared API client for all schedule-advanced features)",
+    "frontend/src/app/locales/*.ts (all 26 locale files — takt terminology must be translated)",
+    "backend/app/core/migrations/ (single alembic head constraint — migration coordination required)"
+   ],
+   "ui": "Route: /projects/{id}/schedule-advanced/{master_schedule_id}/takt (or tab within ScheduleAdvancedPage). Three view toggle buttons (Gantt / Line-of-Balance / Takt Crew Flow). \n\n**Gantt View (default)**: Traditional Gantt with activities as bars on time axis, but grouped/colored by location sequence. Highlight location-sequence critical path in red instead of activity critical path.\n\n**Line-of-Balance View**: x-axis = calendar time (weeks), y-axis = location sequence (vertical axis orders locations top-to-bottom by execution order). Each activity rendered as a diagonal bar connecting its start location-week to end location-week. Parallel diagonal bars = concurrent crews on different locations. Gaps = buffer/wait periods. One diagonal bar per activity across all locations = takt cycle. Visual clarity: bold diagonal for critical location sequence, faint for non-critical.\n\n**Takt Crew Flow View**: x-axis = calendar time (weeks), y-axis = crew/equipment resource. Stacked bars show each crew cycling through locations. Legend shows location color-coding. Hover over a bar = shows crew name, location, planned vs actual cycle time. Detects and highlights takt rhythm breaks (deviation > 1 day) in orange.\n\nSimple + beautiful: use a light color palette, thin diagonal lines for LOB, no label clutter until hover, export to PDF with summary stats (total takt duration, number of locations, crews, average cycle time, takt compliance %). Make it clear that this is for **repetitive work only** — show a warning if user tries to create takt schedule for non-repetitive activities.",
+   "test": "1. **Browser: Create takt schedule** — Navigate to /projects/{id}/schedule-advanced, create new master schedule, click \"+ Takt\" button, fill form (name, locations: [L1, L2, L3], target cycle 7 days), click Create. Screenshot must show: master schedule created, takt tab appears.\n\n2. **Add activities to takt schedule** — Click Takt tab, bulk-import 9 activities (3 per location: Formwork, Concrete, Finishes), each assigned to locations [L1, L2, L3]. Assign planned duration 5 days per location per activity. Screenshot: activity table with location columns, durations filled.\n\n3. **Compute line-of-balance** — Click \"Compute LOB\" button. Backend calculates: each activity cycles through 3 locations × 5-day duration = 15 days per activity. Stagger locations so L2 starts after L1 finishes formwork (day 5) = L2 starts day 6. Screenshot: LOB view loads with diagonal bars.\n\n4. **Verify LOB diagonal bars** — Line-of-Balance view renders 9 diagonal bars (3 activities × 3 locations). Formwork activity: diagonal from (start=day 1, location=L1) to (end=day 5, location=L1), then (day 6, L2) to (day 10, L2), then (day 11, L3) to (day 15, L3). Each diagonal spans roughly 5 days horizontally. Screenshot: LOB grid visible, diagonals correctly positioned.\n\n5. **Verify Takt Crew Flow view** — Click Takt toggle. View shows 3 crews (one per location) on y-axis, cycling through formwork → concrete → finishes over weeks. Each crew bar is labeled (Crew L1, Crew L2, Crew L3). Screenshot: stacked bars show crew progression.\n\n6. **Detect takt violation** — Manually delay Concrete work on L2 by 3 days. Recompute LOB. System highlights the break: orange warning indicator on Concrete-L2 diagonal, console shows \"Takt rhythm break: expected day 11, actual day 14\" message.\n\n7. **Export LOB to PDF** — Click Export button in LOB view. PDF downloads with: summary (9 activities, 3 locations, 15-day total, 5-day takt rhythm), LOB diagram scaled to fit page, crew summary table. Open PDF, verify diagram is readable, dimensions are labeled.\n\n8. **Verify critical location path** — Gantt view now shows location-sequence critical path in red instead of activity critical path. If Formwork on L1 slips 2 days, it cascades to all downstream locations (critical). If Finishes on L2 slips, only L2 finishes date shifts (non-critical). Screenshot: red path highlights L1→L2→L3 sequence for Formwork only."
+  }
+ ],
+ "plan": {
+  "already_done": [],
+  "recommended_first_wave_summary": "Wave 1 attacks the cheapest, highest-leverage event-bus and data-integrity gaps. Three file-disjoint lanes: (A) clash/validation lifecycle wiring into notifications/punchlist/NCR (rank 2), (B) the schedule dependency-graph unification + completion guards (rank 5) which is the single most dangerous data-integrity footgun and must own all schedule/models.py and schedule/service.py edits before any later schedule work, and (C) the tendering-vs-bid award reconciliation (rank 8, needs only procurement/events.py subscriber). These three never collide on a file. Critically, schedule/models.py and schedule/service.py are claimed by Wave 1 Lane B as the sole owner so that Wave 2's live-EVM work and Wave 6's takt work build on a single, guarded dependency graph rather than re-forking it.",
+  "shared_file_warnings": [
+   "backend/app/core/events.py — touched by ranks 2, 3 (live EVM), 24 (risk/schedule auto-create). Assign sole ownership to the earliest wave that needs it (W1 Lane A clash/validation), and have later waves only subscribe via their own module events.py files, never edit core/events.py again. If a later wave genuinely needs a new bus primitive, route that edit back through a single designated lane in that wave.",
+   "backend/app/modules/notifications/events.py — touched by ranks 2 (clash/validation), 19 (predictive alerts), 24 (risk auto-create). Owned by W1 Lane A. W5/W6 predictive-alert and risk-escalation subscribers must be added in their OWN module events files (risk/events.py, full_evm/service.py) or appended only by the single designated notifications owner-lane in that wave, never concurrently.",
+   "backend/app/modules/notifications/templates.py — touched by rank 2 only in W1; later notification work (rank 19) must add templates through the same single notifications-owner lane in its wave.",
+   "backend/app/modules/schedule/models.py + schedule/service.py + schedule/router.py — touched by ranks 5 (unify graph + guards) and 24 (schedule-slip auto-creates risk). W1 Lane B owns the unification/guards fully; rank 24 (W1 Lane D / or deferred) must publish schedule.activity.slipped only via schedule/events.py and read, never re-edit the dependency storage. Sequence rank 5 before rank 24 if both land same wave.",
+   "backend/app/modules/costmodel/models.py + costmodel/service.py — touched by ranks 3 (live EVM), 2-payroll (labour_cost_actual), 11-changeorders (impact simulator reads budget). In W2 these are owned by a single Cost-Truth lane; W3/W4 lanes must read costmodel via service calls and not edit its models/service concurrently.",
+   "backend/app/modules/finance/service.py + finance/events.py — touched by ranks 3 (KPI invalidation), 4 (ERP connectors), 6 (commitment approval moves budget sync), 2-payroll (GL posting), 9 (lien-waiver invoice gating). These are heavily contended. In W2 finance/events.py budget-sync changes are owned by the live-EVM lane; in W3 the ERP-connector lane owns finance/service.py + finance/router.py + finance/schemas.py and the commitment-approval lane must coordinate the single finance/events.py edit (route both through one owner).",
+   "backend/app/modules/reporting/service.py + reporting/schemas.py + reporting/renderer.py — touched by ranks 3 (live EVM/KPI) and 4-progress-reporting (rank 4 narrative). Split by wave: W2 owns reporting/service.py for KPI cache; W5 progress-report narrative must own renderer.py + schemas.py edits in its own wave and avoid concurrent reporting/service.py edits with any other lane.",
+   "backend/app/modules/procurement/events.py + procurement/service.py — touched by ranks 8 (bid award PO), 6 (commitment approval), 20 (vendor scorecard handler). Sequence: W1 owns events.py for the bid-award subscriber; W3 commitment-approval and W3 vendor-scorecard must be in the SAME wave but DIFFERENT lanes only if file-disjoint — they are NOT (both touch procurement/events.py + service.py), so they must be ONE combined lane or sequenced sub-steps within one owner lane.",
+   "backend/app/modules/subcontractors/service.py + subcontractors/models.py — touched by ranks 9 (lien waivers), 2-payroll (SiteWorkforceLog FK), 20 (scorecards/prequal), 22 (portal payment apps). In W3 the lien-waiver + scorecard/prequal work share subcontractors/service.py and must be a single combined lane; W3 portal-payment (rank 22) reads via portal endpoints and must not edit subcontractors/service.py concurrently.",
+   "backend/app/modules/bim_hub/service.py + bim_hub/schemas.py — touched by ranks 17 (drawing revision compare, only as counterexample import) and 27 (model progress overlay). Rank 27 owns bim_hub/service.py + schemas.py in W4; rank 17 lives in dwg_takeoff/takeoff modules and must not edit bim_hub files.",
+   "backend/app/modules/schedule_advanced/service.py + router.py + models.py + leveling.py + cpm.py — touched by ranks 3 (portfolio leveling), 30 (takt/line-of-balance). Both are heavy schedule_advanced work; place rank 3 (portfolio leveling) in W2 and rank 30 (takt) in W6 so they never edit schedule_advanced concurrently. Within each wave they own these files solely.",
+   "backend/app/modules/ai_agents/* — touched by ranks 29 (no-code agent builder) and indirectly 11 (CO AI draft uses core/llm.py not ai_agents). Rank 29 owns ai_agents fully in W6; rank 11 (W5) touches changeorders + core/llm.py, not ai_agents.",
+   "backend/app/modules/portal/service.py + portal/router.py — touched by ranks 22 (subcontractor portal payments) and 4-progress-reporting (client progress reports in portal). Place rank 22 in W3 and the portal-facing progress report (rank 4) in W5; they must not co-edit portal/service.py in the same wave.",
+   "frontend/src/features/schedule/CPMView.tsx — touched by ranks 3 (portfolio leveling) and 5 (completion guards). Rank 5 (W1) owns it first for the guard UI; rank 3 (W2) portfolio leveling adds the leveling entry separately in a later wave so no concurrency.",
+   "backend/app/core/match_service/extractors/photo.py — touched by ranks 5-photo-intel (AI photo) and 3-ML-extraction (symbol recognition). Both are stub-replacements of the same file; place AI photo (rank 5) in W4 and ML symbol extraction (rank 3) in W5 so the stub is replaced once per wave by one owner.",
+   "frontend/src/features/procurement/ProcurementPage.tsx — touched by ranks 8 (bid award toast), 6 (PO approval UI), 20 (vendor scorecard badges). W1 owns it for the bid-award toast; W3 commitment+scorecard work share it and must be one combined lane in W3."
+  ],
+  "waves": [
+   {
+    "wave": 1,
+    "theme": "Event-bus gaps + data-integrity footguns: wire orphaned lifecycle events into their subscribers, unify the split-brain schedule dependency graph behind completion guards, and reconcile the two award sources. Cheapest, highest leverage; establishes the single dependency graph and event conventions that all later waves build on.",
+    "lanes": [
+     {
+      "lane": "A — Clash/validation lifecycle into notifications, punchlist, NCR (event-bus owner)",
+      "items": [
+       2
+      ],
+      "files": [
+       "backend/app/modules/notifications/events.py",
+       "backend/app/modules/notifications/templates.py",
+       "backend/app/modules/punchlist/events.py",
+       "backend/app/modules/ncr/events.py",
+       "backend/app/modules/clash/models.py",
+       "backend/app/modules/punchlist/models.py",
+       "backend/app/modules/ncr/models.py",
+       "backend/app/modules/validation/service.py",
+       "backend/app/core/events.py",
+       "frontend/src/features/clash/ClashDetectionPage.tsx",
+       "frontend/src/features/punchlist",
+       "frontend/src/features/ncr",
+       "frontend/src/app/locales/en.ts",
+       "backend/alembic/versions (clash->punchlist/ncr FK migration)"
+      ],
+      "notes": "Sole owner of core/events.py, notifications/events.py and notifications/templates.py for this wave. Implement validation.report.created subscriber first (no schema change), then clash->punch/NCR auto-create with idempotency key on clash signature. Owns the only new alembic migration in this lane; coordinate revision parent with Lane B if both add migrations (run alembic heads after)."
+     },
+     {
+      "lane": "B — Unify schedule dependency graph + completion guards (schedule-graph owner)",
+      "items": [
+       5
+      ],
+      "files": [
+       "backend/app/modules/schedule/models.py",
+       "backend/app/modules/schedule/service.py",
+       "backend/app/modules/schedule/router.py",
+       "backend/app/modules/schedule/schemas.py",
+       "backend/app/modules/schedule/repository.py",
+       "frontend/src/features/schedule/api.ts",
+       "frontend/src/features/schedule/SchedulePage.tsx",
+       "frontend/src/features/schedule/CPMView.tsx",
+       "backend/alembic/versions (consolidate ScheduleRelationship into Activity.dependencies)"
+      ],
+      "notes": "SOLE owner of schedule/models.py + service.py + router.py + CPMView.tsx for the whole roadmap until later waves. Consolidate dependencies to one source of truth, add completion guard reading the unified store (parity with tasks module guard). This unblocks W2 live-EVM and W6 takt cleanly. File-disjoint from Lane A and Lane C."
+     },
+     {
+      "lane": "C — Tendering vs Bid Management award reconciliation (procurement-events owner)",
+      "items": [
+       8
+      ],
+      "files": [
+       "backend/app/modules/procurement/events.py",
+       "backend/app/modules/bid_management/models.py",
+       "backend/app/modules/bid_management/schemas.py",
+       "backend/app/modules/tests/test_procurement_events.py",
+       "frontend/src/features/bid-management/containers/BidAwardCard.tsx",
+       "frontend/src/features/bid-management/services/bidAwardService.ts",
+       "frontend/src/features/procurement/ProcurementPage.tsx"
+      ],
+      "notes": "No migration needed. Subscribe procurement to bid_management.package.awarded mirroring _on_tender_awarded with idempotency on bid_package_id. Owns procurement/events.py and ProcurementPage.tsx for this wave so W3 commitment/scorecard work inherits a clean base. File-disjoint from A and B."
+     }
+    ]
+   },
+   {
+    "wave": 2,
+    "theme": "Planning + financial truth: one live event-driven EVM/KPI pipeline, cross-project portfolio resource leveling, and cost-model currency-correct actuals. Depends on W1's unified schedule graph. Establishes costmodel/service.py and finance/events.py budget-sync as single-owned so W3 money-flow work is safe.",
+    "lanes": [
+     {
+      "lane": "A — Event-driven live EVM + KPI refresh (cost/reporting/finance-events owner)",
+      "items": [
+       3
+      ],
+      "files": [
+       "backend/app/modules/reporting/service.py",
+       "backend/app/modules/reporting/router.py",
+       "backend/app/modules/reporting/models.py",
+       "backend/app/modules/reporting/__init__.py",
+       "backend/app/modules/bi_dashboards/events.py",
+       "backend/app/modules/bi_dashboards/service.py",
+       "backend/app/modules/bi_dashboards/models.py",
+       "backend/app/modules/costmodel/service.py",
+       "backend/app/modules/costmodel/models.py",
+       "backend/app/modules/finance/service.py",
+       "backend/app/modules/finance/events.py",
+       "backend/app/modules/risk/service.py",
+       "backend/app/modules/safety/service.py",
+       "frontend/src/features/reporting/hooks/useKPIRefresh.ts",
+       "frontend/src/features/bi-dashboards/hooks/useKPIDashboardSubscription.ts",
+       "frontend/src/features/dashboard/hooks/useLiveEVMRefresh.ts",
+       "backend/alembic/versions/v_new_kpi_cache_watermark.py"
+      ],
+      "notes": "SOLE owner of costmodel/service.py + costmodel/models.py + finance/service.py + finance/events.py for W2. Follows the detached-session pattern from finance/events.py to avoid deadlock. Reads the unified schedule graph from W1 for live PV/EV. Does NOT edit core/events.py (W1 already added the bus primitives); only subscribes. Note this lane touches risk/safety service.py read-only-ish; keep edits minimal and localized to event publication."
+     },
+     {
+      "lane": "B — Cross-project portfolio resource leveling + capacity planning (schedule_advanced owner)",
+      "items": [
+       3
+      ],
+      "files": [
+       "backend/app/modules/resources/service.py",
+       "backend/app/modules/resources/repository.py",
+       "backend/app/modules/schedule_advanced/service.py",
+       "backend/app/modules/schedule_advanced/router.py",
+       "backend/app/modules/schedule_advanced/schemas.py",
+       "backend/app/modules/schedule_advanced/leveling.py",
+       "frontend/src/features/schedule/CPMView.tsx",
+       "frontend/src/features/schedule/api.ts",
+       "frontend/src/features/portfolio/CapacityPlanningPage.tsx",
+       "frontend/src/features/portfolio/api.ts"
+      ],
+      "notes": "NOTE: this is the portfolio-leveling instance of the rank-3 feature (distinct from the live-EVM rank-3). SOLE owner of schedule_advanced/* for W2 (takt rank 30 is deferred to W6, no concurrency). Adds check_cross_project flag (default False) for backward compat. CPMView.tsx ownership passes from W1 Lane B to this lane in W2 — sequential across waves, no concurrent edit. File-disjoint from Lane A: does not touch costmodel/finance/reporting."
+     }
+    ]
+   },
+   {
+    "wave": 3,
+    "theme": "Commercial depth + money flow: commitment approval workflows with budget sync, lien-waiver invoice gating, vendor/subcontractor scorecards + prequal gating, change-order AI draft + impact simulator, bi-directional ERP connectors, and the subcontractor portal. Depends on W2's cost-model and finance budget-sync being stable and single-owned.",
+    "lanes": [
+     {
+      "lane": "A — Commitment management (PO/subcontract approval) + vendor scorecards + lien waivers + prequal (procurement+subcontractors money-gate owner)",
+      "items": [
+       6,
+       9,
+       20
+      ],
+      "files": [
+       "backend/app/modules/procurement/service.py",
+       "backend/app/modules/procurement/models.py",
+       "backend/app/modules/procurement/router.py",
+       "backend/app/modules/procurement/events.py",
+       "backend/app/modules/procurement/schemas.py",
+       "backend/app/modules/contracts/service.py",
+       "backend/app/modules/contracts/models.py",
+       "backend/app/modules/contracts/router.py",
+       "backend/app/modules/contracts/events.py",
+       "backend/app/modules/subcontractors/models.py",
+       "backend/app/modules/subcontractors/service.py",
+       "backend/app/modules/subcontractors/repository.py",
+       "backend/app/modules/subcontractors/router.py",
+       "backend/app/modules/subcontractors/events.py",
+       "backend/app/modules/finance/events.py",
+       "backend/app/modules/approval_routes/service.py",
+       "frontend/src/features/procurement/ProcurementPage.tsx",
+       "frontend/src/features/procurement/api.ts",
+       "frontend/src/features/procurement/SupplierScorecardModal.tsx",
+       "frontend/src/features/contracts/ContractPage.tsx",
+       "frontend/src/features/contracts/api.ts",
+       "frontend/src/features/subcontractors/PrequalModal.tsx",
+       "frontend/src/features/subcontractors/api.ts",
+       "frontend/src/features/subcontractors/PaymentApplicationApprovalCard.tsx",
+       "frontend/src/features/finance/FinancePage.tsx",
+       "backend/alembic/versions (PO approval status, scorecard persist, waiver gating)"
+      ],
+      "notes": "Deliberately ONE combined lane because ranks 6, 9, 20 all contend on procurement/service.py+events.py, subcontractors/service.py+models.py, finance/events.py, and ProcurementPage.tsx. Combining them avoids same-wave file collisions. Sequence internally: PO/contract approval+budget-sync (6) first (it moves the finance/events.py budget sync), then waiver gating (9), then scorecard/prequal persistence + gating (20). This lane is the SOLE owner of finance/events.py in W3."
+     },
+     {
+      "lane": "B — Bi-directional ERP/accounting connectors (finance-connectors owner)",
+      "items": [
+       4
+      ],
+      "files": [
+       "backend/app/modules/finance/connectors/__init__.py",
+       "backend/app/modules/finance/connectors/base.py",
+       "backend/app/modules/finance/connectors/netsuite.py",
+       "backend/app/modules/finance/connectors/quickbooks.py",
+       "backend/app/modules/finance/connectors/sage.py",
+       "backend/app/modules/finance/connectors/datev.py",
+       "backend/app/modules/finance/connectors/oracle.py",
+       "backend/app/modules/finance/models.py",
+       "backend/app/modules/finance/router.py",
+       "backend/app/modules/finance/service.py",
+       "backend/app/modules/finance/schemas.py",
+       "backend/app/core/job_runner.py",
+       "frontend/src/features/finance/ConnectorSetup.tsx",
+       "frontend/src/features/finance/ConnectorManagement.tsx",
+       "frontend/src/features/finance/SyncLogs.tsx",
+       "backend/alembic/versions/v0XX_add_accounting_connectors.py"
+      ],
+      "notes": "Owns finance/service.py, finance/router.py, finance/models.py, finance/schemas.py for W3 — but NOT finance/events.py (Lane A owns that). Coordinate: ERP sync triggers must be subscribed via a new connector event handler that Lane A wires the single line for, OR defer the event-trigger hook to a follow-up so Lane B stays file-disjoint on events.py. New connector files are all greenfield (file-disjoint). Encrypted secrets store + circuit breaker required."
+     },
+     {
+      "lane": "C — Change Order AI auto-draft + cost/schedule impact simulator (changeorders owner)",
+      "items": [
+       11
+      ],
+      "files": [
+       "backend/app/modules/changeorders/models.py",
+       "backend/app/modules/changeorders/schemas.py",
+       "backend/app/modules/changeorders/service.py",
+       "backend/app/modules/changeorders/router.py",
+       "backend/app/modules/changeorders/events.py",
+       "backend/app/modules/rfi/router.py",
+       "backend/app/core/llm.py",
+       "frontend/src/features/changeorders/ChangeOrdersPage.tsx",
+       "frontend/src/features/changeorders/ImpactSimulator.tsx",
+       "frontend/src/features/changeorders/AIProposalReview.tsx",
+       "frontend/src/features/daily-diary/DailyDiaryPage.tsx",
+       "frontend/src/features/rfi/RFIPage.tsx",
+       "backend/alembic/versions/v31XX_changeorders_ai_draft_columns.py"
+      ],
+      "notes": "File-disjoint from A and B: owns changeorders/* + core/llm.py + rfi/router.py. The impact simulator READS schedule (unified W1 graph), finance/costmodel (W2) and BOQ via service calls only — must not edit costmodel/service.py or finance/* (those are W3 Lane A/B owned). AI output always lands in draft, human sign-off required. core/llm.py is exclusive to this lane in W3."
+     },
+     {
+      "lane": "D — Subcontractor portal with mobile invoice submission + payment tracking (portal owner)",
+      "items": [
+       22
+      ],
+      "files": [
+       "backend/app/modules/portal/router.py",
+       "backend/app/modules/portal/service.py",
+       "backend/app/modules/portal/schemas.py",
+       "backend/app/modules/portal/repository.py",
+       "frontend/src/features/portal/PortalPage.tsx",
+       "frontend/src/features/portal/api.ts",
+       "frontend/src/app/App.tsx",
+       "frontend/src/features/portal/PaymentApplicationList.tsx",
+       "frontend/src/features/portal/PaymentApplicationForm.tsx",
+       "backend/tests/modules/portal/test_payment_applications.py"
+      ],
+      "notes": "No migration (PaymentApplication schema already exists). Owns portal/* for W3. READS subcontractor payment data via existing subcontractors endpoints / RLS-scoped queries; must NOT edit subcontractors/service.py (Lane A owns it) — surface portal-facing endpoints that call existing service methods. Strict RLS so a portal user only sees granted agreements. File-disjoint from A/B/C."
+     }
+    ]
+   },
+   {
+    "wave": 4,
+    "theme": "Field operations first-class: offline-first mobile shell with sync ledger, mobile time/attendance feeding payroll-to-job-cost, AI photo EXIF-GPS + defect classification, equipment predictive maintenance, and model-based progress overlay in the 3D viewer. Depends on W2 cost model (labour cost) and W1/W3 event conventions.",
+    "lanes": [
+     {
+      "lane": "A — Native offline-first mobile shell + field sync ledger (field_diary/offline owner)",
+      "items": [
+       14
+      ],
+      "files": [
+       "backend/alembic/versions/v42_field_pwa_sync.py",
+       "backend/app/main.py",
+       "backend/app/modules/field_diary/models.py",
+       "backend/app/modules/field_diary/repository.py",
+       "backend/app/modules/field_diary/service.py",
+       "backend/app/modules/field_diary/schemas.py",
+       "backend/app/modules/field_diary/router.py",
+       "backend/app/modules/daily_diary/events.py",
+       "frontend/src/features/field/FieldShellPage.tsx",
+       "frontend/src/features/field/FieldAuthPage.tsx",
+       "frontend/src/features/field/tabs/FieldTodayTab.tsx",
+       "frontend/src/features/field/tabs/FieldCrewTab.tsx",
+       "frontend/src/features/field/tabs/FieldProfileTab.tsx",
+       "frontend/src/features/field/capture/FieldCaptureFlow.tsx",
+       "frontend/src/features/field/capture/FieldPunchForm.tsx",
+       "frontend/src/features/field/capture/FieldDiaryEntryForm.tsx",
+       "frontend/src/features/field/useFieldSync.ts",
+       "frontend/src/features/field/submitFieldMutation.ts",
+       "frontend/src/stores/useFieldSessionStore.ts",
+       "frontend/src/shared/lib/offlineStore.ts",
+       "frontend/src/app/App.tsx"
+      ],
+      "notes": "SOLE owner of field_diary/* and the offline substrate (offlineStore.ts, useFieldSync). Phase 1 MVP only (diary + punch offline end-to-end). FieldSyncOp idempotency ledger is non-negotiable. Pre-create_all import in main.py required. App.tsx also touched by W3 Lane D portal route — sequential across waves, no concurrency. File-disjoint from B/C/D in W4."
+     },
+     {
+      "lane": "B — Mobile time/attendance + payroll-to-job-cost pipeline (payroll/fieldreports owner)",
+      "items": [
+       2
+      ],
+      "files": [
+       "backend/app/modules/fieldreports/events.py",
+       "backend/app/modules/fieldreports/service.py",
+       "backend/app/modules/fieldreports/models.py",
+       "backend/app/modules/fieldreports/schemas.py",
+       "backend/app/modules/payroll/__init__.py",
+       "backend/app/modules/payroll/models.py",
+       "backend/app/modules/payroll/service.py",
+       "backend/app/modules/payroll/router.py",
+       "backend/app/modules/payroll/schemas.py",
+       "backend/app/modules/payroll/repository.py",
+       "backend/app/modules/payroll/manifest.py",
+       "backend/app/modules/payroll/permissions.py",
+       "backend/app/modules/resources/models.py",
+       "frontend/src/features/payroll/PayrollPage.tsx",
+       "frontend/src/features/payroll/PayrollBatchList.tsx",
+       "frontend/src/features/payroll/PayrollBatchDetail.tsx",
+       "frontend/src/features/payroll/api.ts",
+       "backend/alembic/versions (payroll tables, labour_cost_actual, workforce FKs)"
+      ],
+      "notes": "This is the rank-2 payroll feature (distinct from rank-2 clash in W1). New payroll module is greenfield. Owns fieldreports/* and resources/models.py for W4. CRITICAL: this lane must NOT edit costmodel/service.py (W2-owned) — it publishes labour-cost events that the costmodel consumes via its existing subscriber, or adds labour_cost_actual via a migration + a thin service hook coordinated to avoid concurrent costmodel/service.py edits. Keep field_diary edits out (Lane A owns). Conflict point: resources/models.py — Lane B owns it in W4; ensure no other W4 lane touches it."
+     },
+     {
+      "lane": "C — AI photo intelligence: EXIF-GPS auto-extract + LLM defect classification (documents/photo owner)",
+      "items": [
+       7
+      ],
+      "files": [
+       "backend/app/modules/documents/service.py",
+       "backend/app/modules/documents/router.py",
+       "backend/app/modules/documents/models.py",
+       "backend/app/modules/daily_diary/weather.py",
+       "backend/app/core/match_service/extractors/photo.py",
+       "backend/app/modules/ai/service.py",
+       "backend/app/modules/ai/router.py",
+       "frontend/src/features/documents/PhotoGalleryPage.tsx",
+       "frontend/src/features/documents/api.ts",
+       "backend/alembic/versions (cv_confidence, estimated_category, ai_extracted_tags)"
+      ],
+      "notes": "Phase 1+2 scope: wire extract_exif_gps into upload flow + LLM-based defect classification via existing ai module (defer full YOLO/PaddleOCR CV pipeline). Owns photo.py extractor stub-replacement for W4 (rank-3 ML symbol extraction is deferred to W5, no concurrency on photo.py). daily_diary/weather.py owned here; daily_diary/events.py is owned by Lane A — coordinate so they edit different files in daily_diary (events.py vs weather.py = disjoint). File-disjoint from A/B/D."
+     },
+     {
+      "lane": "D — Equipment predictive maintenance + fleet analytics, and model-based progress overlay (equipment + bim_hub owner)",
+      "items": [
+       26,
+       27
+      ],
+      "files": [
+       "backend/app/modules/equipment/models.py",
+       "backend/app/modules/equipment/schemas.py",
+       "backend/app/modules/equipment/repository.py",
+       "backend/app/modules/equipment/service.py",
+       "backend/app/modules/equipment/router.py",
+       "backend/app/modules/equipment/predictive_service.py",
+       "backend/app/modules/bim_hub/service.py",
+       "backend/app/modules/bim_hub/schemas.py",
+       "backend/app/modules/bim_hub/router.py",
+       "frontend/src/features/equipment/EquipmentPage.tsx",
+       "frontend/src/features/equipment/api.ts",
+       "frontend/src/features/equipment/components/EquipmentHealthDashboard.tsx",
+       "frontend/src/features/equipment/components/FailureForecastCard.tsx",
+       "frontend/src/features/equipment/components/FleetOptimizationPanel.tsx",
+       "frontend/src/shared/ui/BIMViewer/BIMViewer.tsx",
+       "frontend/src/shared/ui/BIMViewer/use4dTimeline.ts",
+       "frontend/src/features/bim/BIMPage.tsx",
+       "frontend/src/features/bim/api.ts",
+       "backend/alembic/versions (equipment predictive analytics tables)"
+      ],
+      "notes": "Combines two file-disjoint sub-features into one lane to keep lane count low: equipment predictive (rank 26, owns equipment/*) and model-progress overlay (rank 27, owns bim_hub/service.py+schemas.py + BIMViewer). They share NO files. bim_hub ownership in W4 belongs here; rank-17 drawing compare (W5) lives in dwg_takeoff/takeoff and must not touch bim_hub. Progress overlay needs only a read JOIN to oe_progress_entry (no migration); equipment needs a migration with explicit ordering."
+     }
+    ]
+   },
+   {
+    "wave": 5,
+    "theme": "AI estimating + coordination differentiators: semantic cross-module retrieval, ML quantity/symbol extraction from drawings, auto-revision drawing/BIM compare with cost impact, predictive schedule/cost risk early-warning, automated narrative progress reporting, and ITP hold-point quality gates. Depends on W1 events, W2 EVM/cost truth, W4 photo extractor base.",
+    "lanes": [
+     {
+      "lane": "A — Semantic AI assistant over project docs (vector_index + erp_chat owner)",
+      "items": [
+       16
+      ],
+      "files": [
+       "backend/app/modules/rfi/vector_adapter.py",
+       "backend/app/modules/submittals/vector_adapter.py",
+       "backend/app/modules/correspondence/vector_adapter.py",
+       "backend/app/core/vector_index.py",
+       "backend/app/modules/search/service.py",
+       "backend/app/modules/erp_chat/tools.py",
+       "backend/app/modules/rfi/events.py",
+       "backend/app/modules/submittals/events.py",
+       "backend/app/modules/correspondence/events.py",
+       "frontend/src/features/search/GlobalSearchModal.tsx",
+       "frontend/src/features/erp-chat/FloatingChatPanel.tsx"
+      ],
+      "notes": "No migration. Greenfield vector adapters + registry edits. Owns vector_index.py, search/service.py, erp_chat/tools.py for W5. rfi/events.py and submittals/events.py owned here in W5 (no other W5 lane touches them). Note rfi/router.py was W3 Lane C; sequential across waves. File-disjoint from B/C/D/E."
+     },
+     {
+      "lane": "B — ML quantity extraction + symbol recognition from drawings, and auto-revision compare with cost impact (match_elements/takeoff/dwg_takeoff owner)",
+      "items": [
+       3,
+       17
+      ],
+      "files": [
+       "backend/app/modules/match_elements/sources/image_adapter.py",
+       "backend/app/modules/match_elements/router.py",
+       "backend/app/modules/match_elements/service.py",
+       "backend/app/modules/match_elements/schemas.py",
+       "backend/app/modules/match_elements/models.py",
+       "backend/app/modules/takeoff/service.py",
+       "backend/app/modules/takeoff/router.py",
+       "backend/app/modules/takeoff/models.py",
+       "backend/app/core/match_service/extractors/photo.py",
+       "backend/app/core/match_service/extractors/symbol.py",
+       "services/cv-pipeline/symbol_detector.py",
+       "services/cv-pipeline/ocr_extractor.py",
+       "services/cv-pipeline/__init__.py",
+       "backend/app/modules/dwg_takeoff/schemas.py",
+       "backend/app/modules/dwg_takeoff/service.py",
+       "backend/app/modules/dwg_takeoff/router.py",
+       "frontend/src/features/match-elements/MatchWizard.tsx",
+       "frontend/src/features/match-elements/MatchWizardFlow.tsx",
+       "frontend/src/features/match-elements/api.ts",
+       "frontend/src/features/match-elements/components/SourceSelector.tsx",
+       "frontend/src/features/takeoff/TakeoffPage.tsx",
+       "frontend/src/features/takeoff/PdfCompareDrawer.tsx",
+       "frontend/src/features/dwg-takeoff/api.ts",
+       "frontend/src/features/dwg-takeoff/DwgDrawingCompareDrawer.tsx",
+       "frontend/src/features/dwg-takeoff/DwgTakeoffPage.tsx",
+       "frontend/src/features/dwg-takeoff/components/AnnotationOverlay.tsx",
+       "backend/alembic/versions (match_elements image/symbol fields)"
+      ],
+      "notes": "This is the rank-3 ML-extraction feature plus rank-17 drawing compare, combined because both span match_elements/takeoff/dwg_takeoff and would collide if split. Owns photo.py extractor in W5 (W4 Lane C already did EXIF/defect; this lane extends it for symbol/dimension — sequential across waves). READS boq cost logic (_resolve_project_fx) by import only; must NOT edit boq/service.py or boq/models.py (treat as read-only shared). Does NOT touch bim_hub (W4-owned). File-disjoint from A/C/D/E."
+     },
+     {
+      "lane": "C — Predictive schedule/cost risk early-warning + risk-escalation/schedule-slip auto-create (project_intelligence + risk/tasks owner)",
+      "items": [
+       19,
+       24
+      ],
+      "files": [
+       "backend/app/modules/project_intelligence/models.py",
+       "backend/app/modules/project_intelligence/schemas.py",
+       "backend/app/modules/project_intelligence/collector.py",
+       "backend/app/modules/project_intelligence/scorer.py",
+       "backend/app/modules/project_intelligence/advisor.py",
+       "backend/app/modules/project_intelligence/router.py",
+       "backend/app/modules/full_evm/service.py",
+       "backend/app/modules/risk/events.py",
+       "backend/app/modules/risk/models.py",
+       "backend/app/modules/tasks/service.py",
+       "backend/app/modules/tasks/models.py",
+       "backend/app/modules/schedule/events.py",
+       "backend/app/modules/projects/models.py",
+       "backend/app/modules/projects/service.py",
+       "frontend/src/features/project-intelligence/components/ForecastPanel.tsx",
+       "frontend/src/features/project-intelligence/components/ProjectKPIHero.tsx",
+       "frontend/src/features/project-intelligence/ProjectIntelligencePage.tsx",
+       "frontend/src/features/risk/RiskRegisterPage.tsx",
+       "frontend/src/features/tasks/TasksPage.tsx",
+       "frontend/src/features/schedule/SchedulePage.tsx",
+       "backend/alembic/versions (AlertRule / EVMForecast)"
+      ],
+      "notes": "Combines rank 19 (predictive forecast alerts) and rank 24 (risk-escalation auto-task / schedule-slip auto-risk) because both edit risk + tasks + schedule events. CRITICAL: risk/service.py is W2-owned for EVM event publication — here only risk/events.py + risk/models.py are edited (disjoint from risk/service.py if possible; if service edits needed, scope to the escalation publish only and confirm W2 work landed first). schedule/events.py owned here in W5 (schedule/service.py/models.py from W1 are NOT re-edited — publish slip via events only). notifications subscribers added via full_evm/service.py + risk/events.py, NOT notifications/events.py. projects/models.py owned here in W5."
+     },
+     {
+      "lane": "D — Automated client/owner progress reporting with narrative summarization (reporting-narrative + portal-report owner)",
+      "items": [
+       4
+      ],
+      "files": [
+       "backend/app/modules/reporting/models.py",
+       "backend/app/modules/reporting/schemas.py",
+       "backend/app/modules/reporting/renderer.py",
+       "backend/app/modules/ai_agents/agents/progress_reporter.py",
+       "backend/app/modules/progress/service.py",
+       "backend/app/modules/portal/service.py",
+       "backend/app/modules/notifications/service.py",
+       "backend/app/core/jobs_tasks.py",
+       "frontend/src/features/reporting/ReportingPage.tsx",
+       "frontend/src/features/portal/PortalPage.tsx",
+       "frontend/src/features/buyer-portal/BuyerPortalPage.tsx",
+       "backend/alembic/versions (progress report type + data_snapshot expansion)"
+      ],
+      "notes": "This is the rank-4 progress-reporting feature. WARNING: reporting/service.py is contended with W2 Lane A — but W2 landed earlier, so in W5 this lane owns reporting/schemas.py + renderer.py + models.py and adds the progress_report type. It must coordinate the single reporting/service.py edit: route the generate_report progress-section change through this lane only (no other W5 lane touches reporting/service.py). portal/service.py was W3 Lane D — sequential across waves. notifications/service.py (dispatch) owned here in W5; do not edit notifications/events.py. ai_agents/agents/progress_reporter.py is a NEW file (rank-29 agent builder is W6, no concurrency)."
+     },
+     {
+      "lane": "E — ITP workflow with hold points + quality gates (qms owner)",
+      "items": [
+       12
+      ],
+      "files": [
+       "backend/app/modules/qms/models.py",
+       "backend/app/modules/qms/schemas.py",
+       "backend/app/modules/qms/service.py",
+       "backend/app/modules/qms/router.py",
+       "backend/app/modules/qms/repository.py",
+       "backend/app/modules/qms/events.py",
+       "backend/app/modules/approval_routes/models.py",
+       "frontend/src/features/qms/QMSPage.tsx",
+       "frontend/src/features/qms/api.ts",
+       "backend/alembic/versions (qms spec linkage, attachments, hold-point deps, signature non-repudiation)"
+      ],
+      "notes": "Owns qms/* fully. Publishes qms.inspection.hold_point_failed/passed for downstream subscribers (punchlist/ncr/risk already wired in W1) — subscribe handlers live in those modules' events.py, NOT edited here. approval_routes/models.py: add inspection-result trigger target_kind — coordinate, as W3 Lane A also touched approval_routes/service.py (different file: models.py vs service.py = disjoint; and W3 is an earlier wave). File-disjoint from A/B/C/D."
+     }
+    ]
+   },
+   {
+    "wave": 6,
+    "theme": "Compliance + lifecycle + platform reach: workflow-level compliance rule engine with jurisdiction rule packs, ISO 19650 CDE suitability alignment, LTIFR/TRIR safety analytics UI, digital handover/closeout packages, no-code agent builder with triggers, and Takt / line-of-balance scheduling. Final wave; depends on stable workflows, schedule graph, and event bus.",
+    "lanes": [
+     {
+      "lane": "A — Compliance rule engine at workflow level + jurisdiction rule packs (compliance owner)",
+      "items": [
+       3
+      ],
+      "files": [
+       "backend/app/modules/compliance/models.py",
+       "backend/app/modules/compliance/service.py",
+       "backend/app/modules/compliance/router.py",
+       "backend/app/modules/compliance/repository.py",
+       "backend/app/modules/compliance/events.py",
+       "backend/app/modules/contracts/service.py",
+       "backend/app/modules/contracts/router.py",
+       "backend/app/modules/contracts/models.py",
+       "backend/app/modules/projects/models.py",
+       "backend/app/modules/projects/service.py",
+       "backend/app/modules/projects/schemas.py",
+       "backend/app/core/partner_pack/manifest.py",
+       "backend/app/core/partner_pack/apply.py",
+       "backend/app/core/validation/engine.py",
+       "backend/app/core/validation/rules/__init__.py",
+       "frontend/src/features/compliance/index.ts",
+       "frontend/src/features/compliance/api.ts",
+       "frontend/src/features/contracts/ComplianceGate.tsx",
+       "frontend/src/features/contracts/ContractWorkflow.tsx",
+       "backend/tests/integration/test_contracts_compliance_enforcement.py",
+       "backend/tests/integration/test_compliance_rule_packs.py",
+       "backend/alembic/versions/v_compliance_rule_packs.py"
+      ],
+      "notes": "This is the rank-3 compliance feature. Owns compliance/*, validation/engine.py, partner_pack/*, and contracts/* in W6 (contracts/service.py was W3 Lane A — sequential across waves, no concurrency). projects/models.py also touched by W5 Lane C — sequential across waves (W5 landed first). File-disjoint from B/C/D/E/F."
+     },
+     {
+      "lane": "B — ISO 19650 CDE suitability + state-machine alignment (documents/cde owner)",
+      "items": [
+       2
+      ],
+      "files": [
+       "backend/app/modules/documents/service.py",
+       "backend/app/modules/documents/schemas.py",
+       "backend/app/modules/documents/router.py",
+       "backend/app/core/cde_states.py",
+       "backend/app/modules/cde/suitability.py",
+       "frontend/src/features/documents/DocumentsPage.tsx",
+       "frontend/src/features/documents/api.ts"
+      ],
+      "notes": "This is the rank-2 ISO-19650 feature. No migration. Aligns documents state validator with CDEStateMachine + suitability validation on PATCH. documents/service.py was W4 Lane C (photo intel) — sequential across waves, no concurrency. Owns cde_states.py + cde/suitability.py in W6. File-disjoint from A/C/D/E/F."
+     },
+     {
+      "lane": "C — LTIFR/TRIR safety analytics UI + digital handover/closeout package (safety-frontend + property_dev owner)",
+      "items": [
+       13,
+       3
+      ],
+      "files": [
+       "frontend/src/features/safety/SafetyPage.tsx",
+       "frontend/src/components/SafetyTrendChart.tsx",
+       "backend/app/modules/property_dev/router.py",
+       "backend/app/modules/property_dev/service.py",
+       "frontend/src/features/property-dev/api.ts",
+       "frontend/src/features/property-dev/PropertyDevPage.tsx",
+       "frontend/src/app/locales/en.ts",
+       "frontend/src/app/locales/de.ts",
+       "frontend/src/app/locales/fr.ts"
+      ],
+      "notes": "Combines two small file-disjoint features: rank 13 (LTIFR/TRIR is frontend-only, backend already done — owns SafetyPage.tsx + SafetyTrendChart.tsx) and rank-3 digital handover/closeout (owns property_dev/router.py+service.py + PropertyDevPage.tsx + property-dev/api.ts, no migration). They share NO files except locale files. LOCALE FILE CONTENTION: en.ts/de.ts/fr.ts are also needed by Lanes D/E/F — designate THIS lane as the sole owner of locale files in W6, or run /i18n-sweep as a final serialized pass after all W6 lanes land. Recommend the latter to avoid any locale merge conflict."
+     },
+     {
+      "lane": "D — No-code agent builder: triggers, scheduling, tool access (ai_agents owner)",
+      "items": [
+       29
+      ],
+      "files": [
+       "backend/app/modules/ai_agents/models.py",
+       "backend/app/modules/ai_agents/schemas.py",
+       "backend/app/modules/ai_agents/router.py",
+       "backend/app/modules/ai_agents/service.py",
+       "backend/app/modules/ai_agents/scheduler.py",
+       "backend/app/modules/ai_agents/triggers.py",
+       "backend/app/modules/ai_agents/base.py",
+       "frontend/src/features/ai-agents/components/CustomAgentBuilder.tsx",
+       "frontend/src/features/ai-agents/components/SchedulePanel.tsx",
+       "frontend/src/features/ai-agents/api.ts",
+       "frontend/src/features/ai-agents/AgentsPage.tsx",
+       "backend/alembic/versions (agent triggers/schedule)"
+      ],
+      "notes": "Owns ai_agents/* fully (W5 Lane D only added the NEW agents/progress_reporter.py file, disjoint from these core ai_agents files; and W5 landed first). Careful tool-access permission scoping (no privilege escalation via agent builder). File-disjoint from A/B/C/E/F."
+     },
+     {
+      "lane": "E — Takt / line-of-balance scheduling (schedule_advanced takt owner)",
+      "items": [
+       30
+      ],
+      "files": [
+       "backend/app/modules/schedule_advanced/models.py",
+       "backend/app/modules/schedule_advanced/schemas.py",
+       "backend/app/modules/schedule_advanced/service.py",
+       "backend/app/modules/schedule_advanced/router.py",
+       "backend/app/modules/schedule_advanced/repository.py",
+       "backend/app/modules/schedule_advanced/cpm.py",
+       "backend/app/modules/schedule_advanced/events.py",
+       "frontend/src/features/schedule-advanced/TaktSchedulePage.tsx",
+       "frontend/src/features/schedule-advanced/LineOfBalanceView.tsx",
+       "frontend/src/features/schedule-advanced/TaktCrewFlowView.tsx",
+       "frontend/src/features/schedule-advanced/api.ts",
+       "frontend/src/shared/ui/LineOfBalanceChart/index.ts",
+       "backend/alembic/versions (takt tables)"
+      ],
+      "notes": "Owns schedule_advanced/* in W6 (W2 Lane B portfolio leveling landed earlier — sequential across waves, no concurrency on schedule_advanced files). New takt ORM models + LOB algorithm orthogonal to CPM. Reads the unified W1 schedule graph. File-disjoint from A/B/C/D/F. Confirm single alembic head after this large migration."
+     }
+    ]
+   }
+  ]
+ }
+}

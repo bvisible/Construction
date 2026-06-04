@@ -247,18 +247,68 @@ export interface ApplyTemplatePayload {
   language?: string;
 }
 
+/**
+ * Money and numeric fields come off the wire as JSON strings: the backend
+ * serialises Decimal money as an exact string like "900.0" (the platform's
+ * "Decimal-in, Decimal-as-string out" money contract). The interfaces above
+ * declare these as `number`, and the Cost Drivers roll-up plus other consumers
+ * do real arithmetic on them. A raw string silently turns `a + b` into string
+ * concatenation: with two priced components a category total became
+ * "0900.0" + "500.0" -> "0900.0500.0" -> Number(...) -> NaN, so `NaN > 0` was
+ * false and the whole category vanished from the breakdown (single-component
+ * categories survived by luck). Coerce at the API boundary so runtime matches
+ * the declared `number` types and every consumer gets real numbers.
+ */
+const toNum = (v: unknown): number => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  }
+  return 0;
+};
+
+const normalizeComponent = (c: AssemblyComponent): AssemblyComponent => ({
+  ...c,
+  factor: toNum(c.factor),
+  quantity: toNum(c.quantity),
+  unit_cost: toNum(c.unit_cost),
+  total: toNum(c.total),
+});
+
+const normalizeAssembly = <T extends Assembly>(a: T): T => ({
+  ...a,
+  total_rate: toNum(a.total_rate),
+  bid_factor: toNum(a.bid_factor),
+});
+
+const normalizeWithComponents = (a: AssemblyWithComponents): AssemblyWithComponents => ({
+  ...normalizeAssembly(a),
+  components: (a.components ?? []).map(normalizeComponent),
+});
+
 export const assembliesApi = {
   list: (params?: Record<string, string>) =>
-    apiGet<AssemblySearchResponse>(`/v1/assemblies/?${new URLSearchParams(params)}`),
-  get: (id: string) => apiGet<AssemblyWithComponents>(`/v1/assemblies/${id}`),
-  create: (data: CreateAssemblyData) => apiPost<Assembly>('/v1/assemblies/', data),
+    apiGet<AssemblySearchResponse>(`/v1/assemblies/?${new URLSearchParams(params)}`).then((r) => ({
+      ...r,
+      items: (r.items ?? []).map(normalizeAssembly),
+    })),
+  get: (id: string) =>
+    apiGet<AssemblyWithComponents>(`/v1/assemblies/${id}`).then(normalizeWithComponents),
+  create: (data: CreateAssemblyData) =>
+    apiPost<Assembly>('/v1/assemblies/', data).then(normalizeAssembly),
   update: (id: string, data: Partial<CreateAssemblyData>) =>
-    apiPatch<Assembly>(`/v1/assemblies/${id}`, data),
+    apiPatch<Assembly>(`/v1/assemblies/${id}`, data).then(normalizeAssembly),
   delete: (id: string) => apiDelete(`/v1/assemblies/${id}`),
   addComponent: (assemblyId: string, data: CreateComponentData) =>
-    apiPost<AssemblyComponent>(`/v1/assemblies/${assemblyId}/components/`, data),
+    apiPost<AssemblyComponent>(`/v1/assemblies/${assemblyId}/components/`, data).then(
+      normalizeComponent,
+    ),
   updateComponent: (assemblyId: string, componentId: string, data: Partial<CreateComponentData>) =>
-    apiPatch<AssemblyComponent>(`/v1/assemblies/${assemblyId}/components/${componentId}`, data),
+    apiPatch<AssemblyComponent>(
+      `/v1/assemblies/${assemblyId}/components/${componentId}`,
+      data,
+    ).then(normalizeComponent),
   deleteComponent: (assemblyId: string, componentId: string) =>
     apiDelete(`/v1/assemblies/${assemblyId}/components/${componentId}`),
   applyToBoq: (assemblyId: string, boqId: string, quantity: number) =>
@@ -272,7 +322,7 @@ export const assembliesApi = {
   importAssembly: (data: AssemblyExport) =>
     apiPost<Assembly>('/v1/assemblies/import/', { assembly: data }),
   updateTags: (assemblyId: string, tags: string[]) =>
-    apiPatch<Assembly>(`/v1/assemblies/${assemblyId}/tags/`, { tags }),
+    apiPatch<Assembly>(`/v1/assemblies/${assemblyId}/tags/`, { tags }).then(normalizeAssembly),
   getStats: () => apiGet<AssemblyStats>(`/v1/assemblies/stats/`),
 
   // Assembly Library templates

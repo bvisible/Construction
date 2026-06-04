@@ -49,23 +49,28 @@ class RFIRepository:
         return list(result.scalars().all()), total
 
     async def next_rfi_number(self, project_id: uuid.UUID) -> str:
-        """‌⁠‍Generate the next RFI number using MAX to avoid duplicates under concurrency."""
+        """‌⁠‍Generate the next ``RFI-NNN`` number using MAX to avoid duplicates.
+
+        Only canonical ``RFI-<digits>`` rows are cast: PostgreSQL rejects an
+        empty or non-numeric integer cast (unlike SQLite, which yielded 0), so
+        one legacy or externally-numbered row would otherwise raise on every
+        new RFI for the project.
+        """
         from sqlalchemy import Integer as SAInteger
         from sqlalchemy import cast
         from sqlalchemy.sql import func as sqlfunc
 
         # Extract numeric suffix from existing RFI numbers (e.g. 'RFI-007' -> 7)
-        stmt = select(
-            sqlfunc.coalesce(
-                sqlfunc.max(
-                    cast(
-                        func.substr(RFI.rfi_number, 5),
-                        SAInteger,
-                    )
-                ),
-                0,
+        stmt = (
+            select(
+                sqlfunc.coalesce(
+                    sqlfunc.max(cast(func.substr(RFI.rfi_number, 5), SAInteger)),
+                    0,
+                )
             )
-        ).where(RFI.project_id == project_id)
+            .where(RFI.project_id == project_id)
+            .where(RFI.rfi_number.regexp_match("^RFI-[0-9]+$"))
+        )
         max_num = (await self.session.execute(stmt)).scalar_one()
         return f"RFI-{max_num + 1:03d}"
 

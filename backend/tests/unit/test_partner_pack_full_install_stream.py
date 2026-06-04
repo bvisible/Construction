@@ -173,8 +173,13 @@ def _patch_orchestrator(
 
     monkeypatch.setattr("app.modules.costs.router.vectorize_region", _fake_vectorize)
 
-    # Step 5 (demos) -> install the requested ids without real templates.
-    async def _fake_install_demo(_session: AsyncSession, demo_id: str) -> dict[str, Any]:
+    # Step 5 (demos) -> install the requested ids without real templates. The
+    # one-click installer tags each demo with the active pack's slug so the
+    # workspace can scope to it, so the fake accepts (and records) partner_pack.
+    async def _fake_install_demo(
+        _session: AsyncSession, demo_id: str, *, partner_pack: str | None = None
+    ) -> dict[str, Any]:
+        assert partner_pack == _PACK_SLUG, f"demo not tagged with the pack slug: {partner_pack!r}"
         return {"project_id": str(uuid.uuid4()), "project_name": demo_id, "already_installed": False}
 
     monkeypatch.setattr("app.core.demo_projects.install_demo_project", _fake_install_demo)

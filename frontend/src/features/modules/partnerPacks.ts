@@ -137,13 +137,17 @@ export function useApplyPack() {
   });
 }
 
+export interface UnapplyResult {
+  applied: boolean;
+  restored_modules: string[];
+  /** Projects released from the pack's scope back into the general workspace. */
+  untagged_projects?: number;
+}
+
 export function useUnapplyPack() {
   const invalidate = useInvalidatePackQueries();
   return useMutation({
-    mutationFn: () => apiPost<{ applied: boolean; restored_modules: string[] }>(
-      '/v1/partner-pack/unapply',
-      {},
-    ),
+    mutationFn: () => apiPost<UnapplyResult>('/v1/partner-pack/unapply', {}),
     onSuccess: invalidate,
   });
 }

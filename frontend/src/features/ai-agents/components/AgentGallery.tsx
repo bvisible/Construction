@@ -14,6 +14,10 @@ interface AgentGalleryProps {
   selectedName: string | null;
   onSelect: (agent: AgentDescriptor) => void;
   onPromptPick: (agent: AgentDescriptor, prompt: string) => void;
+  /** Edit a custom agent (only ever called for is_custom agents). */
+  onEdit?: (agent: AgentDescriptor) => void;
+  /** Delete a custom agent (only ever called for is_custom agents). */
+  onDelete?: (agent: AgentDescriptor) => void;
 }
 
 interface CategoryGroup {
@@ -31,13 +35,18 @@ export function AgentGallery({
   selectedName,
   onSelect,
   onPromptPick,
+  onEdit,
+  onDelete,
 }: AgentGalleryProps): JSX.Element {
   const { t } = useTranslation();
 
   const groups = useMemo<CategoryGroup[]>(() => {
     const byCategory = new Map<string, AgentDescriptor[]>();
     for (const agent of agents) {
-      const key = normaliseCategory(agent.category);
+      // The caller's own custom agents collect into a single "Your agents"
+      // section at the top, regardless of the category they were filed under,
+      // so a user always finds their creations together.
+      const key = agent.is_custom ? 'my_agents' : normaliseCategory(agent.category);
       const bucket = byCategory.get(key);
       if (bucket) bucket.push(agent);
       else byCategory.set(key, [agent]);
@@ -82,6 +91,8 @@ export function AgentGallery({
                   selected={selectedName === agent.name}
                   onSelect={() => onSelect(agent)}
                   onPromptPick={(prompt) => onPromptPick(agent, prompt)}
+                  onEdit={agent.is_custom && onEdit ? () => onEdit(agent) : undefined}
+                  onDelete={agent.is_custom && onDelete ? () => onDelete(agent) : undefined}
                 />
               ))}
             </div>

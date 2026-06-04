@@ -15,6 +15,7 @@ import {
   AlertTriangle,
   Trash2,
   Download,
+  Sparkles,
 } from 'lucide-react';
 import { Button, Card, Badge, EmptyState, Breadcrumb, InfoHint, ConfirmDialog, RecoveryCard, SkeletonTable, SkeletonCard } from '@/shared/ui';
 import { RequiresProject } from '@/shared/auth/RequiresProject';
@@ -30,6 +31,8 @@ import { useToastStore } from '@/stores/useToastStore';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { useAuthStore } from '@/stores/useAuthStore';
 import { ApprovalTimeline } from './ApprovalTimeline';
+import { ImpactSimulator } from './ImpactSimulator';
+import { AIDraftModal } from './AIDraftModal';
 import {
   advanceApproval,
   getApprovals,
@@ -1008,6 +1011,19 @@ function DetailView({
         </Card>
       </div>
 
+      {/* What-If impact simulator (TOP-30 #11). Hidden once a CO is rejected:
+          there is nothing left to forecast. Publishing a scenario is allowed
+          while the CO can still change (draft / submitted); the backend also
+          enforces the changeorders.update permission. */}
+      {order.status !== 'rejected' && (
+        <ImpactSimulator
+          orderId={orderId}
+          defaultCost={order.cost_impact}
+          defaultDays={order.schedule_impact_days}
+          canPublish={order.status === 'draft' || order.status === 'submitted'}
+        />
+      )}
+
       {/* Audit trail */}
       {(order.submitted_at || order.approved_at) && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
@@ -1214,6 +1230,7 @@ export function ChangeOrdersPage() {
   const { confirm: confirmList, ...confirmListProps } = useConfirm();
 
   const [showCreate, setShowCreate] = useState(false);
+  const [showAIDraft, setShowAIDraft] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('');
 
@@ -1365,6 +1382,10 @@ export function ChangeOrdersPage() {
           </div>
           <Button variant="secondary" size="sm" icon={<Download size={14} />} onClick={handleExportCSV} disabled={!filteredOrders || filteredOrders.length === 0}>
             {t('changeorders.export_csv', { defaultValue: 'Export CSV' })}
+          </Button>
+          <Button variant="secondary" onClick={() => setShowAIDraft(true)} disabled={!projectId}>
+            <Sparkles size={16} className="mr-1.5" />
+            {t('changeorders.ai_draft', { defaultValue: 'AI Draft' })}
           </Button>
           <Button variant="primary" onClick={() => setShowCreate(true)} disabled={!projectId}>
             <Plus size={16} className="mr-1.5" />
@@ -1612,6 +1633,18 @@ export function ChangeOrdersPage() {
           currency={currency}
           onClose={() => setShowCreate(false)}
           onCreated={handleRefresh}
+        />
+      )}
+      {showAIDraft && projectId && (
+        <AIDraftModal
+          projectId={projectId}
+          currency={currency}
+          onClose={() => setShowAIDraft(false)}
+          onCreated={(orderId) => {
+            setShowAIDraft(false);
+            handleRefresh();
+            setSelectedOrderId(orderId);
+          }}
         />
       )}
       <ConfirmDialog {...confirmListProps} />

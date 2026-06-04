@@ -304,6 +304,30 @@ async def kpi_history(
     return KPIHistoryResponse(kpi_code=code, history=points)
 
 
+@router.get(
+    "/kpi-freshness",
+    dependencies=[Depends(RequirePermission("bi.kpi.read"))],
+)
+async def kpi_freshness(
+    user_id: CurrentUserId,
+    session: SessionDep,
+    project_id: uuid.UUID | None = Query(default=None),
+) -> dict[str, str | None]:
+    """Return the live KPI/EVM freshness watermark for a project.
+
+    Upstream data changes (cost, schedule progress, finance, contracts) bump an
+    in-process watermark. The frontend polls this cheap endpoint; when
+    ``invalidated_at`` advances past the value it last saw, it refetches the
+    heavier live EVM/KPI payloads. This is the event-driven live-refresh signal,
+    so the UI updates within seconds of an upstream change without a WebSocket.
+    """
+    if project_id is not None:
+        await verify_project_access(project_id, user_id, session)
+    from app.modules.bi_dashboards.events import get_kpi_freshness
+
+    return get_kpi_freshness(str(project_id) if project_id else None)
+
+
 @router.post(
     "/kpis/{code}/drill-down",
     response_model=DrillDownResponse,

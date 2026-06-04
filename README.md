@@ -11,8 +11,8 @@ Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-
 [▶ Watch the 12-min walkthrough](https://www.youtube.com/watch?v=X06cIaroAeI) · [Demo](https://openconstructionerp.com) · [Documentation](https://openconstructionerp.com/docs) · [Discussions](https://t.me/datadrivenconstruction) · [Report Bug](https://github.com/datadrivenconstruction/OpenConstructionERP/issues)
 
 [![License](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
-[![Version](https://img.shields.io/github/v/release/datadrivenconstruction/OpenConstructionERP?label=version&color=green&v=6.4.2)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest)
-[![PyPI](https://img.shields.io/pypi/v/openconstructionerp?color=informational&label=pypi&v=6.4.2)](https://pypi.org/project/openconstructionerp/)
+[![Version](https://img.shields.io/github/v/release/datadrivenconstruction/OpenConstructionERP?label=version&color=green&v=6.7.0)](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest)
+[![PyPI](https://img.shields.io/pypi/v/openconstructionerp?color=informational&label=pypi&v=6.7.0)](https://pypi.org/project/openconstructionerp/)
 [![Downloads (pepy · per month)](https://static.pepy.tech/personalized-badge/openconstructionerp?period=month&units=international_system&left_color=grey&right_color=blue&left_text=downloads%20(pepy%20%C2%B7%20per%20month))](https://pepy.tech/project/openconstructionerp)
 [![Stars](https://img.shields.io/github/stars/datadrivenconstruction/OpenConstructionERP?style=flat&logo=github)](https://github.com/datadrivenconstruction/OpenConstructionERP/stargazers)
 <br/>
@@ -27,6 +27,22 @@ Professional BOQ, 4D scheduling, 5D cost model, and tendering - all in one open-
 </video>
 
 <sub><picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/device-camera-video-dark.svg"><img src="docs/readme-icons/device-camera-video-light.svg" width="14" align="center" alt=""></picture> <b>1-minute teaser above</b> · for the full 12-minute walkthrough → <a href="https://www.youtube.com/watch?v=X06cIaroAeI"><b>watch on YouTube</b></a> · onboarding → BoQ → BIM → DWG → PDF → AI → dashboard</sub>
+
+<br/><br/>
+
+### Download the free desktop app
+
+<sub>No Python, no Docker, nothing to set up. Pick your system and run it.</sub>
+
+<a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest"><img src="https://img.shields.io/badge/Windows-Download%20.exe-0078D6?style=for-the-badge&logo=windows11&logoColor=white" alt="Download OpenConstructionERP for Windows" height="46"></a>
+&nbsp;&nbsp;
+<a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest"><img src="https://img.shields.io/badge/macOS-Download%20.dmg-111111?style=for-the-badge&logo=apple&logoColor=white" alt="Download OpenConstructionERP for macOS" height="46"></a>
+&nbsp;&nbsp;
+<a href="https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest"><img src="https://img.shields.io/badge/Linux-.deb%20%2F%20.AppImage-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download OpenConstructionERP for Linux" height="46"></a>
+
+<sub>Not sure which file? <a href="https://openconstructionerp.com/download"><b>openconstructionerp.com/download</b></a> picks the right one for you automatically. Prefer the terminal? <code>pip install openconstructionerp</code> or Docker, see <a href="#quick-start">Quick Start</a> below.</sub>
+
+<br/>
 
 <table>
 <tr>
@@ -739,9 +755,18 @@ Get productive in under 10 minutes:
 
 > <picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme-icons/eye-dark.svg"><img src="docs/readme-icons/eye-light.svg" width="14" align="center" alt=""></picture> **Prefer to see it first?** [▶ Watch the 12-minute walkthrough on YouTube](https://www.youtube.com/watch?v=X06cIaroAeI) - onboarding → BoQ → BIM → DWG → PDF → AI → dashboard.
 
-> **Requires Python 3.12+** (any path below). Check with `python --version`.
+### Easiest: download the desktop app (no Python, no setup)
 
-### Recommended: pip install (1 command, full app)
+Download the installer for your operating system, run it, and OpenConstructionERP opens as a native desktop app. No Python, no pip, no Docker, and no database to set up. Everything runs locally on your machine.
+
+- **[Download for your platform](https://openconstructionerp.com/download)** picks the right file for your OS automatically.
+- Or grab one straight from the **[latest release](https://github.com/datadrivenconstruction/OpenConstructionERP/releases/latest)**: Windows `.exe` installer, macOS `.dmg`, or Linux `.deb` / `.AppImage`.
+
+The first launch takes about a minute while it sets up your local database, then every launch after that is fast. Open source under AGPL-3.0.
+
+> **Prefer the command line?** The options below (pip, Docker, source) need Python 3.12+. Check with `python --version`.
+
+### pip install (full app, one command)
 
 ```bash
 pip install --upgrade openconstructionerp
@@ -750,19 +775,67 @@ openconstructionerp
 
 That's it. The single wheel ships the backend plus the pre-built React frontend. The first run sets up a local embedded PostgreSQL database (no Docker, no setup), loads the demo data, opens your browser at **http://localhost:8080**, and you sign in with `demo@openconstructionerp.com` / `DemoPass1234!`. No Node.js and no extra services. Every later run, just type `openconstructionerp` again. [PyPI package](https://pypi.org/project/openconstructionerp/).
 
-> **If your terminal says `openconstructionerp: command not found` (macOS/Linux) or `'openconstructionerp' is not recognized` (Windows):** the package installed fine, pip just put the launcher in a per-user scripts folder that is not on your PATH. There are two easy ways out.
->
-> The clean one is [pipx](https://pipx.pypa.io). It installs the app in its own isolated environment and adds the command to your PATH for you:
-> ```bash
-> python -m pip install --user pipx
-> python -m pipx ensurepath        # then close and reopen the terminal
-> pipx install openconstructionerp
-> openconstructionerp
-> ```
-> Or run it straight through Python without changing anything. This works from any folder and starts the exact same app:
-> ```bash
-> python -m openconstructionerp
-> ```
+If the `openconstructionerp` command is not found after install, run it through Python instead. This works on every operating system and never depends on PATH:
+
+```bash
+python -m openconstructionerp
+```
+
+#### "Command not found"? You do not need to touch PATH
+
+If your terminal says `openconstructionerp: command not found` (macOS/Linux) or `'openconstructionerp' is not recognized` (Windows), the package installed fine. pip just put the launcher in a per-user scripts folder that is not on your PATH. You have three options, easiest first.
+
+**1. Run it through Python (simplest, no setup).** This works from any folder, on every OS, and never depends on PATH. We recommend this:
+
+```bash
+python -m openconstructionerp
+```
+
+Every command works this way: `python -m openconstructionerp serve`, `python -m openconstructionerp doctor`, and so on.
+
+**2. Let pipx handle PATH for you.** [pipx](https://pipx.pypa.io) installs the app in its own isolated environment and puts the `openconstructionerp` command on your PATH automatically:
+
+```bash
+python -m pip install --user pipx
+python -m pipx ensurepath        # then close and reopen the terminal
+pipx install openconstructionerp
+openconstructionerp
+```
+
+**3. Add the scripts folder to PATH yourself,** if you want the short `openconstructionerp` command. Pick your platform:
+
+<details>
+<summary><b>Windows</b></summary>
+
+First find the folder pip used (it is printed as a warning during install, usually `%APPDATA%\Python\Python3xx\Scripts`):
+
+```powershell
+python -m site --user-base
+```
+
+Add `\Scripts` to that path. Then either:
+
+- **Permanent (recommended):** open the Start menu, search for "Edit environment variables for your account", edit the `Path` variable, and add the folder (for example `C:\Users\you\AppData\Roaming\Python\Python312\Scripts`). Open a new terminal and `openconstructionerp` works.
+- **This session only:**
+  ```powershell
+  set PATH=%APPDATA%\Python\Python312\Scripts;%PATH%
+  ```
+  (replace `Python312` with your version).
+
+</details>
+
+<details>
+<summary><b>macOS / Linux</b></summary>
+
+pip installs user scripts to `~/.local/bin`. Add it to your PATH by appending one line to your shell profile (`~/.zshrc` on modern macOS, `~/.bashrc` on most Linux):
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # or ~/.bashrc
+source ~/.zshrc                                            # or ~/.bashrc
+openconstructionerp
+```
+
+</details>
 
 > **Ubuntu / Debian users:** on Ubuntu 23.04+ (including Ubuntu 26) and Debian 12+, `pip install` into the system Python fails with `error: externally-managed-environment` (PEP 668). The simplest fix is pipx (above), which is built for exactly this. If you prefer a venv:
 > ```bash

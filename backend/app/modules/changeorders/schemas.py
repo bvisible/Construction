@@ -332,3 +332,152 @@ class ChangeOrderSummary(BaseModel):
     _coerce_decimal = field_validator("total_approved_amount", "total_cost_impact", mode="before")(
         lambda cls, v: _decimal_to_str(v)
     )
+
+
+# ── What-If impact simulator (TOP-30 #11) ────────────────────────────────────
+
+
+class SimulateImpactRequest(BaseModel):
+    """Run a what-if impact projection for a change order.
+
+    Both fields are optional overrides: when omitted the simulator uses the
+    change order's own stored ``cost_impact`` / ``schedule_impact_days`` so a
+    plain ``POST`` with an empty body forecasts the order exactly as it stands.
+    Supplying a value lets the user explore "what if this CO were worth X / ran
+    Y days longer" before committing to it. Nothing is persisted by a simulate
+    call - it is a read-only projection.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+    cost_impact: str | None = Field(
+        default=None,
+        max_length=50,
+        description="Optional signed decimal override for the CO cost impact, in the CO's own currency.",
+    )
+    schedule_impact_days: int | None = Field(
+        default=None,
+        ge=0,
+        le=_INT32_MAX,
+        description="Optional override for the number of calendar days this CO adds to the programme.",
+    )
+
+    @field_validator("cost_impact")
+    @classmethod
+    def _check_decimal(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_decimal(v, "cost_impact")
+
+
+class ImpactCost(BaseModel):
+    """Cost side of an impact projection, all in the project base currency."""
+
+    budget_before: str = "0"
+    budget_after: str = "0"
+    delta: str = "0"
+    pct_of_budget: float = 0.0
+
+
+class ImpactSchedule(BaseModel):
+    """Schedule side of an impact projection."""
+
+    current_end_date: str | None = None
+    projected_end_date: str | None = None
+    days_added: int = 0
+    finish_moves: bool = False
+
+
+class ImpactEVM(BaseModel):
+    """Earned-value projection before and after the change order is applied."""
+
+    bac_before: str = "0"
+    bac_after: str = "0"
+    eac_before: str = "0"
+    eac_after: str = "0"
+    vac_before: str = "0"
+    vac_after: str = "0"
+    spi: str = "0"
+    cpi: str = "0"
+
+
+class ImpactBOQ(BaseModel):
+    """Preview of what approving the CO would write into the project BOQ."""
+
+    item_count: int = 0
+    sections_added: int = 0
+    positions_added: int = 0
+    target_boq_name: str | None = None
+
+
+class SimulateImpactResponse(BaseModel):
+    """Full what-if impact projection for a change order."""
+
+    order_id: UUID
+    code: str
+    base_currency: str = ""
+    as_of: str
+    co_cost_native: str = "0"
+    co_currency: str = ""
+    co_cost_base: str = "0"
+    fx_converted: bool = True
+    cost: ImpactCost
+    schedule: ImpactSchedule
+    evm: ImpactEVM
+    boq: ImpactBOQ
+    notes: list[str] = Field(default_factory=list)
+
+
+# ── AI / heuristic draft from free text, RFI or daily log (TOP-30 #11) ───────
+
+
+class AIDraftRequest(BaseModel):
+    """Draft a change order from a piece of source text.
+
+    The text can come from an RFI thread, a daily-diary entry, or be pasted
+    free-hand. When an AI provider key is configured the text is sent to the
+    model for structured extraction; otherwise a deterministic heuristic reads
+    the obvious cost/schedule signals so the feature still produces a usable
+    draft offline. Nothing is saved - the response is a review-ready proposal
+    the user confirms (or edits) before a change order is actually created.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True, extra="ignore")
+
+    project_id: UUID
+    source_kind: str = Field(
+        default="free_text",
+        pattern=r"^(free_text|rfi|daily_log)$",
+    )
+    source_id: UUID | None = None
+    source_text: str = Field(..., min_length=1, max_length=20000)
+    currency: str = Field(default="", max_length=10)
+
+
+class AIDraftLine(BaseModel):
+    """One suggested change-order line item in a draft proposal."""
+
+    description: str = ""
+    unit: str = ""
+    quantity: str = "0"
+    rate: str = "0"
+    cost_delta: str = "0"
+    confidence: int = Field(default=0, ge=0, le=100)
+
+
+class AIDraftResponse(BaseModel):
+    """A review-ready change-order draft (never auto-saved)."""
+
+    title: str = ""
+    description: str = ""
+    reason_category: str = "client_request"
+    cost_impact: str = "0"
+    schedule_impact_days: int = 0
+    currency: str = ""
+    lines: list[AIDraftLine] = Field(default_factory=list)
+    confidence: int = Field(default=0, ge=0, le=100)
+    ai_used: bool = False
+    provider: str = ""
+    source_kind: str = "free_text"
+    source_id: UUID | None = None
+    note: str = ""

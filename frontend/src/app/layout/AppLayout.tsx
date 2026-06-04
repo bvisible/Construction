@@ -23,6 +23,7 @@ import {
 import { useSwipeGesture, useEdgeSwipe } from '@/shared/hooks/useSwipeGesture';
 import { useIsRTL } from '@/shared/hooks/useIsRTL';
 import { useOfflineSync } from '@/shared/hooks/useOnlineStatus';
+import { usePartnerPackLocale } from '@/shared/hooks/usePartnerPackLocale';
 
 interface AppLayoutProps {
   title?: string;
@@ -39,6 +40,11 @@ export function AppLayout({ title, children }: AppLayoutProps) {
 
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
   const openSidebar = useCallback(() => setSidebarOpen(true), []);
+
+  // When a partner pack is active, present the app in the pack's language
+  // (e.g. French for batimatech-ca). Forces once per activation; the deactivate
+  // dialog reverts to English.
+  usePartnerPackLocale();
 
   useEffect(() => {
     // Translate the browser-tab title through the same map the on-screen

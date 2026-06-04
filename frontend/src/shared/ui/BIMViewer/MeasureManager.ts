@@ -21,6 +21,7 @@ import {
   polygonPerimeter3,
 } from './measureMath';
 import { SnapDetector, type SnapKind } from './SnapDetector';
+import { uuid } from '@/shared/lib/browser';
 
 export type MeasureState = 'idle' | 'awaiting-first' | 'awaiting-second' | 'done';
 
@@ -67,10 +68,7 @@ const DOT_COLOR = 0xffffff;
 const DOT_RADIUS = 0.08;
 
 function randomId(): string {
-  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
-    return crypto.randomUUID();
-  }
-  return `m_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return uuid();
 }
 
 export class MeasureManager {

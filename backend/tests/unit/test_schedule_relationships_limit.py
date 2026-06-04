@@ -62,7 +62,9 @@ async def seeded_schedule_id() -> tuple[uuid.UUID, AsyncSession]:
             id=schedule_id,
             project_id=project_id,
             name="perf-fixture-schedule",
-            start_date=datetime.now(UTC).date(),
+            # start_date is a VARCHAR ISO-date column; asyncpg rejects a bare
+            # date object (SQLite used to coerce it, PostgreSQL does not).
+            start_date=datetime.now(UTC).date().isoformat(),
         )
         s.add(schedule)
         # Two activities are enough — relationships unique on (pred, succ)

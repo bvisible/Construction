@@ -25,6 +25,7 @@ import {
   ScrollText,
 } from 'lucide-react';
 import { Card, Badge, Button, ConfirmDialog, Input } from '@/shared/ui';
+import { copyToClipboard } from '@/shared/lib/browser';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/shared/lib/api';
 import { useConfirm } from '@/shared/hooks/useConfirm';
 import { useToastStore } from '@/stores/useToastStore';
@@ -225,7 +226,7 @@ export function WebhookLeads() {
   );
 
   const copy = (text: string) => {
-    void navigator.clipboard?.writeText(text);
+    void copyToClipboard(text);
     addToast({
       type: 'info',
       title: t('webhook_leads.copied', { defaultValue: 'Copied to clipboard' }),
